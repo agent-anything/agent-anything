@@ -30,7 +30,7 @@ describe("Context Continuity deterministic Evaluation", () => {
       attribution: "model_reasoning",
       downstreamOutcome: "failed",
       projection: { outcome: "projected", projectedItemCount: 1, complete: true },
-      modelInput: { budgetError: 0 },
+      modelInput: { semanticInputConsistent: true },
     });
   });
 

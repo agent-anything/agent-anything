@@ -6,10 +6,7 @@ import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import {
-  createUtf8ModelInputAccounting,
-  type ProviderModelInputAccounting,
-} from "@agent-anything/model-interaction/input";
+import { createFakeProviderContext } from "./provider/FakeProviderContext.js";
 
 export interface FakeProviderInput {
   descriptor?: Partial<Omit<ProviderDescriptor, "capabilities">> & {
@@ -20,25 +17,16 @@ export interface FakeProviderInput {
 
 export class FakeProvider implements Provider {
   readonly descriptor: ProviderDescriptor;
-  readonly inputAccounting: ProviderModelInputAccounting;
+  readonly modelContext: Provider["modelContext"];
+  readonly requestBodyTransportLimit: Provider["requestBodyTransportLimit"];
   private readonly results: ProviderCallResult[];
   private readonly recordedRequests: ProviderRequest[] = [];
 
   constructor(input: FakeProviderInput = {}) {
     const providerId = input.descriptor?.id ?? "fake-provider";
-    this.inputAccounting = createUtf8ModelInputAccounting({
-      providerId,
-      model: "fake-model",
-      maximumInputBytes: 4 * 1_024 * 1_024,
-      limitSource: "host_configured",
-      estimator: { id: "fake-provider.utf8-content", revision: "1" },
-      framing: { id: "fake-provider.framing", revision: "1" },
-      renderRequest: (instructions, messages, interaction) => JSON.stringify({
-        instructions,
-        messages,
-        interaction,
-      }),
-    });
+    const context = createFakeProviderContext(providerId);
+    this.modelContext = context.modelContext;
+    this.requestBodyTransportLimit = context.requestBodyTransportLimit;
     this.descriptor = {
       id: providerId,
       name: input.descriptor?.name ?? "Fake Provider",
@@ -47,7 +35,11 @@ export class FakeProvider implements Provider {
         nativeToolInteraction: { supported: false },
         structuredGeneration: { supported: true },
         streaming: { supported: false },
-        modelInput: this.inputAccounting.capability,
+        modelContext: {
+          capacity: this.modelContext.capacity,
+          requestedOutput: this.modelContext.requestedOutput,
+          inputPreservation: this.modelContext.inputPreservation,
+        },
         continuation: { supported: false },
         compaction: { supported: false },
         usageMetering: {

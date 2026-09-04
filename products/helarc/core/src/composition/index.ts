@@ -10,7 +10,6 @@ export type {
 } from "./HelarcActionComposition.js";
 export {
   createHelarcActionComposition,
-  validateHelarcToolInput,
 } from "./HelarcActionComposition.js";
 export type {
   HelarcActivityItem,

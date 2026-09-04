@@ -7,7 +7,6 @@ export interface DescendantRunRelationRef {
 
 export type DescendantRunRelationKind =
   | "delegation"
-  | "replacement"
   | "continuation";
 
 export interface RootRunLineage {
@@ -112,7 +111,6 @@ function assertRelationKind(
 ): asserts value is DescendantRunRelationKind {
   if (
     value !== "delegation" &&
-    value !== "replacement" &&
     value !== "continuation"
   ) {
     throw new TypeError("Descendant relation kind is unsupported.");

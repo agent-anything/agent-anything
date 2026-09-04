@@ -11,12 +11,19 @@ import type {
   ProviderUsage,
 } from "@agent-anything/model-interaction";
 import {
+  assessModelContext,
+  createProviderSemanticRequestDigest,
   modelCallRefKey,
   snapshotModelCallRef,
   snapshotModelToolCall,
   snapshotModelTurn,
   snapshotProviderRequest,
+  type ModelContextAssessment,
 } from "@agent-anything/model-interaction";
+import {
+  snapshotModelInputComposition,
+  type ModelInputComposition,
+} from "@agent-anything/model-interaction/input";
 import {
   ModelContinuationLifecycle,
   type ModelContinuationPreparation,
@@ -29,6 +36,8 @@ import type { RetryClassification, RetryFailure } from "../retry/index.js";
 import type { RetryExhaustedEvent } from "../retry/index.js";
 import type { RetryOperation } from "../retry/index.js";
 import type { ModelFailure } from "./ModelFailure.js";
+import type { ModelInputRecoveryPort } from "./ModelInputRecovery.js";
+import { unsupportedModelInputRecovery } from "./ModelInputRecovery.js";
 import type {
   Controller,
   ControllerCallContext,
@@ -59,6 +68,8 @@ export type ControllerFailureCode =
   | "model_request_failed"
   | "model_output_invalid"
   | "model_structured_output_retry_exhausted"
+  | "model_context_capacity_exceeded"
+  | "model_input_recovery_failed"
   | "provider_context_window_exceeded"
   | "provider_request_failed"
   | "provider_timeout"
@@ -99,6 +110,7 @@ export interface ProviderBackedControllerInput<TOutput = unknown> {
   readonly retryExecutor: RetryExecutor;
   readonly retryClock: RetryClock;
   readonly continuation?: ModelContinuationLifecycle;
+  readonly modelInputRecovery?: ModelInputRecoveryPort;
 }
 
 type ProviderRetryCategory =
@@ -150,6 +162,7 @@ export class ProviderBackedController<TOutput = unknown>
   implements Controller<TOutput>
 {
   private readonly continuation: ModelContinuationLifecycle;
+  private readonly modelInputRecovery: ModelInputRecoveryPort;
 
   get resourceMetering(): Controller<TOutput>["resourceMetering"] {
     const usage = this.input.provider.descriptor.capabilities.usageMetering;
@@ -162,6 +175,7 @@ export class ProviderBackedController<TOutput = unknown>
 
   constructor(private readonly input: ProviderBackedControllerInput<TOutput>) {
     this.continuation = input.continuation ?? new ModelContinuationLifecycle();
+    this.modelInputRecovery = input.modelInputRecovery ?? unsupportedModelInputRecovery;
     if (typeof input.retryExecutor?.execute !== "function") {
       throw new TypeError("ProviderBackedController requires a RetryExecutor.");
     }
@@ -210,7 +224,8 @@ export class ProviderBackedController<TOutput = unknown>
     const request = await this.buildRequest(controllerInput, Object.freeze({
       attemptNumber: 1,
       correction: null,
-      inputAccounting: this.input.provider.inputAccounting,
+      target: this.input.provider.modelContext.target,
+      requestedOutput: this.input.provider.modelContext.requestedOutput,
     }));
     const response = await this.sendRequest(
       request,
@@ -271,7 +286,8 @@ export class ProviderBackedController<TOutput = unknown>
           const buildContext = Object.freeze({
             attemptNumber: attempt.attempt.attemptNumber,
             correction,
-            inputAccounting: this.input.provider.inputAccounting,
+            target: this.input.provider.modelContext.target,
+            requestedOutput: this.input.provider.modelContext.requestedOutput,
           });
           let request: ProviderRequest;
           try {
@@ -427,14 +443,19 @@ export class ProviderBackedController<TOutput = unknown>
       const request = snapshotProviderRequest(
         await this.input.buildRequest(input, context),
       );
-      this.input.provider.inputAccounting.verify({
-        providerId: this.input.provider.descriptor.id,
-        model: request.composition.model,
-        instructions: request.instructions,
-        messages: request.messages,
-        interaction: request.interaction,
-        composition: request.composition,
-      });
+      const target = this.input.provider.modelContext.target;
+      const requestedOutput = this.input.provider.modelContext.requestedOutput;
+      if (
+        request.composition.providerId !== target.providerId ||
+        request.composition.model !== target.model ||
+        request.modelContext.requestedOutput.unit !== requestedOutput.unit ||
+        request.modelContext.requestedOutput.maximum !== requestedOutput.maximum ||
+        request.modelContext.requestedOutput.source !== requestedOutput.source ||
+        request.modelContext.requestedOutput.revision !== requestedOutput.revision ||
+        request.modelContext.assessment !== null
+      ) {
+        throw new TypeError("Provider request does not match its admitted model target and output request.");
+      }
       return request;
     } catch (error) {
       throw createControllerError(
@@ -452,7 +473,14 @@ export class ProviderBackedController<TOutput = unknown>
     controllerInput: ControllerInput<TOutput>,
     callContext: ControllerCallContext,
     nextProviderRequestNumber: () => number,
+    modelInputRecoveryAttempt = 0,
   ): Promise<ProviderResponse> {
+    const assessedRequest = await this.prepareModelContextRequest(
+      request,
+      callContext,
+      modelInputRecoveryAttempt,
+    );
+    request = assessedRequest;
     const preparation = await this.continuation.prepare({
       capability: this.input.provider.descriptor.capabilities.continuation,
       lineage: continuationLineage(request, controllerInput),
@@ -468,6 +496,21 @@ export class ProviderBackedController<TOutput = unknown>
       );
     } catch (error) {
       await this.recordContinuationInterruption(preparation, callContext, error);
+      const recovered = await this.recoverAfterProviderContextRejection(
+        request,
+        error,
+        callContext,
+        modelInputRecoveryAttempt,
+      );
+      if (recovered !== null) {
+        return this.sendRequest(
+          recovered,
+          controllerInput,
+          callContext,
+          nextProviderRequestNumber,
+          modelInputRecoveryAttempt + 1,
+        );
+      }
       throw error;
     }
 
@@ -541,6 +584,152 @@ export class ProviderBackedController<TOutput = unknown>
 
     await this.advanceContinuation(preparation, settlement.response);
     return settlement.response;
+  }
+
+  private async prepareModelContextRequest(
+    request: ProviderRequest,
+    callContext: ControllerCallContext,
+    recoveryAttempt: number,
+  ): Promise<ProviderRequest> {
+    const measuredAt = this.input.retryClock.now().toISOString();
+    const modelContext = this.input.provider.modelContext;
+    const measurement = modelContext.measure(request.composition, measuredAt);
+    const assessment = assessModelContext({
+      compositionId: request.composition.id,
+      capacity: modelContext.capacity,
+      measurement,
+      requestedOutput: request.modelContext.requestedOutput,
+      headroom: request.modelContext.headroom,
+      assessedAt: measuredAt,
+      revision: "agent-runtime.model-context-assessment.v1",
+    });
+    const assessedRequest = withModelContextAssessment(request, assessment);
+    if (assessment.disposition !== "proven_overflow" &&
+        assessment.disposition !== "estimated_overflow") {
+      return assessedRequest;
+    }
+
+    const capability = this.modelInputRecovery.capability;
+    const shouldRecover = assessment.disposition === "proven_overflow" || capability.supported;
+    if (shouldRecover && capability.supported && recoveryAttempt < capability.maximumAttempts) {
+      const recovered = await this.recoverModelInput(
+        assessedRequest,
+        assessment,
+        callContext,
+        recoveryAttempt + 1,
+        Object.freeze({ kind: "local_assessment" as const }),
+      );
+      if (recovered !== null) {
+        return this.prepareModelContextRequest(recovered, callContext, recoveryAttempt + 1);
+      }
+    }
+
+    if (assessment.disposition === "proven_overflow") {
+      throw createControllerError(
+        "model",
+        "model_context_capacity_exceeded",
+        "The composed model input is proven to exceed the admitted model context capacity.",
+        false,
+        {
+          providerId: modelContext.target.providerId,
+          model: modelContext.target.model,
+          modelContextAssessmentId: assessment.id,
+          modelContextDisposition: assessment.disposition,
+          effectiveInputBudget: assessment.effectiveInputBudget,
+        },
+        "settled_failure",
+      );
+    }
+    return assessedRequest;
+  }
+
+  private async recoverAfterProviderContextRejection(
+    request: ProviderRequest,
+    error: unknown,
+    callContext: ControllerCallContext,
+    recoveryAttempt: number,
+  ): Promise<ProviderRequest | null> {
+    if (!(error instanceof ControllerError) ||
+        error.failure.kind !== "provider" ||
+        error.failure.failure.code !== "provider_context_window_exceeded" ||
+        request.modelContext.assessment === null) {
+      return null;
+    }
+    const capability = this.modelInputRecovery.capability;
+    if (!capability.supported || recoveryAttempt >= capability.maximumAttempts) return null;
+    return this.recoverModelInput(
+      request,
+      request.modelContext.assessment,
+      callContext,
+      recoveryAttempt + 1,
+      Object.freeze({
+        kind: "provider_rejection" as const,
+        failure: error.failure.failure,
+      }),
+    );
+  }
+
+  private async recoverModelInput(
+    request: ProviderRequest,
+    assessment: ModelContextAssessment,
+    callContext: ControllerCallContext,
+    attemptNumber: number,
+    trigger: Parameters<ModelInputRecoveryPort["recover"]>[0]["trigger"],
+  ): Promise<ProviderRequest | null> {
+    const sourceDigest = createProviderSemanticRequestDigest(request);
+    const outcome = await this.modelInputRecovery.recover(Object.freeze({
+      sourceRequest: request,
+      sourceComposition: request.composition,
+      targetCapacity: this.input.provider.modelContext.capacity,
+      assessment,
+      requestDigest: sourceDigest,
+      attempt: Object.freeze({
+        id: `${request.requestId}:model-input-recovery:${attemptNumber}`,
+        number: attemptNumber,
+      }),
+      trigger,
+    }), interruptionContext(callContext));
+    if (outcome.status === "unavailable") return null;
+    if (outcome.status === "failed") {
+      throw createControllerError(
+        "model",
+        "model_input_recovery_failed",
+        outcome.failure.message,
+        outcome.failure.retryable,
+        {
+          ...outcome.failure.metadata,
+          contextPath: outcome.failure.path,
+          modelContextAssessmentId: assessment.id,
+        },
+        "settled_failure",
+      );
+    }
+    const composition = snapshotModelInputComposition(outcome.composition);
+    if (
+      outcome.predecessorCompositionId !== request.composition.id ||
+      composition.id === request.composition.id
+    ) {
+      throw createControllerError(
+        "model",
+        "model_input_recovery_failed",
+        "Model input recovery returned an invalid composition lineage.",
+        false,
+        { modelContextAssessmentId: assessment.id },
+        "settled_failure",
+      );
+    }
+    const recovered = withRecoveredComposition(request, composition);
+    if (createProviderSemanticRequestDigest(recovered) === sourceDigest) {
+      throw createControllerError(
+        "model",
+        "model_input_recovery_failed",
+        "Model input recovery returned an unchanged semantic request.",
+        false,
+        { modelContextAssessmentId: assessment.id },
+        "settled_failure",
+      );
+    }
+    return recovered;
   }
 
   private async executeProviderRequest(
@@ -1830,6 +2019,54 @@ function errorMetadata(error: unknown): Readonly<Record<string, unknown>> {
 
 function recreateProviderRequest(request: ProviderRequest): ProviderRequest {
   return snapshotProviderRequest(request);
+}
+
+function withModelContextAssessment(
+  request: ProviderRequest,
+  assessment: ModelContextAssessment,
+): ProviderRequest {
+  return snapshotProviderRequest({
+    ...request,
+    modelContext: Object.freeze({
+      ...request.modelContext,
+      assessment,
+    }),
+  });
+}
+
+function withRecoveredComposition(
+  request: ProviderRequest,
+  composition: ModelInputComposition,
+): ProviderRequest {
+  return snapshotProviderRequest({
+    ...request,
+    requestId: composition.id,
+    instructions: composition.instructions,
+    messages: composition.messages,
+    interaction: composition.interaction,
+    composition,
+    modelContext: Object.freeze({
+      ...request.modelContext,
+      assessment: null,
+    }),
+  });
+}
+
+function interruptionContext(
+  callContext: ControllerCallContext,
+): InvocationInterruptionContext {
+  return Object.freeze({
+    signal: callContext.cancellation.signal,
+    interruption: callContext.cancellation.request === null
+      ? null
+      : Object.freeze({
+          kind: "run_cancellation" as const,
+          cancellation: Object.freeze({
+            runId: callContext.cancellation.request.runId,
+            requestId: callContext.cancellation.request.id,
+          }),
+        }),
+  });
 }
 
 function withContinuation(

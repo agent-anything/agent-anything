@@ -6,6 +6,7 @@ export {
   type FakeNativeToolProviderInput,
   type FakeNativeToolProviderStep,
 } from "./provider/FakeNativeToolProvider.js";
+export { createFakeProviderContext } from "./provider/FakeProviderContext.js";
 export {
   FakeApprovalReviewer,
   type FakeApprovalReviewerHandler,

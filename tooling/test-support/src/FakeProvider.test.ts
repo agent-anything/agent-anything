@@ -5,7 +5,6 @@ import type {
 } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  createUtf8ModelInputAccounting,
   modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
@@ -101,26 +100,12 @@ describe("FakeProvider", () => {
 });
 
 function createRequest(requestId: string): ProviderRequest {
-  const accounting = createUtf8ModelInputAccounting({
-    providerId: "fake-provider",
-    model: "fake-model",
-    maximumInputBytes: 1_000_000,
-    limitSource: "host_configured",
-    estimator: { id: "fake-provider.utf8-content", revision: "1" },
-    framing: { id: "fake-provider.framing", revision: "1" },
-    renderRequest: (instructions, messages, interaction) =>
-      JSON.stringify({ instructions, messages, interaction }),
-  });
   const interaction = { kind: "text_generation" as const };
   const composition = composeModelInput({
     id: requestId,
     providerId: "fake-provider",
     model: "fake-model",
-    accounting,
     interaction,
-    outputReserve: { unit: "bytes", amount: 0 },
-    contextBudget: { unit: "bytes", amount: 0 },
-    contextProjectedAmount: 0,
     sections: [{
       id: "instructions",
       source: source("instructions"),

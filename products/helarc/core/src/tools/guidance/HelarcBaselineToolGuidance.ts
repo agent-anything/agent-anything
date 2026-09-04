@@ -195,27 +195,17 @@ const DEFINITIONS = Object.freeze({
     }),
   }),
   Agent: Object.freeze({
-    description: "Delegate one bounded, self-contained objective to a new descendant Agent when isolation or independent analysis improves progress. Work directly when the task is small, tightly sequential, or depends on rapidly changing local context. The prompt must include the objective, relevant constraints, expected result, and only the context the descendant needs; do not assume it can infer omitted conversation state. One Agent call requests one Child. Several independent Agent calls emitted together in the same response request concurrent sibling dispatch; dependent work must wait for those results and be emitted in a later response. Each settled Agent call returns a result_ref. Copy that entire result_ref unchanged into dependency_result when new work consumes it or into replaced_result when a new Run supersedes it. Never use an ordinary Tool result, Child Run id, copied id and revision pair, or placeholder as a Delegation Result reference; summarize ordinary Tool evidence in the new prompt instead. Treat each returned summary, artifact, verification fact, effect, limitation, and failure status as bounded descendant material, not as proof beyond its recorded evidence. Use SendMessage, not Agent, to continue one exact settled child context.",
+    description: "Delegate one bounded, self-contained objective to a new descendant Agent when isolation or independent analysis improves progress. Work directly when the task is small, tightly sequential, or depends on rapidly changing local context. The prompt must include the objective, relevant constraints, expected contribution, and only the context the descendant needs; do not assume it can infer omitted conversation state. One Agent call requests one Child. Several independent Agent calls emitted together in the same response request concurrent sibling dispatch; dependent work must wait for those results and be emitted in a later response. Treat each returned summary, artifact, verification fact, effect, limitation, and failure status as bounded descendant material, not as proof beyond its recorded evidence. When agent_id is present, use SendMessage to continue that exact retained context; otherwise start fresh with Agent.",
     fields: Object.freeze({
       "/properties/description": "Optional concise label for the delegated work, used for human-readable progress and diagnostics.",
-      "/properties/dependency_result": "Optional exact result_ref copied unchanged from a settled Agent Tool result and consumed as a dependency by the new descendant.",
-      "/properties/dependency_result/properties/kind": "Required discriminator copied from result_ref; it must be delegation_result.",
-      "/properties/dependency_result/properties/id": "Identity of the exact dependency result.",
-      "/properties/dependency_result/properties/revision": "Immutable revision of the dependency result.",
       "/properties/prompt": "Self-contained delegated objective with necessary context, constraints, and expected output.",
-      "/properties/replaced_result": "Optional exact result_ref copied unchanged from a settled Agent Tool result and superseded by this new descendant.",
-      "/properties/replaced_result/properties/kind": "Required discriminator copied from result_ref; it must be delegation_result.",
-      "/properties/replaced_result/properties/id": "Identity of the exact result being replaced.",
-      "/properties/replaced_result/properties/revision": "Immutable revision of the result being replaced.",
     }),
   }),
   SendMessage: Object.freeze({
-    description: "Send one bounded follow-up instruction to one exact descendant target advertised by the current Run. An active target steers the same Child Run; a continuation target consumes one retained same-process child context and starts one successor Run. Use the exact current target identity, do not invent identifiers, and use Agent instead when the work should begin with a fresh isolated context. Delivery does not widen authority, revive a settled Run, or make prior uncertain effects safe to replay.",
+    description: "Send one bounded follow-up prompt to one exact retained descendant context. Use the opaque agent_id returned by Agent, do not invent identifiers, and use Agent instead when work should begin with fresh isolated context. Continuation does not widen authority or make prior uncertain effects safe to replay.",
     fields: Object.freeze({
-      "/properties/message": "Bounded follow-up instruction for the selected descendant context.",
-      "/properties/target": "Exact active-child or continuation target currently advertised by the Run.",
-      "/properties/target/properties/id": "Opaque current target identity. Copy it exactly from the advertised descendant targets.",
-      "/properties/target/properties/kind": "Use active for the same running child or continuation for a retained settled-child context.",
+      "/properties/agent_id": "Opaque continuation identity returned by a settled Agent call. Copy it exactly.",
+      "/properties/prompt": "Bounded follow-up instruction for the retained descendant context.",
     }),
   }),
 } satisfies Readonly<Record<HelarcBaselineToolName, GuidanceDefinition>>);

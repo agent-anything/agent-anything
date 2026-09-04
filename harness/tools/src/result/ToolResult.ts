@@ -1,5 +1,5 @@
 import type { OperationInvocationRef } from "@agent-anything/operation-catalog/identity";
-import type { ToolCall } from "../invocation/index.js";
+import type { ToolCall, ToolCallAttemptRef } from "../invocation/index.js";
 
 export interface ToolSettlementRef {
   readonly owner: string;
@@ -9,7 +9,7 @@ export interface ToolSettlementRef {
 }
 
 export interface ToolResultBase {
-  readonly toolCall: Pick<ToolCall, "toolCallId" | "toolRevision">;
+  readonly toolCall: Pick<ToolCall, "toolCallId" | "toolRevision"> | ToolCallAttemptRef;
   readonly settlement: ToolSettlementRef;
   readonly startedAt: string;
   readonly finishedAt: string;
@@ -22,10 +22,15 @@ export interface ToolResultError {
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
+export type FailedToolResult = ToolResultBase & {
+  readonly status: "failed" | "timeout";
+  readonly error: ToolResultError;
+};
+
 export type ToolResult<TOutput = unknown> =
   | (ToolResultBase & { readonly status: "succeeded"; readonly output: NonNullable<TOutput> })
   | (ToolResultBase & { readonly status: "partial"; readonly output: NonNullable<TOutput>; readonly outputUsability: "validated"; readonly error: ToolResultError })
-  | (ToolResultBase & { readonly status: "failed" | "timeout"; readonly error: ToolResultError });
+  | FailedToolResult;
 
 export interface ToolSemanticResult<TOutput = unknown> {
   readonly operationInvocation: OperationInvocationRef;

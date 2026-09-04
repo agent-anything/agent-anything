@@ -13,7 +13,7 @@ describe("RunTranscriptRecorder", () => {
       },
     });
     const first = item(1, "controller_turn");
-    const second = item(2, "stop_review");
+    const second = item(2, "lifecycle_event");
 
     recorder.record([first]);
     recorder.record([first, second]);

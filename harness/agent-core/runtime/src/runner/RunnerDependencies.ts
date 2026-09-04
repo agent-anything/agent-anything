@@ -52,6 +52,7 @@ import type {
   ToolExposureBasisRef,
 } from "@agent-anything/tools/selection";
 import type { ToolCall } from "@agent-anything/tools/invocation";
+import type { ToolInputSemanticValidator } from "@agent-anything/tools/validation";
 import type {
   DelegationAuthorityDimensionInput,
   DelegationContextMaterial,
@@ -60,7 +61,7 @@ import type {
   DelegationRequest,
   DelegationResult,
 } from "../delegation/index.js";
-import type { TaskFulfillmentEvaluatorPort } from "../completion/index.js";
+import type { RunLifecycleHookComposition } from "../hooks/index.js";
 import type { RunTranscriptPort } from "../transcript/index.js";
 
 export type RunnerIdentityKind =
@@ -97,8 +98,13 @@ export type RunnerIdentityKind =
   | "context_refresh"
   | "verification_gate"
   | "verification_proposal"
-  | "task_fulfillment_assessment"
-  | "stop_review";
+  | "run_suspension"
+  | "run_resume"
+  | "run_settlement_cause"
+  | "run_failure_fact"
+  | "run_completion_acceptance"
+  | "run_lifecycle_event"
+  | "run_lifecycle_hook_invocation";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -197,7 +203,10 @@ export interface DelegationContinuationPreparationPort {
 }
 
 export interface DelegationResultProjectionPort {
-  project(result: DelegationResult): DescendantOperationOutcome;
+  project(input: {
+    readonly result: DelegationResult;
+    readonly continuation: import("@agent-anything/agent-core/delegation").DescendantContinuationRef | null;
+  }): DescendantOperationOutcome;
 }
 
 export interface DelegationNarrativeProjectionPort {
@@ -239,7 +248,7 @@ export interface CompositeOperationResolverPort {
 export interface RunnerOperationComposition {
   readonly catalog: OperationCatalogSnapshot;
   readonly bindings: OperationBindingResolverSnapshot;
-  readonly validateToolInput: (schema: unknown, candidate: unknown) => boolean;
+  readonly toolInputSemanticValidators: readonly ToolInputSemanticValidator[];
   readonly internalHandlers: readonly InternalOperationHandler[];
   readonly availability: readonly OperationToolAvailabilityParticipant[];
   readonly actionExecution?: Omit<
@@ -256,11 +265,6 @@ export interface RunnerVerificationComposition {
   readonly preparation: RunnerVerificationPreparationPort | null;
   readonly settledOperationResults: RunnerVerificationSettledOperationResultProcessorPort | null;
   readonly checkResults: RunnerVerificationCheckResultProcessorPort | null;
-}
-
-export interface RunnerCompletionComposition {
-  readonly taskFulfillment: TaskFulfillmentEvaluatorPort;
-  readonly maximumDurationMs: number;
 }
 
 export interface RunnerVerificationPreparationPort {
@@ -325,7 +329,7 @@ export interface RunnerDependencies {
   readonly controller: import("../controller/index.js").Controller<unknown>;
   readonly contextProjection: RunnerContextProjection;
   readonly operations: RunnerOperationComposition;
-  readonly completion: RunnerCompletionComposition;
+  readonly lifecycleHooks?: RunLifecycleHookComposition;
   readonly verification: RunnerVerificationComposition;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly agents?: AgentResolverPort;
@@ -350,6 +354,6 @@ export interface RunInvocationOptions {
 export type ResolvedRunnerDependencies = Required<Pick<
   RunnerDependencies,
   "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"
->> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "completion" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"> & {
-  readonly completion: RunnerCompletionComposition;
+>> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "lifecycleHooks" | "now" | "createRunId" | "createId" | "retryExecutor"> & {
+  readonly lifecycleHooks: RunLifecycleHookComposition;
 };

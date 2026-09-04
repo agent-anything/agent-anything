@@ -1,5 +1,6 @@
 export type { ToolFailure } from "./ToolFailure.js";
 export type {
+  FailedToolResult,
   ToolResult,
   ToolResultBase,
   ToolResultError,

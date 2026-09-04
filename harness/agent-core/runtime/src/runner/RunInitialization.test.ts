@@ -4,7 +4,7 @@ import { createAgentInstructionBinding } from "../instructions/index.js";
 import { createInitialRunState } from "./RunInitialization.js";
 
 describe("Run initialization", () => {
-  it("creates one coherent immutable Stop Review state", () => {
+  it("creates one coherent immutable lifecycle Hook state", () => {
     const agent = {
       id: "agent-1",
       revision: "1",
@@ -44,14 +44,17 @@ describe("Run initialization", () => {
       activeContextId: "context-1",
     });
 
-    expect(state.stopReview).toEqual({
-      reviewSequence: 0,
-      requiredFeedbackRounds: 0,
-      advisoryFeedbackRounds: 0,
-      latestReview: null,
+    expect(state.lifecycleHooks).toEqual({
+      stopEventSequence: 0,
+      stopFailureEventSequence: 0,
+      feedbackEpoch: 0,
+      consecutiveBlockingRounds: 0,
+      latestEventId: null,
+      latestInvocations: [],
+      latestFeedback: null,
       limitations: [],
     });
-    expect(Object.isFrozen(state.stopReview)).toBe(true);
-    expect(Object.isFrozen(state.stopReview.limitations)).toBe(true);
+    expect(Object.isFrozen(state.lifecycleHooks)).toBe(true);
+    expect(Object.isFrozen(state.lifecycleHooks.limitations)).toBe(true);
   });
 });

@@ -11,10 +11,37 @@ export type {
   ProviderUsageMeteringQualification,
   ProviderDescriptor,
   ProviderMechanicCapability,
+  ProviderModelContextCapability,
   ProviderNativeToolInteractionCapability,
   RetrySchedulerOwnership,
 } from "./ProviderCapabilities.js";
 export { snapshotProviderCapabilities } from "./ProviderCapabilities.js";
+export type {
+  ModelContextAssessment,
+  ModelContextAssessmentDisposition,
+  ModelContextCapacity,
+  ModelContextHeadroom,
+  ModelInputEstimatorRef,
+  ModelInputMeasurement,
+  ProviderInputPreservationConformance,
+  ProviderModelContext,
+  ProviderModelTarget,
+  ProviderRequestedOutput,
+} from "./context/index.js";
+export {
+  assessModelContext,
+  createUnknownModelInputMeasurement,
+  snapshotModelContextAssessment,
+} from "./context/index.js";
+export type {
+  ProviderTransportAccounting,
+  ProviderTransportBinding,
+  ProviderTransportLimit,
+} from "./transport/index.js";
+export {
+  accountProviderTransport,
+  verifyProviderTransportAccounting,
+} from "./transport/index.js";
 export type {
   ModelCallRef,
   ModelCallSettlementKind,
@@ -87,8 +114,12 @@ export {
 export type {
   ProviderRequest,
   ProviderRequestCorrelation,
+  ProviderRequestModelContext,
 } from "./ProviderRequest.js";
-export { snapshotProviderRequest } from "./ProviderRequest.js";
+export {
+  createProviderSemanticRequestDigest,
+  snapshotProviderRequest,
+} from "./ProviderRequest.js";
 export type {
   ProviderFailure,
   ProviderResponse,

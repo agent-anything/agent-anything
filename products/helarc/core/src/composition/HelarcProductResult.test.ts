@@ -1,5 +1,8 @@
-import type { RunItem } from "@agent-anything/agent-runtime/run";
-import { createFailedRunResult } from "@agent-anything/agent-runtime/run";
+import {
+  createRunResult,
+  type RunItem,
+  type RunSettlementCauseRecord,
+} from "@agent-anything/agent-runtime/run";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   type RuntimeEvent,
@@ -139,7 +142,26 @@ describe("HelarcProductResult", () => {
         payload: { kind: "run_action", action: secondAction },
       },
     ];
-    const result = createFailedRunResult<HelarcAgentOutput>({
+    const cause = Object.freeze({
+      ref: Object.freeze({
+        run: Object.freeze({ id: "run-1" }),
+        id: "run-1:settlement-cause:1",
+        revision: "1",
+      }),
+      kind: "failure" as const,
+      failure: Object.freeze({ kind: "operation" as const, failure }),
+      source: Object.freeze({
+        owner: "helarc.file-operation",
+        kind: "operation_result",
+        id: "operation-result-1",
+        revision: null,
+        run: Object.freeze({ id: "run-1" }),
+      }),
+      underlying: Object.freeze([]),
+      omittedUnderlyingCount: 0,
+      recordedAt: COMPLETED_AT,
+    }) satisfies RunSettlementCauseRecord;
+    const result = createRunResult<HelarcAgentOutput>({
       runId: "run-1",
       taskId: task.task.id,
       startingAgent: { id: "helarc-code-agent", revision: "1" },
@@ -147,9 +169,15 @@ describe("HelarcProductResult", () => {
       startingInstructionBinding: testInstructionBinding("run-1"),
       finalInstructionBinding: testInstructionBinding("run-1"),
       startedAt: STARTED_AT,
-      completedAt: COMPLETED_AT,
+      settlement: Object.freeze({
+        status: "failed" as const,
+        completedAt: COMPLETED_AT,
+        cause: cause.ref,
+      }),
+      cause,
+      settlementCauses: Object.freeze([cause]),
       items,
-    }, "unknown_effect", { kind: "operation", failure });
+    });
 
     const projected = projectHelarcProductResult(
       task.task,
@@ -190,7 +218,10 @@ describe("HelarcProductResult", () => {
     );
 
     expect(projected.status).toBe("failed");
-    expect(projected.runResult).toMatchObject({ status: "failed", code: "unknown_effect" });
+    expect(projected.runResult).toMatchObject({
+      status: "failed",
+      code: "file_effect_unknown",
+    });
     expect(projected.verification).toEqual({
       status: "attention_required",
       snapshotRevision: 7,

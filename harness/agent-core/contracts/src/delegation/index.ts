@@ -1,7 +1,5 @@
 export type {
   DelegationOriginCorrelation,
-  DelegationSourceResultCorrelation,
-  DelegationSourceResultKind,
   DelegationRequestRef,
   DelegationResultRef,
   DelegationRunCorrelation,
@@ -12,7 +10,6 @@ export {
   snapshotDescendantContinuationCorrelation,
   snapshotDescendantContinuationRef,
   snapshotDelegationOriginCorrelation,
-  snapshotDelegationSourceResultCorrelation,
   snapshotDelegationRequestRef,
   snapshotDelegationResultRef,
   snapshotDelegationRunCorrelation,

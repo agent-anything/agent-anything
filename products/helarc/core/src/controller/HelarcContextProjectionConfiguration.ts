@@ -1,54 +1,26 @@
 import type { RunnerContextProjection } from "@agent-anything/agent-runtime/runner";
-import type { ControllerPreProjectionInput } from "@agent-anything/agent-runtime/controller";
 import type {
   ContextProjectionEstimationInput,
   ContextProjectionEstimator,
   ContextProjectionPolicy,
 } from "@agent-anything/context/projection";
 import {
-  allocateModelInputContext,
-  type ProviderModelInputAccounting,
-} from "@agent-anything/model-interaction/input";
-import { createNativeToolTurnInteraction } from "@agent-anything/model-interaction";
-import {
-  buildHelarcBasePromptAssembly,
   HELARC_CONTEXT_PROJECTION_FORMAT_VERSION,
-  HELARC_MODEL_OUTPUT_RESERVE_BYTES,
   renderHelarcContextProjectionFragment,
 } from "../prompt/HelarcPromptAssembly.js";
-import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
 
-const HELARC_MAXIMUM_CONTEXT_INPUT_AMOUNT = 256 * 1_024;
+const HELARC_MAXIMUM_CONTEXT_INPUT_BYTES = 256 * 1_024;
 
-export function createHelarcContextProjectionConfiguration(
-  accounting: ProviderModelInputAccounting,
-  protocol: HelarcControllerProtocolComposition,
-): RunnerContextProjection {
-  const capability = requireSupportedAccounting(accounting);
+export function createHelarcContextProjectionConfiguration(): RunnerContextProjection {
   const estimator: ContextProjectionEstimator = Object.freeze({
     ref: Object.freeze({
-      id: `${capability.estimator.id}.${HELARC_CONTEXT_PROJECTION_FORMAT_VERSION}`,
-      revision: capability.estimator.revision,
-      unit: capability.estimator.unit,
+      id: `helarc.context-projection.utf8.${HELARC_CONTEXT_PROJECTION_FORMAT_VERSION}`,
+      revision: "1",
+      unit: "bytes" as const,
       accuracy: "exact" as const,
     }),
     estimate(input: ContextProjectionEstimationInput) {
-      return accounting.estimateSection(Object.freeze({
-        id: "helarc:model-input:context-projection-fragment",
-        source: Object.freeze({
-          owner: "context",
-          kind: "context_contribution",
-          id: input.contribution.id,
-          revision: input.contribution.revision,
-        }),
-        kind: "context_projection_fragment",
-        role: "user",
-        necessity: "optional",
-        content: Object.freeze({
-          kind: "text",
-          text: renderHelarcContextProjectionFragment(input),
-        }),
-      })).accounting.amount;
+      return new TextEncoder().encode(renderHelarcContextProjectionFragment(input)).byteLength;
     },
   });
   const policy: ContextProjectionPolicy = Object.freeze({
@@ -67,40 +39,14 @@ export function createHelarcContextProjectionConfiguration(
     policy,
     audiences: Object.freeze(["model"]),
     maxContributionPayloadBytes: 128 * 1_024,
-    allocate(input: ControllerPreProjectionInput) {
-      const callableCatalog = protocol.createCallableCatalog(
-        input.toolExposure,
-        input.planLimits,
-      );
-      const allocation = allocateModelInputContext({
-        accounting,
-        interaction: createNativeToolTurnInteraction(callableCatalog.definitions),
-        outputReserve: Object.freeze({
-          unit: capability.estimator.unit,
-          amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,
-        }),
-        baseSections: buildHelarcBasePromptAssembly(input).sections,
-        maximumContextAmount: HELARC_MAXIMUM_CONTEXT_INPUT_AMOUNT,
-      });
+    allocate() {
       return Object.freeze({
         budget: Object.freeze({
-          unit: allocation.unit,
-          maximum: allocation.amount,
+          unit: "bytes" as const,
+          maximum: HELARC_MAXIMUM_CONTEXT_INPUT_BYTES,
         }),
         estimator,
       });
     },
   });
-}
-
-function requireSupportedAccounting(
-  accounting: ProviderModelInputAccounting,
-): Extract<ProviderModelInputAccounting["capability"], { readonly supported: true }> {
-  if (!accounting.capability.supported) {
-    throw new TypeError("Helarc requires exact Provider Model Input Accounting.");
-  }
-  if (accounting.capability.estimator.unit !== "bytes") {
-    throw new TypeError("Helarc currently requires byte-based Provider Model Input Accounting.");
-  }
-  return accounting.capability;
 }

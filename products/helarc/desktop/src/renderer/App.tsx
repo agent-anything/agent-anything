@@ -656,7 +656,7 @@ export function RunTerminalPanel({
   if (terminal === null) return null;
   const safeOutput = run.product.result?.output ?? null;
   const verification = run.product.result?.verification ?? null;
-  const failed = run.display.status === "failed" || run.display.status === "blocked" ||
+  const failed = run.display.status === "failed" ||
     run.display.status === "rejected" || run.display.status === "cancelled";
 
   return (
@@ -693,10 +693,10 @@ export function RunTerminalPanel({
           <dt>Model use</dt>
           <dd>{run.product.qualification.status}</dd>
         </div>
-        {run.host.stopReview.reviewSequence > 0 ? (
+        {run.host.lifecycleHooks.stopEventSequence > 0 ? (
           <div>
-            <dt>Stop review</dt>
-            <dd>{runStopReviewLabel(run.host.stopReview)}</dd>
+            <dt>Lifecycle hooks</dt>
+            <dd>{runLifecycleHookLabel(run.host.lifecycleHooks)}</dd>
           </div>
         ) : null}
         {terminal.code ? (
@@ -724,11 +724,6 @@ export function RunTerminalPanel({
           <dd>{formatTimestamp(terminal.completedAt)}</dd>
         </div>
       </dl>
-      {terminal.code === "runtime_stop_feedback_exhausted" ? (
-        <span>
-          The Run stopped after required completion feedback was exhausted.
-        </span>
-      ) : null}
       {safeOutput !== null && safeOutput.safeErrors.length > 0 ? (
         <ul className="error-list">
           {safeOutput.safeErrors.map((error) => (
@@ -1091,7 +1086,7 @@ function statusTone(status: HelarcMainSnapshot["status"]): string {
     return "success";
   }
 
-  if (status === "failed" || status === "blocked" || status === "rejected" || status === "cancelled") {
+  if (status === "failed" || status === "rejected" || status === "cancelled") {
     return "danger";
   }
 
@@ -1319,7 +1314,7 @@ export function RunTreePanel({
                   Steerable at revision {activeDelegation.childRunRevision}
                 </small>
               ) : null}
-              {node.resultCode !== null ? <small>{node.resultCode}</small> : null}
+              {node.terminal !== null ? <small>{node.terminal.code}</small> : null}
             </div>
             <span className="run-tree-node-status">{node.status}</span>
             </div>
@@ -1358,10 +1353,6 @@ function terminalTitle(snapshot: HelarcMainSnapshot): string {
 
   if (snapshot.status === "failed") {
     return "Run failed";
-  }
-
-  if (snapshot.status === "blocked") {
-    return "Run blocked";
   }
 
   return "Run completed";
@@ -1431,11 +1422,11 @@ function enforcementLabel(
   }
 }
 
-function runStopReviewLabel(stopReview: ActiveRunProjection["host"]["stopReview"]): string {
-  const limitations = stopReview.limitations.length === 0
+function runLifecycleHookLabel(hooks: ActiveRunProjection["host"]["lifecycleHooks"]): string {
+  const limitations = hooks.limitations.length === 0
     ? ""
-    : `, ${stopReview.limitations.length} limitations`;
-  return `review ${stopReview.reviewSequence}, ${stopReview.requiredFeedbackRounds} required and ${stopReview.advisoryFeedbackRounds} advisory feedback rounds${limitations}`;
+    : `, ${hooks.limitations.length} limitations`;
+  return `${hooks.stopEventSequence} stop events, ${hooks.consecutiveBlockingRounds} consecutive blocking rounds${limitations}`;
 }
 
 function verificationLabel(
@@ -1555,7 +1546,7 @@ function activitySeverity(
   activity: ActiveRunProjection["product"]["activity"][number],
 ): "info" | "warning" | "error" {
   if (
-    activity.kind === "run.failed" || activity.kind === "run.blocked" ||
+    activity.kind === "run.failed" ||
     activity.kind === "action.invalidated" ||
     activity.metadata.status === "failed" || activity.metadata.status === "blocked"
   ) {
@@ -1582,9 +1573,9 @@ function runTreeStatusTone(
   status: ActiveRunProjection["host"]["runTree"]["nodes"][number]["status"],
 ): "active" | "warning" | "success" | "danger" | "neutral" {
   if (status === "running" || status === "waiting") return "active";
-  if (status === "cancelling") return "warning";
+  if (status === "suspended" || status === "cancelling") return "warning";
   if (status === "succeeded") return "success";
-  if (status === "blocked" || status === "failed" || status === "cancelled") return "danger";
+  if (status === "failed" || status === "cancelled") return "danger";
   return "neutral";
 }
 

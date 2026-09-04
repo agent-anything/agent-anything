@@ -49,28 +49,22 @@ describe("Helarc baseline Tool Contracts", () => {
       canonicalEffect: null,
     });
     expect(findHelarcBaselineToolContract("Agent").inputSchema).toMatchObject({
+      required: ["prompt"],
       properties: {
-        dependency_result: {
-          required: ["kind", "id", "revision"],
-          properties: { kind: { const: "delegation_result" } },
-        },
-        replaced_result: {
-          required: ["kind", "id", "revision"],
-          properties: { kind: { const: "delegation_result" } },
-        },
+        prompt: { type: "string" },
+        description: { type: "string" },
       },
     });
     expect(findHelarcBaselineToolContract("Agent").outputSchema).toMatchObject({
-      required: expect.arrayContaining(["result_ref", "child_run_id", "status"]),
+      required: expect.arrayContaining(["agent_id", "status", "summary"]),
       properties: {
-        result_ref: {
-          required: ["kind", "id", "revision"],
-          properties: { kind: { const: "delegation_result" } },
-        },
+        agent_id: { anyOf: expect.any(Array) },
       },
     });
+    expect(findHelarcBaselineToolContract("Agent").inputSchema)
+      .not.toHaveProperty("properties.dependency_result");
     expect(findHelarcBaselineToolContract("Agent").outputSchema)
-      .not.toHaveProperty("properties.delegation_result_id");
+      .not.toHaveProperty("properties.result_ref");
     expect(findHelarcBaselineToolContract("SendMessage").binding).toEqual({
       kind: "descendant_message",
       target: "agent.child",

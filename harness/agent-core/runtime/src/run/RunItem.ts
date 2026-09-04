@@ -13,17 +13,23 @@ import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunSteeringApplication } from "./RunSteering.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunObservation } from "./RunObservation.js";
-import type { RunBlockedCode, RunFailureCode, RunResultStatus } from "./RunStatus.js";
+import type { RunResultStatus } from "./RunStatus.js";
+import type {
+  RunCauseSourceRef,
+  RunSettlement,
+  RunSettlementCauseRecord,
+} from "./RunSettlement.js";
+import type { RunResumeRequest, RunSuspension } from "./RunSuspension.js";
 import type { VerificationRunnerProjection } from "@agent-anything/verification/projection";
 import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolBindingUnavailableReason } from "@agent-anything/tools/selection";
-import type {
-  RunStopFeedback,
-  RunStopReviewRecord,
-} from "../stop/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 import type { ModelCallRef, ModelToolResult } from "@agent-anything/model-interaction";
-import type { TaskFulfillmentAssessment } from "../completion/index.js";
+import type { RunLifecycleEvent } from "../lifecycle/index.js";
+import type {
+  StopHookFeedbackRecord,
+  StopHookInvocationRecord,
+} from "../hooks/index.js";
 
 export interface ControllerToolExposureRecord {
   readonly proofId: string;
@@ -102,24 +108,37 @@ export type RunItemPayload<TOutput = unknown> =
       readonly kind: "verification_feedback";
       readonly verification: VerificationRunnerProjection;
     }
+  | { readonly kind: "lifecycle_event"; readonly event: RunLifecycleEvent<TOutput> }
+  | { readonly kind: "lifecycle_hook_invocation"; readonly invocation: StopHookInvocationRecord }
+  | { readonly kind: "lifecycle_hook_feedback"; readonly feedback: StopHookFeedbackRecord }
   | {
-      readonly kind: "task_fulfillment_assessment";
-      readonly assessment: TaskFulfillmentAssessment;
+      readonly kind: "completion_acceptance";
+      readonly source: RunCauseSourceRef;
+      readonly eventId: string;
+      readonly candidateRevision: string;
+      readonly acceptedAt: string;
     }
   | {
-      readonly kind: "stop_review";
-      readonly review: RunStopReviewRecord;
+      readonly kind: "suspension_transition";
+      readonly transition: "suspended";
+      readonly suspension: RunSuspension;
+      readonly resume: null;
     }
   | {
-      readonly kind: "stop_feedback";
-      readonly feedback: RunStopFeedback;
+      readonly kind: "suspension_transition";
+      readonly transition: "resumed";
+      readonly suspension: RunSuspension;
+      readonly resume: RunResumeRequest;
+    }
+  | {
+      readonly kind: "settlement_cause";
+      readonly cause: RunSettlementCauseRecord;
     }
   | {
       readonly kind: "terminal_transition";
       readonly status: RunResultStatus;
-      readonly code: RunBlockedCode | RunFailureCode | "runtime_cancelled" | null;
-      readonly output: TOutput | null;
-      readonly failure: RunFailureCause | null;
+      readonly settlement: RunSettlement<TOutput>;
+      readonly cause: RunSettlementCauseRecord;
     };
 
 export type RunItem<TOutput = unknown> = RunItemEnvelope<RunItemPayload<TOutput>>;

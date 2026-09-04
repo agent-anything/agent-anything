@@ -20,13 +20,13 @@ describe("RunTreeExecution", () => {
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child-active", 2))
       .toEqual({ status: "rejected", code: "descendant_run_active_limit_exceeded", treeRevision: 1 });
     tree.settleResources("run-child-1");
-    tree.settleRun("run-child-1", "succeeded", null, "2026-08-23T00:00:10.000Z");
+    tree.settleRun("run-child-1", "succeeded", terminal("succeeded"), "2026-08-23T00:00:10.000Z");
     tree.settleDescendantTransfer("run-child-1", "settled");
 
     const second = reserve(tree, tree.rootLineage, "run-root", "run-child-2", 3);
     expect(second.status).toBe("accepted");
     tree.settleResources("run-child-2");
-    tree.settleRun("run-child-2", "failed", "runtime_execution_failed", "2026-08-23T00:00:20.000Z");
+    tree.settleRun("run-child-2", "failed", terminal("failed"), "2026-08-23T00:00:20.000Z");
     tree.settleDescendantTransfer("run-child-2", "settled");
 
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child-total", 4))
@@ -149,7 +149,7 @@ describe("RunTreeExecution", () => {
     tree.updateLifecycle("run-child", "failed");
     expect(tree.getSnapshot().nodes.at(-1)).toMatchObject({
       status: "initializing",
-      resultCode: null,
+      terminal: null,
       completedAt: null,
     });
 
@@ -157,13 +157,13 @@ describe("RunTreeExecution", () => {
     tree.settleRun(
       "run-child",
       "failed",
-      "runtime_execution_failed",
+      terminal("failed"),
       "2026-08-23T00:00:01.000Z",
     );
     expect(tree.getSnapshot()).toMatchObject({ activeDescendantRuns: 0 });
     expect(tree.getSnapshot().nodes.at(-1)).toMatchObject({
       status: "failed",
-      resultCode: "runtime_execution_failed",
+      terminal: { code: "runtime_execution_failed" },
       completedAt: "2026-08-23T00:00:01.000Z",
     });
     tree.settleDescendantTransfer("run-child", "settled");
@@ -183,7 +183,7 @@ describe("RunTreeExecution", () => {
     expect(() => tree.settleRun(
       "run-root",
       "succeeded",
-      null,
+      terminal("succeeded"),
       "2026-08-23T00:00:01.000Z",
     )).toThrow("resource account");
   });
@@ -265,16 +265,16 @@ describe("RunTreeExecution", () => {
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child", 1).status)
       .toBe("accepted");
     expect(() => tree.settleRun(
-      "run-child", "succeeded", null, "2026-08-23T00:00:01.000Z",
+      "run-child", "succeeded", terminal("succeeded"), "2026-08-23T00:00:01.000Z",
     )).toThrow("resource account");
     tree.settleResources("run-child");
-    tree.settleRun("run-child", "succeeded", null, "2026-08-23T00:00:01.000Z");
+    tree.settleRun("run-child", "succeeded", terminal("succeeded"), "2026-08-23T00:00:01.000Z");
     tree.settleResources("run-root");
     expect(() => tree.settleRun(
-      "run-root", "succeeded", null, "2026-08-23T00:00:02.000Z",
+      "run-root", "succeeded", terminal("succeeded"), "2026-08-23T00:00:02.000Z",
     )).toThrow("descendant obligations remain");
     tree.settleDescendantTransfer("run-child", "unknown");
-    tree.settleRun("run-root", "succeeded", null, "2026-08-23T00:00:02.000Z");
+    tree.settleRun("run-root", "succeeded", terminal("succeeded"), "2026-08-23T00:00:02.000Z");
     expect(tree.getSnapshot().settlement).toMatchObject({
       complete: true,
       unsettledDescendantRuns: 0,
@@ -464,5 +464,26 @@ function cancellation(runId: string) {
     runId,
     now: () => STARTED_AT,
     createRequestId: (id) => `${id}:cancellation`,
+  });
+}
+
+function terminal(status: "succeeded" | "failed" | "cancelled") {
+  const causeKind = status === "succeeded"
+    ? "completion" as const
+    : status === "failed"
+      ? "failure" as const
+      : "cancellation" as const;
+  return Object.freeze({
+    causeId: `cause-${status}`,
+    causeRevision: "1",
+    causeKind,
+    code: status === "succeeded"
+      ? "completion_accepted"
+      : status === "failed"
+        ? "runtime_execution_failed"
+        : "runtime_cancelled",
+    sourceOwner: "agent-runtime",
+    sourceKind: `run_${causeKind}`,
+    sourceId: `source-${status}`,
   });
 }

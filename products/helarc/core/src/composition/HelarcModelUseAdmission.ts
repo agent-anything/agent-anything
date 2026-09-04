@@ -188,13 +188,13 @@ function assertProviderProfileIdentity(
   profile: HelarcProviderProfile,
 ): void {
   if (
-    provider.inputAccounting.providerId !== provider.descriptor.id ||
-    provider.inputAccounting.model !== profile.model ||
+    provider.modelContext.target.providerId !== provider.descriptor.id ||
+    provider.modelContext.target.model !== profile.model ||
     (providerKindForDescriptor(provider.descriptor.id) !== null &&
       providerKindForDescriptor(provider.descriptor.id) !== profile.providerKind)
   ) {
     throw new TypeError(
-      "Helarc Provider profile, descriptor, and Model Input Accounting identities differ.",
+      "Helarc Provider profile, descriptor, and model-target identities differ.",
     );
   }
 }
@@ -215,12 +215,11 @@ function providerAdapterRevision(
     kind,
     providerId: provider.descriptor.id,
     requestRetryScheduler: provider.descriptor.requestRetryScheduler,
-    estimator: provider.inputAccounting.capability.supported
-      ? provider.inputAccounting.capability.estimator
-      : null,
-    framingEstimator: provider.inputAccounting.capability.supported
-      ? provider.inputAccounting.capability.framingEstimator
-      : null,
+    modelTarget: provider.modelContext.target,
+    contextCapacity: provider.modelContext.capacity,
+    requestedOutput: provider.modelContext.requestedOutput,
+    inputPreservation: provider.modelContext.inputPreservation,
+    requestBodyTransportLimit: provider.requestBodyTransportLimit,
   });
 }
 

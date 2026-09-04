@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RunOperationSnapshot } from "@agent-anything/agent-runtime/runner";
-import { createSucceededRunResult } from "@agent-anything/agent-runtime/run";
+import {
+  createRunResult,
+  type RunSettlementCauseRecord,
+} from "@agent-anything/agent-runtime/run";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   snapshotRuntimeEventPayload,
@@ -45,7 +48,7 @@ describe("HostRunProjectionReducer", () => {
       status: "completed",
       terminal: {
         runId: "run-1",
-        code: null,
+        code: "completion_accepted",
         itemCount: 0,
       },
     });
@@ -111,44 +114,59 @@ describe("HostRunProjectionReducer", () => {
     expect(projection).toMatchObject({ status: "running", pendingInteractions: [] });
   });
 
-  it("copies bounded Stop Review only from RunHandle snapshots and rejects regression", () => {
-    const source = stopReviewSnapshot(2);
+  it("copies bounded lifecycle Hook state only from RunHandle snapshots and rejects regression", () => {
+    const source = lifecycleHookSnapshot(2);
     let projection = apply(initialProjection(), runOperationUpdate(1, {
       sequence: 1,
-      stopReview: source,
+      lifecycleHooks: source,
     }));
 
-    expect(projection.stopReview).toEqual({
-      reviewSequence: 2,
-      requiredFeedbackRounds: 1,
-      advisoryFeedbackRounds: 1,
-      latestReview: { runId: "run-1", sequence: 2 },
-      limitations: [{
-        owner: "plan",
-        code: "plan_reconciliation_feedback_exhausted",
-        message: "Plan reconciliation remained incomplete.",
+    expect(projection.lifecycleHooks).toEqual({
+      stopEventSequence: 2,
+      stopFailureEventSequence: 0,
+      feedbackEpoch: 1,
+      consecutiveBlockingRounds: 1,
+      latestEventId: "run-1:lifecycle:Stop:2",
+      latestInvocations: [{
+        hookId: "helarc.task-fulfillment",
+        hookRevision: "1",
+        eventId: "run-1:lifecycle:Stop:2",
+        status: "block",
+        code: "task_incomplete",
+        durationMs: 4,
+        stale: false,
       }],
+      latestFeedback: {
+        eventId: "run-1:lifecycle:Stop:2",
+        epoch: 1,
+        round: 1,
+        codes: ["task_incomplete"],
+        message: "The requested work is incomplete.",
+        omittedReasonCount: 0,
+      },
+      limitations: ["task_fulfillment_hook_non_blocking_error"],
     });
-    expect(Object.isFrozen(projection.stopReview)).toBe(true);
-    expect(Object.isFrozen(projection.stopReview.limitations)).toBe(true);
-    expect(Object.isFrozen(projection.stopReview.limitations[0])).toBe(true);
+    expect(Object.isFrozen(projection.lifecycleHooks)).toBe(true);
+    expect(Object.isFrozen(projection.lifecycleHooks.limitations)).toBe(true);
+    expect(Object.isFrozen(projection.lifecycleHooks.latestInvocations[0])).toBe(true);
 
-    projection = apply(projection, runtimeUpdate(2, "run.stop.reviewed", {
-      reviewSequence: 99,
-      decision: "allow_stop",
-      checkCount: 2,
-      limitationCount: 0,
-      requiredFeedbackRounds: 1,
-      advisoryFeedbackRounds: 1,
+    projection = apply(projection, runtimeUpdate(2, "run.lifecycle.hook.completed", {
+      eventId: "run-1:lifecycle:Stop:99",
+      hookId: "other-hook",
+      hookRevision: "1",
+      status: "allow",
+      code: null,
+      durationMs: 1,
+      stale: false,
     }));
-    expect(projection.stopReview.reviewSequence).toBe(2);
+    expect(projection.lifecycleHooks.stopEventSequence).toBe(2);
 
     expect(reduceHostRunProjection(projection, runOperationUpdate(3, {
       sequence: 2,
-      stopReview: initialStopReview(),
+      lifecycleHooks: initialLifecycleHooks(),
     }))).toMatchObject({
       status: "rejected",
-      code: "run_stop_review_sequence_regression",
+      code: "run_lifecycle_hook_sequence_regression",
     });
   });
 
@@ -443,7 +461,8 @@ function runOperationUpdate(
       lastRunItemSequence: 0,
       instructionBinding: null,
       plan: null,
-      stopReview: initialStopReview(),
+      suspension: null,
+      lifecycleHooks: initialLifecycleHooks(),
       retry: null,
       verification: null,
       pendingInteractions: [],
@@ -456,29 +475,54 @@ function runOperationUpdate(
   };
 }
 
-function initialStopReview(): RunOperationSnapshot["stopReview"] {
+function initialLifecycleHooks(): RunOperationSnapshot["lifecycleHooks"] {
   return Object.freeze({
-    reviewSequence: 0,
-    requiredFeedbackRounds: 0,
-    advisoryFeedbackRounds: 0,
-    latestReview: null,
+    stopEventSequence: 0,
+    stopFailureEventSequence: 0,
+    feedbackEpoch: 0,
+    consecutiveBlockingRounds: 0,
+    latestEventId: null,
+    latestInvocations: Object.freeze([]),
+    latestFeedback: null,
     limitations: Object.freeze([]),
   });
 }
 
-function stopReviewSnapshot(
-  reviewSequence: number,
-): RunOperationSnapshot["stopReview"] {
+function lifecycleHookSnapshot(
+  stopEventSequence: number,
+): RunOperationSnapshot["lifecycleHooks"] {
+  const eventId = `run-1:lifecycle:Stop:${stopEventSequence}`;
   return Object.freeze({
-    reviewSequence,
-    requiredFeedbackRounds: 1,
-    advisoryFeedbackRounds: 1,
-    latestReview: Object.freeze({ runId: "run-1", sequence: reviewSequence }),
-    limitations: Object.freeze([Object.freeze({
-      owner: "plan" as const,
-      code: "plan_reconciliation_feedback_exhausted",
-      message: "Plan reconciliation remained incomplete.",
+    stopEventSequence,
+    stopFailureEventSequence: 0,
+    feedbackEpoch: 1,
+    consecutiveBlockingRounds: 1,
+    latestEventId: eventId,
+    latestInvocations: Object.freeze([Object.freeze({
+      hook: Object.freeze({ id: "helarc.task-fulfillment", revision: "1" }),
+      eventId,
+      startedAt: NOW,
+      completedAt: NOW,
+      durationMs: 4,
+      outcome: Object.freeze({
+        status: "decided" as const,
+        decision: Object.freeze({
+          kind: "block" as const,
+          code: "task_incomplete",
+          reason: "The requested work is incomplete.",
+        }),
+      }),
+      stale: false,
     })]),
+    latestFeedback: Object.freeze({
+      eventId,
+      epoch: 1,
+      round: 1,
+      codes: Object.freeze(["task_incomplete"]),
+      message: "The requested work is incomplete.",
+      omittedReasonCount: 0,
+    }),
+    limitations: Object.freeze(["task_fulfillment_hook_non_blocking_error"]),
   });
 }
 
@@ -612,7 +656,26 @@ function settlementSnapshot() {
 }
 
 function succeededResult() {
-  return createSucceededRunResult({
+  const cause = Object.freeze({
+    ref: Object.freeze({
+      run: Object.freeze({ id: "run-1" }),
+      id: "run-1:settlement-cause:1",
+      revision: "1",
+    }),
+    kind: "completion" as const,
+    code: "completion_accepted" as const,
+    source: Object.freeze({
+      owner: "agent-runtime",
+      kind: "controller_decision",
+      id: "controller-turn-1",
+      revision: "1",
+      run: Object.freeze({ id: "run-1" }),
+    }),
+    underlying: Object.freeze([]),
+    omittedUnderlyingCount: 0,
+    recordedAt: LATER,
+  }) satisfies RunSettlementCauseRecord;
+  return createRunResult({
     runId: "run-1",
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
@@ -620,9 +683,16 @@ function succeededResult() {
     startingInstructionBinding: instructionBindingRef("run-1"),
     finalInstructionBinding: instructionBindingRef("run-1"),
     startedAt: NOW,
-    completedAt: LATER,
+    settlement: Object.freeze({
+      status: "succeeded" as const,
+      completedAt: LATER,
+      cause: cause.ref,
+      output: Object.freeze({ summary: "private final output" }),
+    }),
+    cause,
+    settlementCauses: Object.freeze([cause]),
     metadata: { durationMs: 1_000, privatePrompt: "must not survive" },
-  }, { summary: "private final output" });
+  });
 }
 
 const REQUEST: InteractionRequestRef = Object.freeze({

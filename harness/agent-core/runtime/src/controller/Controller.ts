@@ -28,7 +28,7 @@ import type {
   ProviderUsage,
 } from "@agent-anything/model-interaction";
 import type { PlanLimits } from "../plan/index.js";
-import type { RunStopReviewProjection } from "../stop/index.js";
+import type { RunLifecycleHookProjection } from "../hooks/index.js";
 import type { DescendantTargetsProjection } from "../delegation/index.js";
 
 interface ControllerModelItemBase {
@@ -146,7 +146,7 @@ export interface ControllerInput<TOutput = unknown> {
   readonly interaction: ModelInteractionProjection;
   readonly plan: PlanProjection | null;
   readonly planLimits: PlanLimits;
-  readonly stopReview: RunStopReviewProjection;
+  readonly lifecycleHooks: RunLifecycleHookProjection;
   readonly verification: ControllerVerificationProjection;
   readonly permission: PermissionContextProjection;
   readonly pending: readonly PendingRunSubjectProjection[];

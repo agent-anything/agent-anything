@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  snapshotDescendantContinuationCorrelation,
   snapshotDelegationOriginCorrelation,
   snapshotDelegationRunCorrelation,
-  snapshotDelegationSourceResultCorrelation,
 } from "./DelegationIdentity.js";
 
 describe("Agent Core delegation identity", () => {
@@ -70,21 +70,20 @@ describe("Agent Core delegation identity", () => {
     })).toThrow(/does not match its origin/);
   });
 
-  it("keeps a dependency result correlation separate from a new child identity", () => {
-    const dependency = snapshotDelegationSourceResultCorrelation({
-      kind: "dependency",
-      request: { id: "request-old", revision: "sha256:request-old" },
-      result: { id: "result-old", revision: "sha256:result-old" },
+  it("keeps a continuation correlation separate from a later child identity", () => {
+    const continuation = snapshotDescendantContinuationCorrelation({
+      ref: { id: "continuation-1", revision: "sha256:continuation-1" },
+      sourceRequest: { id: "request-old", revision: "sha256:request-old" },
+      sourceResult: { id: "result-old", revision: "sha256:result-old" },
       root: { id: "run-root" },
-      child: {
-        run: { id: "run-old" },
-        task: { id: "task-old" },
-        agent: { id: "agent-child", revision: "1" },
-      },
+      parent: { id: "run-root" },
+      sourceChild: { id: "run-old" },
+      agent: { id: "agent-child", revision: "1" },
     });
 
-    expect(dependency).not.toHaveProperty("newChild");
-    expect(Object.isFrozen(dependency.child)).toBe(true);
+    expect(continuation).not.toHaveProperty("newChild");
+    expect(continuation.sourceChild.id).toBe("run-old");
+    expect(Object.isFrozen(continuation.sourceResult)).toBe(true);
   });
 });
 

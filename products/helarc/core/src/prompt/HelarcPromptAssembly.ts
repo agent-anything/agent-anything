@@ -17,7 +17,6 @@ export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v6";
 export const HELARC_TOOL_EXPOSURE_VERSION = "trusted-tool-exposure-v1";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v2";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
-export const HELARC_MODEL_OUTPUT_RESERVE_BYTES = 256_000;
 
 export type HelarcPromptSectionId =
   | "native_tool_protocol"
@@ -28,7 +27,7 @@ export type HelarcPromptSectionId =
   | "run_input_items"
   | "context_projection"
   | "current_plan"
-  | "current_stop_review"
+  | "current_lifecycle_hooks"
   | "current_verification"
   | "permission_context"
   | "pending_interactions"
@@ -97,7 +96,7 @@ function assemble(
   const currentStateSections = Object.freeze([
     promptSection("context_projection", "user", contextContent),
     promptSection("current_plan", "user", `Current plan:\n${JSON.stringify(input.plan)}`),
-    promptSection("current_stop_review", "user", `Current stop review:\n${JSON.stringify(input.stopReview)}`),
+    promptSection("current_lifecycle_hooks", "user", `Current lifecycle Hook state:\n${JSON.stringify(input.lifecycleHooks)}`),
     promptSection("current_verification", "user", buildHelarcVerificationText({
       context,
       toolExposure: input.toolExposure,

@@ -28,6 +28,14 @@ import {
   snapshotModelInputComposition,
   type ModelInputComposition,
 } from "./input/index.js";
+import {
+  snapshotModelContextAssessment,
+  snapshotModelContextHeadroom,
+  snapshotProviderRequestedOutput,
+  type ModelContextAssessment,
+  type ModelContextHeadroom,
+  type ProviderRequestedOutput,
+} from "./context/index.js";
 
 export interface ProviderRequest {
   readonly requestId: string;
@@ -37,8 +45,15 @@ export interface ProviderRequest {
   readonly messages: readonly ModelMessage[];
   readonly interaction: ProviderInteraction;
   readonly composition: ModelInputComposition;
+  readonly modelContext: ProviderRequestModelContext;
   readonly continuation: ModelContinuationRef | null;
   readonly metadata: { readonly [key: string]: ModelJsonValue };
+}
+
+export interface ProviderRequestModelContext {
+  readonly requestedOutput: ProviderRequestedOutput;
+  readonly headroom: ModelContextHeadroom;
+  readonly assessment: ModelContextAssessment | null;
 }
 
 export interface ProviderRequestCorrelation {
@@ -49,12 +64,13 @@ export interface ProviderRequestCorrelation {
 export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest {
   strictRecord(input, "ProviderRequest", [
     "requestId", "purpose", "correlation", "instructions", "messages", "interaction", "composition",
-    "continuation", "metadata",
+    "modelContext", "continuation", "metadata",
   ]);
   const instructions = snapshotModelInstructions(input.instructions);
   const messages = snapshotModelMessages(input.messages);
   const interaction = snapshotProviderInteraction(input.interaction);
   const composition = snapshotModelInputComposition(input.composition);
+  const modelContext = snapshotProviderRequestModelContext(input.modelContext);
   if (
     input.requestId !== composition.id ||
     !modelInstructionsEqual(instructions, composition.instructions) ||
@@ -75,10 +91,40 @@ export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest
     messages,
     interaction,
     composition,
+    modelContext,
     continuation: input.continuation === null
       ? null
       : snapshotModelContinuationRef(input.continuation),
     metadata: metadata as { readonly [key: string]: ModelJsonValue },
+  });
+}
+
+export function createProviderSemanticRequestDigest(input: ProviderRequest): string {
+  const request = snapshotProviderRequest(input);
+  return `sha256:${createHash("sha256").update(JSON.stringify({
+    requestId: request.requestId,
+    purpose: request.purpose,
+    correlation: request.correlation,
+    instructions: request.instructions,
+    messages: request.messages,
+    interaction: request.interaction,
+    composition: request.composition,
+    requestedOutput: request.modelContext.requestedOutput,
+    headroom: request.modelContext.headroom,
+    continuation: request.continuation,
+    metadata: request.metadata,
+  }), "utf8").digest("hex")}`;
+}
+
+function snapshotProviderRequestModelContext(
+  input: ProviderRequestModelContext,
+): ProviderRequestModelContext {
+  return Object.freeze({
+    requestedOutput: snapshotProviderRequestedOutput(input.requestedOutput),
+    headroom: snapshotModelContextHeadroom(input.headroom),
+    assessment: input.assessment === null
+      ? null
+      : snapshotModelContextAssessment(input.assessment),
   });
 }
 
@@ -96,3 +142,4 @@ function snapshotProviderRequestCorrelation(
     branchId: token(input.branchId, "ProviderRequest.correlation.branchId"),
   });
 }
+import { createHash } from "node:crypto";

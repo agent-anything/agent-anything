@@ -34,8 +34,9 @@ test("accepts current owner-directed source forms", () => {
     {
       sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
       text: [
-        "const completion = await this.evaluateRunStop(turn, output);",
-        'if (completion.kind === "succeeded") { return this.settle({ status: "succeeded" }); }',
+        "const merged = await invokeStopLifecycleHooks(event, handlers);",
+        'if (merged.kind === "block") { return this.continueAfterFeedback(merged); }',
+        'this.record({ kind: "completion_acceptance" });',
       ].join("\n"),
     },
   ];
@@ -302,7 +303,7 @@ test("rejects physical execution and semantic processor dependencies in Verifica
   );
 });
 
-test("requires Runner Stop Review before success settlement", () => {
+test("requires Runner Stop lifecycle before success settlement", () => {
   const violations = evaluateSourceOwnershipRules({
     sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
     text: 'return this.settle({ status: "succeeded" });',
@@ -310,7 +311,7 @@ test("requires Runner Stop Review before success settlement", () => {
 
   assert.deepEqual(
     violations.map(({ rule }) => rule),
-    ["runner_stop_review_required"],
+    ["runner_stop_lifecycle_required"],
   );
 });
 

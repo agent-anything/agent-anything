@@ -1,20 +1,10 @@
-export type RunResultStatus = "succeeded" | "blocked" | "failed" | "cancelled";
-export type RunBlockedCode =
-  | "runtime_no_safe_path"
-  | "runtime_stop_feedback_exhausted"
-  | "verification_blocked";
-export type RunFailureCode =
-  | "runtime_execution_failed"
-  | "runtime_limit_exceeded"
-  | "runtime_deadline_exceeded"
-  | "context_projection_failed"
-  | "controller_failed"
-  | "tool_exposure_failed"
-  | "operation_failed"
-  | "interaction_failed"
-  | "required_finalization_failed"
-  | "task_fulfillment_failed"
-  | "verification_failed"
-  | "unknown_effect";
-export type RunCancelledCode = "runtime_cancelled";
-export type RunResultCode = RunBlockedCode | RunFailureCode | RunCancelledCode;
+export type ActiveRunStatus =
+  | "initializing"
+  | "running"
+  | "waiting"
+  | "suspended"
+  | "cancelling";
+
+export type TerminalRunStatus = "succeeded" | "failed" | "cancelled";
+export type RunStatus = ActiveRunStatus | TerminalRunStatus;
+export type RunResultStatus = TerminalRunStatus;

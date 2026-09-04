@@ -13,20 +13,12 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "instructionBindingRevision",
   ],
   "run.item.appended": ["itemId", "itemKind", "itemSequence"],
-  "run.stop.reviewed": [
-    "reviewSequence",
-    "decision",
-    "checkCount",
-    "limitationCount",
-    "requiredFeedbackRounds",
-    "advisoryFeedbackRounds",
+  "run.lifecycle.emitted": ["eventId", "eventName", "sequence", "eventRevision"],
+  "run.lifecycle.hook.completed": [
+    "eventId", "hookId", "hookRevision", "status", "code", "durationMs", "stale",
   ],
-  "run.stop.feedback_requested": [
-    "reviewSequence",
-    "owner",
-    "severity",
-    "round",
-    "code",
+  "run.lifecycle.hook.feedback": [
+    "eventId", "epoch", "round", "codeCount", "omittedReasonCount",
   ],
   "run.descendant.reserved": descendantFields(),
   "run.descendant.started": descendantFields(),
@@ -80,7 +72,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
   ],
   "run.completed": terminalFields(),
-  "run.blocked": terminalFields(),
   "run.failed": terminalFields(),
   "run.cancelled": terminalFields(),
   "controller.started": ["turnId", "iteration"],
@@ -104,6 +95,10 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "status",
     "code",
     "decisionKind",
+  ],
+  "tool.input.rejected": [
+    "attemptId", "requestedName", "selectedToolRevision", "code",
+    "issueCount", "omittedIssueCount", "modelCallId",
   ],
   "operation.started": [
     "invocationId",
@@ -187,7 +182,7 @@ function descendantFields(): readonly string[] {
   return [
     ...descendantDispatchFields(),
     "relationId", "relationKind", "parentRunActionId", "childRunId", "childAgentId", "childAgentRevision",
-    "requestId", "requestRevision", "dependencyResultId", "replacedResultId", "contextSourceCount",
+    "requestId", "requestRevision", "contextSourceCount",
     "authorityDerivationId", "limitDerivationId", "depth", "treeRevision",
   ];
 }

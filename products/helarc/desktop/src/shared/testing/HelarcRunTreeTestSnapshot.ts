@@ -72,7 +72,7 @@ export function createHelarcRunTreeTestSnapshot(input: {
       dispatch: null,
       depth: 0,
       status: input.status ?? "running",
-      resultCode: null,
+      terminal: null,
       startedAt: input.startedAt,
       completedAt: null,
       resourcesSettled: false,

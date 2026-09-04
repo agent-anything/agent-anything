@@ -70,7 +70,7 @@ test("lower Contract dependencies are exact and acyclic", () => {
 test("execution dependencies are exact and owner-directed", () => {
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/tools"),
-    ["@agent-anything/agent-core", "@agent-anything/operation-catalog"],
+    ["@agent-anything/agent-core", "@agent-anything/operation-catalog", "ajv"],
   );
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/context"),

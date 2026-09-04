@@ -1,6 +1,7 @@
 import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
+import { assessModelContext } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
   modelInputFromComposition,
@@ -25,8 +26,9 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "secret-key",
       model: "model-a",
       timeoutMs: 1000,
+      maximumOutputTokens: 2_048,
       nativeToolInteraction: { supported: true },
-      inputLimit: testInputLimit(),
+      requestBodyTransportLimit: testTransportLimit(),
     }, async (url, init) => {
       calls.push({
         url,
@@ -195,7 +197,7 @@ describe("OpenAICompatibleProvider", () => {
     });
     expect(calls[0]).not.toHaveProperty("response_format");
     expect(new TextEncoder().encode(JSON.stringify(calls[0])).byteLength)
-      .toBe(firstRequest.composition.accounting.inputAmount);
+      .toBeGreaterThan(0);
     expect(calls[1]).toMatchObject({
       messages: [
         expect.any(Object),
@@ -227,8 +229,9 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "secret-key",
       model: "model-a",
       timeoutMs: 1000,
+      maximumOutputTokens: 2_048,
       nativeToolInteraction: { supported: true },
-      inputLimit: testInputLimit(),
+      requestBodyTransportLimit: testTransportLimit(),
     }, async () => ({
       ok: false,
       status: 401,
@@ -278,8 +281,9 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "secret-key",
       model: "model-a",
       timeoutMs: 1000,
+      maximumOutputTokens: 2_048,
       nativeToolInteraction: { supported: true },
-      inputLimit: testInputLimit(),
+      requestBodyTransportLimit: testTransportLimit(),
     }, async () => ({
       ok: false,
       status: 400,
@@ -554,13 +558,18 @@ function config() {
     apiKey: "",
     model: "model-a",
     timeoutMs: 1000,
+    maximumOutputTokens: 2_048,
     nativeToolInteraction: { supported: true },
-    inputLimit: testInputLimit(),
+    requestBodyTransportLimit: testTransportLimit(),
   };
 }
 
-function testInputLimit() {
-  return { maximumBytes: 1_024 * 1_024, source: "host_configured" as const };
+function testTransportLimit() {
+  return {
+    maximumBytes: 1_024 * 1_024,
+    source: "host_configured" as const,
+    revision: "test-transport-limit-1",
+  };
 }
 
 function context(): InvocationInterruptionContext {
@@ -601,13 +610,9 @@ function rejectWhenAborted(signal: AbortSignal): Promise<never> {
 function request(provider: OpenAICompatibleProvider): ProviderRequest {
   const composition = composeModelInput({
     id: "openai-test-composition",
-    providerId: provider.inputAccounting.providerId,
-    model: provider.inputAccounting.model,
-    accounting: provider.inputAccounting,
+    providerId: provider.modelContext.target.providerId,
+    model: provider.modelContext.target.model,
     interaction: { kind: "structured_generation", outputFormat: TEST_OUTPUT_FORMAT },
-    outputReserve: { unit: "bytes", amount: 0 },
-    contextBudget: { unit: "bytes", amount: 0 },
-    contextProjectedAmount: 0,
     sections: [
       section("instructions", "instruction", "Follow the test instructions."),
       section("user", "user", "hello"),
@@ -616,6 +621,12 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
     composedAt: "2026-08-17T00:00:00.000Z",
   });
   const modelInput = modelInputFromComposition(composition);
+  const headroom = {
+    unit: "tokens" as const,
+    amount: 0,
+    policy: { id: "provider-test", revision: "1" },
+  };
+  const assessedAt = "2026-08-17T00:00:00.000Z";
   return {
     requestId: composition.id,
     purpose: "helarc.code-agent.plan",
@@ -627,6 +638,19 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
     instructions: modelInput.instructions,
     messages: modelInput.messages,
     composition,
+    modelContext: {
+      requestedOutput: provider.modelContext.requestedOutput,
+      headroom,
+      assessment: assessModelContext({
+        compositionId: composition.id,
+        capacity: provider.modelContext.capacity,
+        measurement: provider.modelContext.measure(composition, assessedAt),
+        requestedOutput: provider.modelContext.requestedOutput,
+        headroom,
+        assessedAt,
+        revision: "provider-test-assessment-1",
+      }),
+    },
     continuation: null,
     metadata: {},
   };
@@ -686,7 +710,7 @@ const TEST_OUTPUT_FORMAT = {
 function continuationRef(): ProviderRequest["continuation"] & object {
   return {
     id: "continuation-1",
-    providerId: "helarc-openai-compatible",
+    providerId: "openai-compatible.chat-completions",
     model: "model-a",
     mechanism: "response_chaining",
     predecessor: null,
@@ -697,7 +721,6 @@ function continuationRef(): ProviderRequest["continuation"] & object {
     protocol: { id: "protocol-1", revision: "1" },
     toolExposureContent: { id: "tools-1", revision: "1" },
     callableDefinitions: { id: "callables-1", revision: "1" },
-    modelQualification: null,
     policy: { id: "policy-1", revision: "1" },
     state: {
       kind: "opaque_provider_state",

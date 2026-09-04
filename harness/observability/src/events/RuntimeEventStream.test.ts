@@ -4,7 +4,7 @@ import { RUNTIME_EVENT_SCHEMA_VERSION } from "./RuntimeEvent.js";
 import type {
   ContextProjectionCompletedRuntimeEventPayload,
   ControllerFinishedRuntimeEventPayload,
-  RunStopReviewedRuntimeEventPayload,
+  RunLifecycleHookCompletedRuntimeEventPayload,
 } from "./RuntimeEventPayload.js";
 import { RuntimeEventStream } from "./RuntimeEventStream.js";
 
@@ -118,19 +118,19 @@ describe("RuntimeEventStream", () => {
     });
   });
 
-  it("publishes the bounded Task Fulfillment assessment Run Item kind", () => {
+  it("publishes the bounded lifecycle Hook invocation Run Item kind", () => {
     const events: RuntimeEvent[] = [];
     const stream = createStream([{ publish: (event) => events.push(event) }]);
 
     stream.emit("run.item.appended", {
       itemId: "run-1:run-item:1",
-      itemKind: "task_fulfillment_assessment",
+      itemKind: "lifecycle_hook_invocation",
       itemSequence: 1,
     });
 
     expect(events[0]?.payload).toEqual({
       itemId: "run-1:run-item:1",
-      itemKind: "task_fulfillment_assessment",
+      itemKind: "lifecycle_hook_invocation",
       itemSequence: 1,
     });
   });
@@ -172,30 +172,32 @@ describe("RuntimeEventStream", () => {
     expect(events[0]?.payload).not.toHaveProperty("omittedDescriptors");
   });
 
-  it("allowlists bounded Stop Review counters without private checks", () => {
+  it("allowlists bounded lifecycle Hook completion fields without private output", () => {
     const events: RuntimeEvent[] = [];
     const stream = createStream([{ publish: (event) => events.push(event) }]);
 
-    stream.emit("run.stop.reviewed", {
-      reviewSequence: 2,
-      decision: "continue_run",
-      checkCount: 3,
-      limitationCount: 0,
-      requiredFeedbackRounds: 1,
-      advisoryFeedbackRounds: 1,
-      rawChecks: [{ private: true }],
-    } as RunStopReviewedRuntimeEventPayload);
+    stream.emit("run.lifecycle.hook.completed", {
+      eventId: "run-1:lifecycle:Stop:2",
+      hookId: "helarc.task-fulfillment",
+      hookRevision: "1",
+      status: "block",
+      code: "task_incomplete",
+      durationMs: 12,
+      stale: false,
+      rawOutput: { private: true },
+    } as RunLifecycleHookCompletedRuntimeEventPayload);
 
     expect(events[0]?.payload).toEqual({
-      reviewSequence: 2,
-      decision: "continue_run",
-      checkCount: 3,
-      limitationCount: 0,
-      requiredFeedbackRounds: 1,
-      advisoryFeedbackRounds: 1,
+      eventId: "run-1:lifecycle:Stop:2",
+      hookId: "helarc.task-fulfillment",
+      hookRevision: "1",
+      status: "block",
+      code: "task_incomplete",
+      durationMs: 12,
+      stale: false,
     });
     expect(Object.isFrozen(events[0]?.payload)).toBe(true);
-    expect(events[0]?.payload).not.toHaveProperty("rawChecks");
+    expect(events[0]?.payload).not.toHaveProperty("rawOutput");
   });
 
   it("snapshots a payload-free Context transition trace record", () => {
@@ -270,15 +272,13 @@ describe("RuntimeEventStream", () => {
       siblingIndex: 1,
       siblingCount: 2,
       relationId: "relation-next",
-      relationKind: "replacement",
+      relationKind: "continuation",
       parentRunActionId: "action-next",
       childRunId: "run-grandchild",
       childAgentId: "agent-child",
       childAgentRevision: "agent-child-v1",
       requestId: "request-next",
       requestRevision: "request-next-v1",
-      dependencyResultId: null,
-      replacedResultId: "result-previous",
       contextSourceCount: 2,
       authorityDerivationId: "authority-next",
       limitDerivationId: "limits-next",
@@ -334,15 +334,13 @@ describe("RuntimeEventStream", () => {
       siblingIndex: 1,
       siblingCount: 2,
       relationId: "relation-next",
-      relationKind: "replacement",
+      relationKind: "continuation",
       parentRunActionId: "action-next",
       childRunId: "run-grandchild",
       childAgentId: "agent-child",
       childAgentRevision: "agent-child-v1",
       requestId: "request-next",
       requestRevision: "request-next-v1",
-      dependencyResultId: null,
-      replacedResultId: "result-previous",
       contextSourceCount: 2,
       authorityDerivationId: "authority-next",
       limitDerivationId: "limits-next",

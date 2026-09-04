@@ -29,22 +29,30 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       }) as RuntimeEventPayloadMap[TName];
     case "run.item.appended":
       return freeze({ itemId: token(payload.itemId, "run.item.appended.itemId"), itemKind: oneOf(payload.itemKind, runItemKinds, "run.item.appended.itemKind"), itemSequence: positive(payload.itemSequence, "run.item.appended.itemSequence") }) as RuntimeEventPayloadMap[TName];
-    case "run.stop.reviewed":
+    case "run.lifecycle.emitted":
       return freeze({
-        reviewSequence: positive(payload.reviewSequence, "run.stop.reviewed.reviewSequence"),
-        decision: oneOf(payload.decision, ["allow_stop", "continue_run", "wait", "failed"] as const, "run.stop.reviewed.decision"),
-        checkCount: nonNegativeInteger(payload.checkCount, "run.stop.reviewed.checkCount"),
-        limitationCount: nonNegativeInteger(payload.limitationCount, "run.stop.reviewed.limitationCount"),
-        requiredFeedbackRounds: nonNegativeInteger(payload.requiredFeedbackRounds, "run.stop.reviewed.requiredFeedbackRounds"),
-        advisoryFeedbackRounds: nonNegativeInteger(payload.advisoryFeedbackRounds, "run.stop.reviewed.advisoryFeedbackRounds"),
+        eventId: token(payload.eventId, "run.lifecycle.emitted.eventId"),
+        eventName: oneOf(payload.eventName, ["Stop", "StopFailure"] as const, "run.lifecycle.emitted.eventName"),
+        sequence: positive(payload.sequence, "run.lifecycle.emitted.sequence"),
+        eventRevision: token(payload.eventRevision, "run.lifecycle.emitted.eventRevision"),
       }) as RuntimeEventPayloadMap[TName];
-    case "run.stop.feedback_requested":
+    case "run.lifecycle.hook.completed":
       return freeze({
-        reviewSequence: positive(payload.reviewSequence, "run.stop.feedback_requested.reviewSequence"),
-        owner: oneOf(payload.owner, ["task_fulfillment", "verification", "plan"] as const, "run.stop.feedback_requested.owner"),
-        severity: oneOf(payload.severity, ["required", "advisory"] as const, "run.stop.feedback_requested.severity"),
-        round: positive(payload.round, "run.stop.feedback_requested.round"),
-        code: token(payload.code, "run.stop.feedback_requested.code"),
+        eventId: token(payload.eventId, "run.lifecycle.hook.completed.eventId"),
+        hookId: token(payload.hookId, "run.lifecycle.hook.completed.hookId"),
+        hookRevision: token(payload.hookRevision, "run.lifecycle.hook.completed.hookRevision"),
+        status: oneOf(payload.status, ["allow", "block", "non_blocking_error"] as const, "run.lifecycle.hook.completed.status"),
+        code: nullableToken(payload.code, "run.lifecycle.hook.completed.code"),
+        durationMs: nonNegativeInteger(payload.durationMs, "run.lifecycle.hook.completed.durationMs"),
+        stale: boolean(payload.stale, "run.lifecycle.hook.completed.stale"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "run.lifecycle.hook.feedback":
+      return freeze({
+        eventId: token(payload.eventId, "run.lifecycle.hook.feedback.eventId"),
+        epoch: nonNegativeInteger(payload.epoch, "run.lifecycle.hook.feedback.epoch"),
+        round: positive(payload.round, "run.lifecycle.hook.feedback.round"),
+        codeCount: nonNegativeInteger(payload.codeCount, "run.lifecycle.hook.feedback.codeCount"),
+        omittedReasonCount: nonNegativeInteger(payload.omittedReasonCount, "run.lifecycle.hook.feedback.omittedReasonCount"),
       }) as RuntimeEventPayloadMap[TName];
     case "run.descendant.reserved":
     case "run.descendant.started":
@@ -65,9 +73,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       return freeze({
         ...base,
         status,
-        code: status === "succeeded"
-          ? exact(payload.code, null, "run.descendant.settled.code")
-          : token(payload.code, "run.descendant.settled.code"),
+        code: token(payload.code, "run.descendant.settled.code"),
         resultId: token(payload.resultId, "run.descendant.settled.resultId"),
         resultRevision: token(payload.resultRevision, "run.descendant.settled.resultRevision"),
         expectationPresentCount: nonNegativeInteger(payload.expectationPresentCount, "run.descendant.settled.expectationPresentCount"),
@@ -100,7 +106,6 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
     case "context.projection.completed":
       return contextProjectionCompleted(payload) as unknown as RuntimeEventPayloadMap[TName];
     case "run.completed":
-    case "run.blocked":
     case "run.failed":
     case "run.cancelled":
       return terminal(name, payload) as unknown as RuntimeEventPayloadMap[TName];
@@ -128,6 +133,16 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         status: oneOf(payload.status, ["decided", "failed", "interrupted"] as const, "controller.finished.status"),
         code: nullableToken(payload.code, "controller.finished.code"),
         decisionKind: payload.decisionKind === null ? null : oneOf(payload.decisionKind, ["advance", "propose_completion", "propose_stop"] as const, "controller.finished.decisionKind"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "tool.input.rejected":
+      return freeze({
+        attemptId: token(payload.attemptId, "tool.input.rejected.attemptId"),
+        requestedName: token(payload.requestedName, "tool.input.rejected.requestedName"),
+        selectedToolRevision: nullableToken(payload.selectedToolRevision, "tool.input.rejected.selectedToolRevision"),
+        code: token(payload.code, "tool.input.rejected.code"),
+        issueCount: nonNegativeInteger(payload.issueCount, "tool.input.rejected.issueCount"),
+        omittedIssueCount: nonNegativeInteger(payload.omittedIssueCount, "tool.input.rejected.omittedIssueCount"),
+        modelCallId: nullableToken(payload.modelCallId, "tool.input.rejected.modelCallId"),
       }) as RuntimeEventPayloadMap[TName];
     case "operation.started":
       return freeze({
@@ -205,8 +220,8 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
   }
 }
 
-const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "task_fulfillment_assessment", "stop_review", "stop_feedback", "terminal_transition"];
-const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "blocked", "failed", "cancelled"];
+const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "lifecycle_event", "lifecycle_hook_invocation", "lifecycle_hook_feedback", "completion_acceptance", "suspension_transition", "settlement_cause", "terminal_transition"];
+const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];
@@ -235,15 +250,13 @@ function descendant(
   return freeze({
     ...descendantDispatch(name, input),
     relationId: token(input.relationId, `${name}.relationId`),
-    relationKind: oneOf(input.relationKind, ["delegation", "replacement", "continuation"] as const, `${name}.relationKind`),
+    relationKind: oneOf(input.relationKind, ["delegation", "continuation"] as const, `${name}.relationKind`),
     parentRunActionId: token(input.parentRunActionId, `${name}.parentRunActionId`),
     childRunId: token(input.childRunId, `${name}.childRunId`),
     childAgentId: token(input.childAgentId, `${name}.childAgentId`),
     childAgentRevision: token(input.childAgentRevision, `${name}.childAgentRevision`),
     requestId: token(input.requestId, `${name}.requestId`),
     requestRevision: token(input.requestRevision, `${name}.requestRevision`),
-    dependencyResultId: nullableToken(input.dependencyResultId, `${name}.dependencyResultId`),
-    replacedResultId: nullableToken(input.replacedResultId, `${name}.replacedResultId`),
     contextSourceCount: nonNegativeInteger(input.contextSourceCount, `${name}.contextSourceCount`),
     authorityDerivationId: token(input.authorityDerivationId, `${name}.authorityDerivationId`),
     limitDerivationId: token(input.limitDerivationId, `${name}.limitDerivationId`),
@@ -365,6 +378,7 @@ function nullablePositive(value: unknown, field: string): number | null { return
 function positive(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new TypeError(`${field} must be a positive integer.`); return value as number; }
 function nonNegative(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new TypeError(`${field} must be non-negative.`); return value; }
 function nonNegativeInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError(`${field} must be a non-negative integer.`); return value as number; }
+function boolean(value: unknown, field: string): boolean { if (typeof value !== "boolean") throw new TypeError(`${field} must be a boolean.`); return value; }
 function exact<T>(value: unknown, expected: T, field: string): T { if (value !== expected) throw new TypeError(`${field} has an invalid value.`); return expected; }
 function oneOf<T extends string>(value: unknown, values: readonly T[], field: string): T { if (typeof value !== "string" || !values.includes(value as T)) throw new TypeError(`${field} has an unsupported value.`); return value as T; }
 function tokenArray(value: unknown, field: string): readonly string[] { if (!Array.isArray(value)) throw new TypeError(`${field} must be an array.`); return Object.freeze(value.map((entry, index) => token(entry, `${field}[${index}]`))); }

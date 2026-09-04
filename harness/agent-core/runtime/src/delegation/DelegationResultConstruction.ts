@@ -1,6 +1,6 @@
 import type { DelegationRunCorrelation } from "@agent-anything/agent-core/delegation";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
-import type { RunItem, RunResult } from "../run/index.js";
+import { runSettlementCauseCode, type RunItem, type RunResult } from "../run/index.js";
 import type {
   RunTreeResourceMeasurement,
   RunTreeResourceSettlement,
@@ -170,8 +170,9 @@ function limitDisposition(
     0,
     Date.parse(result.completedAt) - Date.parse(result.startedAt),
   );
+  const terminalCode = runSettlementCauseCode(result.cause);
   const exhaustedLimit = controllerTurns > request.limits.maxControllerTurns ||
-      result.code === "runtime_limit_exceeded" &&
+      terminalCode === "runtime_limit_exceeded" &&
         controllerTurns >= request.limits.maxControllerTurns
     ? "controller_turns" as const
     : actions > request.limits.maxActions
@@ -183,7 +184,7 @@ function limitDisposition(
           : exceeds(usage.costUnits, request.limits.maxCostUnits)
             ? "cost_units" as const
       : durationMs > request.limits.maxDurationMs ||
-          result.code === "runtime_deadline_exceeded"
+          terminalCode === "runtime_deadline_exceeded"
         ? "duration" as const
         : contextBytes > request.limits.maxContextBytes
           ? "context_bytes" as const

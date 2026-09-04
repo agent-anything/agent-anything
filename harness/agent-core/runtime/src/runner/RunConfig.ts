@@ -8,7 +8,7 @@ import type {
 } from "@agent-anything/canonical-action/subject";
 import type { ToolSelectionRevision } from "@agent-anything/tools/selection";
 import type { PlanLimits } from "../plan/index.js";
-import type { RunStopReviewLimits } from "../stop/index.js";
+import type { StopHookFeedbackPolicy } from "../hooks/index.js";
 import type { RetryPolicy } from "../retry/index.js";
 import type { CancellationLimits, RunCancellationController } from "../run/index.js";
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
@@ -26,7 +26,10 @@ export interface RunLimits {
   readonly maxDurationMs: number;
   readonly maxPendingInteractions: number;
   readonly plan: PlanLimits;
-  readonly stopReview: RunStopReviewLimits;
+  readonly completionGate: {
+    readonly maxFeedbackRounds: number;
+  };
+  readonly stopHooks: StopHookFeedbackPolicy;
 }
 
 export interface RunTreeLimits {

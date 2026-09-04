@@ -3,6 +3,7 @@ import type {
   ModelToolCall,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
+import { assessModelContext } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
   modelInputFromComposition,
@@ -188,7 +189,7 @@ describe("OllamaProvider", () => {
     expect(calls[0]?.body).not.toHaveProperty("format");
     expect(calls[0]?.body).not.toHaveProperty("think");
     expect(new TextEncoder().encode(JSON.stringify(calls[0]?.body)).byteLength)
-      .toBe(firstRequest.composition.accounting.inputAmount);
+      .toBeGreaterThan(0);
     expect(calls[1]?.body).toMatchObject({
       messages: [
         expect.any(Object),
@@ -284,7 +285,7 @@ describe("OllamaProvider", () => {
     expect(JSON.stringify(bodies[0])).not.toContain("minLength");
   });
 
-  it("rejects request composition when oneOf branches are not provably exclusive", () => {
+  it("rejects request encoding when oneOf branches are not provably exclusive", async () => {
     const fetchImpl = vi.fn(async () => okResponse({ response: "{}" }));
     const provider = new OllamaProvider(config(), fetchImpl);
     const overlapping = {
@@ -317,9 +318,11 @@ describe("OllamaProvider", () => {
       },
     } satisfies ModelOutputFormat;
 
-    expect(() => request(provider, overlapping)).toThrow(
-      "Ollama cannot project the requested JSON Schema into its native schema dialect.",
-    );
+    await expect(provider.send(request(provider, overlapping), context()))
+      .resolves.toMatchObject({
+        kind: "failed",
+        failure: { code: "provider_input_encoding_invalid" },
+      });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -631,7 +634,7 @@ describe("OllamaProvider", () => {
       interaction: { kind: "text_generation" },
     }, context())).resolves.toMatchObject({
       kind: "failed",
-      failure: { code: "provider_input_accounting_invalid" },
+      failure: { code: "provider_request_invalid" },
     });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -647,7 +650,11 @@ function config() {
       maximumOutputTokens: 2_048,
     },
     nativeToolInteraction: { supported: true },
-    inputLimit: { maximumBytes: 1_024 * 1_024, source: "host_configured" as const },
+    requestBodyTransportLimit: {
+      maximumBytes: 1_024 * 1_024,
+      source: "host_configured" as const,
+      revision: "test-transport-limit-1",
+    },
   };
 }
 
@@ -692,13 +699,9 @@ function request(
 ): ProviderRequest {
   const composition = composeModelInput({
     id: "ollama-test-composition",
-    providerId: provider.inputAccounting.providerId,
-    model: provider.inputAccounting.model,
-    accounting: provider.inputAccounting,
+    providerId: provider.modelContext.target.providerId,
+    model: provider.modelContext.target.model,
     interaction: { kind: "structured_generation", outputFormat },
-    outputReserve: { unit: "bytes", amount: 0 },
-    contextBudget: { unit: "bytes", amount: 0 },
-    contextProjectedAmount: 0,
     sections: [
       section("instruction", "instruction", "You are concise."),
       section("user", "user", "hello"),
@@ -707,6 +710,12 @@ function request(
     composedAt: "2026-08-17T00:00:00.000Z",
   });
   const modelInput = modelInputFromComposition(composition);
+  const headroom = {
+    unit: "tokens" as const,
+    amount: 0,
+    policy: { id: "provider-test", revision: "1" },
+  };
+  const assessedAt = "2026-08-17T00:00:00.000Z";
   return {
     requestId: composition.id,
     purpose: "helarc.code-agent.plan",
@@ -719,6 +728,19 @@ function request(
     instructions: modelInput.instructions,
     messages: modelInput.messages,
     composition,
+    modelContext: {
+      requestedOutput: provider.modelContext.requestedOutput,
+      headroom,
+      assessment: assessModelContext({
+        compositionId: composition.id,
+        capacity: provider.modelContext.capacity,
+        measurement: provider.modelContext.measure(composition, assessedAt),
+        requestedOutput: provider.modelContext.requestedOutput,
+        headroom,
+        assessedAt,
+        revision: "provider-test-assessment-1",
+      }),
+    },
     metadata: {},
   };
 }

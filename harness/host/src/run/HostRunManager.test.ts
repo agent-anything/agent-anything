@@ -3,7 +3,10 @@ import { createAgentInstructions, type Agent } from "@agent-anything/agent-core/
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
-import { createSucceededRunResult } from "@agent-anything/agent-runtime/run";
+import {
+  createRunResult,
+  type RunSettlementCauseRecord,
+} from "@agent-anything/agent-runtime/run";
 import type {
   RunConfig,
   RunHandle,
@@ -172,11 +175,15 @@ function createFakeHandle(runId: string) {
     lastRunItemSequence: 0,
     instructionBinding: null,
     plan: null,
-    stopReview: {
-      reviewSequence: 0,
-      requiredFeedbackRounds: 0,
-      advisoryFeedbackRounds: 0,
-      latestReview: null,
+    suspension: null,
+    lifecycleHooks: {
+      stopEventSequence: 0,
+      stopFailureEventSequence: 0,
+      feedbackEpoch: 0,
+      consecutiveBlockingRounds: 0,
+      latestEventId: null,
+      latestInvocations: [],
+      latestFeedback: null,
       limitations: [],
     },
     retry: null,
@@ -234,7 +241,9 @@ function createFakeHandle(runId: string) {
       return () => listeners.delete(listener);
     },
     cancel,
+    resume: vi.fn(() => ({ status: "not_suspended" as const })),
     steer,
+    steerDescendant: vi.fn(() => ({ status: "not_found" as const })),
     submitInteraction,
     wait: () => completion,
     getResult: () => result,
@@ -334,7 +343,26 @@ function rootTree(runId: string): RunOperationSnapshot["runTree"] {
 }
 
 function succeededResult() {
-  return createSucceededRunResult({
+  const cause = Object.freeze({
+    ref: Object.freeze({
+      run: Object.freeze({ id: "run-1" }),
+      id: "run-1:settlement-cause:1",
+      revision: "1",
+    }),
+    kind: "completion" as const,
+    code: "completion_accepted" as const,
+    source: Object.freeze({
+      owner: "agent-runtime",
+      kind: "controller_decision",
+      id: "controller-turn-1",
+      revision: "1",
+      run: Object.freeze({ id: "run-1" }),
+    }),
+    underlying: Object.freeze([]),
+    omittedUnderlyingCount: 0,
+    recordedAt: LATER,
+  }) satisfies RunSettlementCauseRecord;
+  return createRunResult({
     runId: "run-1",
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
@@ -342,8 +370,15 @@ function succeededResult() {
     startingInstructionBinding: instructionBindingRef("run-1"),
     finalInstructionBinding: instructionBindingRef("run-1"),
     startedAt: NOW,
-    completedAt: LATER,
-  }, { summary: "done" });
+    settlement: Object.freeze({
+      status: "succeeded" as const,
+      completedAt: LATER,
+      cause: cause.ref,
+      output: Object.freeze({ summary: "done" }),
+    }),
+    cause,
+    settlementCauses: Object.freeze([cause]),
+  });
 }
 
 function instructionBindingRef(runId: string) {

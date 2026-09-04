@@ -103,6 +103,7 @@ import type {
 import type { InteractionTerminalRecord } from "@agent-anything/interaction/records";
 import {
   adaptToolSemanticResult,
+  type FailedToolResult,
   type ToolResult,
   type ToolSettlementRef,
 } from "@agent-anything/tools/result";
@@ -117,7 +118,11 @@ import {
   type ModelToolCall,
   type ModelToolResult,
 } from "@agent-anything/model-interaction";
-import { materializeToolCall, type ToolCall } from "@agent-anything/tools/invocation";
+import {
+  materializeToolCall,
+  type ToolCall,
+  type ToolCallAttempt,
+} from "@agent-anything/tools/invocation";
 import {
   findSelectedTool,
   ToolExposureValidationError,
@@ -136,50 +141,52 @@ import {
   type ToolRequestCandidate,
 } from "../controller/index.js";
 import {
-  createTaskFulfillmentFailure,
-  snapshotTaskFulfillmentAssessment,
-  snapshotTaskFulfillmentEvaluationInput,
-  type TaskFulfillmentAssessment,
-  type TaskFulfillmentEvaluationInput,
-  type TaskFulfillmentEvaluationResult,
-  type TaskFulfillmentFailure,
-} from "../completion/index.js";
-import {
   abandonPlan,
   applyPlanUpdate,
   projectPlan,
 } from "../plan/index.js";
 import { snapshotRetryEvent, type RetryEventSink } from "../retry/index.js";
 import {
-  projectRunStopReview,
-  snapshotRunStopFeedback,
-  snapshotRunStopReviewRecord,
-  type RunStopCheck,
-  type RunStopFeedback,
-  type RunStopLimitation,
-} from "../stop/index.js";
+  advanceRunLifecycleHookFeedbackEpoch,
+  invokeStopLifecycleHooks,
+  observeStopFailureLifecycleHooks,
+  projectRunLifecycleHooks,
+  type StopHookFeedbackRecord,
+} from "../hooks/index.js";
+import {
+  snapshotStopFailureLifecycleEvent,
+  snapshotStopLifecycleEvent,
+  type StopCandidateBasis,
+} from "../lifecycle/index.js";
 import { RunTranscriptRecorder } from "../transcript/index.js";
 import {
-  createBlockedRunResult,
-  createCancelledRunResult,
-  createFailedRunResult,
+  createRunResult,
   createRunFailureCause,
   createRunObservation,
-  createSucceededRunResult,
   deriveActiveRunStatus,
+  runSettlementCauseCode,
+  sameRunSuspensionRef,
   toRunCancellationSummary,
   type PendingRunSubject,
   type ControllerToolExposureRecord,
+  type RunCausalLink,
+  type RunCauseSourceRef,
   type RunFailureCause,
-  type RunFailureCode,
   type RunItemPayload,
   type RunObservation,
+  type RunResumeReceipt,
+  type RunResumeRequest,
+  type RunResumeRequestInput,
   type RunResult,
+  type RunSettlement,
+  type RunSettlementCauseRecord,
   type RunState,
   type RunSteeringApplication,
   type RunSteeringCommand,
   type RunSteeringInput,
   type RunSteeringSubmissionReceipt,
+  type RunSuspension,
+  type RunSuspensionCode,
   type RuntimeRunAction,
   snapshotRunSteeringInput,
 } from "../run/index.js";
@@ -200,7 +207,6 @@ import {
   deriveDelegationAuthority,
   deriveDelegationLimits,
   constructDelegationResult,
-  createDelegationContextMaterial,
   createDescendantContinuationTargetProjection,
   materializeDelegationRequest,
   snapshotDelegationSteeringRoute,
@@ -275,8 +281,8 @@ import {
   createDelegationSelectedContextContribution,
   createObservationContextAdmissionProfile,
   createObservationContextContribution,
-  createStopFeedbackContextAdmissionProfile,
-  createStopFeedbackContextContribution,
+  createLifecycleHookFeedbackContextAdmissionProfile,
+  createLifecycleHookFeedbackContextContribution,
   createSteeringContextAdmissionProfile,
   createSteeringContextContribution,
   createTaskContextAdmissionProfile,
@@ -348,15 +354,23 @@ export type RuntimeDescendantRunAdmitter = (
 ) => RuntimeDescendantRunAdmissionResult;
 
 type TerminalCandidate<TOutput> =
-  | { readonly status: "succeeded"; readonly output: TOutput }
-  | { readonly status: "blocked"; readonly code: import("../run/index.js").RunBlockedCode }
+  | {
+      readonly status: "succeeded";
+      readonly output: TOutput;
+      readonly source?: RunCauseSourceRef;
+    }
   | {
       readonly status: "failed";
-      readonly code: RunFailureCode;
       readonly failure: RunFailureCause;
-      readonly relatedFailures?: readonly RunFailureCause[];
+      readonly source?: RunCauseSourceRef;
+      readonly underlying?: readonly RunCausalLink[];
+      readonly omittedUnderlyingCount?: number;
     }
-  | { readonly status: "cancelled" };
+  | {
+      readonly status: "cancelled";
+      readonly underlying?: readonly RunCausalLink[];
+      readonly omittedUnderlyingCount?: number;
+    };
 
 interface CandidateBasis<TOutput> {
   readonly turn: ControllerTurnRef;
@@ -383,8 +397,10 @@ type ConcurrentDescendantCandidateEntry =
       readonly kind: "tool_rejected";
       readonly action: RuntimeRunAction;
       readonly candidate: ToolRequestCandidate;
+      readonly attempt: ToolCallAttempt;
       readonly code: string;
       readonly message: string;
+      readonly validation: import("@agent-anything/tools/validation").ToolInputValidationFailure | null;
     }
   | {
       readonly kind: "descendant";
@@ -400,6 +416,7 @@ type DescendantExecutionOutcome =
       readonly relationId: string;
       readonly childRunId: string;
       readonly result: DelegationResult;
+      readonly continuation: import("@agent-anything/agent-core/delegation").DescendantContinuationRef | null;
       readonly resourceSettlement: RunTreeResourceSettlement;
     }
   | {
@@ -476,6 +493,11 @@ export class RunExecution<TOutput> {
   private activeInstructionBinding: AgentInstructionBinding;
   private readonly instructionRevisionByAgentRevision = new Map<string, string>();
   private terminalResult: RunResult<TOutput> | null = null;
+  private settlementPromise: Promise<RunResult<TOutput>> | null = null;
+  private suspendedWaiter: {
+    readonly suspension: RunSuspension;
+    readonly resolve: () => void;
+  } | null = null;
   private emittedItemCount = 0;
   private nextInteractionRequest = 1;
   private readonly identitySequences = new Map<
@@ -489,7 +511,6 @@ export class RunExecution<TOutput> {
   }>();
   private readonly settledDelegations = new Map<string, {
     readonly result: DelegationResult;
-    readonly material: DelegationContextMaterial;
   }>();
   private readonly continuationRecords = new Map<string, RuntimeContinuationRecord>();
   private readonly interactionActions = new Map<string, InteractionActionContext>();
@@ -669,6 +690,118 @@ export class RunExecution<TOutput> {
       }
     }
     return local;
+  }
+
+  submitResume(input: RunResumeRequestInput): RunResumeReceipt {
+    const current = this.writer.getSnapshot();
+    const requestId = typeof input?.id === "string" ? input.id : "";
+    if (!isValidResumeInput(input)) {
+      return rejectedResume("resume_invalid", requestId, current.revision);
+    }
+    if (current.status === "cancelling") {
+      return rejectedResume("run_cancelling", input.id, current.revision);
+    }
+    if (current.status === "succeeded" || current.status === "failed" || current.status === "cancelled") {
+      return rejectedResume("run_settled", input.id, current.revision);
+    }
+    if (current.status !== "suspended" || this.suspendedWaiter === null) {
+      return rejectedResume("run_not_suspended", input.id, current.revision);
+    }
+    if (input.expectedRunRevision !== current.revision) {
+      return rejectedResume("run_revision_stale", input.id, current.revision);
+    }
+    if (!sameRunSuspensionRef(input.suspension, current.suspension.ref)) {
+      return rejectedResume("suspension_stale", input.id, current.revision);
+    }
+    const request: RunResumeRequest = Object.freeze({
+      id: input.id,
+      expectedRunRevision: input.expectedRunRevision,
+      suspension: Object.freeze({
+        ...input.suspension,
+        run: Object.freeze({ ...input.suspension.run }),
+      }),
+      origin: input.origin,
+      reason: input.reason.trim(),
+      run: current.run,
+      requestedAt: this.now(),
+    });
+    const waiter = this.suspendedWaiter;
+    const next = this.writer.commit({
+      kind: "suspension_transition",
+      transition: "resumed",
+      suspension: current.suspension,
+      resume: request,
+    }, () => Object.freeze({
+      status: "running" as const,
+      suspension: null,
+      lifecycleHooks: advanceRunLifecycleHookFeedbackEpoch(current.lifecycleHooks),
+    }));
+    this.suspendedWaiter = null;
+    waiter.resolve();
+    return Object.freeze({
+      status: "accepted" as const,
+      request,
+      currentRunRevision: next.revision,
+    });
+  }
+
+  private async suspendRun(
+    code: RunSuspensionCode,
+    source: RunCauseSourceRef,
+    reason: string,
+  ): Promise<void> {
+    const current = this.writer.getSnapshot();
+    if (this.terminalResult !== null || current.status === "cancelling") return;
+    if (current.status === "suspended") {
+      if (this.suspendedWaiter === null) {
+        throw new TypeError("Suspended Run is missing its invocation-local resume waiter.");
+      }
+      return;
+    }
+    const nextRevision = current.revision + 1;
+    const suspension: RunSuspension = Object.freeze({
+      ref: Object.freeze({
+        run: current.run,
+        id: this.id("run_suspension"),
+        revision: String(nextRevision),
+      }),
+      code,
+      source,
+      reason: boundedReason(reason),
+      runRevision: nextRevision,
+      suspendedAt: this.now(),
+    });
+    let resume!: () => void;
+    const resumed = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    this.suspendedWaiter = Object.freeze({ suspension, resolve: resume });
+    this.writer.commit({
+      kind: "suspension_transition",
+      transition: "suspended",
+      suspension,
+      resume: null,
+    }, () => Object.freeze({
+      status: "suspended" as const,
+      suspension,
+    }));
+
+    const deadlineAtMs = Date.parse(current.deadlineAt);
+    const remainingMs = Math.max(0, deadlineAtMs - Date.parse(this.now()));
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    const deadlineReached = new Promise<void>((resolve) => {
+      deadlineTimer = setTimeout(resolve, remainingMs);
+    });
+    const cancelled = new Promise<void>((resolve) => {
+      const signal = this.config.cancellation.context.signal;
+      if (signal.aborted) resolve();
+      else signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await Promise.race([resumed, deadlineReached, cancelled]);
+    if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+    if (this.suspendedWaiter?.suspension.ref.id === suspension.ref.id) {
+      this.suspendedWaiter = null;
+    }
   }
 
   private descendantMessageAvailability(
@@ -886,9 +1019,11 @@ export class RunExecution<TOutput> {
       if (startFailures.length > 0) {
         return await this.settle({
           status: "failed",
-          code: "required_finalization_failed",
           failure: startFailures[0]!,
-          relatedFailures: startFailures.slice(1),
+          underlying: startFailures.slice(1).map((failure) => this.failureCausalLink(
+            failure,
+            "caused_by",
+          )),
         });
       }
 
@@ -953,20 +1088,25 @@ export class RunExecution<TOutput> {
             decision.prepared.input.interaction,
           );
           if (completion.kind === "succeeded") {
-            return await this.settle({ status: "succeeded", output: decision.decision.output });
+            return await this.settle({
+              status: "succeeded",
+              output: decision.decision.output,
+              source: completion.source,
+            });
           }
-          if (completion.kind === "blocked") {
-            return await this.settle({ status: "blocked", code: completion.code });
+          if (completion.kind === "suspend") {
+            await this.suspendRun(
+              completion.code,
+              controllerTurnSource(decision.turn),
+              completion.code,
+            );
+            continue;
           }
           if (completion.kind === "failed") {
             return await this.settle({
               status: "failed",
-              code: completion.owner === "verification"
-                ? "verification_failed"
-                : "task_fulfillment_failed",
-              failure: completion.owner === "verification"
-                ? createRunFailureCause("verification", completion.failure)
-                : createRunFailureCause("task_fulfillment", completion.failure),
+              failure: createRunFailureCause("verification", completion.failure),
+              source: controllerTurnSource(decision.turn),
             });
           }
           if (completion.kind === "cancelled") {
@@ -979,10 +1119,12 @@ export class RunExecution<TOutput> {
         }
         if (decision.decision.kind === "propose_stop") {
           this.settleTerminalControllerCall(decision.decision, decision.turn);
-          return await this.settle({
-            status: "blocked",
-            code: "runtime_no_safe_path",
-          });
+          await this.suspendRun(
+            "controller_stop_requested",
+            controllerTurnSource(decision.turn),
+            decision.decision.reason,
+          );
+          continue;
         }
 
         const basis: CandidateBasis<TOutput> = {
@@ -1127,7 +1269,13 @@ export class RunExecution<TOutput> {
           !(error instanceof OperationSettlementTimeoutError)) {
         return await this.settle({ status: "cancelled" });
       }
-      return await this.settle(this.failureFromError(error));
+      const failure = this.failureFromError(error);
+      if (error instanceof ControllerError) {
+        const source = failure.source ?? this.failureSource(failure.failure, "controller_failure");
+        await this.emitStopFailureLifecycleEvent(failure.failure, source);
+        return await this.settle(Object.freeze({ ...failure, source }));
+      }
+      return await this.settle(failure);
     } finally {
       this.interactions.close();
       this.interruptionCoordinator.dispose();
@@ -1186,8 +1334,12 @@ export class RunExecution<TOutput> {
     output: TOutput,
     interaction: ModelInteractionProjection,
   ): Promise<
-    | { readonly kind: "succeeded" | "continue" | "cancelled" }
-    | { readonly kind: "blocked"; readonly code: "verification_blocked" | "runtime_stop_feedback_exhausted" }
+    | { readonly kind: "succeeded"; readonly source: RunCauseSourceRef }
+    | { readonly kind: "continue" | "cancelled" }
+    | {
+        readonly kind: "suspend";
+        readonly code: "completion_gate_feedback_exhausted" | "stop_hook_feedback_exhausted";
+      }
     | {
         readonly kind: "wait";
         readonly snapshotRevision: number;
@@ -1199,10 +1351,9 @@ export class RunExecution<TOutput> {
         }[];
       }
     | { readonly kind: "failed"; readonly owner: "verification"; readonly failure: VerificationFailure }
-    | { readonly kind: "failed"; readonly owner: "task_fulfillment"; readonly failure: TaskFulfillmentFailure }
   > {
     const execution = this.requireVerificationExecution();
-    let runState = this.writer.getSnapshot();
+    const runState = this.writer.getSnapshot();
     if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
     if (runState.status !== "running" && runState.status !== "waiting") {
       return { kind: "continue" };
@@ -1217,99 +1368,6 @@ export class RunExecution<TOutput> {
       id: this.id("verification_proposal"),
       revision: outputDigest,
     });
-    const objectiveRevision = await createCanonicalSha256Digest(
-      "agent-anything.task-objective.v1",
-      this.input.task,
-    );
-    const fulfillmentRequestedAt = this.now();
-    const fulfillmentConfiguredDeadline = Date.parse(fulfillmentRequestedAt) +
-      this.dependencies.completion.maximumDurationMs;
-    const fulfillmentDeadlineAt = new Date(Math.min(
-      Date.parse(runState.deadlineAt),
-      fulfillmentConfiguredDeadline,
-    )).toISOString();
-    const fulfillmentInput = snapshotTaskFulfillmentEvaluationInput({
-      assessment: Object.freeze({
-        id: this.id("task_fulfillment_assessment"),
-        revision: "1",
-      }),
-      run: runState.run,
-      turn,
-      objective: Object.freeze({
-        id: this.input.task.id,
-        kind: this.input.task.kind,
-        revision: objectiveRevision,
-      }),
-      task: this.input.task,
-      proposal,
-      output,
-      interaction,
-      verification: Object.freeze({
-        snapshot: current.ref,
-        gate: runState.verification.gate,
-      }),
-      requestedAt: fulfillmentRequestedAt,
-      deadlineAt: fulfillmentDeadlineAt,
-    });
-    const fulfillmentBasisRevision = runState.revision;
-    const fulfillmentSteeringEpoch = this.steeringEpoch;
-    const fulfillmentResult = await this.invokeTaskFulfillment(fulfillmentInput);
-    if (this.config.cancellation.context.request !== null) {
-      return { kind: "cancelled" };
-    }
-    if (fulfillmentResult.kind === "cancelled") {
-      return this.recordTaskFulfillmentStopFailure({
-        turn,
-        proposal,
-        failure: createTaskFulfillmentFailure({
-          code: "task_fulfillment_cancellation_unattributed",
-          message: "Task Fulfillment evaluation returned cancellation without an accepted Run cancellation.",
-          retryable: false,
-          metadata: Object.freeze({
-            evaluatorId: this.dependencies.completion.taskFulfillment.ref.id,
-            cancellationRequestId: fulfillmentResult.cancellation.requestId,
-            cancellationRunId: fulfillmentResult.cancellation.runId,
-          }),
-        }),
-      });
-    }
-    if (fulfillmentResult.kind === "failed") {
-      return this.recordTaskFulfillmentStopFailure({
-        turn,
-        proposal,
-        failure: fulfillmentResult.failure,
-      });
-    }
-    let fulfillment: TaskFulfillmentAssessment;
-    try {
-      fulfillment = snapshotTaskFulfillmentAssessment(fulfillmentResult.assessment);
-      this.assertCurrentTaskFulfillmentAssessment(fulfillmentInput, fulfillment);
-    } catch (error) {
-      return this.recordTaskFulfillmentStopFailure({
-        turn,
-        proposal,
-        failure: createTaskFulfillmentFailure({
-          code: "task_fulfillment_assessment_invalid",
-          message: error instanceof Error ? error.message : "Task Fulfillment Assessment is invalid.",
-          retryable: false,
-          metadata: Object.freeze({ evaluatorId: this.dependencies.completion.taskFulfillment.ref.id }),
-        }),
-      });
-    }
-    const currentAfterFulfillment = await execution.readCurrentSnapshot();
-    if (this.writer.getSnapshot().revision !== fulfillmentBasisRevision ||
-        this.steeringEpoch !== fulfillmentSteeringEpoch ||
-        currentAfterFulfillment.ref.revision !== current.ref.revision) {
-      return { kind: "continue" };
-    }
-    this.writer.commit({
-      kind: "task_fulfillment_assessment",
-      assessment: fulfillment,
-    });
-    runState = this.writer.getSnapshot();
-    if (runState.status !== "running" && runState.status !== "waiting") {
-      return { kind: "continue" };
-    }
     const gateRequestedAt = this.now();
     const gateConfiguredDeadline = Date.parse(gateRequestedAt) +
       this.config.verification.completion.maximumDurationMs;
@@ -1367,11 +1425,9 @@ export class RunExecution<TOutput> {
       decision = snapshotCompletionGateDecision(await this.invokeCompletionGate(gateInput));
     } catch (error) {
       if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
-      return this.recordVerificationStopFailure({
-        turn,
-        proposal,
-        fulfillment,
-        revision: String(current.ref.revision),
+      return Object.freeze({
+        kind: "failed" as const,
+        owner: "verification" as const,
         failure: error instanceof VerificationExecutionError
           ? error.failure
           : createVerificationFailure({
@@ -1410,33 +1466,22 @@ export class RunExecution<TOutput> {
     await this.commitVerificationFeedback(decision);
 
     if (decision.status === "completion_eligible") {
-      return this.resolveStopReview({
+      return this.evaluateStopHooks({
         turn,
         proposal,
-        fulfillment,
-        verification: Object.freeze({
-          status: "passed" as const,
-          code: "verification_completion_eligible",
-          message: "Configured mandatory Verification permits completion.",
-          revision: String(recorded.current.ref.revision),
-        }),
+        output,
+        interaction,
+        verificationSnapshot: recorded.current.ref,
+        completionGate: invocation,
       });
     }
     if (decision.status === "invalid" || decision.status === "failed") {
-      return this.recordVerificationStopFailure({
-        turn,
-        proposal,
-        fulfillment,
-        revision: String(recorded.current.ref.revision),
-        failure: decision.failure,
-      });
+      return Object.freeze({ kind: "failed" as const, owner: "verification" as const, failure: decision.failure });
     }
     if (decision.disposition === "fail") {
-      return this.recordVerificationStopFailure({
-        turn,
-        proposal,
-        fulfillment,
-        revision: String(recorded.current.ref.revision),
+      return Object.freeze({
+        kind: "failed" as const,
+        owner: "verification" as const,
         failure: createVerificationFailure({
           code: "verification_completion_policy_failed",
           stage: "completion_gate",
@@ -1446,26 +1491,10 @@ export class RunExecution<TOutput> {
         }),
       });
     }
-    if (decision.disposition === "block") {
-      this.commitStopReviewRecord({
-        turn,
-        proposal,
-        decision: "failed",
-        checks: this.stopChecks(fulfillment, Object.freeze({
-          status: "failed",
-          code: decision.reasons[0]?.code ?? "verification_blocked",
-          message: decision.reasons[0]?.message ?? "Verification blocked completion.",
-          revision: String(recorded.current.ref.revision),
-        })),
-      });
-      return { kind: "blocked", code: "verification_blocked" };
-    }
     if (decision.disposition === "wait" && gateInput.pendingWork.length === 0) {
-      return this.recordVerificationStopFailure({
-        turn,
-        proposal,
-        fulfillment,
-        revision: String(recorded.current.ref.revision),
+      return Object.freeze({
+        kind: "failed" as const,
+        owner: "verification" as const,
         failure: createVerificationFailure({
           code: "verification_gate_wait_without_pending_work",
           stage: "completion_gate",
@@ -1476,17 +1505,6 @@ export class RunExecution<TOutput> {
       });
     }
     if (decision.disposition === "wait") {
-      this.commitStopReviewRecord({
-        turn,
-        proposal,
-        decision: "wait",
-        checks: this.stopChecks(fulfillment, Object.freeze({
-          status: "wait",
-          code: decision.reasons[0]?.code ?? "verification_waiting",
-          message: decision.reasons[0]?.message ?? "Verification is waiting for exact active mandatory work.",
-          revision: String(recorded.current.ref.revision),
-        })),
-      });
       return {
         kind: "wait",
         snapshotRevision: recorded.current.ref.revision,
@@ -1501,17 +1519,196 @@ export class RunExecution<TOutput> {
             : []),
       };
     }
-    return this.resolveStopReview({
-      turn,
-      proposal,
-      fulfillment,
-      verification: Object.freeze({
-        status: "continue" as const,
-        code: decision.reasons[0]?.code ?? "verification_continue_required",
-        message: decision.reasons[0]?.message ?? "Verification requires more work before completion.",
-        revision: String(recorded.current.ref.revision),
-      }),
+    const feedbackRounds = this.writer.getSnapshot().verification.feedbackRounds + 1;
+    this.writer.commitState((state) => Object.freeze({
+      verification: Object.freeze({ ...state.verification, feedbackRounds }),
+    }));
+    return feedbackRounds > this.config.limits.completionGate.maxFeedbackRounds
+      ? Object.freeze({ kind: "suspend" as const, code: "completion_gate_feedback_exhausted" as const })
+      : Object.freeze({ kind: "continue" as const });
+  }
+
+  private async evaluateStopHooks(input: {
+    readonly turn: ControllerTurnRef;
+    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
+    readonly output: TOutput;
+    readonly interaction: ModelInteractionProjection;
+    readonly verificationSnapshot: Readonly<{ readonly runId: string; readonly revision: number }>;
+    readonly completionGate: Readonly<{ readonly id: string; readonly revision: string }>;
+  }): Promise<
+    | { readonly kind: "succeeded"; readonly source: RunCauseSourceRef }
+    | { readonly kind: "continue" | "cancelled" }
+    | { readonly kind: "suspend"; readonly code: "stop_hook_feedback_exhausted" }
+  > {
+    const state = this.writer.getSnapshot();
+    const pendingRevision = await createCanonicalSha256Digest(
+      "agent-anything.run-pending-set.v1",
+      state.pending,
+    );
+    const basis: StopCandidateBasis = Object.freeze({
+      runRevision: state.revision,
+      steeringEpoch: this.steeringEpoch,
+      controllerTurn: input.turn,
+      completionProposal: input.proposal,
+      activeAgent: state.activeAgent,
+      instructionBinding: state.activeInstructionBinding,
+      verificationSnapshot: input.verificationSnapshot,
+      completionGate: input.completionGate,
+      planRevision: state.plan?.version ?? null,
+      pendingRevision,
     });
+    const sequence = state.lifecycleHooks.stopEventSequence + 1;
+    const eventId = this.id("run_lifecycle_event");
+    const eventRevision = await createCanonicalSha256Digest(
+      "agent-anything.run-lifecycle-stop.v1",
+      { runId: this.runId, sequence, basis },
+    );
+    const event = snapshotStopLifecycleEvent({
+      ref: Object.freeze({
+        run: state.run,
+        id: eventId,
+        sequence,
+        revision: eventRevision,
+      }),
+      name: "Stop",
+      run: state.run,
+      task: this.input.task,
+      basis,
+      output: input.output,
+      interaction: input.interaction,
+      emittedAt: this.now(),
+    });
+    this.writer.commit({ kind: "lifecycle_event", event }, (current) => Object.freeze({
+      lifecycleHooks: Object.freeze({
+        ...current.lifecycleHooks,
+        stopEventSequence: sequence,
+        latestEventId: event.ref.id,
+      }),
+    }));
+    const eventCommittedRevision = this.writer.getSnapshot().revision;
+    const merged = await invokeStopLifecycleHooks({
+      composition: this.dependencies.lifecycleHooks,
+      runKind: this.lineage.kind === "root" ? "root" : "descendant",
+      event,
+      interruption: this.invocationInterruption(),
+      runDeadlineAt: state.deadlineAt,
+      now: () => this.now(),
+    });
+    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
+
+    const after = this.writer.getSnapshot();
+    const currentVerification = await this.requireVerificationExecution().readCurrentSnapshot();
+    const currentPendingRevision = await createCanonicalSha256Digest(
+      "agent-anything.run-pending-set.v1",
+      after.pending,
+    );
+    const basisCurrent = after.revision === eventCommittedRevision &&
+      this.steeringEpoch === basis.steeringEpoch &&
+      sameAgentRef(after.activeAgent, basis.activeAgent) &&
+      after.activeInstructionBinding.id === basis.instructionBinding.id &&
+      after.activeInstructionBinding.revision === basis.instructionBinding.revision &&
+      currentVerification.ref.runId === basis.verificationSnapshot.runId &&
+      currentVerification.ref.revision === basis.verificationSnapshot.revision &&
+      after.verification.gate?.id === basis.completionGate.id &&
+      after.verification.gate?.revision === basis.completionGate.revision &&
+      (after.plan?.version ?? null) === basis.planRevision &&
+      currentPendingRevision === basis.pendingRevision;
+    const invocations = Object.freeze(merged.invocations.map((invocation) => Object.freeze({
+      ...invocation,
+      stale: !basisCurrent,
+    })));
+    const invocationItems = invocations.map((invocation) => Object.freeze({
+      kind: "lifecycle_hook_invocation" as const,
+      invocation,
+    }));
+    const limitations = Object.freeze([
+      ...after.lifecycleHooks.limitations,
+      ...invocations.flatMap((invocation) => invocation.outcome.status === "non_blocking_error"
+        ? [`${invocation.hook.id}:${invocation.outcome.code}`]
+        : []),
+    ]);
+    if (!basisCurrent) {
+      if (invocationItems.length > 0) {
+        this.writer.commitItems(Object.freeze(invocationItems), (current) => Object.freeze({
+          lifecycleHooks: Object.freeze({
+            ...current.lifecycleHooks,
+            latestInvocations: invocations,
+            limitations,
+          }),
+        }));
+      }
+      return { kind: "continue" };
+    }
+
+    if (merged.kind === "block") {
+      const round = after.lifecycleHooks.consecutiveBlockingRounds + 1;
+      const feedback: StopHookFeedbackRecord = Object.freeze({
+        eventId: event.ref.id,
+        epoch: after.lifecycleHooks.feedbackEpoch,
+        round,
+        codes: merged.blockCodes,
+        message: merged.feedback ?? "A lifecycle Hook requested more work before completion.",
+        omittedReasonCount: merged.omittedReasonCount,
+      });
+      const contribution = createLifecycleHookFeedbackContextContribution({
+        id: this.currentContextContributionId(
+          after.context,
+          "agent-runtime",
+          "lifecycle_hook_feedback",
+        ) ?? this.id("context_contribution"),
+        revision: `${feedback.epoch}:${feedback.round}`,
+        runId: this.runId,
+        feedback,
+        createdAt: this.now(),
+      });
+      this.writer.commitItems(Object.freeze([
+        ...invocationItems,
+        Object.freeze({ kind: "lifecycle_hook_feedback" as const, feedback }),
+      ]), (current) => Object.freeze({
+        lifecycleHooks: Object.freeze({
+          ...current.lifecycleHooks,
+          consecutiveBlockingRounds: round,
+          latestInvocations: invocations,
+          latestFeedback: feedback,
+          limitations,
+        }),
+        context: this.applyContextContributions(
+          current.context,
+          Object.freeze([contribution]),
+          createLifecycleHookFeedbackContextAdmissionProfile(),
+          "lifecycle_hook_feedback",
+          event.ref.id,
+        ),
+      }));
+      return round > this.config.limits.stopHooks.maxConsecutiveBlockingRounds
+        ? Object.freeze({ kind: "suspend" as const, code: "stop_hook_feedback_exhausted" as const })
+        : Object.freeze({ kind: "continue" as const });
+    }
+
+    const source: RunCauseSourceRef = Object.freeze({
+      owner: "agent-runtime",
+      kind: "run_completion_acceptance",
+      id: this.id("run_completion_acceptance"),
+      revision: event.ref.revision,
+      run: state.run,
+    });
+    this.writer.commitItems(Object.freeze([
+      ...invocationItems,
+      Object.freeze({
+        kind: "completion_acceptance" as const,
+        source,
+        eventId: event.ref.id,
+        candidateRevision: input.proposal.revision,
+        acceptedAt: this.now(),
+      }),
+    ]), (current) => Object.freeze({
+      lifecycleHooks: Object.freeze({
+        ...current.lifecycleHooks,
+        latestInvocations: invocations,
+        limitations,
+      }),
+    }));
+    return Object.freeze({ kind: "succeeded" as const, source });
   }
 
   private async waitForMandatoryVerification(input: {
@@ -1573,371 +1770,6 @@ export class RunExecution<TOutput> {
       for (const pending of pendingSubjects) this.removePending(pending, transition, null);
       this.publishCurrentState();
     }
-  }
-
-  private async invokeTaskFulfillment(
-    input: TaskFulfillmentEvaluationInput,
-  ): Promise<TaskFulfillmentEvaluationResult> {
-    const delay = Math.max(
-      1,
-      Math.min(
-        this.dependencies.completion.maximumDurationMs,
-        Date.parse(input.deadlineAt) - Date.parse(input.requestedAt),
-      ),
-    );
-    const runInterruption = this.invocationInterruption();
-    const local = new AbortController();
-    const abortForRun = () => local.abort();
-    if (runInterruption.signal.aborted) local.abort();
-    else runInterruption.signal.addEventListener("abort", abortForRun, { once: true });
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<TaskFulfillmentEvaluationResult>((resolve) => {
-      timeout = setTimeout(() => {
-        local.abort();
-        resolve(Object.freeze({
-          kind: "failed" as const,
-          failure: createTaskFulfillmentFailure({
-            code: "task_fulfillment_evaluation_timed_out",
-            message: "Task Fulfillment evaluation exceeded its deadline.",
-            retryable: true,
-            metadata: Object.freeze({ evaluatorId: this.dependencies.completion.taskFulfillment.ref.id }),
-          }),
-        }));
-      }, delay);
-    });
-    try {
-      return await Promise.race([
-        this.dependencies.completion.taskFulfillment.evaluate(
-          input,
-          Object.freeze({
-            signal: local.signal,
-            interruption: runInterruption.interruption,
-          }),
-        ),
-        timedOut,
-      ]);
-    } catch (error) {
-      return Object.freeze({
-        kind: "failed" as const,
-        failure: createTaskFulfillmentFailure({
-          code: "task_fulfillment_evaluation_failed",
-          message: error instanceof Error ? error.message : "Task Fulfillment evaluation failed.",
-          retryable: false,
-          metadata: Object.freeze({ evaluatorId: this.dependencies.completion.taskFulfillment.ref.id }),
-        }),
-      });
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout);
-      runInterruption.signal.removeEventListener("abort", abortForRun);
-    }
-  }
-
-  private assertCurrentTaskFulfillmentAssessment(
-    input: TaskFulfillmentEvaluationInput,
-    assessment: TaskFulfillmentAssessment,
-  ): void {
-    const evaluator = this.dependencies.completion.taskFulfillment.ref;
-    if (
-      assessment.ref.id !== input.assessment.id ||
-      assessment.ref.revision !== input.assessment.revision ||
-      assessment.evaluator.owner !== evaluator.owner ||
-      assessment.evaluator.id !== evaluator.id ||
-      assessment.evaluator.revision !== evaluator.revision ||
-      assessment.run.id !== input.run.id ||
-      assessment.turn.id !== input.turn.id ||
-      assessment.turn.sequence !== input.turn.sequence ||
-      assessment.objective.id !== input.objective.id ||
-      assessment.objective.kind !== input.objective.kind ||
-      assessment.objective.revision !== input.objective.revision ||
-      assessment.proposal.id !== input.proposal.id ||
-      assessment.proposal.revision !== input.proposal.revision
-    ) {
-      throw new TypeError("Task Fulfillment Assessment does not match its exact evaluation input.");
-    }
-  }
-
-  private resolveStopReview(input: {
-    readonly turn: ControllerTurnRef;
-    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
-    readonly fulfillment: TaskFulfillmentAssessment;
-    readonly verification: Readonly<{
-      readonly status: "passed" | "continue";
-      readonly code: string;
-      readonly message: string;
-      readonly revision: string;
-    }>;
-  }): { readonly kind: "succeeded" | "continue" } |
-      { readonly kind: "blocked"; readonly code: "runtime_stop_feedback_exhausted" } {
-    const checks = [...this.stopChecks(input.fulfillment, input.verification)];
-    const required = checks.find((check) =>
-      check.severity === "required" && check.status === "continue"
-    );
-    if (required !== undefined) {
-      const state = this.writer.getSnapshot().stopReview;
-      if (
-        state.requiredFeedbackRounds >=
-          this.config.limits.stopReview.maxRequiredFeedbackRounds
-      ) {
-        this.commitStopReviewRecord({
-          turn: input.turn,
-          proposal: input.proposal,
-          decision: "failed",
-          checks,
-          limitations: Object.freeze([Object.freeze({
-            owner: required.owner,
-            code: "required_stop_feedback_exhausted",
-            message: "Required Stop Review feedback was exhausted before completion became eligible.",
-          })]),
-        });
-        return { kind: "blocked", code: "runtime_stop_feedback_exhausted" };
-      }
-      this.commitStopReviewRecord({
-        turn: input.turn,
-        proposal: input.proposal,
-        decision: "continue_run",
-        checks,
-        feedback: Object.freeze({
-          owner: required.owner,
-          severity: "required",
-          code: required.code,
-          message: required.message,
-        }),
-      });
-      return { kind: "continue" };
-    }
-
-    const plan = this.writer.getSnapshot().plan;
-    if (plan !== null && plan.status === "active") {
-      const planCheck: RunStopCheck = Object.freeze({
-        owner: "plan",
-        severity: "advisory",
-        status: "continue",
-        code: "plan_reconciliation_requested",
-        message: "The active Plan has not been reconciled with the proposed completion. Update or complete the Plan, continue work, or explain why its remaining state no longer applies.",
-        subjectId: plan.id,
-        revision: String(plan.version),
-      });
-      checks.push(planCheck);
-      const state = this.writer.getSnapshot().stopReview;
-      if (
-        state.advisoryFeedbackRounds <
-          this.config.limits.stopReview.maxAdvisoryFeedbackRounds
-      ) {
-        this.commitStopReviewRecord({
-          turn: input.turn,
-          proposal: input.proposal,
-          decision: "continue_run",
-          checks,
-          feedback: Object.freeze({
-            owner: "plan",
-            severity: "advisory",
-            code: planCheck.code,
-            message: planCheck.message,
-          }),
-        });
-        return { kind: "continue" };
-      }
-      const limitation: RunStopLimitation = Object.freeze({
-        owner: "plan",
-        code: "plan_reconciliation_feedback_exhausted",
-        message: "The Run stopped after exhausting advisory Plan reconciliation feedback.",
-      });
-      this.commitStopReviewRecord({
-        turn: input.turn,
-        proposal: input.proposal,
-        decision: "allow_stop",
-        checks,
-        limitations: Object.freeze([limitation]),
-      });
-      return { kind: "succeeded" };
-    }
-
-    this.commitStopReviewRecord({
-      turn: input.turn,
-      proposal: input.proposal,
-      decision: "allow_stop",
-      checks,
-    });
-    return { kind: "succeeded" };
-  }
-
-  private stopChecks(
-    fulfillment: TaskFulfillmentAssessment,
-    verification: Readonly<{
-      readonly status: RunStopCheck["status"];
-      readonly code: string;
-      readonly message: string;
-      readonly revision: string;
-    }>,
-  ): readonly RunStopCheck[] {
-    const fulfillmentPassed = fulfillment.status === "fulfilled";
-    return Object.freeze([
-      Object.freeze({
-        owner: "task_fulfillment" as const,
-        severity: "required" as const,
-        status: fulfillmentPassed ? "passed" as const : "continue" as const,
-        code: fulfillmentPassed
-          ? "task_fulfillment_satisfied"
-          : fulfillment.status === "incomplete"
-            ? "task_fulfillment_incomplete"
-            : "task_fulfillment_uncertain",
-        message: fulfillmentPassed
-          ? "The Product Task Fulfillment assessment permits completion."
-          : fulfillment.feedback!,
-        subjectId: fulfillment.ref.id,
-        revision: fulfillment.ref.revision,
-      }),
-      Object.freeze({
-        owner: "verification" as const,
-        severity: "required" as const,
-        status: verification.status,
-        code: verification.code,
-        message: verification.message,
-        subjectId: this.config.verification.profile.ref.id,
-        revision: verification.revision,
-      }),
-    ]);
-  }
-
-  private recordTaskFulfillmentStopFailure(input: {
-    readonly turn: ControllerTurnRef;
-    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
-    readonly failure: TaskFulfillmentFailure;
-  }): { readonly kind: "failed"; readonly owner: "task_fulfillment"; readonly failure: TaskFulfillmentFailure } {
-    const evaluator = this.dependencies.completion.taskFulfillment.ref;
-    this.commitStopReviewRecord({
-      turn: input.turn,
-      proposal: input.proposal,
-      decision: "failed",
-      checks: Object.freeze([Object.freeze({
-        owner: "task_fulfillment" as const,
-        severity: "required" as const,
-        status: "failed" as const,
-        code: input.failure.code,
-        message: input.failure.message,
-        subjectId: evaluator.id,
-        revision: evaluator.revision,
-      })]),
-    });
-    return Object.freeze({
-      kind: "failed" as const,
-      owner: "task_fulfillment" as const,
-      failure: input.failure,
-    });
-  }
-
-  private recordVerificationStopFailure(input: {
-    readonly turn: ControllerTurnRef;
-    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
-    readonly fulfillment: TaskFulfillmentAssessment;
-    readonly revision: string;
-    readonly failure: VerificationFailure;
-  }): { readonly kind: "failed"; readonly owner: "verification"; readonly failure: VerificationFailure } {
-    this.commitStopReviewRecord({
-      turn: input.turn,
-      proposal: input.proposal,
-      decision: "failed",
-      checks: this.stopChecks(input.fulfillment, Object.freeze({
-        status: "failed",
-        code: input.failure.code,
-        message: input.failure.message,
-        revision: input.revision,
-      })),
-    });
-    return Object.freeze({
-      kind: "failed" as const,
-      owner: "verification" as const,
-      failure: input.failure,
-    });
-  }
-
-  private commitStopReviewRecord(input: {
-    readonly turn: ControllerTurnRef;
-    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
-    readonly decision: "allow_stop" | "continue_run" | "wait" | "failed";
-    readonly checks: readonly RunStopCheck[];
-    readonly feedback?: Readonly<{
-      readonly owner: RunStopFeedback["owner"];
-      readonly severity: RunStopFeedback["severity"];
-      readonly code: string;
-      readonly message: string;
-    }>;
-    readonly limitations?: readonly RunStopLimitation[];
-  }): void {
-    const before = this.writer.getSnapshot();
-    const ref = Object.freeze({
-      runId: this.runId,
-      sequence: before.stopReview.reviewSequence + 1,
-    });
-    const requiredFeedbackRounds = before.stopReview.requiredFeedbackRounds +
-      (input.feedback?.severity === "required" ? 1 : 0);
-    const advisoryFeedbackRounds = before.stopReview.advisoryFeedbackRounds +
-      (input.feedback?.severity === "advisory" ? 1 : 0);
-    const limitations = Object.freeze([
-      ...before.stopReview.limitations,
-      ...(input.limitations ?? []),
-    ]);
-    const review = snapshotRunStopReviewRecord({
-      ref,
-      run: before.run,
-      turn: input.turn,
-      proposal: input.proposal,
-      decision: input.decision,
-      checks: input.checks,
-      limitations,
-      requiredFeedbackRounds,
-      advisoryFeedbackRounds,
-      reviewedAt: this.now(),
-    });
-    const feedback = input.feedback === undefined
-      ? null
-      : snapshotRunStopFeedback({
-          review: ref,
-          owner: input.feedback.owner,
-          severity: input.feedback.severity,
-          round: input.feedback.severity === "required"
-            ? requiredFeedbackRounds
-            : advisoryFeedbackRounds,
-          code: input.feedback.code,
-          message: input.feedback.message,
-        });
-    const nextStopReview = Object.freeze({
-      reviewSequence: ref.sequence,
-      requiredFeedbackRounds,
-      advisoryFeedbackRounds,
-      latestReview: ref,
-      limitations,
-    });
-    if (feedback === null) {
-      this.writer.commit({ kind: "stop_review", review }, () => Object.freeze({
-        stopReview: nextStopReview,
-      }));
-      return;
-    }
-    const contribution = createStopFeedbackContextContribution({
-      id: this.currentContextContributionId(
-        before.context,
-        "agent-runtime",
-        "run_stop_feedback",
-      ) ?? this.id("context_contribution"),
-      revision: `${ref.sequence}:${feedback.round}`,
-      runId: this.runId,
-      feedback,
-      createdAt: this.now(),
-    });
-    this.writer.commitItems(Object.freeze([
-      { kind: "stop_review", review },
-      { kind: "stop_feedback", feedback },
-    ]), (current) => Object.freeze({
-      stopReview: nextStopReview,
-      context: this.applyContextContributions(
-        current.context,
-        Object.freeze([contribution]),
-        createStopFeedbackContextAdmissionProfile(),
-        "run_stop_feedback",
-        `${this.runId}:${ref.sequence}`,
-      ),
-    }));
   }
 
   private async invokeCompletionGate(input: CompletionGateInput): Promise<CompletionGateDecision> {
@@ -2048,6 +1880,7 @@ export class RunExecution<TOutput> {
       verification: Object.freeze({
         snapshot: projection.snapshot,
         gate: projection.gate?.ref ?? null,
+        feedbackRounds: current.verification.feedbackRounds,
       }),
       context: contextProjection.contribution === null
         ? current.context
@@ -2690,7 +2523,6 @@ export class RunExecution<TOutput> {
   ): Promise<RunResult<TOutput>> {
     return this.settle({
       status: "failed",
-      code: violation.code,
       failure: runtimeFailure(violation.code, violation.message, violation.metadata),
     });
   }
@@ -2712,7 +2544,6 @@ export class RunExecution<TOutput> {
   ): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
     return {
       status: "failed",
-      code: "runtime_limit_exceeded",
       failure: runtimeFailure(
         failure.status === "limit_exceeded"
           ? "runtime_tree_resource_limit_exceeded"
@@ -2823,16 +2654,19 @@ export class RunExecution<TOutput> {
         exposure: basis.exposure,
         parentRunAction: action.ref,
         toolCallId,
+        modelCall: candidate.modelCallRef,
         createdAt: this.now(),
-        validateInput: this.dependencies.operations.validateToolInput,
+        semanticValidators: this.dependencies.operations.toolInputSemanticValidators,
       });
       if (materialized.status === "rejected") {
         entries.push(Object.freeze({
           kind: "tool_rejected" as const,
           action,
           candidate,
+          attempt: materialized.attempt,
           code: materialized.code,
           message: materialized.message,
+          validation: materialized.validation,
         }));
         continue;
       }
@@ -2882,11 +2716,29 @@ export class RunExecution<TOutput> {
       const entry = entries[index]!;
       const settled = outcomes[index]!;
       if (entry.kind === "tool_rejected") {
+        const toolResult = failedToolAttemptResult(
+          entry.attempt,
+          entry.code,
+          entry.message,
+          entry.validation,
+          this.now(),
+        );
         this.commitObservation(entry.action, {
           kind: "tool_rejected",
+          attempt: entry.attempt,
           code: entry.code,
           message: entry.message,
-        }, [], "tools");
+          toolResult,
+        }, [toolResultLowerRef(toolResult)], "tools");
+        this.emit("tool.input.rejected", {
+          attemptId: entry.attempt.ref.id,
+          requestedName: entry.attempt.requestedName,
+          selectedToolRevision: entry.attempt.selectedTool?.revision ?? null,
+          code: entry.code,
+          issueCount: entry.validation?.issues.length ?? 0,
+          omittedIssueCount: entry.validation?.omittedIssueCount ?? 0,
+          modelCallId: entry.attempt.ref.modelCall?.id ?? null,
+        });
         this.commitModelCallSettlement(entry.action, null);
         continue;
       }
@@ -2994,7 +2846,6 @@ export class RunExecution<TOutput> {
             if (outcome.result.status === "unknown_effect") {
               terminal = {
                 status: "failed",
-                code: "unknown_effect",
                 failure: createRunFailureCause("operation", outcome.result.failure),
               };
               invalidatesRemainder = true;
@@ -3331,21 +3182,40 @@ export class RunExecution<TOutput> {
     toolCallId: string,
     exposure: ToolExposureProof,
   ): Promise<CandidateProcessingOutcome<TOutput>> {
-    const materialized = materializeToolCall({
+      const materialized = materializeToolCall({
       candidate: candidate.tool,
       selection: this.config.tools,
       exposure,
       parentRunAction: action.ref,
       toolCallId,
+      modelCall: candidate.modelCallRef,
       createdAt: this.now(),
-      validateInput: this.dependencies.operations.validateToolInput,
+      semanticValidators: this.dependencies.operations.toolInputSemanticValidators,
     });
     if (materialized.status === "rejected") {
+      const toolResult = failedToolAttemptResult(
+        materialized.attempt,
+        materialized.code,
+        materialized.message,
+        materialized.validation,
+        this.now(),
+      );
       this.commitObservation(action, {
         kind: "tool_rejected",
+        attempt: materialized.attempt,
         code: materialized.code,
         message: materialized.message,
-      }, [], "tools");
+        toolResult,
+      }, [toolResultLowerRef(toolResult)], "tools");
+      this.emit("tool.input.rejected", {
+        attemptId: materialized.attempt.ref.id,
+        requestedName: materialized.attempt.requestedName,
+        selectedToolRevision: materialized.attempt.selectedTool?.revision ?? null,
+        code: materialized.code,
+        issueCount: materialized.validation?.issues.length ?? 0,
+        omittedIssueCount: materialized.validation?.omittedIssueCount ?? 0,
+        modelCallId: materialized.attempt.ref.modelCall?.id ?? null,
+      });
       return Object.freeze({ invalidatesRemainder: false, terminal: null });
     }
     const call = materialized.call;
@@ -3972,7 +3842,10 @@ export class RunExecution<TOutput> {
     let mapped: import("./RunnerDependencies.js").DescendantOperationOutcome;
     try {
       mapped = this.dependencies.operations.delegation!.resultProjection.project(
-        descendant.result,
+        Object.freeze({
+          result: descendant.result,
+          continuation: descendant.continuation,
+        }),
       );
     } catch {
       this.commitDescendantToolObservation(
@@ -4027,77 +3900,40 @@ export class RunExecution<TOutput> {
       );
       return;
     }
-    if (request.target.kind === "active") {
-      const active = [...this.childHandles.entries()].find(([, child]) =>
-        child.childRunId === request.target.id &&
-        sameAgentRef(child.request.childAgent, targetAgent)
-      );
-      if (active === undefined) {
-        this.commitDescendantToolObservation(
-          action,
-          call,
-          null,
-          request.target.id,
-          "unavailable",
-          null,
-          operationFailure("agent-runtime", "descendant_active_target_unavailable"),
-          startedAt,
-          null,
-        );
-        return;
-      }
-      const [relationId, child] = active;
-      const childSnapshot = child.handle.getSnapshot();
-      const routed = this.submitDescendantSteering({
-        request: child.request.ref,
-        relation: Object.freeze({ id: relationId }),
-        child: Object.freeze({ id: child.childRunId }),
-        steering: Object.freeze({
-          commandId: `${call.toolCallId}:command`,
-          expectedRunRevision: childSnapshot.runRevision,
-          instruction: request.message,
-          attribution: Object.freeze({
-            origin: "model" as const,
-            actorId: this.activeAgent.id,
-          }),
-          submittedAt: this.now(),
-        }),
-      });
-      const delivered = routed.status === "routed" &&
-        (routed.submission.status === "accepted_for_application" ||
-          routed.submission.status === "duplicate_identical");
-      const rejectionCode = routed.status === "rejected"
-        ? routed.code
-        : routed.submission.status === "rejected"
-          ? routed.submission.code
-          : null;
+    const target = this.continuationRecords.get(request.agent_id);
+    if (target === undefined) {
       this.commitDescendantToolObservation(
-        action,
-        call,
-        relationId,
-        child.childRunId,
-        delivered ? "succeeded" : "unavailable",
-        delivered
-          ? Object.freeze({
-              delivery: "active" as const,
-              child_run_id: child.childRunId,
-              command_id: `${call.toolCallId}:command`,
-            })
-          : null,
-        delivered
-          ? null
-          : operationFailure(
-              "agent-runtime",
-              rejectionCode ?? "descendant_message_delivery_failed",
-            ),
-        startedAt,
-        null,
+        action, call, null, null, "unavailable", null,
+        operationFailure("agent-runtime", "agent_target_unknown"),
+        startedAt, null,
       );
       return;
     }
-
+    if (target.status !== "available") {
+      this.commitDescendantToolObservation(
+        action, call, null, target.correlation.sourceChild.id, "unavailable", null,
+        operationFailure("agent-runtime", "agent_target_stale"),
+        startedAt, null,
+      );
+      return;
+    }
+    if (
+      target.correlation.root.id !== this.lineage.root.id ||
+      target.correlation.parent.id !== this.runId ||
+      !sameAgentRef(target.correlation.agent, targetAgent)
+    ) {
+      this.commitDescendantToolObservation(
+        action, call, null, null, "invalid", null,
+        operationFailure("agent-runtime", "agent_target_incompatible"),
+        startedAt, null,
+      );
+      return;
+    }
     const descendant = await this.executeDescendantRun(action, call);
     if (descendant.status === "rejected") {
+      const code = isContinuationNotResumableCode(descendant.code)
+        ? "agent_target_not_resumable"
+        : descendant.code;
       this.commitDescendantToolObservation(
         action,
         call,
@@ -4105,7 +3941,7 @@ export class RunExecution<TOutput> {
         descendant.childRunId,
         descendant.operationStatus,
         null,
-        operationFailure("agent-runtime", descendant.code),
+        operationFailure("agent-runtime", code),
         startedAt,
         null,
       );
@@ -4114,7 +3950,10 @@ export class RunExecution<TOutput> {
     let mapped: import("./RunnerDependencies.js").DescendantOperationOutcome;
     try {
       mapped = this.dependencies.operations.delegation!.resultProjection.project(
-        descendant.result,
+        Object.freeze({
+          result: descendant.result,
+          continuation: descendant.continuation,
+        }),
       );
     } catch {
       mapped = Object.freeze({
@@ -4241,14 +4080,11 @@ export class RunExecution<TOutput> {
         const message = snapshotDescendantMessageRequest(
           call.input as Parameters<typeof snapshotDescendantMessageRequest>[0],
         );
-        if (message.target.kind !== "continuation") {
-          throw new TypeError("Descendant continuation requires a continuation target.");
-        }
-        const candidate = this.continuationRecords.get(message.target.id);
+        const candidate = this.continuationRecords.get(message.agent_id);
         if (
           candidate === undefined ||
           candidate.status !== "available" ||
-          candidate.correlation.ref.id !== message.target.id ||
+          candidate.correlation.ref.id !== message.agent_id ||
           candidate.correlation.root.id !== this.lineage.root.id ||
           candidate.correlation.parent.id !== this.runId ||
           !sameAgentRef(candidate.correlation.agent, targetAgent)
@@ -4263,7 +4099,7 @@ export class RunExecution<TOutput> {
             role: "user",
             content: Object.freeze([Object.freeze({
               kind: "text" as const,
-              text: message.message,
+              text: message.prompt,
             })]),
           }),
         ]);
@@ -4272,7 +4108,7 @@ export class RunExecution<TOutput> {
           targetAgent,
           sourceRequest: candidate.sourceRequest,
           sourceResult: candidate.sourceResult,
-          message: message.message,
+          message: message.prompt,
           authorityCeiling,
           limitCeiling,
         });
@@ -4322,10 +4158,7 @@ export class RunExecution<TOutput> {
       );
     }
     if (!sameAgentRef(prepared.agent, targetAgent) ||
-        !sameAgentRef(prepared.preparation.childAgent, targetAgent) ||
-        continuationRecord !== null &&
-          (prepared.preparation.dependencyResult !== null ||
-            prepared.preparation.replacedResult !== null)) {
+        !sameAgentRef(prepared.preparation.childAgent, targetAgent)) {
       if (continuationRecord?.status === "starting") {
         continuationRecord.status = "available";
       }
@@ -4414,17 +4247,7 @@ export class RunExecution<TOutput> {
           preparation: prepared.preparation,
         }),
       });
-      const dependency = prepared.preparation.dependencyResult === null
-        ? null
-        : this.resolveDelegationSourceResult(prepared.preparation.dependencyResult);
-      const replacement = prepared.preparation.replacedResult === null
-        ? null
-        : this.resolveDelegationSourceResult(prepared.preparation.replacedResult);
-      selectedContextMaterials = Object.freeze([
-        ...prepared.contextMaterials,
-        ...(dependency === null ? [] : [dependency.material]),
-        ...(replacement === null ? [] : [replacement.material]),
-      ]);
+      selectedContextMaterials = Object.freeze([...prepared.contextMaterials]);
       request = materializeDelegationRequest({
         requestId: this.id("delegation_request"),
         origin: Object.freeze({
@@ -4443,30 +4266,6 @@ export class RunExecution<TOutput> {
         preparation: prepared.preparation,
         authorityDerivation: authority,
         limitDerivation: limits,
-        dependencyResult: dependency === null
-          ? null
-          : Object.freeze({
-              correlation: Object.freeze({
-                kind: "dependency" as const,
-                request: dependency.result.request,
-                result: dependency.result.ref,
-                root: dependency.result.correlation.origin.root.run,
-                child: dependency.result.correlation.child,
-              }),
-              material: dependency.material,
-            }),
-        replacedResult: replacement === null
-          ? null
-          : Object.freeze({
-              correlation: Object.freeze({
-                kind: "replacement" as const,
-                request: replacement.result.request,
-                result: replacement.result.ref,
-                root: replacement.result.correlation.origin.root.run,
-                child: replacement.result.correlation.child,
-              }),
-              material: replacement.material,
-            }),
         continuation: continuationRecord?.correlation ?? null,
         createdAt,
       });
@@ -4491,11 +4290,7 @@ export class RunExecution<TOutput> {
 
     const admission = this.admitDescendantRun({
       relationId,
-      relationKind: request.continuation !== null
-        ? "continuation"
-        : request.replacedResult === null
-          ? "delegation"
-          : "replacement",
+      relationKind: request.continuation !== null ? "continuation" : "delegation",
       parentRunAction: action.ref,
       agent: prepared.agent,
       request,
@@ -4650,12 +4445,10 @@ export class RunExecution<TOutput> {
           "failed",
         );
       }
-      const resultMaterial = createDelegationResultContextMaterial(delegationResult);
       this.settledDelegations.set(delegationResult.ref.id, Object.freeze({
         result: delegationResult,
-        material: resultMaterial,
       }));
-      this.retainDescendantContinuation(
+      const continuation = this.retainDescendantContinuation(
         request,
         delegationResult,
         result,
@@ -4673,8 +4466,6 @@ export class RunExecution<TOutput> {
         childAgentRevision: request.childAgent.revision,
         requestId: request.ref.id,
         requestRevision: request.ref.revision,
-        dependencyResultId: request.dependencyResult?.result.id ?? null,
-        replacedResultId: request.replacedResult?.result.id ?? null,
         contextSourceCount: request.contextPlan.entries.length,
         authorityDerivationId: request.authorityDerivation.id,
         limitDerivationId: request.limitDerivation.id,
@@ -4710,6 +4501,7 @@ export class RunExecution<TOutput> {
         relationId,
         childRunId: child.runId,
         result: delegationResult,
+        continuation: continuation?.ref ?? null,
         resourceSettlement,
       });
     } finally {
@@ -4742,8 +4534,6 @@ export class RunExecution<TOutput> {
       childAgentRevision: request.childAgent.revision,
       requestId: request.ref.id,
       requestRevision: request.ref.revision,
-      dependencyResultId: request.dependencyResult?.result.id ?? null,
-      replacedResultId: request.replacedResult?.result.id ?? null,
       contextSourceCount: request.contextPlan.entries.length,
       authorityDerivationId: request.authorityDerivation.id,
       limitDerivationId: request.limitDerivation.id,
@@ -4769,30 +4559,17 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private resolveDelegationSourceResult(
-    ref: import("@agent-anything/agent-core/delegation").DelegationResultRef,
-  ): { readonly result: DelegationResult; readonly material: DelegationContextMaterial } {
-    const source = this.settledDelegations.get(ref.id);
-    if (source === undefined || source.result.ref.revision !== ref.revision) {
-      throw new TypeError("Delegation source result is unknown, stale, or not settled.");
-    }
-    if (source.result.correlation.origin.root.run.id !== this.lineage.root.id) {
-      throw new TypeError("Delegation source result belongs to another root Run.");
-    }
-    return source;
-  }
-
   private retainDescendantContinuation(
     request: DelegationRequest,
     result: DelegationResult,
     childResult: RunResult,
     childModelInteractionSeed: readonly ModelMessage[],
-  ): void {
+  ): DescendantContinuationCorrelation | null {
     if (
       result.terminal.status === "cancelled" ||
       result.effects.status === "unknown"
     ) {
-      return;
+      return null;
     }
     let interaction: ModelInteractionProjection;
     try {
@@ -4803,10 +4580,10 @@ export class RunExecution<TOutput> {
         seedMessages: childModelInteractionSeed,
       });
     } catch {
-      return;
+      return null;
     }
     if (interaction.unsettledCalls.length > 0 || interaction.messages.length === 0) {
-      return;
+      return null;
     }
     const material = Object.freeze({
       sourceRequest: request.ref,
@@ -4827,7 +4604,7 @@ export class RunExecution<TOutput> {
       ...material,
     });
     const limitations = Object.freeze([
-      ...(result.terminal.code === null ? [] : [result.terminal.code]),
+      result.terminal.code,
       ...result.uncertainty,
       ...(result.limitDisposition.exhaustedLimit === null
         ? []
@@ -4846,6 +4623,7 @@ export class RunExecution<TOutput> {
     };
     this.continuationRecords.set(correlation.ref.id, record);
     this.publishCurrentState();
+    return correlation;
   }
 
   private projectDescendantTargets(): import("../delegation/index.js").DescendantTargetsProjection {
@@ -4862,9 +4640,7 @@ export class RunExecution<TOutput> {
                 relation: Object.freeze({ id: relationId }),
                 relationKind: child.request.continuation !== null
                   ? "continuation" as const
-                  : child.request.replacedResult === null
-                    ? "delegation" as const
-                    : "replacement" as const,
+                  : "delegation" as const,
                 agent: child.request.childAgent,
                 runRevision: snapshot.runRevision,
                 status: snapshot.status as
@@ -4973,12 +4749,7 @@ export class RunExecution<TOutput> {
       },
       ...(outcome.toolResult === null
         ? []
-        : [{
-            owner: "tools",
-            kind: "tool_result",
-            id: outcome.toolResult.toolCall.toolCallId,
-            revision: outcome.toolResult.toolCall.toolRevision.revision,
-          }]),
+        : [toolResultLowerRef(outcome.toolResult)]),
     ];
     this.commitObservation(action, {
       kind: "operation",
@@ -5085,6 +4856,7 @@ export class RunExecution<TOutput> {
       payload,
     });
     const failed = observationFailed(observation);
+    const resetsHookFeedback = !failed && observation.payload.kind !== "plan_update";
     const contribution = createObservationContextContribution({
       id: this.id("context_contribution"),
       observation,
@@ -5104,6 +4876,9 @@ export class RunExecution<TOutput> {
           ? current.counters.consecutiveActionFailures + 1
           : 0,
       }),
+      lifecycleHooks: resetsHookFeedback
+        ? advanceRunLifecycleHookFeedbackEpoch(current.lifecycleHooks)
+        : current.lifecycleHooks,
     }));
   }
 
@@ -5758,10 +5533,19 @@ export class RunExecution<TOutput> {
       cancellationRequest: request,
     }));
     this.interactions.cancelAll(request.id);
+    const waiter = this.suspendedWaiter;
+    this.suspendedWaiter = null;
+    waiter?.resolve();
   }
 
   private async settle(candidate: TerminalCandidate<TOutput>): Promise<RunResult<TOutput>> {
     if (this.terminalResult !== null) return this.terminalResult;
+    if (this.settlementPromise !== null) return this.settlementPromise;
+    this.settlementPromise = this.performSettlement(candidate);
+    return this.settlementPromise;
+  }
+
+  private async performSettlement(candidate: TerminalCandidate<TOutput>): Promise<RunResult<TOutput>> {
     this.drainSteering(candidate.status === "cancelled" ? "cancelled" : "run_settled");
     this.interactions.close();
     this.drainInteractionSettlements();
@@ -5771,8 +5555,8 @@ export class RunExecution<TOutput> {
       const abandoned = abandonPlan({
         plan: stateBeforeFinalization.plan,
         terminalStatus: terminal.status,
-        reasonCode: terminal.status === "failed" || terminal.status === "blocked"
-          ? terminal.code
+        reasonCode: terminal.status === "failed"
+          ? terminal.failure.failure.code
           : terminal.status === "cancelled"
             ? "runtime_cancelled"
             : null,
@@ -5819,24 +5603,30 @@ export class RunExecution<TOutput> {
         ),
       ];
       if (failures.length > 0) {
-        terminal = {
-          status: "failed",
-          code: "required_finalization_failed",
-          failure: failures[0]!,
-          relatedFailures: failures.slice(1),
-        };
+        terminal = terminal.status === "succeeded"
+          ? {
+              status: "failed",
+              failure: failures[0]!,
+              source: this.failureSource(failures[0]!, "required_finalization"),
+              underlying: failures.slice(1).map((failure) =>
+                this.failureCausalLink(failure, "terminalization_failure")
+              ),
+            }
+          : this.appendTerminalFailures(terminal, failures, "terminalization_failure");
       }
     } finally {
       finalization.dispose();
     }
 
-    if (terminal.status === "succeeded" &&
-        this.config.cancellation.context.request !== null) {
-      terminal = { status: "cancelled" };
-    }
-
     if (this.resourceFailure !== null) {
-      terminal = this.resourceFailureCandidate(this.resourceFailure);
+      const resource = this.resourceFailureCandidate(this.resourceFailure);
+      terminal = terminal.status === "succeeded"
+        ? resource
+        : this.appendTerminalFailures(
+            terminal,
+            Object.freeze([resource.failure]),
+            "terminalization_failure",
+          );
     }
     const stateBeforeTerminal = this.writer.getSnapshot();
     const resultResource = this.runTree.recordResources(this.runId, {
@@ -5850,47 +5640,53 @@ export class RunExecution<TOutput> {
       }),
     });
     if (resultResource.status !== "recorded") {
-      terminal = this.resourceFailureCandidate(resultResource);
+      const resource = this.resourceFailureCandidate(resultResource);
+      terminal = terminal.status === "succeeded"
+        ? resource
+        : this.appendTerminalFailures(
+            terminal,
+            Object.freeze([resource.failure]),
+            "terminalization_failure",
+          );
     }
     this.runTree.settleResources(this.runId);
 
     const completedAt = this.now();
     const cancellationRequest = this.config.cancellation.context.request;
-    const payload: RunItemPayload<TOutput> = terminal.status === "succeeded"
-      ? {
-          kind: "terminal_transition",
-          status: "succeeded",
-          code: null,
+    const cause = this.createSettlementCause(terminal, cancellationRequest, completedAt);
+    const settlement: RunSettlement<TOutput> = terminal.status === "succeeded"
+      ? Object.freeze({
+          status: "succeeded" as const,
+          completedAt,
+          cause: cause.ref,
           output: terminal.output,
-          failure: null,
-        }
-      : terminal.status === "blocked"
-        ? {
-            kind: "terminal_transition",
-            status: "blocked",
-            code: terminal.code,
-            output: null,
-            failure: null,
-          }
-        : terminal.status === "cancelled"
-          ? {
-              kind: "terminal_transition",
-              status: "cancelled",
-              code: "runtime_cancelled",
-              output: null,
-              failure: null,
-            }
-          : {
-              kind: "terminal_transition",
-              status: "failed",
-              code: terminal.code,
-              output: null,
-              failure: terminal.failure,
-            };
-    this.writer.commit(payload, () => terminalStatePatch(
+        })
+      : terminal.status === "failed"
+        ? Object.freeze({
+            status: "failed" as const,
+            completedAt,
+            cause: cause.ref,
+          })
+        : Object.freeze({
+            status: "cancelled" as const,
+            completedAt,
+            cause: cause.ref,
+          });
+    this.writer.commitItems(Object.freeze([
+      Object.freeze({ kind: "settlement_cause" as const, cause }),
+      Object.freeze({
+        kind: "terminal_transition" as const,
+        status: settlement.status,
+        settlement,
+        cause,
+      }),
+    ]), (current) => terminalStatePatch(
       terminal,
+      settlement,
+      cause,
       cancellationRequest,
       completedAt,
+      Object.freeze([...current.settlementCauses, cause]),
     ));
     await this.closeVerification(completedAt);
     await this.transcript.flush();
@@ -5903,28 +5699,15 @@ export class RunExecution<TOutput> {
       startingInstructionBinding: state.startingInstructionBinding,
       finalInstructionBinding: state.activeInstructionBinding,
       startedAt: state.startedAt,
-      completedAt,
+      settlement,
+      cause,
+      settlementCauses: state.settlementCauses,
       items: state.items,
       evidenceRefs: state.evidenceRefs,
       artifactRefs: state.artifactRefs,
       metadata: state.metadata,
     };
-    const result = terminal.status === "succeeded"
-      ? createSucceededRunResult(base, terminal.output)
-      : terminal.status === "blocked"
-        ? createBlockedRunResult<TOutput>(base, terminal.code)
-        : terminal.status === "cancelled"
-          ? createCancelledRunResult<TOutput>(
-              base,
-              toRunCancellationSummary(requireCancellation(cancellationRequest)),
-            )
-          : createFailedRunResult<TOutput>(
-              base,
-              terminal.code,
-              terminal.failure,
-              terminal.relatedFailures ?? [],
-             cancellationRequest === null ? null : toRunCancellationSummary(cancellationRequest),
-           );
+    const result = createRunResult(base);
     this.terminalResult = result;
     this.emitCommittedRunItems(state);
     this.emitTerminal(result);
@@ -5933,18 +5716,130 @@ export class RunExecution<TOutput> {
     return result;
   }
 
+  private createSettlementCause(
+    terminal: TerminalCandidate<TOutput>,
+    cancellationRequest: import("../run/index.js").RunCancellationRequest | null,
+    recordedAt: string,
+  ): RunSettlementCauseRecord {
+    const state = this.writer.getSnapshot();
+    const ref = Object.freeze({
+      run: state.run,
+      id: this.id("run_settlement_cause"),
+      revision: String(state.revision + 1),
+    });
+    const underlyingCandidates = terminal.status === "succeeded"
+      ? Object.freeze([])
+      : terminal.underlying ?? Object.freeze([]);
+    const underlying = Object.freeze([...underlyingCandidates].slice(0, 8));
+    const omittedUnderlyingCount = terminal.status === "succeeded"
+      ? 0
+      : (terminal.omittedUnderlyingCount ?? 0) +
+        Math.max(0, underlyingCandidates.length - 8);
+    if (terminal.status === "succeeded") {
+      return Object.freeze({
+        ref,
+        kind: "completion" as const,
+        code: "completion_accepted" as const,
+        source: terminal.source ?? this.runSource("completion_acceptance", "run_completion_acceptance"),
+        underlying,
+        omittedUnderlyingCount,
+        recordedAt,
+      });
+    }
+    if (terminal.status === "cancelled") {
+      const request = requireCancellation(cancellationRequest);
+      return Object.freeze({
+        ref,
+        kind: "cancellation" as const,
+        code: "runtime_cancelled" as const,
+        cancellation: toRunCancellationSummary(request),
+        source: Object.freeze({
+          owner: "agent-runtime",
+          kind: "cancellation_request",
+          id: request.id,
+          revision: null,
+          run: state.run,
+        }),
+        underlying: Object.freeze([]),
+        omittedUnderlyingCount: 0,
+        recordedAt,
+      });
+    }
+    return Object.freeze({
+      ref,
+      kind: "failure" as const,
+      failure: terminal.failure,
+      source: terminal.source ?? this.failureSource(terminal.failure),
+      underlying,
+      omittedUnderlyingCount,
+      recordedAt,
+    });
+  }
+
+  private appendTerminalFailures(
+    terminal: TerminalCandidate<TOutput>,
+    failures: readonly RunFailureCause[],
+    relation: RunCausalLink["relation"],
+  ): TerminalCandidate<TOutput> {
+    if (failures.length === 0) return terminal;
+    if (terminal.status === "succeeded") {
+      return Object.freeze({
+        status: "failed" as const,
+        failure: failures[0]!,
+        source: this.failureSource(failures[0]!),
+        underlying: Object.freeze(failures.slice(1).map((failure) =>
+          this.failureCausalLink(failure, relation)
+        )),
+      });
+    }
+    const links = [
+      ...(terminal.underlying ?? []),
+      ...failures.map((failure) => this.failureCausalLink(failure, relation)),
+    ];
+    return Object.freeze({
+      ...terminal,
+      underlying: Object.freeze(links.slice(0, 8)),
+      omittedUnderlyingCount: (terminal.omittedUnderlyingCount ?? 0) + Math.max(0, links.length - 8),
+    });
+  }
+
+  private failureCausalLink(
+    failure: RunFailureCause,
+    relation: RunCausalLink["relation"],
+  ): RunCausalLink {
+    return Object.freeze({ relation, source: this.failureSource(failure) });
+  }
+
+  private failureSource(failure: RunFailureCause, kind = "failure_fact"): RunCauseSourceRef {
+    return Object.freeze({
+      owner: failure.kind,
+      kind,
+      id: this.id("run_failure_fact"),
+      revision: null,
+      run: Object.freeze({ id: this.runId }),
+    });
+  }
+
+  private runSource(kind: string, identityKind: "run_completion_acceptance"): RunCauseSourceRef {
+    return Object.freeze({
+      owner: "agent-runtime",
+      kind,
+      id: this.id(identityKind),
+      revision: null,
+      run: Object.freeze({ id: this.runId }),
+    });
+  }
+
   private failureFromError(error: unknown): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
     if (error instanceof VerificationExecutionError) {
       return {
         status: "failed",
-        code: "verification_failed",
         failure: createRunFailureCause("verification", error.failure),
       };
     }
     if (error instanceof ContextContractError) {
       return {
         status: "failed",
-        code: "context_projection_failed",
         failure: createRunFailureCause("context", Object.freeze({
           code: error.failure.code,
           message: error.failure.message,
@@ -5957,7 +5852,6 @@ export class RunExecution<TOutput> {
     if (error instanceof ControllerError) {
       return {
         status: "failed",
-        code: "controller_failed",
         failure: createRunFailureCause(error.failure.kind, error.failure.failure),
       } as Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }>;
     }
@@ -5967,7 +5861,6 @@ export class RunExecution<TOutput> {
     ) {
       return {
         status: "failed",
-        code: "tool_exposure_failed",
         failure: createRunFailureCause("tool", Object.freeze({
           code: error.code,
           message: error.message,
@@ -5979,7 +5872,6 @@ export class RunExecution<TOutput> {
     if (error instanceof OperationSettlementTimeoutError) {
       return {
         status: "failed",
-        code: "unknown_effect",
         failure: runtimeFailure(
           "runtime_operation_settlement_unconfirmed",
           error.message,
@@ -5989,13 +5881,62 @@ export class RunExecution<TOutput> {
     }
     return {
       status: "failed",
-      code: "runtime_execution_failed",
       failure: runtimeFailure(
         "runtime_execution_failed",
         error instanceof Error ? error.message : "Agent Runtime execution failed.",
         error instanceof Error ? { causeName: error.name } : {},
       ),
     };
+  }
+
+  private async emitStopFailureLifecycleEvent(
+    failure: RunFailureCause,
+    source: RunCauseSourceRef,
+  ): Promise<void> {
+    const state = this.writer.getSnapshot();
+    const failedTurn = [...state.items].reverse().find((item) =>
+      item.payload.kind === "controller_turn" && item.payload.status === "failed"
+    );
+    if (failedTurn === undefined || failedTurn.payload.kind !== "controller_turn") return;
+    const sequence = state.lifecycleHooks.stopFailureEventSequence + 1;
+    const revision = await createCanonicalSha256Digest(
+      "agent-anything.run-lifecycle-stop-failure.v1",
+      {
+        runId: this.runId,
+        sequence,
+        turn: failedTurn.payload.turn,
+        failureKind: failure.kind,
+        failureCode: failure.failure.code,
+        source,
+      },
+    );
+    const event = snapshotStopFailureLifecycleEvent({
+      ref: Object.freeze({
+        run: state.run,
+        id: this.id("run_lifecycle_event"),
+        sequence,
+        revision,
+      }),
+      name: "StopFailure",
+      run: state.run,
+      turn: failedTurn.payload.turn,
+      failure,
+      source,
+      emittedAt: this.now(),
+    });
+    this.writer.commit({ kind: "lifecycle_event", event }, (current) => Object.freeze({
+      lifecycleHooks: Object.freeze({
+        ...current.lifecycleHooks,
+        stopFailureEventSequence: sequence,
+        latestEventId: event.ref.id,
+      }),
+    }));
+    observeStopFailureLifecycleHooks({
+      composition: this.dependencies.lifecycleHooks,
+      runKind: this.lineage.kind === "root" ? "root" : "descendant",
+      event,
+      interruption: this.invocationInterruption(),
+    });
   }
 
   private async closeVerification(closedAt: string): Promise<void> {
@@ -6217,24 +6158,41 @@ export class RunExecution<TOutput> {
         itemKind: item.payload.kind,
         itemSequence: item.ref.sequence,
       }, item.createdAt);
-      if (item.payload.kind === "stop_review") {
-        const review = item.payload.review;
-        this.emit("run.stop.reviewed", {
-          reviewSequence: review.ref.sequence,
-          decision: review.decision,
-          checkCount: review.checks.length,
-          limitationCount: review.limitations.length,
-          requiredFeedbackRounds: review.requiredFeedbackRounds,
-          advisoryFeedbackRounds: review.advisoryFeedbackRounds,
+      if (item.payload.kind === "lifecycle_event") {
+        const event = item.payload.event;
+        this.emit("run.lifecycle.emitted", {
+          eventId: event.ref.id,
+          eventName: event.name,
+          sequence: event.ref.sequence,
+          eventRevision: event.ref.revision,
         }, item.createdAt);
-      } else if (item.payload.kind === "stop_feedback") {
+      } else if (item.payload.kind === "lifecycle_hook_invocation") {
+        const invocation = item.payload.invocation;
+        const status = invocation.outcome.status === "non_blocking_error"
+          ? "non_blocking_error" as const
+          : invocation.outcome.decision.kind;
+        const code = invocation.outcome.status === "non_blocking_error"
+          ? invocation.outcome.code
+          : invocation.outcome.decision.kind === "block"
+            ? invocation.outcome.decision.code
+            : null;
+        this.emit("run.lifecycle.hook.completed", {
+          eventId: invocation.eventId,
+          hookId: invocation.hook.id,
+          hookRevision: invocation.hook.revision,
+          status,
+          code,
+          durationMs: invocation.durationMs,
+          stale: invocation.stale,
+        }, item.createdAt);
+      } else if (item.payload.kind === "lifecycle_hook_feedback") {
         const feedback = item.payload.feedback;
-        this.emit("run.stop.feedback_requested", {
-          reviewSequence: feedback.review.sequence,
-          owner: feedback.owner,
-          severity: feedback.severity,
+        this.emit("run.lifecycle.hook.feedback", {
+          eventId: feedback.eventId,
+          epoch: feedback.epoch,
           round: feedback.round,
-          code: feedback.code,
+          codeCount: feedback.codes.length,
+          omittedReasonCount: feedback.omittedReasonCount,
         }, item.createdAt);
       } else if (item.payload.kind === "controller_turn") {
         const exposure = item.payload.toolExposure;
@@ -6294,7 +6252,8 @@ export class RunExecution<TOutput> {
         agent: this.activeAgent,
       }),
       plan: state.plan === null ? null : projectPlan(state.plan),
-      stopReview: projectRunStopReview(state.stopReview),
+      suspension: state.suspension,
+      lifecycleHooks: projectRunLifecycleHooks(state.lifecycleHooks),
       retry: this.retryProjection,
       verification: this.verificationHostProjection,
       pendingInteractions: Object.freeze([
@@ -6312,9 +6271,7 @@ export class RunExecution<TOutput> {
                 }),
                 relationKind: child.request.continuation !== null
                   ? "continuation" as const
-                  : child.request.replacedResult === null
-                    ? "delegation" as const
-                    : "replacement" as const,
+                  : "delegation" as const,
                 child: Object.freeze({ id: child.childRunId }),
                 childRunRevision: snapshot.runRevision,
                 childStatus: snapshot.status,
@@ -6405,25 +6362,25 @@ export class RunExecution<TOutput> {
   }
 
   private emitTerminal(result: RunResult<TOutput>): void {
+    const code = runSettlementCauseCode(result.cause);
     const payload = {
       status: result.status,
-      code: result.code,
+      code,
       durationMs: Math.max(0, Date.parse(result.completedAt) - this.startedAtMs),
       itemCount: result.items.length,
       evidenceCount: result.evidenceRefs.length,
       artifactCount: result.artifactRefs.length,
-      errorCodes: Object.freeze(result.failure === null
-        ? []
-        : [result.failure.failure.code, ...result.relatedFailures.map((failure) => failure.failure.code)]),
+      errorCodes: Object.freeze(result.cause.kind === "failure"
+        ? [result.cause.failure.failure.code]
+        : []),
     };
     if (result.status === "succeeded") this.emit("run.completed", { ...payload, status: "succeeded", code: null });
-    else if (result.status === "blocked") this.emit("run.blocked", { ...payload, status: "blocked", code: result.code });
-    else if (result.status === "cancelled") this.emit("run.cancelled", { ...payload, status: "cancelled", code: result.code });
-    else this.emit("run.failed", { ...payload, status: "failed", code: result.code });
+    else if (result.status === "cancelled") this.emit("run.cancelled", { ...payload, status: "cancelled", code });
+    else this.emit("run.failed", { ...payload, status: "failed", code });
   }
 
   private async recordLifecycle(
-    phase: "started" | "succeeded" | "blocked" | "failed" | "cancelled",
+    phase: "started" | "succeeded" | "failed" | "cancelled",
     skipKinds = new Set<import("../run/index.js").RunFailureKind>(),
     context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
   ): Promise<RunFailureCause[]> {
@@ -6484,45 +6441,41 @@ function agentRevisionKey(agent: Pick<Agent, "id" | "revision">): string {
 
 function terminalStatePatch<TOutput>(
   terminal: TerminalCandidate<TOutput>,
+  settlement: RunSettlement<TOutput>,
+  cause: RunSettlementCauseRecord,
   cancellationRequest: import("../run/index.js").RunCancellationRequest | null,
   completedAt: string,
+  settlementCauses: readonly RunSettlementCauseRecord[],
 ): Readonly<Record<string, unknown>> {
   if (terminal.status === "succeeded") return Object.freeze({
     status: "succeeded",
-    code: null,
     finalOutput: terminal.output,
-    failure: null,
-    relatedFailures: Object.freeze([]),
-    cancellationRequest: null,
-    completedAt,
-    pending: Object.freeze([]),
-  });
-  if (terminal.status === "blocked") return Object.freeze({
-    status: "blocked",
-    code: terminal.code,
-    finalOutput: null,
-    failure: null,
-    relatedFailures: Object.freeze([]),
+    settlement,
+    settlementCause: cause,
+    settlementCauses,
+    suspension: null,
     cancellationRequest: null,
     completedAt,
     pending: Object.freeze([]),
   });
   if (terminal.status === "cancelled") return Object.freeze({
     status: "cancelled",
-    code: "runtime_cancelled",
     finalOutput: null,
-    failure: null,
-    relatedFailures: Object.freeze([]),
+    settlement,
+    settlementCause: cause,
+    settlementCauses,
+    suspension: null,
     cancellationRequest: requireCancellation(cancellationRequest),
     completedAt,
     pending: Object.freeze([]),
   });
   return Object.freeze({
     status: "failed",
-    code: terminal.code,
     finalOutput: null,
-    failure: terminal.failure,
-    relatedFailures: Object.freeze([...(terminal.relatedFailures ?? [])]),
+    settlement,
+    settlementCause: cause,
+    settlementCauses,
+    suspension: null,
     cancellationRequest,
     completedAt,
     pending: Object.freeze([]),
@@ -6722,12 +6675,55 @@ function failedToolResult(
   });
 }
 
+function failedToolAttemptResult(
+  attempt: ToolCallAttempt,
+  code: string,
+  message: string,
+  validation: import("@agent-anything/tools/validation").ToolInputValidationFailure | null,
+  finishedAt: string,
+): FailedToolResult {
+  return Object.freeze({
+    toolCall: attempt.ref,
+    settlement: Object.freeze({
+      owner: "tools",
+      kind: validation === null ? "tool_call_attempt_rejection" : "tool_input_validation",
+      id: attempt.ref.id,
+      revision: attempt.selectedTool?.revision ?? null,
+    }),
+    status: "failed" as const,
+    error: Object.freeze({
+      code,
+      message,
+      ...(validation === null
+        ? {}
+        : { metadata: Object.freeze({
+            issues: validation.issues,
+            omittedIssueCount: validation.omittedIssueCount,
+          }) }),
+    }),
+    startedAt: attempt.createdAt,
+    finishedAt,
+    metadata: Object.freeze({
+      requestedName: attempt.requestedName,
+      selectedToolRevision: attempt.selectedTool?.revision ?? null,
+    }),
+  });
+}
+
 function toolResultLowerRef(result: ToolResult): RunObservation["lowerRefs"][number] {
+  if ("toolCallId" in result.toolCall) {
+    return Object.freeze({
+      owner: "tools",
+      kind: "tool_result",
+      id: result.toolCall.toolCallId,
+      revision: result.toolCall.toolRevision.revision,
+    });
+  }
   return Object.freeze({
     owner: "tools",
     kind: "tool_result",
-    id: result.toolCall.toolCallId,
-    revision: result.toolCall.toolRevision.revision,
+    id: result.toolCall.id,
+    revision: null,
   });
 }
 
@@ -6790,29 +6786,6 @@ function rejectedDelegationSteering(
   child: Extract<DelegationSteeringReceipt, { readonly status: "rejected" }>["child"],
 ): DelegationSteeringReceipt {
   return Object.freeze({ status: "rejected" as const, code, relation, child });
-}
-
-function createDelegationResultContextMaterial(
-  result: DelegationResult,
-): DelegationContextMaterial {
-  return createDelegationContextMaterial({
-    owner: "agent-runtime",
-    kind: "delegation_result",
-    id: result.ref.id,
-    payload: Object.freeze({
-      kind: "delegation_result",
-      result: result.ref,
-      child: result.correlation.child,
-      terminal: result.terminal,
-      narrative: result.narrative,
-      evidence: result.evidence,
-      artifacts: result.artifacts,
-      verification: result.verification,
-      effects: result.effects,
-      expectationCoverage: result.expectationCoverage,
-      uncertainty: result.uncertainty,
-    }),
-  });
 }
 
 function delegationAuthoritySources(input: {
@@ -6985,6 +6958,17 @@ function delegationModelUsageStatus(
   return "unavailable";
 }
 
+function isContinuationNotResumableCode(
+  code: Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["code"],
+): boolean {
+  return code === "delegation_resource_limit_exceeded" ||
+    code === "descendant_run_depth_limit_exceeded" ||
+    code === "descendant_run_total_limit_exceeded" ||
+    code === "descendant_run_active_limit_exceeded" ||
+    code === "descendant_run_resource_limit_exceeded" ||
+    code === "descendant_run_deadline_exceeded";
+}
+
 function sameAgentRef(
   left: { readonly id: string; readonly revision: string },
   right: { readonly id: string; readonly revision: string },
@@ -7048,12 +7032,19 @@ function projectObservationSettlement(observation: RunObservation): {
         },
       );
     case "operation_rejected":
-    case "tool_rejected":
     case "model_call_rejected":
       return modelSettlement("invalid", {
         kind: payload.kind,
         code: payload.code,
         message: payload.message,
+      });
+    case "tool_rejected":
+      return modelSettlement("invalid", {
+        kind: payload.kind,
+        code: payload.code,
+        message: payload.message,
+        issues: payload.toolResult.error.metadata?.issues ?? [],
+        omittedIssueCount: payload.toolResult.error.metadata?.omittedIssueCount ?? 0,
       });
     case "interaction":
       return modelSettlement(
@@ -7160,7 +7151,7 @@ function measureTerminalResultBytes<TOutput>(
     status: terminal.status,
     code: terminal.status === "succeeded" ? null : terminal.status === "cancelled"
       ? "runtime_cancelled"
-      : terminal.code,
+      : terminal.failure.failure.code,
     finalOutput: terminal.status === "succeeded" ? terminal.output : null,
     evidenceRefs,
     artifactRefs,
@@ -7172,7 +7163,47 @@ function measureTerminalResultBytes<TOutput>(
 }
 
 function isActiveStatus(status: RunState["status"]): boolean {
-  return status === "initializing" || status === "running" || status === "waiting";
+  return status === "initializing" || status === "running" || status === "waiting" || status === "suspended";
+}
+
+function controllerTurnSource(turn: ControllerTurnRef): RunCauseSourceRef {
+  return Object.freeze({
+    owner: "controller",
+    kind: "controller_turn",
+    id: turn.id,
+    revision: String(turn.sequence),
+    run: Object.freeze({ ...turn.run }),
+  });
+}
+
+function boundedReason(value: string): string {
+  const normalized = value.trim();
+  return (normalized.length === 0 ? "Run progression requires explicit resume." : normalized).slice(0, 2_048);
+}
+
+function isValidResumeInput(input: RunResumeRequestInput): boolean {
+  return typeof input === "object" && input !== null &&
+    typeof input.id === "string" && input.id.trim().length > 0 && input.id === input.id.trim() &&
+    Number.isSafeInteger(input.expectedRunRevision) && input.expectedRunRevision >= 0 &&
+    typeof input.suspension === "object" && input.suspension !== null &&
+    typeof input.suspension.id === "string" && input.suspension.id.trim().length > 0 &&
+    typeof input.suspension.revision === "string" && input.suspension.revision.trim().length > 0 &&
+    typeof input.suspension.run?.id === "string" && input.suspension.run.id.trim().length > 0 &&
+    (input.origin === "user" || input.origin === "host") &&
+    typeof input.reason === "string" && input.reason.trim().length > 0 && input.reason.trim().length <= 500;
+}
+
+function rejectedResume(
+  code: Extract<RunResumeReceipt, { readonly status: "rejected" }>["code"],
+  requestId: string,
+  currentRunRevision: number,
+): RunResumeReceipt {
+  return Object.freeze({
+    status: "rejected" as const,
+    code,
+    requestId,
+    currentRunRevision,
+  });
 }
 
 function sameInteractionRequest(

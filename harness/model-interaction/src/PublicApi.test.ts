@@ -7,10 +7,14 @@ import * as api from "./index.js";
 describe("Model Interaction public API", () => {
   it("exposes focused Model Interaction runtime values from their owner paths", () => {
     expect(Object.keys(api).sort()).toEqual([
+      "accountProviderTransport",
+      "assessModelContext",
       "createModelCallRef",
       "createModelTurnId",
       "createNativeToolTurnInteraction",
       "createProviderAttemptInterruption",
+      "createProviderSemanticRequestDigest",
+      "createUnknownModelInputMeasurement",
       "modelCallRefKey",
       "modelCallableDefinitionsContentDigest",
       "modelInstructionsEqual",
@@ -22,6 +26,7 @@ describe("Model Interaction public API", () => {
       "snapshotModelCallRef",
       "snapshotModelCallableDefinition",
       "snapshotModelCallableDefinitions",
+      "snapshotModelContextAssessment",
       "snapshotModelInstructions",
       "snapshotModelJsonValue",
       "snapshotModelMessage",
@@ -36,15 +41,13 @@ describe("Model Interaction public API", () => {
       "snapshotProviderInteraction",
       "snapshotProviderRequest",
       "snapshotProviderResponse",
+      "verifyProviderTransportAccounting",
     ]);
     expect(Object.keys(inputApi).sort()).toEqual([
       "ModelInputCompositionError",
-      "allocateModelInputContext",
       "composeModelInput",
-      "createUtf8ModelInputAccounting",
       "modelInputFromComposition",
       "modelInputFromSections",
-      "snapshotModelInputCapability",
       "snapshotModelInputComposition",
       "snapshotModelOutputFormat",
     ]);

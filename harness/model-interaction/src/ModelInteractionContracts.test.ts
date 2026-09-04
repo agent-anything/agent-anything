@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  accountProviderTransport,
+  createProviderSemanticRequestDigest,
   createModelCallRef,
   createModelTurnId,
   createNativeToolTurnInteraction,
@@ -11,15 +13,14 @@ import {
   snapshotModelTurnFinish,
   snapshotProviderCapabilities,
   snapshotProviderRequest,
+  verifyProviderTransportAccounting,
   type ModelCallRef,
   type ModelCallableDefinition,
   type ModelMessage,
   type ModelToolCall,
-  type ProviderInteraction,
 } from "./index.js";
 import {
   composeModelInput,
-  createUtf8ModelInputAccounting,
   modelInputFromComposition,
 } from "./input/index.js";
 
@@ -183,7 +184,11 @@ describe("provider-neutral Model Interaction contracts", () => {
       },
       structuredGeneration: { supported: false },
       streaming: { supported: true },
-      modelInput: { supported: false },
+      modelContext: {
+        capacity: { supported: false },
+        requestedOutput: requestedOutput(),
+        inputPreservation: inputPreservation(),
+      },
       continuation: { supported: false },
       compaction: { supported: false },
       usageMetering: {
@@ -221,6 +226,7 @@ describe("provider-neutral Model Interaction contracts", () => {
       messages: composition.messages,
       interaction: composition.interaction,
       composition,
+      modelContext: requestModelContext(),
       continuation: null,
       metadata: {},
     })).toThrow("does not match");
@@ -236,6 +242,7 @@ describe("provider-neutral Model Interaction contracts", () => {
       messages: composition.messages,
       interaction: { kind: "text_generation" },
       composition,
+      modelContext: requestModelContext(),
       continuation: null,
       metadata: {},
     })).toThrow("does not match");
@@ -250,6 +257,7 @@ describe("provider-neutral Model Interaction contracts", () => {
       messages: composition.messages,
       interaction: composition.interaction,
       composition,
+      modelContext: requestModelContext(),
       continuation: null,
       metadata: {},
     } as unknown as Parameters<typeof snapshotProviderRequest>[0])).toThrow(
@@ -257,59 +265,60 @@ describe("provider-neutral Model Interaction contracts", () => {
     );
   });
 
-  it("accounts callable schemas and messages and rejects final encoding drift", () => {
-    const { accounting, composition, encodedRequest } = nativeComposition();
+  it("keeps semantic input separate from exact Provider transport accounting", () => {
+    const { composition, encodedRequest } = nativeComposition();
     const modelInput = modelInputFromComposition(composition);
-    const verification = {
-      providerId: composition.providerId,
-      model: composition.model,
+    const request = snapshotProviderRequest({
+      requestId: composition.id,
+      purpose: "test",
+      correlation: {
+        controllerRequestId: "controller-request-1",
+        branchId: "branch-1",
+      },
       instructions: modelInput.instructions,
       messages: modelInput.messages,
       interaction: composition.interaction,
       composition,
+      modelContext: requestModelContext(),
+      continuation: null,
+      metadata: {},
+    });
+    const binding = {
+      method: "POST" as const,
+      endpoint: "https://provider.example/v1/chat",
+      contentType: "application/json",
+      encoding: "utf-8" as const,
     };
+    const accounting = accountProviderTransport({
+      encodedBody: encodedRequest,
+      binding,
+      limit: { maximumBytes: 1_000_000, source: "host_configured", revision: "1" },
+    });
 
-    expect(composition.accounting.inputAmount).toBe(
-      new TextEncoder().encode(encodedRequest).byteLength,
-    );
+    expect(accounting.encodedBytes).toBe(new TextEncoder().encode(encodedRequest).byteLength);
     expect(encodedRequest).toContain("Read one workspace file.");
     expect(encodedRequest).toContain("file_path");
-    expect(() => accounting.verifyEncoded({
-      ...verification,
-      encodedRequest,
+    expect(createProviderSemanticRequestDigest(request)).toMatch(/^sha256:/);
+    expect(() => verifyProviderTransportAccounting({
+      accounting,
+      encodedBody: encodedRequest,
+      binding,
     })).not.toThrow();
-    expect(() => accounting.verifyEncoded({
-      ...verification,
-      encodedRequest: `${encodedRequest} `,
-    })).toThrow("differs from the accounted encoding");
+    expect(() => verifyProviderTransportAccounting({
+      accounting,
+      encodedBody: `${encodedRequest} `,
+      binding,
+    })).toThrow("does not match");
   });
 });
 
 function nativeComposition() {
   const interaction = createNativeToolTurnInteraction([CALLABLE]);
-  const renderRequest = (
-    instructions: import("./index.js").ModelInstructions,
-    messages: readonly ModelMessage[],
-    providerInteraction: ProviderInteraction,
-  ) => JSON.stringify({ instructions, messages, interaction: providerInteraction });
-  const accounting = createUtf8ModelInputAccounting({
-    providerId: "provider-1",
-    model: "model-1",
-    maximumInputBytes: 1_000_000,
-    limitSource: "host_configured",
-    estimator: { id: "test-utf8", revision: "1" },
-    framing: { id: "test-native-request", revision: "1" },
-    renderRequest,
-  });
   const composition = composeModelInput({
     id: "request-1",
     providerId: "provider-1",
     model: "model-1",
-    accounting,
     interaction,
-    outputReserve: { unit: "bytes", amount: 0 },
-    contextBudget: { unit: "bytes", amount: 0 },
-    contextProjectedAmount: 0,
     sections: [{
       id: "instructions",
       source: { owner: "test", kind: "instructions", id: "instructions", revision: "1" },
@@ -353,13 +362,46 @@ function nativeComposition() {
   });
   const modelInput = modelInputFromComposition(composition);
   return {
-    accounting,
     composition,
-    encodedRequest: renderRequest(
-      modelInput.instructions,
-      modelInput.messages,
-      composition.interaction,
-    ),
+    encodedRequest: JSON.stringify({
+      instructions: modelInput.instructions,
+      messages: modelInput.messages,
+      interaction: composition.interaction,
+    }),
+  };
+}
+
+function requestedOutput() {
+  return {
+    unit: "tokens" as const,
+    maximum: 1_024,
+    source: "host_configured" as const,
+    revision: "output-1",
+  };
+}
+
+function inputPreservation() {
+  return {
+    providerId: "provider-1",
+    model: "model-1",
+    adapterRevision: "adapter-1",
+    runtimeVersion: null,
+    truncation: "unknown" as const,
+    contextShift: "unknown" as const,
+    evidence: [],
+    revision: "preservation-1",
+  };
+}
+
+function requestModelContext() {
+  return {
+    requestedOutput: requestedOutput(),
+    headroom: {
+      unit: "tokens" as const,
+      amount: 128,
+      policy: { id: "test-headroom", revision: "1" },
+    },
+    assessment: null,
   };
 }
 

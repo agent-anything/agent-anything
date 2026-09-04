@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createRunCancellationController,
   createRunFailureCause,
-  createFailedRunResult,
-  createSucceededRunResult,
+  createRunResult,
+  type RunSettlementCauseRecord,
 } from "../run/index.js";
 import {
-  createInitialRunStopReviewState,
-  projectRunStopReview,
-} from "../stop/index.js";
+  createInitialRunLifecycleHookState,
+  projectRunLifecycleHooks,
+} from "../hooks/index.js";
 import { ActiveRunHandle, type RunExecutionUpdate } from "./RunHandle.js";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 
@@ -85,7 +85,7 @@ describe("ActiveRunHandle", () => {
     expect(delivered).toHaveBeenCalledTimes(2);
   });
 
-  it("copies and freezes the authoritative Stop Review projection", () => {
+  it("copies and freezes the authoritative lifecycle Hook projection", () => {
     const result = succeededResult();
     const handle = new ActiveRunHandle(
       "run-1",
@@ -94,22 +94,31 @@ describe("ActiveRunHandle", () => {
       runTree(0),
       () => undefined,
     );
-    const limitations = [{
-      owner: "plan" as const,
-      code: "plan_remains_active",
-      message: "The Run stopped with an active Plan.",
-    }];
+    const limitations = ["hook_result_truncated"];
+    const codes = ["task_incomplete"];
 
     handle.publish({
       runRevision: 2,
       status: "running",
       lastRunItemSequence: 4,
+      instructionBinding: null,
       plan: null,
-      stopReview: {
-        reviewSequence: 2,
-        requiredFeedbackRounds: 1,
-        advisoryFeedbackRounds: 1,
-        latestReview: { runId: "run-1", sequence: 2 },
+      suspension: null,
+      lifecycleHooks: {
+        stopEventSequence: 2,
+        stopFailureEventSequence: 0,
+        feedbackEpoch: 1,
+        consecutiveBlockingRounds: 1,
+        latestEventId: "stop-event-2",
+        latestInvocations: [],
+        latestFeedback: {
+          eventId: "stop-event-2",
+          epoch: 1,
+          round: 1,
+          codes,
+          message: "Continue the Run and complete the Task.",
+          omittedReasonCount: 0,
+        },
         limitations,
       },
       retry: null,
@@ -120,13 +129,15 @@ describe("ActiveRunHandle", () => {
       result: null,
     });
 
-    limitations[0]!.message = "changed-after-publish";
-    const stopReview = handle.getSnapshot().stopReview;
-    expect(stopReview.limitations[0]?.message).toBe("The Run stopped with an active Plan.");
-    expect(Object.isFrozen(stopReview)).toBe(true);
-    expect(Object.isFrozen(stopReview.limitations)).toBe(true);
-    expect(Object.isFrozen(stopReview.limitations[0])).toBe(true);
-    expect(Object.isFrozen(stopReview.latestReview)).toBe(true);
+    limitations[0] = "changed-after-publish";
+    codes[0] = "changed-after-publish";
+    const lifecycleHooks = handle.getSnapshot().lifecycleHooks;
+    expect(lifecycleHooks.limitations).toEqual(["hook_result_truncated"]);
+    expect(lifecycleHooks.latestFeedback?.codes).toEqual(["task_incomplete"]);
+    expect(Object.isFrozen(lifecycleHooks)).toBe(true);
+    expect(Object.isFrozen(lifecycleHooks.limitations)).toBe(true);
+    expect(Object.isFrozen(lifecycleHooks.latestFeedback)).toBe(true);
+    expect(Object.isFrozen(lifecycleHooks.latestFeedback?.codes)).toBe(true);
   });
 
   it("settles an execution rejection through the emergency result exactly once", async () => {
@@ -198,8 +209,10 @@ function terminalUpdate(
     runRevision: 1,
     status: "succeeded",
     lastRunItemSequence: 0,
+    instructionBinding: null,
     plan: null,
-    stopReview: projectRunStopReview(createInitialRunStopReviewState()),
+    suspension: null,
+    lifecycleHooks: projectRunLifecycleHooks(createInitialRunLifecycleHookState()),
     retry: null,
     verification: null,
       pendingInteractions: [],
@@ -219,7 +232,8 @@ function cancellation() {
 
 function succeededResult() {
   const instructionBinding = testInstructionBinding();
-  return createSucceededRunResult({
+  const cause = completionCause();
+  return createRunResult({
     runId: "run-1",
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
@@ -227,13 +241,35 @@ function succeededResult() {
     startingInstructionBinding: instructionBinding,
     finalInstructionBinding: instructionBinding,
     startedAt: NOW,
-    completedAt: LATER,
-  }, { summary: "done" });
+    settlement: {
+      status: "succeeded",
+      completedAt: LATER,
+      cause: cause.ref,
+      output: { summary: "done" },
+    },
+    cause,
+    settlementCauses: [cause],
+  });
 }
 
 function failedResult() {
   const instructionBinding = testInstructionBinding();
-  return createFailedRunResult({
+  const failure = createRunFailureCause("runtime", {
+    code: "runtime_execution_failed",
+    message: "Run execution rejected before normal failure materialization.",
+    retryable: false,
+    metadata: {},
+  });
+  const cause: Extract<RunSettlementCauseRecord, { kind: "failure" }> = {
+    ref: causeRef(),
+    kind: "failure",
+    failure,
+    source: causeSource("runtime_failure"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: LATER,
+  };
+  return createRunResult({
     runId: "run-1",
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
@@ -241,13 +277,40 @@ function failedResult() {
     startingInstructionBinding: instructionBinding,
     finalInstructionBinding: instructionBinding,
     startedAt: NOW,
-    completedAt: LATER,
-  }, "runtime_execution_failed", createRunFailureCause("runtime", {
-    code: "runtime_execution_failed",
-    message: "Run execution rejected before normal failure materialization.",
-    retryable: false,
-    metadata: {},
-  }));
+    settlement: {
+      status: "failed",
+      completedAt: LATER,
+      cause: cause.ref,
+    },
+    cause,
+    settlementCauses: [cause],
+  });
+}
+
+function completionCause(): Extract<RunSettlementCauseRecord, { kind: "completion" }> {
+  return {
+    ref: causeRef(),
+    kind: "completion",
+    code: "completion_accepted",
+    source: causeSource("run_completion_acceptance"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: LATER,
+  };
+}
+
+function causeRef() {
+  return { run: { id: "run-1" }, id: "run-1:cause:1", revision: "1" };
+}
+
+function causeSource(kind: string) {
+  return {
+    owner: "agent-runtime",
+    kind,
+    id: `run-1:${kind}:1`,
+    revision: "1",
+    run: { id: "run-1" },
+  };
 }
 
 function testInstructionBinding() {
@@ -273,12 +336,24 @@ function runTree(revision: number): RunTreeExecutionSnapshot {
       runId: "run-1",
       parentRunId: null,
       relationId: null,
+      relationKind: null,
       parentRunActionId: null,
+      dispatch: null,
       depth: 0,
       status: "running" as const,
-      resultCode: null,
+      terminal: null,
       startedAt: NOW,
       completedAt: null,
+      resources: Object.freeze({
+        status: "active" as const,
+        revision: 0,
+        reserved: Object.freeze({}),
+        consumed: Object.freeze({}),
+        released: Object.freeze({}),
+      }),
+      authorityRevision: "root-authority-v1",
+      cancellation: null,
+      resultTransfer: "not_required" as const,
     })]),
   });
 }

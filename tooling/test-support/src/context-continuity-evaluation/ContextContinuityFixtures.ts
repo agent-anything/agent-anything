@@ -22,7 +22,6 @@ import {
 } from "@agent-anything/model-interaction/continuation";
 import {
   composeModelInput,
-  createUtf8ModelInputAccounting,
 } from "@agent-anything/model-interaction/input";
 import type {
   ContextContinuityContinuationEvidence,
@@ -514,17 +513,11 @@ function projectionRequest(
 }
 
 function composeCompleteInput(contextFragments: readonly string[]): ContextContinuityModelInputEvidence {
-  const accounting = modelInputAccounting();
   const composition = composeModelInput({
     id: "context-continuity-composition",
     providerId: "provider-neutral",
     model: "deterministic-model",
-    accounting,
     interaction: { kind: "text_generation" },
-    outputReserve: { unit: "bytes", amount: 32 },
-    contextBudget: { unit: "bytes", amount: 512 },
-    contextProjectedAmount: contextFragments.reduce((sum, value) =>
-      sum + new TextEncoder().encode(value).byteLength, 0),
     sections: [
       instructionSection(),
       modelSection("task", "user", "Perform the deterministic fixture."),
@@ -533,14 +526,15 @@ function composeCompleteInput(contextFragments: readonly string[]): ContextConti
     lineage: modelInputLineage(),
     composedAt: at(3),
   });
-  const value = composition.accounting;
-  const limitAmount = composition.limit.maximum;
   return Object.freeze({
-    limitAmount,
-    inputAmount: value.inputAmount,
-    outputReserveAmount: value.outputReserveAmount,
-    remainingAmount: value.remainingAmount,
-    budgetError: value.inputAmount + value.outputReserveAmount + value.remainingAmount - limitAmount,
+    compositionId: composition.id,
+    sectionCount: composition.sections.length,
+    messageCount: composition.messages.length,
+    semanticInputConsistent:
+      composition.instructions.content.length === 1 &&
+      composition.messages.length === 1 &&
+      composition.messages[0]?.role === "user" &&
+      composition.messages[0].content.length === 2,
   });
 }
 
@@ -549,11 +543,7 @@ function composeForReconstruction() {
     id: "reconstructed-composition",
     providerId: "provider-neutral",
     model: "deterministic-model",
-    accounting: modelInputAccounting(),
     interaction: { kind: "text_generation" },
-    outputReserve: { unit: "bytes", amount: 32 },
-    contextBudget: { unit: "bytes", amount: 128 },
-    contextProjectedAmount: 12,
     sections: [
       instructionSection(),
       modelSection("task", "user", "Reconstruct this request."),
@@ -561,19 +551,6 @@ function composeForReconstruction() {
     ],
     lineage: modelInputLineage(),
     composedAt: at(3),
-  });
-}
-
-function modelInputAccounting() {
-  return createUtf8ModelInputAccounting({
-    providerId: "provider-neutral",
-    model: "deterministic-model",
-    maximumInputBytes: 1_024,
-    limitSource: "host_configured",
-    estimator: { id: "utf8-bytes", revision: ESTIMATOR_REVISION },
-    framing: { id: "deterministic-framing", revision: "1" },
-    renderRequest: (instructions, messages, interaction) =>
-      JSON.stringify({ instructions, messages, interaction }),
   });
 }
 

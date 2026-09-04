@@ -118,12 +118,12 @@ export type HelarcMainSnapshotStatus =
   | "workspace_selected"
   | "starting"
   | "running"
+  | "suspended"
   | "cancelling"
   | "waiting_for_approval"
   | "completed"
   | "rejected"
   | "failed"
-  | "blocked"
   | "cancelled";
 
 export type HelarcThreadMessageRole =
@@ -1409,13 +1409,6 @@ function createAssistantTerminalMessageContent(
     return "Run cancelled.";
   }
 
-  if (terminal.status === "blocked") {
-    if (terminal.code === "runtime_stop_feedback_exhausted") {
-      return "Run blocked because required completion feedback was exhausted.";
-    }
-    return "Run blocked.";
-  }
-
   if (product.output.safeErrors.length > 0) {
     return product.output.safeErrors
       .map((error) => `${error.code}: ${error.message}`)
@@ -1582,7 +1575,7 @@ function createInjectedProviderProfile(provider: Provider | null): HelarcProvide
     providerKind: providerId === "ollama.api" ? "ollama" : "openai-compatible",
     displayName: provider?.descriptor.name ?? "Injected Provider",
     baseUrl: "https://provider.local/v1",
-    model: provider?.inputAccounting.model ?? "injected-model",
+    model: provider?.modelContext.target.model ?? "injected-model",
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
     qualificationPolicy: "allow_experimental",

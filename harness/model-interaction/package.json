@@ -14,6 +14,14 @@
       "types": "./src/input/index.ts",
       "import": "./dist/input/index.js"
     },
+    "./context": {
+      "types": "./src/context/index.ts",
+      "import": "./dist/context/index.js"
+    },
+    "./transport": {
+      "types": "./src/transport/index.ts",
+      "import": "./dist/transport/index.js"
+    },
     "./continuation": {
       "types": "./src/continuation/index.ts",
       "import": "./dist/continuation/index.js"

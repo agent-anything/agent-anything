@@ -37,6 +37,10 @@ describe("Helarc Evaluation target public API", () => {
       "HELARC_PRODUCT_EFFECTIVENESS_TIME",
       "HELARC_PROVIDER_NATIVE_TOOL_INTERACTION_ACCEPTED_BASELINE",
       "HELARC_PROVIDER_NATIVE_TOOL_INTERACTION_BASELINE_ACCEPTANCE",
+      "HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE",
+      "HELARC_RUN_LIFECYCLE_SETTLEMENT_BASELINE_ACCEPTANCE",
+      "HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_ACCEPTED_BASELINE",
+      "HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_BASELINE_ACCEPTANCE",
       "HELARC_RUN_PROGRESS_ACCEPTED_BASELINE",
       "HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE",
       "HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE",
@@ -92,6 +96,7 @@ describe("Helarc Evaluation target public API", () => {
       "sealHelarcProductEffectivenessEvidenceBundle",
       "verifyHelarcAgentInstructionCampaignArtifact",
       "verifyHelarcOperationalConformanceAcceptedBaseline",
+      "verifyHelarcRunLifecycleSettlementOperationalAcceptedBaseline",
       "verifyHelarcRunStopOperationalAcceptedBaseline",
     ]);
   });

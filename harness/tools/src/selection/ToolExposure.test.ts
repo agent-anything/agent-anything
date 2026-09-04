@@ -236,8 +236,15 @@ describe("current-turn Tool Exposure", () => {
       exposure: proof,
       parentRunAction: { run: { id: "run-1" }, id: "action-1", sequence: 1 },
       toolCallId: "tool-call-1",
+      modelCall: {
+        id: "model-call-1",
+        providerRequestId: "provider-request-1",
+        controllerRequestId: "controller-request-1",
+        turnId: "turn-1",
+        contentBlockOrdinal: 0,
+        branchId: "branch-1",
+      },
       createdAt: "2026-08-24T00:00:00.000Z",
-      validateInput: () => true,
     };
 
     expect(materializeToolCall({
@@ -259,7 +266,7 @@ describe("current-turn Tool Exposure", () => {
         origin: "model",
         controllerRequestId: "controller-request-stale",
       },
-    })).toEqual(expect.objectContaining({ status: "rejected", code: "tool_not_exposed" }));
+    })).toEqual(expect.objectContaining({ status: "rejected", code: "tool_call_correlation_invalid" }));
     expect(materializeToolCall({
       ...common,
       candidate: {

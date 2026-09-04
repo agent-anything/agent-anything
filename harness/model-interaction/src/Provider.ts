@@ -2,7 +2,8 @@ import type { InvocationCancellationRef, InvocationInterruptionContext } from "@
 import type { ProviderDescriptor } from "./ProviderCapabilities.js";
 import type { ProviderRequest } from "./ProviderRequest.js";
 import type { ProviderFailure, ProviderResponse } from "./ProviderResponse.js";
-import type { ProviderModelInputAccounting } from "./input/index.js";
+import type { ProviderModelContext } from "./context/index.js";
+import type { ProviderTransportLimit } from "./transport/index.js";
 
 export type ProviderCallResult =
   | {
@@ -29,7 +30,8 @@ export type ProviderCallResult =
 
 export interface Provider {
   readonly descriptor: ProviderDescriptor;
-  readonly inputAccounting: ProviderModelInputAccounting;
+  readonly modelContext: ProviderModelContext;
+  readonly requestBodyTransportLimit: ProviderTransportLimit;
   send(
     request: ProviderRequest,
     context: InvocationInterruptionContext,

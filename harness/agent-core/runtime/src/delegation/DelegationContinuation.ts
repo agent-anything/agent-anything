@@ -4,13 +4,9 @@ import {
 } from "@agent-anything/agent-core/delegation";
 import { boundedText, deepFreeze, strictRecord, token } from "./DelegationContract.js";
 
-export type DescendantMessageTarget =
-  | { readonly kind: "active"; readonly id: string }
-  | { readonly kind: "continuation"; readonly id: string };
-
 export interface DescendantMessageRequest {
-  readonly target: DescendantMessageTarget;
-  readonly message: string;
+  readonly agent_id: string;
+  readonly prompt: string;
 }
 
 export interface DescendantContinuationTargetProjection {
@@ -24,7 +20,7 @@ export interface DescendantContinuationTargetProjection {
 export interface ActiveDescendantTargetProjection {
   readonly target: Readonly<{ readonly kind: "active"; readonly id: string }>;
   readonly relation: Readonly<{ readonly id: string }>;
-  readonly relationKind: "delegation" | "replacement" | "continuation";
+  readonly relationKind: "delegation" | "continuation";
   readonly agent: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly runRevision: number;
   readonly status: "initializing" | "running" | "waiting" | "cancelling";
@@ -38,19 +34,12 @@ export interface DescendantTargetsProjection {
 export function snapshotDescendantMessageRequest(
   input: DescendantMessageRequest,
 ): DescendantMessageRequest {
-  strictRecord(input, "DescendantMessageRequest", ["target", "message"]);
-  strictRecord(input.target, "DescendantMessageRequest.target", ["kind", "id"]);
-  if (input.target.kind !== "active" && input.target.kind !== "continuation") {
-    throw new TypeError("Descendant message target kind is unsupported.");
-  }
+  strictRecord(input, "DescendantMessageRequest", ["agent_id", "prompt"]);
   return deepFreeze({
-    target: {
-      kind: input.target.kind,
-      id: token(input.target.id, "DescendantMessageRequest.target.id"),
-    },
-    message: boundedText(
-      input.message,
-      "DescendantMessageRequest.message",
+    agent_id: token(input.agent_id, "DescendantMessageRequest.agent_id"),
+    prompt: boundedText(
+      input.prompt,
+      "DescendantMessageRequest.prompt",
       64_000,
     ),
   });

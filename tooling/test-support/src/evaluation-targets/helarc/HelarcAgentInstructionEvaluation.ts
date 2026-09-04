@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
 import type { EvaluationDataValue, EvaluationRecordRef } from "@agent-anything/evaluation/definition";
 import { providerResponseUsage } from "@agent-anything/model-interaction";
+import { runSettlementCauseCode } from "@agent-anything/agent-runtime/run";
 import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 import {
   fakeNativeModelOutput,
@@ -460,7 +461,7 @@ function trialMetrics(
       item.payload.kind === "state_transition" && item.payload.transition === "plan"
     ).length,
     correctionEvents: material.retryCount + items.filter((item) =>
-      item.payload.kind === "stop_feedback"
+      item.payload.kind === "lifecycle_hook_feedback"
     ).length,
     delegationCalls: actionNames.filter((name) => name === "Agent").length,
     verificationObserved: verificationObserved,
@@ -528,7 +529,7 @@ function semanticOutcomeFingerprint(
   return digest({
     productStatus: material.product.status,
     runStatus: material.runResult.status,
-    runCode: material.runResult.code,
+    runCode: runSettlementCauseCode(material.runResult.cause),
     summary: material.product.output.agentSummary,
     workspace: material.after,
     actionNames: material.actionNames,

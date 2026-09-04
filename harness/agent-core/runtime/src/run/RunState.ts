@@ -6,15 +6,14 @@ import type { ActiveContext } from "@agent-anything/context/active-context";
 import type { RunPermissionState } from "./RunPermissionState.js";
 import type { Plan } from "../plan/index.js";
 import type { PendingRunSubject } from "./PendingRunSubject.js";
-import type { RunObservation } from "./RunObservation.js";
 import type { RunCancellationRequest } from "./RunCancellation.js";
-import type { RunFailureCause } from "./RunFailure.js";
 import type { RunItem } from "./RunItem.js";
-import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
 import type { VerificationCurrentSnapshotRef } from "@agent-anything/verification/assessment";
 import type { CompletionGateInvocationRef } from "@agent-anything/verification/completion";
-import type { RunStopReviewState } from "../stop/index.js";
+import type { RunLifecycleHookState } from "../hooks/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
+import type { RunSettlement, RunSettlementCauseRecord } from "./RunSettlement.js";
+import type { RunSuspension } from "./RunSuspension.js";
 
 export interface RunCounters {
   readonly controllerTurns: number;
@@ -26,6 +25,7 @@ export interface RunCounters {
 export interface RunVerificationState {
   readonly snapshot: VerificationCurrentSnapshotRef;
   readonly gate: CompletionGateInvocationRef | null;
+  readonly feedbackRounds: number;
 }
 
 interface RunStateBase<TOutput> {
@@ -47,76 +47,77 @@ interface RunStateBase<TOutput> {
   readonly pending: readonly PendingRunSubject[];
   readonly permission: RunPermissionState;
   readonly verification: RunVerificationState;
-  readonly stopReview: RunStopReviewState;
+  readonly lifecycleHooks: RunLifecycleHookState;
   readonly evidenceRefs: readonly EvidenceRef[];
   readonly artifactRefs: readonly ArtifactRef[];
+  readonly settlementCauses: readonly RunSettlementCauseRecord[];
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 type ActiveRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "initializing" | "running" | "waiting";
-  readonly code: null;
   readonly finalOutput: null;
-  readonly failure: null;
-  readonly relatedFailures: readonly [];
+  readonly settlement: null;
+  readonly settlementCause: null;
+  readonly suspension: null;
+  readonly cancellationRequest: null;
+  readonly completedAt: null;
+};
+
+type SuspendedRunState<TOutput> = RunStateBase<TOutput> & {
+  readonly status: "suspended";
+  readonly finalOutput: null;
+  readonly settlement: null;
+  readonly settlementCause: null;
+  readonly suspension: RunSuspension;
   readonly cancellationRequest: null;
   readonly completedAt: null;
 };
 
 type CancellingRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "cancelling";
-  readonly code: null;
   readonly finalOutput: null;
-  readonly failure: null;
-  readonly relatedFailures: readonly [];
+  readonly settlement: null;
+  readonly settlementCause: null;
+  readonly suspension: null;
   readonly cancellationRequest: RunCancellationRequest;
   readonly completedAt: null;
 };
 
 type SucceededRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "succeeded";
-  readonly code: null;
   readonly finalOutput: TOutput;
-  readonly failure: null;
-  readonly relatedFailures: readonly [];
-  readonly cancellationRequest: null;
-  readonly completedAt: string;
-};
-
-type BlockedRunState<TOutput> = RunStateBase<TOutput> & {
-  readonly status: "blocked";
-  readonly code: RunBlockedCode;
-  readonly finalOutput: null;
-  readonly failure: null;
-  readonly relatedFailures: readonly [];
+  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "succeeded" }>;
+  readonly settlementCause: Extract<RunSettlementCauseRecord, { readonly kind: "completion" }>;
+  readonly suspension: null;
   readonly cancellationRequest: null;
   readonly completedAt: string;
 };
 
 type FailedRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "failed";
-  readonly code: RunFailureCode;
   readonly finalOutput: null;
-  readonly failure: RunFailureCause;
-  readonly relatedFailures: readonly RunFailureCause[];
+  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "failed" }>;
+  readonly settlementCause: Extract<RunSettlementCauseRecord, { readonly kind: "failure" }>;
+  readonly suspension: null;
   readonly cancellationRequest: RunCancellationRequest | null;
   readonly completedAt: string;
 };
 
 type CancelledRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "cancelled";
-  readonly code: "runtime_cancelled";
   readonly finalOutput: null;
-  readonly failure: null;
-  readonly relatedFailures: readonly [];
+  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "cancelled" }>;
+  readonly settlementCause: Extract<RunSettlementCauseRecord, { readonly kind: "cancellation" }>;
+  readonly suspension: null;
   readonly cancellationRequest: RunCancellationRequest;
   readonly completedAt: string;
 };
 
 export type RunState<TOutput = unknown> =
   | ActiveRunState<TOutput>
+  | SuspendedRunState<TOutput>
   | CancellingRunState<TOutput>
   | SucceededRunState<TOutput>
-  | BlockedRunState<TOutput>
   | FailedRunState<TOutput>
   | CancelledRunState<TOutput>;

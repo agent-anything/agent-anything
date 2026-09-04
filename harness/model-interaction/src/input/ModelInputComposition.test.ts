@@ -1,259 +1,92 @@
 import { describe, expect, it } from "vitest";
 import {
-  allocateModelInputContext,
   composeModelInput,
   ModelInputCompositionError,
 } from "./ModelInputComposition.js";
-import { createUtf8ModelInputAccounting } from "./Utf8ModelInputAccounting.js";
+import { snapshotModelInputComposition } from "./ModelInput.js";
 
-describe("complete Model Input Composition", () => {
-  it("reserves output and framing before granting the remaining Context amount", () => {
-    const accounting = testAccounting(100);
-    const allocation = allocateModelInputContext({
-      accounting,
-      interaction: { kind: "text_generation" },
-      outputReserve: { unit: "bytes", amount: 10 },
-      baseSections: [
-        section("instruction", "instruction", "12345"),
-        section("user", "user", "x"),
-      ],
-      maximumContextAmount: 80,
-    });
-
-    expect(allocation).toMatchObject({
-      unit: "bytes",
-      amount: 77,
-      remainingAmount: 77,
-      framing: { amount: 7 },
-    });
-  });
-
-  it("composes all ordered sections and verifies the same Provider accounting", () => {
-    const accounting = testAccounting(100);
+describe("semantic Model Input Composition", () => {
+  it("composes ordered semantic sections without transport accounting", () => {
     const composition = composeModelInput({
       id: "composition-1",
       providerId: "provider-1",
       model: "model-1",
-      accounting,
       interaction: { kind: "text_generation" },
-      outputReserve: { unit: "bytes", amount: 10 },
-      contextBudget: { unit: "bytes", amount: 40 },
-      contextProjectedAmount: 12,
       sections: [
-        section("instruction", "instruction", "rules"),
-        section("user", "user", "task and context"),
+        section("instructions", "instruction", "agent_instruction", "Follow the protocol."),
+        section("task", "user", "task", "Inspect package.json."),
       ],
       lineage: lineage(),
       composedAt: "2026-08-16T00:00:00.000Z",
     });
 
-    expect(composition.accounting).toEqual({
-      unit: "bytes",
-      sectionAmount: 21,
-      framingAmount: 7,
-      inputAmount: 28,
-      outputReserveAmount: 10,
-      remainingAmount: 62,
-    });
-    expect(() => accounting.verify({
-      providerId: "provider-1",
-      model: "model-1",
-      instructions: composition.instructions,
-      messages: composition.messages,
-      interaction: composition.interaction,
-      composition,
-    })).not.toThrow();
+    expect(composition.instructions.content).toEqual([
+      { kind: "text", text: "Follow the protocol." },
+    ]);
+    expect(composition.messages).toEqual([{
+      role: "user",
+      content: [{ kind: "text", text: "Inspect package.json." }],
+    }]);
+    expect(composition).not.toHaveProperty("accounting");
+    expect(composition).not.toHaveProperty("contextBudget");
   });
 
-  it("fails before transport for unsupported accounting and mandatory overflow", () => {
-    expect(() => allocateModelInputContext({
-      accounting: {
-        capability: { supported: false },
-        estimateSection() { throw new Error("not called"); },
-        estimateFraming() { throw new Error("not called"); },
-        verify() { throw new Error("not called"); },
-        verifyEncoded() { throw new Error("not called"); },
-      },
+  it("rejects empty input and duplicate semantic section identities", () => {
+    expect(() => composeModelInput({
+      id: "empty",
+      providerId: "provider-1",
+      model: "model-1",
       interaction: { kind: "text_generation" },
-      outputReserve: { unit: "bytes", amount: 1 },
-      baseSections: [section("instruction", "instruction", "rules")],
-      maximumContextAmount: 1,
+      sections: [],
+      lineage: lineage(),
+      composedAt: "2026-08-16T00:00:00.000Z",
     })).toThrow(ModelInputCompositionError);
 
     expect(() => composeModelInput({
-      id: "composition-overflow",
+      id: "duplicate",
       providerId: "provider-1",
       model: "model-1",
-      accounting: testAccounting(20),
       interaction: { kind: "text_generation" },
-      outputReserve: { unit: "bytes", amount: 10 },
-      contextBudget: { unit: "bytes", amount: 0 },
-      contextProjectedAmount: 0,
       sections: [
-        section("instruction", "instruction", "this is too large"),
-        section("user", "user", "task"),
+        section("instructions", "instruction", "agent_instruction", "Rules."),
+        section("instructions", "user", "task", "Task."),
       ],
       lineage: lineage(),
       composedAt: "2026-08-16T00:00:00.000Z",
-    })).toThrow("exceeds the effective input limit");
+    })).toThrow("section identities must be unique");
   });
 
-  it("rejects Provider messages that diverge from the accepted composition", () => {
-    const accounting = testAccounting(100);
+  it("rejects Provider input that diverges from its semantic sections", () => {
     const composition = composeModelInput({
-      id: "composition-verify",
+      id: "composition-2",
       providerId: "provider-1",
       model: "model-1",
-      accounting,
       interaction: { kind: "text_generation" },
-      outputReserve: { unit: "bytes", amount: 10 },
-      contextBudget: { unit: "bytes", amount: 0 },
-      contextProjectedAmount: 0,
       sections: [
-        section("instruction", "instruction", "rules"),
-        section("user", "user", "task"),
+        section("instructions", "instruction", "agent_instruction", "Rules."),
+        section("task", "user", "task", "Task."),
       ],
       lineage: lineage(),
       composedAt: "2026-08-16T00:00:00.000Z",
     });
 
-    expect(() => accounting.verify({
-      providerId: "provider-1",
-      model: "model-1",
-      instructions: { content: [{ kind: "text", text: "changed" }] },
-      messages: composition.messages,
-      interaction: composition.interaction,
-      composition,
-    })).toThrow("does not match its accounting capability");
-  });
-
-  it("accounts and verifies the exact Provider-native output format", () => {
-    const accounting = createUtf8ModelInputAccounting({
-      providerId: "provider-1",
-      model: "model-1",
-      maximumInputBytes: 1_024,
-      limitSource: "host_configured",
-      estimator: { id: "test-utf8", revision: "1" },
-      framing: { id: "format-aware-framing", revision: "1" },
-      renderRequest: (instructions, messages, interaction) =>
-        `${inputText(instructions, messages)}${JSON.stringify(interaction)}`,
-    });
-    const outputFormat = {
-      kind: "json_schema" as const,
-      name: "test_decision",
-      schemaId: "test.decision",
-      schemaRevision: "1",
-      schema: { type: "object", required: ["kind"] },
-    };
-    const composition = composeModelInput({
-      id: "composition-format",
-      providerId: "provider-1",
-      model: "model-1",
-      accounting,
-      interaction: { kind: "structured_generation", outputFormat },
-      outputReserve: { unit: "bytes", amount: 10 },
-      contextBudget: { unit: "bytes", amount: 0 },
-      contextProjectedAmount: 0,
-      sections: [
-        section("instruction", "instruction", "rules"),
-        section("user", "user", "task"),
-      ],
-      lineage: lineage(),
-      composedAt: "2026-08-16T00:00:00.000Z",
-    });
-
-    expect(composition.interaction).toEqual({
-      kind: "structured_generation",
-      outputFormat,
-    });
-    expect(composition.framing.amount).toBeGreaterThan(0);
-    expect(() => accounting.verify({
-      providerId: "provider-1",
-      model: "model-1",
-      instructions: composition.instructions,
-      messages: composition.messages,
-      interaction: { kind: "text_generation" },
-      composition,
-    })).toThrow("does not match");
-  });
-
-  it("keeps model-message section accounting equal to final encoded bytes", () => {
-    const renderRequest = (
-      instructions: Parameters<typeof inputText>[0],
-      messages: Parameters<typeof inputText>[1],
-    ) => JSON.stringify({ instructions, messages });
-    const accounting = createUtf8ModelInputAccounting({
-      providerId: "provider-1",
-      model: "model-1",
-      maximumInputBytes: 1_024,
-      limitSource: "host_configured",
-      estimator: { id: "test-utf8", revision: "1" },
-      framing: { id: "model-message-framing", revision: "1" },
-      renderRequest,
-    });
-    const historyMessage = {
-      role: "assistant" as const,
-      content: [{ kind: "text" as const, text: "Prior response." }],
-    };
-    const composition = composeModelInput({
-      id: "composition-history",
-      providerId: "provider-1",
-      model: "model-1",
-      accounting,
-      interaction: { kind: "text_generation" },
-      outputReserve: { unit: "bytes", amount: 0 },
-      contextBudget: { unit: "bytes", amount: 0 },
-      contextProjectedAmount: 0,
-      sections: [
-        section("instruction", "instruction", "rules"),
-        {
-          id: "history",
-          source: { owner: "test", kind: "history", id: "history", revision: "1" },
-          kind: "interaction_history",
-          role: "assistant",
-          necessity: "mandatory",
-          content: { kind: "model_message", message: historyMessage },
-        },
-      ],
-      lineage: { ...lineage(), interactionHistory: {
-        owner: "test", kind: "history", id: "history", revision: "1",
-      } },
-      composedAt: "2026-08-27T00:00:00.000Z",
-    });
-    const encodedRequest = renderRequest(composition.instructions, composition.messages);
-
-    expect(composition.accounting.inputAmount).toBe(
-      new TextEncoder().encode(encodedRequest).byteLength,
-    );
-    expect(() => accounting.verifyEncoded({
-      providerId: "provider-1",
-      model: "model-1",
-      instructions: composition.instructions,
-      messages: composition.messages,
-      interaction: composition.interaction,
-      composition,
-      encodedRequest,
-    })).not.toThrow();
+    expect(() => snapshotModelInputComposition({
+      ...composition,
+      messages: [{ role: "user", content: [{ kind: "text", text: "Changed." }] }],
+    })).toThrow("input diverges from its sections");
   });
 });
 
-function testAccounting(maximumInputBytes: number) {
-  return createUtf8ModelInputAccounting({
-    providerId: "provider-1",
-    model: "model-1",
-    maximumInputBytes,
-    limitSource: "host_configured",
-    estimator: { id: "test-utf8", revision: "1" },
-    framing: { id: "test-framing", revision: "1" },
-    renderRequest: (instructions, messages) => `${inputText(instructions, messages)}1234567`,
-  });
-}
-
-function section(id: string, role: "instruction" | "user", text: string) {
+function section(
+  id: string,
+  role: "instruction" | "user",
+  kind: string,
+  text: string,
+) {
   return {
     id,
-    source: { owner: "test", kind: "section", id, revision: "1" },
-    kind: id === "instruction" ? "agent_instruction" : id,
+    source: source("test", kind, id),
+    kind,
     role,
     necessity: "mandatory" as const,
     content: { kind: "text" as const, text },
@@ -262,14 +95,14 @@ function section(id: string, role: "instruction" | "user", text: string) {
 
 function lineage() {
   return {
-    instructionBinding: { owner: "agent-runtime", kind: "agent_instruction_binding", id: "binding", revision: "1" },
-    agent: { owner: "agent-core", kind: "agent_revision", id: "agent", revision: "1" },
-    instructions: { owner: "agent-core", kind: "agent_instructions", id: "instructions", revision: "1" },
-    instructionRelease: { owner: "test", kind: "agent_instruction_release", id: "release", revision: "1" },
-    instructionResolver: { owner: "test", kind: "agent_instruction_resolver", id: "resolver", revision: "1" },
-    instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions", revision: "1" },
+    instructionBinding: source("agent-runtime", "instruction_binding", "binding"),
+    agent: source("agent-core", "agent_revision", "agent"),
+    instructions: source("agent-core", "agent_instructions", "instructions"),
+    instructionRelease: source("test", "instruction_release", "release"),
+    instructionResolver: source("test", "instruction_resolver", "resolver"),
+    instructionContent: source("agent-core", "instruction_content", "instructions"),
     instructionModel: { providerId: "provider-1", model: "model-1" },
-    instructionBlocks: [{ owner: "test", kind: "section", id: "instruction", revision: "1" }],
+    instructionBlocks: [source("test", "agent_instruction", "instructions")],
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,
@@ -282,20 +115,11 @@ function lineage() {
     callableDefinitions: null,
     modelQualification: null,
     interactionHistory: null,
-    protocol: { owner: "test", kind: "protocol", id: "protocol", revision: "1" },
-    policy: { owner: "test", kind: "policy", id: "policy", revision: "1" },
+    protocol: source("test", "protocol", "protocol"),
+    policy: source("test", "policy", "policy"),
   };
 }
 
-function messageText(messages: readonly { readonly content: readonly { readonly kind: string; readonly text?: string }[] }[]): string {
-  return messages.flatMap((message) => message.content)
-    .map((block) => block.kind === "text" ? block.text ?? "" : JSON.stringify(block))
-    .join("");
-}
-
-function inputText(
-  instructions: { readonly content: readonly { readonly text: string }[] },
-  messages: Parameters<typeof messageText>[0],
-): string {
-  return instructions.content.map((block) => block.text).join("") + messageText(messages);
+function source(owner: string, kind: string, id: string) {
+  return { owner, kind, id, revision: "1" };
 }

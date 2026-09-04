@@ -69,11 +69,11 @@ export type HelarcProductRunProjectionReduction =
 export type HelarcRunDisplayStatus =
   | "starting"
   | "running"
+  | "suspended"
   | "waiting_for_approval"
   | "cancelling"
   | "completed"
   | "rejected"
-  | "blocked"
   | "failed"
   | "cancelled";
 
@@ -227,19 +227,21 @@ export function deriveHelarcRunDisplayProjection(
 ): HelarcRunDisplayProjection {
   assertProjectionPair(host, product);
 
-  if (host.status === "blocked" || host.status === "failed" ||
-    host.status === "cancelled") {
+  if (host.status === "failed" || host.status === "cancelled") {
     return display(host.status, true, "host");
   }
   if (host.status === "completed") {
     const productStatus = product.result?.status ?? null;
-    if (productStatus === "rejected" || productStatus === "blocked" || productStatus === "failed") {
+    if (productStatus === "rejected" || productStatus === "failed") {
       return display(productStatus, true, "product");
     }
     return display("completed", true, "host");
   }
   if (host.status === "cancelling") {
     return display("cancelling", false, "host");
+  }
+  if (host.status === "suspended") {
+    return display("suspended", false, "host");
   }
   if (host.pendingInteractions.some((pending) =>
     pending.request.protocol.owner === "permission" &&
@@ -355,7 +357,7 @@ function snapshotProductResult(result: HelarcProductResult): HelarcProductResult
   if (
     result === null || typeof result !== "object" ||
     (result.status !== "completed" && result.status !== "rejected" &&
-      result.status !== "failed" && result.status !== "blocked" && result.status !== "cancelled") ||
+      result.status !== "failed" && result.status !== "cancelled") ||
     result.output === null || typeof result.output !== "object"
   ) {
     throw new TypeError("Product result is invalid.");

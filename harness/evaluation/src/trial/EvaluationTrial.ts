@@ -104,11 +104,11 @@ export interface EvaluationObservedChildRun {
 
 export type EvaluationObservedChildRunStatus = Extract<
   RunLifecycleStatus,
-  "succeeded" | "blocked" | "failed" | "cancelled"
+  "succeeded" | "failed" | "cancelled"
 >;
 
 export interface EvaluationTargetOutcome {
-  readonly status: "succeeded" | "failed" | "blocked" | "cancelled";
+  readonly status: "succeeded" | "failed" | "cancelled";
   readonly owner: string;
   readonly code: string | null;
   readonly summary: string;
@@ -738,7 +738,7 @@ function assertCaptureCorrelation(
 }
 
 function assertTargetOutcome(input: EvaluationTargetOutcome): void {
-  if (!(["succeeded", "failed", "blocked", "cancelled"] as const).includes(input?.status)) {
+  if (!(["succeeded", "failed", "cancelled"] as const).includes(input?.status)) {
     throw new TypeError("EvaluationTargetOutcome.status is unsupported.");
   }
   assertToken(input.owner, "EvaluationTargetOutcome.owner");
@@ -763,7 +763,6 @@ function assertRunStatus(
 
 const TERMINAL_RUN_STATUSES: readonly EvaluationObservedChildRunStatus[] = Object.freeze([
   "succeeded",
-  "blocked",
   "failed",
   "cancelled",
 ]);

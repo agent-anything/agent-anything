@@ -74,7 +74,7 @@ describe("Helarc combined operational conformance", () => {
     expect(result.report.gateOutcomes).toHaveLength(11);
     expect(result.report.gateOutcomes.every(({ status }) => status === "passed")).toBe(true);
     expect(result.trials.find(({ caseId }) => caseId === "verification_avoidance")
-      ?.targetOutcomeStatus).toBe("blocked");
+      ?.targetOutcomeStatus).toBe("cancelled");
     expect(result.trials.find(({ caseId }) => caseId === "cancellation_race")
       ?.targetOutcomeStatus).toBe("cancelled");
     expect(result.publication.failureCodes).toEqual([]);

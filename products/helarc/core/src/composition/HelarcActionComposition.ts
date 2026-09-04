@@ -191,10 +191,6 @@ function sameOperationBinding(
     left.revision === right.revision;
 }
 
-export function validateHelarcToolInput(schema: unknown, candidate: unknown): boolean {
-  return validateSchemaNode(schema, candidate);
-}
-
 function actionRegistrationInput(
   registration: ActionRegistration,
 ): ActionRegistrationInput {
@@ -215,55 +211,6 @@ function assertActionRegistrationsBelongToCatalog(
       throw new TypeError(`Action registration '${registration.registrationId}' has no admitted Operation binding.`);
     }
   }
-}
-
-function validateSchemaNode(schema: unknown, value: unknown): boolean {
-  if (!isRecord(schema)) return false;
-  if (Object.hasOwn(schema, "const") && !Object.is(schema.const, value)) return false;
-  if (Array.isArray(schema.enum) && !schema.enum.some((candidate) => Object.is(candidate, value))) {
-    return false;
-  }
-  if (Array.isArray(schema.anyOf) && !schema.anyOf.some((candidate) => validateSchemaNode(candidate, value))) {
-    return false;
-  }
-  if (Array.isArray(schema.oneOf) && schema.oneOf.filter((candidate) => validateSchemaNode(candidate, value)).length !== 1) {
-    return false;
-  }
-  switch (schema.type) {
-    case "object": {
-      if (!isRecord(value)) return false;
-      const properties = isRecord(schema.properties) ? schema.properties : {};
-      const required = Array.isArray(schema.required) ? schema.required : [];
-      if (required.some((key) => typeof key !== "string" || !Object.hasOwn(value, key))) return false;
-      if (schema.additionalProperties === false && Object.keys(value).some((key) => !Object.hasOwn(properties, key))) return false;
-      return Object.entries(value).every(([key, item]) =>
-        !Object.hasOwn(properties, key) || validateSchemaNode(properties[key], item)
-      );
-    }
-    case "array":
-      return Array.isArray(value) &&
-        (typeof schema.minItems !== "number" || value.length >= schema.minItems) &&
-        (typeof schema.maxItems !== "number" || value.length <= schema.maxItems) &&
-        value.every((item) => validateSchemaNode(schema.items, item));
-    case "string":
-      return typeof value === "string" &&
-        (typeof schema.minLength !== "number" || value.length >= schema.minLength) &&
-        (typeof schema.maxLength !== "number" || value.length <= schema.maxLength);
-    case "integer":
-      return Number.isSafeInteger(value) &&
-        (typeof schema.minimum !== "number" || (value as number) >= schema.minimum);
-    case "number":
-      return typeof value === "number" && Number.isFinite(value) &&
-        (typeof schema.minimum !== "number" || value >= schema.minimum);
-    case "boolean":
-      return typeof value === "boolean";
-    default:
-      return true;
-  }
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, any>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireIsoDate(value: unknown): asserts value is string {

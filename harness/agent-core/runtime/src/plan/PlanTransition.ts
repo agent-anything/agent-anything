@@ -28,7 +28,7 @@ export type PlanLifecycleChange =
   | {
       readonly kind: "abandoned";
       readonly plan: PlanProjection;
-      readonly terminalStatus: "succeeded" | "blocked" | "failed" | "cancelled";
+      readonly terminalStatus: "succeeded" | "failed" | "cancelled";
       readonly reasonCode: string | null;
     };
 
@@ -74,7 +74,7 @@ export type ApplyPlanUpdateResult =
 
 export interface AbandonPlanInput {
   readonly plan: Plan;
-  readonly terminalStatus: "succeeded" | "blocked" | "failed" | "cancelled";
+  readonly terminalStatus: "succeeded" | "failed" | "cancelled";
   readonly reasonCode: string | null;
   readonly now: string;
 }

@@ -25,7 +25,6 @@ import { snapshotRunTreeResourceEnvelope } from "./RunTreeResourceAccount.js";
 import { snapshotRunTreeApprovalLimits } from "./RunTreeApprovalAccount.js";
 import { snapshotCompletionGateConfiguration } from "@agent-anything/verification/completion";
 import { snapshotVerificationProfile } from "@agent-anything/verification/definition";
-import { assertRunStopReviewLimits } from "../stop/index.js";
 
 export { snapshotAgent, snapshotRunInput };
 
@@ -235,10 +234,20 @@ function snapshotLimits(input: RunConfig["limits"]): RunConfig["limits"] {
       "RunLimits.maxPendingInteractions",
     ),
     plan: Object.freeze({ ...input.plan }),
-    stopReview: Object.freeze({ ...input.stopReview }),
+    completionGate: Object.freeze({
+      maxFeedbackRounds: nonNegativeInteger(
+        input.completionGate.maxFeedbackRounds,
+        "RunLimits.completionGate.maxFeedbackRounds",
+      ),
+    }),
+    stopHooks: Object.freeze({
+      maxConsecutiveBlockingRounds: nonNegativeInteger(
+        input.stopHooks.maxConsecutiveBlockingRounds,
+        "RunLimits.stopHooks.maxConsecutiveBlockingRounds",
+      ),
+    }),
   });
   assertValidPlanLimits(limits.plan);
-  assertRunStopReviewLimits(limits.stopReview);
   return limits;
 }
 

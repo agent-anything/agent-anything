@@ -57,20 +57,6 @@ export interface DelegationRunCorrelation {
   };
 }
 
-export type DelegationSourceResultKind = "dependency" | "replacement";
-
-export interface DelegationSourceResultCorrelation {
-  readonly kind: DelegationSourceResultKind;
-  readonly request: DelegationRequestRef;
-  readonly result: DelegationResultRef;
-  readonly root: RunRef;
-  readonly child: {
-    readonly run: RunRef;
-    readonly task: TaskRef;
-    readonly agent: AgentRevisionRef;
-  };
-}
-
 export function snapshotDelegationRequestRef(
   input: DelegationRequestRef,
 ): DelegationRequestRef {
@@ -212,37 +198,6 @@ export function snapshotDelegationRunCorrelation(
   return deepFreeze({ request, origin, relation, child });
 }
 
-export function snapshotDelegationSourceResultCorrelation(
-  input: DelegationSourceResultCorrelation,
-): DelegationSourceResultCorrelation {
-  strictRecord(input, "DelegationSourceResultCorrelation", [
-    "kind",
-    "request",
-    "result",
-    "root",
-    "child",
-  ]);
-  if (input.kind !== "dependency" && input.kind !== "replacement") {
-    throw new TypeError("Delegation source-result kind is unsupported.");
-  }
-  strictRecord(input.child, "DelegationSourceResultCorrelation.child", [
-    "run",
-    "task",
-    "agent",
-  ]);
-  return deepFreeze({
-    kind: input.kind,
-    request: snapshotDelegationRequestRef(input.request),
-    result: snapshotDelegationResultRef(input.result),
-    root: snapshotRunRef(input.root, "root"),
-    child: {
-      run: snapshotRunRef(input.child.run, "child.run"),
-      task: snapshotTaskRef(input.child.task, "child.task"),
-      agent: snapshotAgentRef(input.child.agent, "child.agent"),
-    },
-  });
-}
-
 function snapshotRelation(input: DescendantRunRelation): DescendantRunRelation {
   strictRecord(input, "DescendantRunRelation", [
     "ref",
@@ -280,7 +235,6 @@ function snapshotRelationKind(
 ): DescendantRunRelation["kind"] {
   if (
     input !== "delegation" &&
-    input !== "replacement" &&
     input !== "continuation"
   ) {
     throw new TypeError("Delegation relation kind is unsupported.");

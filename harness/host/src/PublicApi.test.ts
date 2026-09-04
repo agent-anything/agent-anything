@@ -38,7 +38,7 @@ describe("Host public API", () => {
       "createHostRunProjection",
       "createHostRunProjectionStore",
       "createHostTerminalRunProjection",
-      "projectHostRunStopReview",
+      "projectHostRunLifecycleHooks",
       "projectRuntimeEventForHost",
       "reduceHostRunProjection",
       "snapshotHostCancellation",

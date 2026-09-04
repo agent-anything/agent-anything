@@ -76,11 +76,10 @@ export interface ContextContinuityProjectionEvidence {
 }
 
 export interface ContextContinuityModelInputEvidence {
-  readonly limitAmount: number;
-  readonly inputAmount: number;
-  readonly outputReserveAmount: number;
-  readonly remainingAmount: number;
-  readonly budgetError: number;
+  readonly compositionId: string;
+  readonly sectionCount: number;
+  readonly messageCount: number;
+  readonly semanticInputConsistent: boolean;
 }
 
 export interface ContextContinuityContinuationEvidence {

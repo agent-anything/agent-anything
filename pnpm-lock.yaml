@@ -119,9 +119,6 @@ importers:
         specifier: workspace:*
         version: link:../workspace
     devDependencies:
-      '@agent-anything/model-interaction':
-        specifier: workspace:*
-        version: link:../model-interaction
       '@agent-anything/operation-catalog':
         specifier: workspace:*
         version: link:../operation-catalog
@@ -305,9 +302,15 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../agent-core/contracts
+      '@agent-anything/model-interaction':
+        specifier: workspace:*
+        version: link:../model-interaction
       '@agent-anything/operation-catalog':
         specifier: workspace:*
         version: link:../operation-catalog
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
     devDependencies:
       '@types/node':
         specifier: ^25.9.1
@@ -467,6 +470,9 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
+      '@agent-anything/test-support':
+        specifier: workspace:*
+        version: link:../../../tooling/test-support
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1

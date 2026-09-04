@@ -5,6 +5,7 @@ import type {
   RunResult,
   RunResultStatus,
 } from "@agent-anything/agent-runtime/run";
+import { runSettlementCauseCode } from "@agent-anything/agent-runtime/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
@@ -23,7 +24,6 @@ export type HelarcProductStatus =
   | "completed"
   | "rejected"
   | "failed"
-  | "blocked"
   | "cancelled";
 
 export interface HelarcActivityItem {
@@ -58,7 +58,7 @@ export interface HelarcProductOutput {
 export interface HelarcRunResultSummary {
   readonly runId: string;
   readonly status: RunResultStatus;
-  readonly code: RunResult<unknown>["code"];
+  readonly code: string;
   readonly startedAt: string;
   readonly completedAt: string;
 }
@@ -206,7 +206,7 @@ export function projectHelarcProductResult(
     runResult: Object.freeze({
       runId: runResult.runId,
       status: runResult.status,
-      code: runResult.code,
+      code: runSettlementCauseCode(runResult.cause),
       startedAt: runResult.startedAt,
       completedAt: runResult.completedAt,
     }),
@@ -428,11 +428,8 @@ function collectSafeRunErrors(
   runResult: RunResult<HelarcAgentOutput>,
 ): Array<{ code: string; message: string }> {
   const errors: Array<{ code: string; message: string }> = [];
-  if (runResult.failure !== null) {
-    appendSafeRunFailure(errors, runResult.failure);
-  }
-  for (const failure of runResult.relatedFailures) {
-    appendSafeRunFailure(errors, failure);
+  if (runResult.cause.kind === "failure") {
+    appendSafeRunFailure(errors, runResult.cause.failure);
   }
   for (const item of runResult.items) {
     if (item.payload.kind !== "observation") continue;
@@ -727,17 +724,18 @@ function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>)
   switch (name) {
     case "run.started": return "Run started";
     case "run.completed": return "Run completed";
-    case "run.blocked": return "Run blocked";
     case "run.failed": return "Run failed";
     case "run.cancelled": return "Run cancelled";
     case "controller.started":
       return `Controller iteration ${payload.iteration ?? ""} started`.trim();
     case "controller.finished": return `Controller ${payload.status ?? "finished"}`;
     case "run.item.appended": return `Run item appended: ${payload.itemKind ?? "unknown"}`;
-    case "run.stop.reviewed":
-      return `Run stop review ${payload.decision ?? "recorded"}`;
-    case "run.stop.feedback_requested":
-      return `Run stop feedback ${payload.round ?? "requested"}`;
+    case "run.lifecycle.emitted":
+      return `Lifecycle ${payload.eventName ?? "event"} emitted`;
+    case "run.lifecycle.hook.completed":
+      return `Lifecycle Hook ${payload.status ?? "completed"}`;
+    case "run.lifecycle.hook.feedback":
+      return `Lifecycle Hook feedback round ${payload.round ?? "recorded"}`;
     case "run.descendant.reserved": return "Descendant Run reserved";
     case "run.descendant.started": return "Descendant Run started";
     case "run.descendant.rejected": return "Descendant Run rejected";
@@ -798,10 +796,16 @@ function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>
   if (name === "context.projection.completed") {
     return typeof payload.manifestId === "string" ? payload.manifestId : null;
   }
-  if (name === "run.stop.reviewed" || name === "run.stop.feedback_requested") {
+  if (name === "run.lifecycle.emitted") {
+    return typeof payload.eventId === "string" ? payload.eventId : null;
+  }
+  if (name === "run.lifecycle.hook.completed") {
     return typeof payload.code === "string"
       ? payload.code
-      : typeof payload.decision === "string" ? payload.decision : null;
+      : typeof payload.hookId === "string" ? payload.hookId : null;
+  }
+  if (name === "run.lifecycle.hook.feedback") {
+    return typeof payload.eventId === "string" ? payload.eventId : null;
   }
   if (name === "approval.requested" || name === "approval.resolved") {
     return typeof payload.requestId === "string" ? payload.requestId : null;

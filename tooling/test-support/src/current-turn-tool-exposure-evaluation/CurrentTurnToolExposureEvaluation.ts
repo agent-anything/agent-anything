@@ -39,7 +39,7 @@ export interface CurrentTurnToolExposureEvaluationReport {
   readonly recoveryPreservedSelection: true;
   readonly recoveryChangedContent: true;
   readonly permissionIndependent: true;
-  readonly stopReviewIndependent: true;
+  readonly lifecycleHookIndependent: true;
   readonly equivalentContentUsesDistinctRequestProofs: true;
   readonly systemTarget: {
     readonly trialCount: number;
@@ -109,7 +109,7 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
     Read: available("read-path", "1"),
     TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
-  const repeatedStopReview = resolve(selection, "stop-review-repeated", {
+  const repeatedLifecycleHook = resolve(selection, "lifecycle-hook-repeated", {
     Read: available("read-path", "1"),
     TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
@@ -140,7 +140,7 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
     recoveryPreservedSelection: (partial.selectionRevision === recovered.selectionRevision) as true,
     recoveryChangedContent: (partial.contentRevision !== recovered.contentRevision) as true,
     permissionIndependent: (permissionAsk.contentRevision === permissionDeny.contentRevision) as true,
-    stopReviewIndependent: (partial.contentRevision === repeatedStopReview.contentRevision) as true,
+    lifecycleHookIndependent: (partial.contentRevision === repeatedLifecycleHook.contentRevision) as true,
     equivalentContentUsesDistinctRequestProofs: (
       proofA.contentRevision === proofB.contentRevision && proofA.id !== proofB.id
     ) as true,
@@ -170,13 +170,22 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
   assertTrue(material.recoveryPreservedSelection, "Recovery changed immutable Run selection.");
   assertTrue(material.recoveryChangedContent, "Recovery did not create fresh exposure content.");
   assertTrue(material.permissionIndependent, "Permission state filtered Tool exposure.");
-  assertTrue(material.stopReviewIndependent, "Stop Review filtered Tool exposure.");
+  assertTrue(material.lifecycleHookIndependent, "Lifecycle Hook state filtered Tool exposure.");
   assertTrue(
     material.equivalentContentUsesDistinctRequestProofs,
     "Equivalent exposure content did not retain request-specific proof correlation.",
   );
   if (material.systemTarget.traceIssueCount !== 0) {
-    throw new TypeError("The real Helarc deterministic target produced Trace issues.");
+    const traceIssues = systemCandidate.cases
+      .filter((item) => item.traceIssueCodes.length > 0)
+      .map((item) => ({
+        caseId: item.caseRef.id,
+        repetitionOrdinal: item.repetitionOrdinal,
+        codes: item.traceIssueCodes,
+      }));
+    throw new TypeError(
+      `The real Helarc deterministic target produced Trace issues: ${JSON.stringify(traceIssues)}.`,
+    );
   }
   return deepFreeze({ ...material, digest: sha256(serialized) });
 }

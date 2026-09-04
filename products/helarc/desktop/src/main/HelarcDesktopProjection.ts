@@ -260,7 +260,7 @@ export function projectHelarcRunStatusQueryReceipt(
       runTree: projectRunTree(receipt.projection.runTree),
       activeDelegations: projectActiveDelegations(receipt.projection.activeDelegations),
       continuationTargets: projectContinuationTargets(receipt.projection.continuationTargets),
-      stopReview: projectRunStopReview(receipt.projection.stopReview),
+      lifecycleHooks: projectRunLifecycleHooks(receipt.projection.lifecycleHooks),
       verification: projectHostVerification(receipt.projection.verification),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
       terminal: receipt.projection.terminal === null
@@ -337,7 +337,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       runTree: projectRunTree(run.host.runTree),
       activeDelegations: projectActiveDelegations(run.host.activeDelegations),
       continuationTargets: projectContinuationTargets(run.host.continuationTargets),
-      stopReview: projectRunStopReview(run.host.stopReview),
+      lifecycleHooks: projectRunLifecycleHooks(run.host.lifecycleHooks),
       verification: projectHostVerification(run.host.verification),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
@@ -451,14 +451,20 @@ function projectInstructionBinding(
   };
 }
 
-function projectRunStopReview(
-  stopReview: NonNullable<MainSnapshot["run"]>["host"]["stopReview"],
-): HelarcRunSnapshot["host"]["stopReview"] {
+function projectRunLifecycleHooks(
+  hooks: NonNullable<MainSnapshot["run"]>["host"]["lifecycleHooks"],
+): HelarcRunSnapshot["host"]["lifecycleHooks"] {
   return {
-    reviewSequence: stopReview.reviewSequence,
-    requiredFeedbackRounds: stopReview.requiredFeedbackRounds,
-    advisoryFeedbackRounds: stopReview.advisoryFeedbackRounds,
-    limitations: stopReview.limitations.map((limitation) => ({ ...limitation })),
+    stopEventSequence: hooks.stopEventSequence,
+    stopFailureEventSequence: hooks.stopFailureEventSequence,
+    feedbackEpoch: hooks.feedbackEpoch,
+    consecutiveBlockingRounds: hooks.consecutiveBlockingRounds,
+    latestEventId: hooks.latestEventId,
+    latestInvocations: hooks.latestInvocations.map((invocation) => ({ ...invocation })),
+    latestFeedback: hooks.latestFeedback === null
+      ? null
+      : { ...hooks.latestFeedback, codes: [...hooks.latestFeedback.codes] },
+    limitations: [...hooks.limitations],
   };
 }
 
@@ -488,7 +494,7 @@ function projectRunTree(
       dispatch: node.dispatch === null ? null : { ...node.dispatch },
       depth: node.depth,
       status: node.status,
-      resultCode: node.resultCode,
+      terminal: node.terminal === null ? null : { ...node.terminal },
       startedAt: node.startedAt,
       completedAt: node.completedAt,
       resourcesSettled: node.resourcesSettled,

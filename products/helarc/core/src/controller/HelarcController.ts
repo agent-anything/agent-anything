@@ -19,7 +19,6 @@ import {
 
 import {
   buildHelarcPromptAssembly,
-  HELARC_MODEL_OUTPUT_RESERVE_BYTES,
   HELARC_PROMPT_ARCHITECTURE_VERSION,
   HELARC_TOOL_EXPOSURE_VERSION,
 } from "../prompt/HelarcPromptAssembly.js";
@@ -36,6 +35,7 @@ import type {
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
   "helarc.provider-native-tool-interaction.v1";
+export const HELARC_MODEL_CONTEXT_HEADROOM_TOKENS = 1_024;
 export type HelarcAgentOutput = { kind: "complete"; summary: string };
 
 class HelarcInstructionModelMismatchError extends TypeError {
@@ -69,19 +69,9 @@ export function buildHelarcProviderRequest(
   const promptAssembly = buildHelarcPromptAssembly({ controllerInput: input });
   const composition = composeModelInput({
     id: `${input.runId}:model-input:${input.iteration}:${context.attemptNumber}`,
-    providerId: context.inputAccounting.providerId,
-    model: context.inputAccounting.model,
-    accounting: context.inputAccounting,
+    providerId: context.target.providerId,
+    model: context.target.model,
     interaction,
-    outputReserve: Object.freeze({
-      unit: input.contextManifest.budget.unit,
-      amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,
-    }),
-    contextBudget: Object.freeze({
-      unit: input.contextManifest.budget.unit,
-      amount: input.contextManifest.budget.maximum,
-    }),
-    contextProjectedAmount: input.context.accounting.amount,
     sections: promptAssembly.sections,
     lineage: Object.freeze({
       instructionBinding: source("agent-runtime", "agent_instruction_binding", input.instructionBinding.ref.id, input.instructionBinding.ref.revision),
@@ -131,6 +121,18 @@ export function buildHelarcProviderRequest(
       branchId: `${input.runId}:main`,
     },
     interaction,
+    modelContext: Object.freeze({
+      requestedOutput: context.requestedOutput,
+      headroom: Object.freeze({
+        unit: "tokens" as const,
+        amount: HELARC_MODEL_CONTEXT_HEADROOM_TOKENS,
+        policy: Object.freeze({
+          id: "helarc.model-context-headroom",
+          revision: "1",
+        }),
+      }),
+      assessment: null,
+    }),
     metadata: {
       runId: input.runId,
       controllerIteration: input.iteration,
@@ -331,8 +333,8 @@ function assertInstructionModelIdentity(
   if (
     input.instructionBinding.model.providerId !== model.providerId ||
     input.instructionBinding.model.modelId !== model.modelId ||
-    context.inputAccounting.providerId !== model.providerId ||
-    context.inputAccounting.model !== model.modelId
+    context.target.providerId !== model.providerId ||
+    context.target.model !== model.modelId
   ) throw new HelarcInstructionModelMismatchError();
 }
 
@@ -363,6 +365,9 @@ function createControllerTraceMetadata(
     modelTurnId: response.turn.turnId,
     modelFinishKind: response.turn.finish.kind,
     modelResponseId: response.turn.responseRef.responseId,
+    modelContextAssessmentId: response.metadata.modelContextAssessmentId ?? null,
+    modelContextDisposition: response.metadata.modelContextDisposition ?? null,
+    inputPreservationRevision: response.metadata.inputPreservationRevision ?? null,
     agentId: input.agent.id,
     agentRevision: input.agent.revision,
     instructionBindingId: input.instructionBinding.ref.id,

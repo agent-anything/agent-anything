@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runSettlementCauseCode } from "@agent-anything/agent-runtime/run";
 
 import { createEvaluationCampaign } from "@agent-anything/evaluation/campaign";
 import {
@@ -71,8 +72,8 @@ import {
   runDelegationTransferDeterministicEvaluation,
 } from "../../../delegation-transfer-evaluation/DelegationTransferEvaluation.js";
 import {
-  runRunStopReviewDeterministicEvaluation,
-} from "../../../run-stop-review-evaluation/RunStopReviewEvaluation.js";
+  runRunLifecycleHookDeterministicEvaluation,
+} from "../../../run-lifecycle-hook-evaluation/RunLifecycleHookEvaluation.js";
 import {
   HELARC_EVALUATION_TIME,
   createHelarcEvaluationCorpus,
@@ -94,12 +95,12 @@ import {
 } from "./HelarcOperationalEvaluation.js";
 
 export const HELARC_OPERATIONAL_CONFORMANCE_REVISION =
-  "helarc-operational-conformance-v2";
+  "helarc-operational-conformance-v3";
 
 export interface HelarcOperationalConformanceFacts {
   readonly caseId: HelarcOperationalConformanceCaseId;
   readonly targetOutcome: {
-    readonly status: "succeeded" | "failed" | "blocked" | "cancelled";
+    readonly status: "succeeded" | "failed" | "cancelled";
     readonly owner: string;
     readonly code: string | null;
     readonly summary: string;
@@ -764,7 +765,7 @@ function defaultCaseRunners(): Readonly<Record<
 async function runCurrentTurnAuthorityProbe(): Promise<HelarcOperationalConformanceFacts> {
   const report = await runCurrentTurnToolExposureDeterministicEvaluation();
   const passed = report.workflowOnlyToolExcluded && report.permissionIndependent &&
-    report.stopReviewIndependent && report.recoveryPreservedSelection &&
+    report.lifecycleHookIndependent && report.recoveryPreservedSelection &&
     report.recoveryChangedContent && report.systemTarget.safetyGate === "passed" &&
     report.systemTarget.traceIssueCount === 0;
   return facts("current_turn_authority", passed, {
@@ -781,17 +782,17 @@ async function runCurrentTurnAuthorityProbe(): Promise<HelarcOperationalConforma
 }
 
 async function runBoundedRepetitionProbe(): Promise<HelarcOperationalConformanceFacts> {
-  const report = runRunStopReviewDeterministicEvaluation();
-  const passed = report.requiredFeedbackRounds > 0 &&
-    report.advisoryFeedbackRounds > 0 &&
-    report.requiredExhaustionCode === "runtime_stop_feedback_exhausted" &&
-    report.advisoryExhaustionAllowsStop;
+  const report = runRunLifecycleHookDeterministicEvaluation();
+  const passed = report.blockingPrecedence &&
+    report.deterministicRegistrationOrder &&
+    report.nonBlockingErrorPreserved &&
+    report.matchingHookLimit === 32;
   return facts("bounded_repetition", passed, {
-    terminal: { status: "blocked", code: report.requiredExhaustionCode },
+    terminal: { status: "succeeded", code: null },
     actionsAndOperations: {
-      stopReviewActivityItems: report.exactActivityKinds.length,
-      requiredFeedbackRounds: report.requiredFeedbackRounds,
-      advisoryFeedbackRounds: report.advisoryFeedbackRounds,
+      lifecycleHookActivityItems: report.exactActivityKinds.length,
+      matchingHookLimit: report.matchingHookLimit,
+      maximumMergedFeedbackCharacters: report.maximumMergedFeedbackCharacters,
     },
     gates: { unbounded_progress: passed, invalid_settlement: passed },
     diagnostics: { trajectory: passed ? 1 : 0, retries: 0 },
@@ -845,25 +846,29 @@ async function runVerificationProbe(
     metadata: {},
   });
   const material = await executeHelarcEvaluationCase({ trial, caseDefinition, signal });
-  const blocked = material.runResult.status === "blocked" && material.product.status === "blocked";
-  const passed = blocked;
+  const verificationGate = material.verificationEvaluationProjection.gate;
+  const prevented = material.runResult.status === "cancelled" &&
+    material.product.status === "cancelled" &&
+    verificationGate?.status === "blocked_violated";
+  const passed = prevented;
   return facts(caseId, passed, {
     targetOutcome: {
-      status: "blocked",
-      owner: "verification",
-      code: material.runResult.code,
-      summary: "Required Verification prevented unsupported completion.",
+      status: material.runResult.status,
+      owner: "runtime",
+      code: runSettlementCauseCode(material.runResult.cause),
+      summary: "Required Verification prevented unsupported completion before the deterministic driver cancelled the suspended Run.",
     },
-    terminal: { status: material.runResult.status, code: material.runResult.code },
+    terminal: { status: material.runResult.status, code: runSettlementCauseCode(material.runResult.cause) },
     actionsAndOperations: { actionNames: material.actionNames, retryCount: material.retryCount },
     verification: {
       required: true,
-      terminalBlocked: blocked,
+      completionPrevented: prevented,
+      gateStatus: verificationGate?.status ?? null,
       safeErrorCodes: material.product.output.safeErrors.map(({ code }) => code),
     },
     effects: {
       workspaceChanged: stableJson(material.before) !== stableJson(material.after),
-      unsupportedCompletionAccepted: !blocked,
+      unsupportedCompletionAccepted: !prevented,
     },
     gates: caseId === "verification_avoidance"
       ? {
@@ -910,7 +915,8 @@ async function runCancellationProbe(signal: AbortSignal): Promise<HelarcOperatio
   const providerStarted = new Promise<void>((resolve) => { started = resolve; });
   const provider: Provider = Object.freeze({
     descriptor: fallback.descriptor,
-    inputAccounting: fallback.inputAccounting,
+    modelContext: fallback.modelContext,
+    requestBodyTransportLimit: fallback.requestBodyTransportLimit,
     async send(
       _request: Parameters<Provider["send"]>[0],
       context: Parameters<Provider["send"]>[1],
@@ -956,10 +962,10 @@ async function runCancellationProbe(signal: AbortSignal): Promise<HelarcOperatio
     targetOutcome: {
       status: "cancelled",
       owner: "agent-core",
-      code: material.runResult.code,
+      code: runSettlementCauseCode(material.runResult.cause),
       summary: "The active Helarc Run settled through attributed cancellation.",
     },
-    terminal: { status: material.runResult.status, code: material.runResult.code },
+    terminal: { status: material.runResult.status, code: runSettlementCauseCode(material.runResult.cause) },
     gates: {
       cancellation_failure: passed,
       invalid_settlement: passed,

@@ -1,17 +1,16 @@
 import type { ActionExecutionNotification } from "@agent-anything/action-execution/enforcement";
 import type { SandboxEnforcement } from "@agent-anything/action-execution/sandbox";
 import type { PlanProjection } from "@agent-anything/agent-runtime/plan";
-import type {
-  RunStopLimitation,
-  RunStopReviewProjection,
-} from "@agent-anything/agent-runtime/stop";
+import type { RunLifecycleHookProjection } from "@agent-anything/agent-runtime/hooks";
 import type {
   RunCancellationSummary,
+  RunCausalLink,
   RunFailureCause,
   RunFailureKind,
   RunResult,
-  RunResultCode,
+  RunSuspension,
 } from "@agent-anything/agent-runtime/run";
+import { runSettlementCauseCode } from "@agent-anything/agent-runtime/run";
 import type {
   ActiveDelegationProjection,
   RunOperationSnapshot,
@@ -34,20 +33,38 @@ export type HostRunProjectionStatus =
   | "starting"
   | "running"
   | "waiting"
+  | "suspended"
   | "cancelling"
   | "completed"
-  | "blocked"
   | "failed"
   | "cancelled";
 
 export type HostPlanProjection = PlanProjection;
 
-export interface HostRunStopReviewProjection {
-  readonly reviewSequence: number;
-  readonly requiredFeedbackRounds: number;
-  readonly advisoryFeedbackRounds: number;
-  readonly latestReview: Readonly<{ readonly runId: string; readonly sequence: number }> | null;
-  readonly limitations: readonly RunStopLimitation[];
+export interface HostRunLifecycleHookProjection {
+  readonly stopEventSequence: number;
+  readonly stopFailureEventSequence: number;
+  readonly feedbackEpoch: number;
+  readonly consecutiveBlockingRounds: number;
+  readonly latestEventId: string | null;
+  readonly latestInvocations: readonly Readonly<{
+    readonly hookId: string;
+    readonly hookRevision: string;
+    readonly eventId: string;
+    readonly status: "allow" | "block" | "non_blocking_error";
+    readonly code: string | null;
+    readonly durationMs: number;
+    readonly stale: boolean;
+  }>[];
+  readonly latestFeedback: Readonly<{
+    readonly eventId: string;
+    readonly epoch: number;
+    readonly round: number;
+    readonly codes: readonly string[];
+    readonly message: string;
+    readonly omittedReasonCount: number;
+  }> | null;
+  readonly limitations: readonly string[];
 }
 
 export interface HostPendingInteractionProjection {
@@ -115,12 +132,20 @@ export interface HostRunTreeNodeProjection {
   readonly runId: string;
   readonly parentRunId: string | null;
   readonly relationId: string | null;
-  readonly relationKind: "delegation" | "replacement" | "continuation" | null;
+  readonly relationKind: "delegation" | "continuation" | null;
   readonly parentRunActionId: string | null;
   readonly dispatch: HostDescendantDispatchProjection | null;
   readonly depth: number;
   readonly status: RunLifecycleStatus;
-  readonly resultCode: RunResultCode | null;
+  readonly terminal: Readonly<{
+    readonly causeId: string;
+    readonly causeRevision: string;
+    readonly causeKind: "completion" | "failure" | "cancellation";
+    readonly code: string;
+    readonly sourceOwner: string;
+    readonly sourceKind: string;
+    readonly sourceId: string;
+  }> | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
   readonly resourcesSettled: boolean;
@@ -240,8 +265,8 @@ export interface HostTerminalFailureProjection {
 export interface HostTerminalRunProjection {
   readonly runId: string;
   readonly taskId: string;
-  readonly status: "completed" | "blocked" | "failed" | "cancelled";
-  readonly code: RunResultCode | null;
+  readonly status: "completed" | "failed" | "cancelled";
+  readonly code: string;
   readonly completedAt: string;
   readonly durationMs: number | null;
   readonly itemCount: number;
@@ -250,7 +275,15 @@ export interface HostTerminalRunProjection {
   readonly startingInstructionBinding: AgentInstructionBindingRef;
   readonly finalInstructionBinding: AgentInstructionBindingRef;
   readonly failure: HostTerminalFailureProjection | null;
-  readonly relatedFailures: readonly HostTerminalFailureProjection[];
+  readonly source: Readonly<{
+    readonly owner: string;
+    readonly kind: string;
+    readonly id: string;
+    readonly revision: string | null;
+    readonly runId: string | null;
+  }>;
+  readonly causalLinks: readonly RunCausalLink[];
+  readonly omittedCausalLinkCount: number;
   readonly cancellation: HostCancellationProjection | null;
 }
 
@@ -266,7 +299,8 @@ export interface HostRunProjection {
   readonly startedAt: string;
   readonly runTree: HostRunTreeProjection;
   readonly plan: HostPlanProjection | null;
-  readonly stopReview: HostRunStopReviewProjection;
+  readonly suspension: RunSuspension | null;
+  readonly lifecycleHooks: HostRunLifecycleHookProjection;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly activeDelegations: readonly HostActiveDelegationProjection[];
   readonly continuationTargets: readonly HostContinuationTargetProjection[];
@@ -345,7 +379,7 @@ export type HostRunProjectionRejectionCode =
   | "invalid_update"
   | "interaction_correlation_mismatch"
   | "run_operation_sequence_regression"
-  | "run_stop_review_sequence_regression"
+  | "run_lifecycle_hook_sequence_regression"
   | "terminal_projection_mismatch";
 
 export type HostRunProjectionReduction =
@@ -398,7 +432,8 @@ export function createHostRunProjection(
     startedAt: input.startedAt,
     runTree: projectRunTree(input.runTree),
     plan: null,
-    stopReview: createInitialHostRunStopReviewProjection(),
+    suspension: null,
+    lifecycleHooks: createInitialHostRunLifecycleHookProjection(),
     pendingInteractions: Object.freeze([]),
     activeDelegations: Object.freeze([]),
     continuationTargets: Object.freeze([]),
@@ -421,36 +456,58 @@ export function projectHostRunTree(
   return projectRunTree(input);
 }
 
-export function projectHostRunStopReview(
-  input: RunStopReviewProjection,
-): HostRunStopReviewProjection {
+export function projectHostRunLifecycleHooks(
+  input: RunLifecycleHookProjection,
+): HostRunLifecycleHookProjection {
   const counters = [
-    input.reviewSequence,
-    input.requiredFeedbackRounds,
-    input.advisoryFeedbackRounds,
+    input.stopEventSequence,
+    input.stopFailureEventSequence,
+    input.feedbackEpoch,
+    input.consecutiveBlockingRounds,
   ];
   if (counters.some((value) => !Number.isSafeInteger(value) || value < 0)) {
-    throw new TypeError("Stop Review counters must be non-negative safe integers.");
+    throw new TypeError("Lifecycle Hook counters must be non-negative safe integers.");
   }
   return Object.freeze({
-    reviewSequence: input.reviewSequence,
-    requiredFeedbackRounds: input.requiredFeedbackRounds,
-    advisoryFeedbackRounds: input.advisoryFeedbackRounds,
-    latestReview: input.latestReview === null ? null : Object.freeze({ ...input.latestReview }),
-    limitations: Object.freeze(input.limitations.map((limitation) => {
-      assertIdentity(limitation.owner, "stopReview.limitation.owner");
-      assertIdentity(limitation.code, "stopReview.limitation.code");
-      return Object.freeze({ ...limitation });
-    })),
+    stopEventSequence: input.stopEventSequence,
+    stopFailureEventSequence: input.stopFailureEventSequence,
+    feedbackEpoch: input.feedbackEpoch,
+    consecutiveBlockingRounds: input.consecutiveBlockingRounds,
+    latestEventId: input.latestEventId,
+    latestInvocations: Object.freeze(input.latestInvocations.map((invocation) => Object.freeze({
+      hookId: invocation.hook.id,
+      hookRevision: invocation.hook.revision,
+      eventId: invocation.eventId,
+      status: invocation.outcome.status === "non_blocking_error"
+        ? "non_blocking_error" as const
+        : invocation.outcome.decision.kind,
+      code: invocation.outcome.status === "non_blocking_error"
+        ? invocation.outcome.code
+        : invocation.outcome.decision.kind === "block"
+          ? invocation.outcome.decision.code
+          : null,
+      durationMs: invocation.durationMs,
+      stale: invocation.stale,
+    }))),
+    latestFeedback: input.latestFeedback === null
+      ? null
+      : Object.freeze({
+          ...input.latestFeedback,
+          codes: Object.freeze([...input.latestFeedback.codes]),
+        }),
+    limitations: Object.freeze([...input.limitations]),
   });
 }
 
-function createInitialHostRunStopReviewProjection(): HostRunStopReviewProjection {
+function createInitialHostRunLifecycleHookProjection(): HostRunLifecycleHookProjection {
   return Object.freeze({
-    reviewSequence: 0,
-    requiredFeedbackRounds: 0,
-    advisoryFeedbackRounds: 0,
-    latestReview: null,
+    stopEventSequence: 0,
+    stopFailureEventSequence: 0,
+    feedbackEpoch: 0,
+    consecutiveBlockingRounds: 0,
+    latestEventId: null,
+    latestInvocations: Object.freeze([]),
+    latestFeedback: null,
     limitations: Object.freeze([]),
   });
 }
@@ -475,7 +532,7 @@ function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection 
       : Object.freeze({ ...node.dispatch }),
     depth: node.depth,
     status: node.status,
-    resultCode: node.resultCode,
+    terminal: node.terminal === null ? null : Object.freeze({ ...node.terminal }),
     startedAt: node.startedAt,
     completedAt: node.completedAt,
     resourcesSettled: node.resources.settled,
@@ -531,7 +588,7 @@ export function createHostTerminalRunProjection<TOutput>(
     runId: input.runResult.runId,
     taskId: input.runResult.taskId,
     status: input.runResult.status === "succeeded" ? "completed" : input.runResult.status,
-    code: input.runResult.code,
+    code: runSettlementCauseCode(input.runResult.cause),
     completedAt,
     durationMs: readNonNegativeNumber(input.runResult.metadata.durationMs),
     itemCount: input.runResult.items.length,
@@ -539,13 +596,29 @@ export function createHostTerminalRunProjection<TOutput>(
     artifactCount: input.runResult.artifactRefs.length,
     startingInstructionBinding: input.runResult.startingInstructionBinding,
     finalInstructionBinding: input.runResult.finalInstructionBinding,
-    failure: input.runResult.failure === null
-      ? null
-      : projectFailure(input.runResult.failure),
-    relatedFailures: Object.freeze(
-      input.runResult.relatedFailures.map(projectFailure),
+    failure: input.runResult.cause.kind === "failure"
+      ? projectFailure(input.runResult.cause.failure)
+      : null,
+    source: Object.freeze({
+      owner: input.runResult.cause.source.owner,
+      kind: input.runResult.cause.source.kind,
+      id: input.runResult.cause.source.id,
+      revision: input.runResult.cause.source.revision,
+      runId: input.runResult.cause.source.run?.id ?? null,
+    }),
+    causalLinks: Object.freeze(input.runResult.cause.underlying.map((link) => Object.freeze({
+      relation: link.relation,
+      source: Object.freeze({
+        ...link.source,
+        run: link.source.run === null ? null : Object.freeze({ ...link.source.run }),
+      }),
+    }))),
+    omittedCausalLinkCount: input.runResult.cause.omittedUnderlyingCount,
+    cancellation: snapshotCancellation(
+      input.runResult.cause.kind === "cancellation"
+        ? input.runResult.cause.cancellation
+        : null,
     ),
-    cancellation: snapshotCancellation(input.runResult.cancellation),
   });
 }
 

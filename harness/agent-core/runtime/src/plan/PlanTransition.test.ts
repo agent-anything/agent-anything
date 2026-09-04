@@ -241,7 +241,7 @@ describe("Plan transitions", () => {
     const abandoned = abandonPlan({
       plan: createActivePlan(),
       terminalStatus: "blocked",
-      reasonCode: "runtime_no_safe_path",
+      reasonCode: "user_requested",
       now: "2026-07-13T00:04:00.000Z",
     });
     const result = applyPlanUpdate({

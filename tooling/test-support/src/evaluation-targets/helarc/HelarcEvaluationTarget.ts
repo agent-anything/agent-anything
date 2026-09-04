@@ -25,7 +25,12 @@ import type {
   VerificationExecutionPort,
 } from "@agent-anything/verification/execution";
 import type { VerificationEvaluationProjection } from "@agent-anything/verification/projection";
-import { createRunFailureCause, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
+import {
+  createRunFailureCause,
+  runSettlementCauseCode,
+  type RunFinalizationContext,
+  type RunResult,
+} from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   assembleEvaluationCapture,
@@ -74,7 +79,6 @@ import {
 import {
   createHelarcProductComposition,
   type HelarcProductResult,
-  validateHelarcToolInput,
 } from "@agent-anything/helarc/composition";
 import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 import type { HelarcProductRunProjection } from "@agent-anything/helarc/run";
@@ -540,7 +544,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   const providerResults: ProviderCallResult[] = [];
   const provider: Provider = Object.freeze({
     descriptor: selectedProvider.descriptor,
-    inputAccounting: selectedProvider.inputAccounting,
+    modelContext: selectedProvider.modelContext,
+    requestBodyTransportLimit: selectedProvider.requestBodyTransportLimit,
     async send(
       request: ProviderRequest,
       context: Parameters<Provider["send"]>[1],
@@ -571,7 +576,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       : "openai-compatible",
     displayName: "Helarc Evaluation Provider",
     baseUrl: "https://evaluation-provider.local/v1",
-    model: provider.inputAccounting.model,
+    model: provider.modelContext.target.model,
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
     qualificationPolicy: "allow_experimental",
@@ -623,18 +628,12 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   });
   const runner = new Runner({
     controller: product.controller,
-    contextProjection: createHelarcContextProjectionConfiguration(
-      provider.inputAccounting,
-      product.controllerProtocol,
-    ),
-    completion: {
-      taskFulfillment: product.taskFulfillment,
-      maximumDurationMs: 15_000,
-    },
+    contextProjection: createHelarcContextProjectionConfiguration(),
+    lifecycleHooks: product.lifecycleHooks,
     operations: {
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
-      validateToolInput: validateHelarcToolInput,
+      toolInputSemanticValidators: Object.freeze([]),
       delegation: product.delegation,
       internalHandlers: [],
       availability: product.actions.operationAvailability,
@@ -743,10 +742,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
           maxStepLength: 300,
           maxExplanationLength: 1_000,
         },
-        stopReview: {
-          maxRequiredFeedbackRounds: 2,
-          maxAdvisoryFeedbackRounds: 1,
-        },
+        completionGate: { maxFeedbackRounds: 2 },
+        stopHooks: { maxConsecutiveBlockingRounds: 2 },
       },
       runTreeLimits: options.runTreeLimits ?? {
         maxTotalDescendantRuns: 0,
@@ -847,10 +844,21 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   const unsubscribeInteractions = options.interactionAnswers === undefined
     ? () => undefined
     : active.subscribe(submitConfiguredInteractions);
+  let suspendedRunCancellationRequested = false;
+  const unsubscribeSuspension = active.subscribe((projection) => {
+    if (projection.status !== "suspended" || suspendedRunCancellationRequested) return;
+    suspendedRunCancellationRequested = true;
+    active.cancel({
+      origin: "host",
+      reasonCode: "host_requested",
+      reason: "The deterministic Evaluation target does not resume a suspended Run.",
+    });
+  });
   submitConfiguredInteractions(active.getProjection());
   const hostResult = await active.wait().finally(() => {
     signal.removeEventListener("abort", onAbort);
     unsubscribeInteractions();
+    unsubscribeSuspension();
   });
   const terminalProjection = active.getProjection();
   const verificationExecution = verificationExecutions.get(hostResult.runResult.runId);
@@ -960,9 +968,7 @@ function targetObservation(
     ? "succeeded"
     : material.product.status === "cancelled"
       ? "cancelled"
-      : material.product.status === "blocked" || material.product.status === "rejected"
-        ? "blocked"
-        : "failed";
+      : "failed";
   const artifactRefs = material.runResult.artifactRefs.map((artifactRef, index) => ({
     id: `${trial.ref.id}.artifact.${index + 1}.${sha256(artifactRef).slice(0, 12)}`,
     revision: trial.ref.revision,
@@ -1001,65 +1007,17 @@ function targetOutcomeCode(
   if (material.runResult.status === "succeeded") {
     return null;
   }
-  if (material.runResult.failure !== null) {
-    return material.runResult.failure.failure.code;
-  }
-  if (material.runResult.status === "cancelled") {
-    return material.runResult.code;
-  }
-  if (material.runResult.status === "blocked") {
-    return blockedRunOutcomeCode(material.runResult.items) ?? material.runResult.code;
-  }
-  throw new TypeError("Helarc Evaluation received an invalid terminal RunResult.");
+  return runSettlementCauseCode(material.runResult.cause);
 }
 
 function targetOutcomeOwner(
   material: HelarcEvaluationRunMaterial,
 ): string {
-  if (material.runResult.failure !== null) {
-    return material.runResult.failure.kind;
-  }
+  if (material.runResult.cause.kind === "failure") return material.runResult.cause.failure.kind;
   if (material.runResult.status === "cancelled") {
     return "runtime";
   }
-  if (material.runResult.status === "blocked") {
-    return blockedRunOutcomeOwner(material.runResult.items) ?? "runtime";
-  }
   return "helarc.product";
-}
-
-function blockedRunOutcomeOwner(
-  items: RunResult<HelarcAgentOutput>["items"],
-): string | null {
-  for (const item of [...items].reverse()) {
-    if (item.payload.kind !== "observation") continue;
-    const payload = item.payload.observation.payload;
-    if (payload.kind === "operation_rejected") return payload.owner;
-    if (payload.kind === "tool_rejected") return "tools";
-    if (payload.kind === "operation") return payload.result.failure?.owner ?? null;
-    if (payload.kind === "interaction") return payload.owner;
-    if (payload.kind === "descendant_run") return payload.failure?.owner ?? "agent-runtime";
-  }
-  return null;
-}
-
-function blockedRunOutcomeCode(
-  items: RunResult<HelarcAgentOutput>["items"],
-): string | null {
-  for (const item of [...items].reverse()) {
-    if (item.payload.kind !== "observation") continue;
-    const payload = item.payload.observation.payload;
-    if (payload.kind === "operation_rejected") return payload.code;
-    if (payload.kind === "tool_rejected") return payload.code;
-    if (payload.kind === "operation") return payload.result.failure?.code ?? null;
-    if (payload.kind === "interaction" && payload.status !== "resolved") {
-      return `interaction_${payload.status}`;
-    }
-    if (payload.kind === "descendant_run" && payload.status !== "succeeded") {
-      return payload.failure?.code ?? `descendant_run_${payload.status}`;
-    }
-  }
-  return null;
 }
 
 function collectObservedToolNames(
@@ -1092,6 +1050,7 @@ function collectObservedToolNames(
       ? payload.toolResult
       : null;
     if (toolResult === null) continue;
+    if (!("toolCallId" in toolResult.toolCall)) continue;
     const ref = toolResult.toolCall.toolRevision;
     const name = namesByTool.get(`${ref.tool.namespace}:${ref.tool.name}@${ref.revision}`);
     if (name !== undefined) observedNames.add(name);
@@ -1183,7 +1142,7 @@ function captureHelarcMaterial(
     }),
     captured("run-terminal", "agent-core", {
       status: material.runResult.status,
-      code: material.runResult.code,
+      code: runSettlementCauseCode(material.runResult.cause),
       itemKinds: runItems.map((item) => item.payload.kind),
       itemCount: runItems.length,
       evidenceCount: material.runResult.evidenceRefs.length,

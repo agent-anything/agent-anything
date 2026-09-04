@@ -5,6 +5,7 @@ import type {
   ToolSourceRef,
 } from "../identity/index.js";
 import { createToolContractIdentity, toolRevisionKey } from "../identity/index.js";
+import { admitToolInputSchema, ToolInputSchemaAdmissionError } from "../validation/index.js";
 
 export type ToolJsonValue = null | boolean | number | string |
   readonly ToolJsonValue[] | ToolJsonObject;
@@ -61,6 +62,9 @@ export type ToolCatalogValidationCode =
   | "tool_name_duplicate"
   | "tool_binding_invalid"
   | "tool_schema_revision_invalid"
+  | "tool_schema_dialect_unsupported"
+  | "tool_input_schema_invalid"
+  | "tool_input_schema_unbuildable"
   | "tool_data_not_serializable";
 
 export class ToolCatalogValidationError extends TypeError {
@@ -81,7 +85,18 @@ export function createToolCatalogSnapshot(
   assertDenseArray(inputs, "tools");
   const names = new Set<string>();
   const revisions = new Set<string>();
-  const tools = inputs.map((input, index) => snapshotDescriptor(input, index));
+  const tools = inputs.map((input, index) => {
+    const descriptor = snapshotDescriptor(input, index);
+    try {
+      admitToolInputSchema(descriptor);
+    } catch (error) {
+      if (error instanceof ToolInputSchemaAdmissionError) {
+        fail(error.code, error.message, `tools[${index}].inputSchema`);
+      }
+      throw error;
+    }
+    return descriptor;
+  });
   for (const tool of tools) {
     const revisionKey = toolRevisionKey(tool.ref);
     if (revisions.has(revisionKey)) fail("tool_revision_duplicate", `Tool revision '${revisionKey}' is duplicated.`, "tools");

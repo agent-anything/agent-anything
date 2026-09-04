@@ -2,7 +2,7 @@ import {
   RunTraceAssembler,
   type RunTraceObserver,
 } from "@agent-anything/observability";
-import type { RunResult } from "../run/index.js";
+import { runSettlementCauseCode, type RunResult } from "../run/index.js";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type { CreateRunnerIdentity } from "./RunnerDependencies.js";
 
@@ -59,20 +59,17 @@ export function completeRunnerTrace(
         runId: result.runId,
         taskId: result.taskId,
         status: result.status,
-        code: result.code,
+        code: result.status === "succeeded"
+          ? null
+          : runSettlementCauseCode(result.cause),
         itemCount: result.items.length,
         evidenceCount: result.evidenceRefs.length,
         artifactCount: result.artifactRefs.length,
         errorCodes: Object.freeze(
           [...new Set(
-            result.failure === null
-              ? []
-              : [
-                  result.failure.failure.code,
-                  ...result.relatedFailures.map(
-                    (cause) => cause.failure.code,
-                  ),
-                ],
+            result.cause.kind === "failure"
+              ? [result.cause.failure.failure.code]
+              : [],
           )],
         ),
       }),

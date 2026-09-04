@@ -7,7 +7,12 @@ import {
 } from "@agent-anything/agent-core/delegation";
 import type { ArtifactRef } from "@agent-anything/agent-core/run";
 import type { EvidenceRef } from "@agent-anything/context/evidence";
-import type { RunResult, RunResultStatus } from "../run/index.js";
+import {
+  runSettlementCauseCode,
+  type RunResult,
+  type RunResultStatus,
+  type RunSettlementCauseRef,
+} from "../run/index.js";
 import {
   createDelegationContractIdentity,
   deepFreeze,
@@ -122,7 +127,8 @@ export type DelegationUncertainty =
 
 export interface DelegationTerminalSummary {
   readonly status: RunResultStatus;
-  readonly code: string | null;
+  readonly cause: RunSettlementCauseRef;
+  readonly code: string;
   readonly failureKind: string | null;
   readonly cancellationOrigin: string | null;
 }
@@ -585,9 +591,12 @@ function snapshotLimitDisposition(
 function terminalSummary(result: RunResult): DelegationTerminalSummary {
   return Object.freeze({
     status: result.status,
-    code: result.code,
-    failureKind: result.status === "failed" ? result.failure.kind : null,
-    cancellationOrigin: result.cancellation?.origin ?? null,
+    cause: result.settlement.cause,
+    code: runSettlementCauseCode(result.cause),
+    failureKind: result.cause.kind === "failure" ? result.cause.failure.kind : null,
+    cancellationOrigin: result.cause.kind === "cancellation"
+      ? result.cause.cancellation.origin
+      : null,
   });
 }
 
@@ -596,22 +605,28 @@ function snapshotTerminal(
 ): DelegationTerminalSummary {
   strictRecord(input, "DelegationTerminalSummary", [
     "status",
+    "cause",
     "code",
     "failureKind",
     "cancellationOrigin",
   ]);
-  if (!["succeeded", "blocked", "failed", "cancelled"].includes(input.status)) {
+  if (!["succeeded", "failed", "cancelled"].includes(input.status)) {
     throw new TypeError("Delegation terminal status is unsupported.");
   }
-  const code = input.code === null ? null : token(input.code, "terminal.code");
+  const cause = Object.freeze({
+    run: Object.freeze({ id: token(input.cause.run.id, "terminal.cause.run.id") }),
+    id: token(input.cause.id, "terminal.cause.id"),
+    revision: token(input.cause.revision, "terminal.cause.revision"),
+  });
+  const code = token(input.code, "terminal.code");
   const failureKind = input.failureKind === null
     ? null
     : token(input.failureKind, "terminal.failureKind");
   const cancellationOrigin = input.cancellationOrigin === null
     ? null
     : token(input.cancellationOrigin, "terminal.cancellationOrigin");
-  if ((input.status === "succeeded") !== (code === null)) {
-    throw new TypeError("Delegation terminal status and code disagree.");
+  if (input.status === "succeeded" && code !== "completion_accepted") {
+    throw new TypeError("Succeeded delegation must preserve completion_accepted.");
   }
   if ((input.status === "failed") !== (failureKind !== null)) {
     throw new TypeError("Delegation terminal failure attribution is inconsistent.");
@@ -624,6 +639,7 @@ function snapshotTerminal(
   }
   return Object.freeze({
     status: input.status,
+    cause,
     code,
     failureKind,
     cancellationOrigin,

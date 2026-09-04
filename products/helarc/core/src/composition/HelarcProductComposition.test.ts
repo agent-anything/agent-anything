@@ -1,11 +1,19 @@
 import type {
+  ModelInputComposition,
   Provider,
   ProviderCallResult,
+  ProviderModelContext,
   ProviderRequest,
+  ProviderTransportLimit,
 } from "@agent-anything/model-interaction";
+import { createUnknownModelInputMeasurement } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
-import { createFailedRunResult } from "@agent-anything/agent-runtime/run";
+import {
+  createRunResult,
+  type CreateRunResultInput,
+  type RunFailureCause,
+  type RunSettlementCauseRecord,
+} from "@agent-anything/agent-runtime/run";
 import { createActionRegistrationSnapshot } from "@agent-anything/canonical-action/registration";
 import {
   bindingRefForCodeFileTool,
@@ -46,6 +54,7 @@ import {
   createHelarcModelQualificationCatalog,
   createHelarcModelQualificationDecision,
 } from "../model-qualification/index.js";
+import type { HelarcAgentOutput } from "../controller/index.js";
 
 async function createHelarcProductComposition(
   input: Omit<CreateHelarcProductCompositionInput, "providerProfile"> & {
@@ -64,7 +73,7 @@ function createTestProviderProfile(
     id: "test-provider",
     displayName: "Test Provider",
     baseUrl: "https://provider.local/v1",
-    model: provider.inputAccounting.model,
+    model: provider.modelContext.target.model,
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
     qualificationPolicy,
@@ -285,7 +294,7 @@ describe("HelarcProductComposition", () => {
       ...createLocalContributions(),
     });
 
-    const result = composition.projectResult(createFailedRunResult({
+    const result = composition.projectResult(failedRunResult({
       runId: "run-1",
       taskId: "helarc-composition-test-task",
       startingAgent: { id: "helarc-code-agent", revision: "1" },
@@ -295,7 +304,7 @@ describe("HelarcProductComposition", () => {
       startedAt: "2026-07-17T00:00:00.000Z",
       completedAt: "2026-07-17T00:00:01.000Z",
       metadata: { rawProvider: secret },
-    }, "controller_failed", {
+    }, {
       kind: "provider",
       failure: {
         category: "transport",
@@ -331,7 +340,7 @@ describe("HelarcProductComposition", () => {
       ...createLocalContributions(),
     });
 
-    const result = composition.projectResult(createFailedRunResult({
+    const result = composition.projectResult(failedRunResult({
       runId: "run-1",
       taskId: "helarc-composition-test-task",
       startingAgent: { id: "helarc-code-agent", revision: "1" },
@@ -340,7 +349,7 @@ describe("HelarcProductComposition", () => {
       finalInstructionBinding: testInstructionBinding("run-1"),
       startedAt: "2026-07-17T00:00:00.000Z",
       completedAt: "2026-07-17T00:00:01.000Z",
-    }, "controller_failed", {
+    }, {
       kind: "provider",
       failure: {
         category: "invalid_request",
@@ -587,20 +596,8 @@ function unavailableCodeSource(): CodeSourcePort {
 }
 
 class UnusedProvider implements Provider {
-  readonly inputAccounting = createUtf8ModelInputAccounting({
-    providerId: "unused-provider",
-    model: "unused-model",
-    maximumInputBytes: 4 * 1_024 * 1_024,
-    limitSource: "host_configured",
-    estimator: { id: "unused-provider.utf8-content", revision: "1" },
-    framing: { id: "unused-provider.test-framing", revision: "1" },
-    renderRequest(messages, interaction) {
-      return JSON.stringify({
-        messages,
-        interaction,
-      });
-    },
-  });
+  readonly modelContext = createTestProviderModelContext("unused-provider", "unused-model");
+  readonly requestBodyTransportLimit = TEST_TRANSPORT_LIMIT;
 
   readonly descriptor: Provider["descriptor"];
 
@@ -614,9 +611,10 @@ class UnusedProvider implements Provider {
           : { supported: false as const },
         structuredGeneration: { supported: true as const },
         streaming: { supported: false as const },
-        modelInput: this.inputAccounting.capability,
+        modelContext: providerModelContextCapability(this.modelContext),
         continuation: { supported: false as const },
         compaction: { supported: false as const },
+        usageMetering: unavailableUsageMetering(),
       },
       requestRetryScheduler: { kind: "harness" as const },
       metadata: {},
@@ -629,6 +627,98 @@ class UnusedProvider implements Provider {
   ): Promise<ProviderCallResult> {
     throw new Error("Provider must not be called while composing Helarc product behavior.");
   }
+}
+
+const TEST_TRANSPORT_LIMIT: ProviderTransportLimit = Object.freeze({
+  maximumBytes: 4 * 1_024 * 1_024,
+  source: "host_configured",
+  revision: "test.transport-limit.v1",
+});
+
+function createTestProviderModelContext(
+  providerId: string,
+  model: string,
+): ProviderModelContext {
+  const requestedOutput = Object.freeze({
+    unit: "tokens" as const,
+    maximum: 1_024,
+    source: "host_configured" as const,
+    revision: "test.requested-output.v1",
+  });
+  const inputPreservation = Object.freeze({
+    providerId,
+    model,
+    adapterRevision: "test.adapter.v1",
+    runtimeVersion: null,
+    truncation: "disabled" as const,
+    contextShift: "disabled" as const,
+    evidence: Object.freeze([]),
+    revision: "test.input-preservation.v1",
+  });
+  return Object.freeze({
+    target: Object.freeze({ providerId, model, revision: "test.target.v1" }),
+    capacity: Object.freeze({ supported: false as const }),
+    requestedOutput,
+    inputPreservation,
+    measure(composition: ModelInputComposition, measuredAt: string) {
+      return createUnknownModelInputMeasurement({
+        compositionId: composition.id,
+        measuredAt,
+        reason: "unsupported",
+      });
+    },
+  });
+}
+
+function providerModelContextCapability(modelContext: ProviderModelContext) {
+  return Object.freeze({
+    capacity: modelContext.capacity,
+    requestedOutput: modelContext.requestedOutput,
+    inputPreservation: modelContext.inputPreservation,
+  });
+}
+
+function unavailableUsageMetering() {
+  return Object.freeze({
+    inputTokens: "unavailable" as const,
+    outputTokens: "unavailable" as const,
+    costUnits: "unavailable" as const,
+  });
+}
+
+function failedRunResult(
+  input: Omit<
+    CreateRunResultInput<HelarcAgentOutput>,
+    "settlement" | "cause" | "settlementCauses"
+  > & { readonly completedAt: string },
+  failure: RunFailureCause,
+) {
+  const { completedAt, ...base } = input;
+  const cause = Object.freeze({
+    ref: Object.freeze({
+      run: Object.freeze({ id: input.runId }),
+      id: `${input.runId}:settlement-cause:1`,
+      revision: "1",
+    }),
+    kind: "failure" as const,
+    failure,
+    source: Object.freeze({
+      owner: failure.kind,
+      kind: "failure_fact",
+      id: failure.failure.code,
+      revision: null,
+      run: Object.freeze({ id: input.runId }),
+    }),
+    underlying: Object.freeze([]),
+    omittedUnderlyingCount: 0,
+    recordedAt: completedAt,
+  }) satisfies RunSettlementCauseRecord;
+  return createRunResult<HelarcAgentOutput>({
+    ...base,
+    settlement: Object.freeze({ status: "failed", completedAt, cause: cause.ref }),
+    cause,
+    settlementCauses: Object.freeze([cause]),
+  });
 }
 
 function fixedNow(): string {

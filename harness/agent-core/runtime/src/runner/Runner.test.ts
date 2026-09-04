@@ -107,12 +107,9 @@ import {
   createDelegationLimits,
   createDelegationResultExpectation,
 } from "../delegation/index.js";
+import { createRunLifecycleHookComposition } from "../hooks/index.js";
 import { Runner } from "./Runner.js";
 import { createStaticOperationToolAvailabilityParticipant } from "./RunToolExposureCoordinator.js";
-import type {
-  TaskFulfillmentEvaluationInput,
-  TaskFulfillmentEvaluatorPort,
-} from "../completion/index.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -176,12 +173,13 @@ describe("Runner semantic integration", () => {
     expect(result.items.map(({ payload }) => payload.kind)).toEqual([
       "verification_feedback",
       "controller_turn",
-      "task_fulfillment_assessment",
       "verification_feedback",
-      "stop_review",
+      "lifecycle_event",
+      "completion_acceptance",
+      "settlement_cause",
       "terminal_transition",
     ]);
-    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(controller.calls).toHaveLength(1);
     expect(controller.calls[0]?.instructionBinding).toMatchObject({
       run: { id: "run_001" },
@@ -241,28 +239,21 @@ describe("Runner semantic integration", () => {
     expect(records.at(-1)?.item).toEqual(result.items.at(-1));
   });
 
-  it("continues from a non-fulfilled completion and succeeds only after reassessment", async () => {
+  it("continues after blocking Stop Hook feedback and succeeds after reassessment", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([
       complete("Explained what should be done", "model_complete_1"),
       complete("Performed the requested work", "model_complete_2"),
     ]);
-    const ref = Object.freeze({ owner: "test-product", id: "task-fulfillment", revision: "1" });
-    let assessmentCount = 0;
-    const evaluator: TaskFulfillmentEvaluatorPort = Object.freeze({
-      ref,
-      async evaluate(input: TaskFulfillmentEvaluationInput) {
-        assessmentCount += 1;
-        return createTaskAssessmentResult(
-          input,
-          ref,
-          assessmentCount === 1 ? "incomplete" : "fulfilled",
-        );
-      },
-    });
+    let invocationCount = 0;
 
     const result = await createRunner(controller, operations, {
-      completion: { taskFulfillment: evaluator, maximumDurationMs: 5_000 },
+      lifecycleHooks: createTestStopHookComposition(async () => {
+        invocationCount += 1;
+        return invocationCount === 1
+          ? { kind: "block", code: "work_incomplete", reason: "Perform the requested work." }
+          : { kind: "allow" };
+      }),
     }).run(createAgent(), createRunInput(), createRunConfig(operations));
 
     expect(result).toMatchObject({
@@ -270,82 +261,77 @@ describe("Runner semantic integration", () => {
       finalOutput: { summary: "Performed the requested work" },
     });
     expect(controller.calls).toHaveLength(2);
-    expect(result.items.filter(({ payload }) =>
-      payload.kind === "task_fulfillment_assessment"
-    ).map(({ payload }) => payload.kind === "task_fulfillment_assessment"
-      ? payload.assessment.status
-      : null)).toEqual(["incomplete", "fulfilled"]);
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "verification_feedback" &&
-      payload.verification.gate !== null
-    )).toBe(true);
+    expect(result.items.filter(({ payload }) => payload.kind === "lifecycle_event"))
+      .toHaveLength(2);
+    expect(result.items.filter(({ payload }) => payload.kind === "lifecycle_hook_feedback"))
+      .toHaveLength(1);
   });
 
-  it("fails closed when Task Fulfillment evaluation fails", async () => {
+  it("treats ordinary Stop Hook failure as attributed non-blocking limitation", async () => {
     const operations = createOperationFixture([]);
-    const evaluator: TaskFulfillmentEvaluatorPort = Object.freeze({
-      ref: Object.freeze({ owner: "test-product", id: "task-fulfillment", revision: "1" }),
-      async evaluate() {
-        return Object.freeze({
-          kind: "failed" as const,
-          failure: Object.freeze({
-            code: "task_fulfillment_provider_failed",
-            message: "The evaluator could not assess the original Task.",
-            retryable: true,
-            metadata: Object.freeze({}),
-          }),
-        });
-      },
-    });
 
     const result = await createRunner(
       new ScriptedController([complete("Done")]),
       operations,
-      { completion: { taskFulfillment: evaluator, maximumDurationMs: 5_000 } },
+      {
+        lifecycleHooks: createTestStopHookComposition(async () => {
+          throw new Error("Hook owner is unavailable.");
+        }),
+      },
     ).run(createAgent(), createRunInput(), createRunConfig(operations));
 
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "task_fulfillment_failed",
-      failure: {
-        kind: "task_fulfillment",
-        failure: { code: "task_fulfillment_provider_failed" },
-      },
-    });
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(result.items).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({
-        kind: "stop_review",
-        review: expect.objectContaining({ decision: "failed" }),
+        kind: "lifecycle_hook_invocation",
+        invocation: expect.objectContaining({
+          outcome: expect.objectContaining({ status: "non_blocking_error" }),
+        }),
       }),
     }));
   });
 
-  it("rejects evaluator cancellation that is not backed by accepted Run cancellation", async () => {
+  it("suspends after bounded Stop Hook feedback and resumes the same Run revision", async () => {
     const operations = createOperationFixture([]);
-    const evaluator: TaskFulfillmentEvaluatorPort = Object.freeze({
-      ref: Object.freeze({ owner: "test-product", id: "task-fulfillment", revision: "1" }),
-      async evaluate(input) {
-        return Object.freeze({
-          kind: "cancelled" as const,
-          cancellation: Object.freeze({ runId: input.run.id, requestId: "unattributed" }),
-        });
-      },
-    });
-
-    const result = await createRunner(
-      new ScriptedController([complete("Done")]),
+    let shouldBlock = true;
+    const handle = createRunner(
+      new ScriptedController([
+        complete("First proposal", "model_complete_1"),
+        complete("Second proposal", "model_complete_2"),
+        complete("Accepted after resume", "model_complete_3"),
+      ]),
       operations,
-      { completion: { taskFulfillment: evaluator, maximumDurationMs: 5_000 } },
-    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+      {
+        lifecycleHooks: createTestStopHookComposition(async () => shouldBlock
+          ? { kind: "block", code: "work_incomplete", reason: "Continue." }
+          : { kind: "allow" }),
+      },
+    ).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        limits: { stopHooks: { maxConsecutiveBlockingRounds: 1 } },
+      }),
+    );
+
+    await waitUntil(() => handle.getSnapshot().status === "suspended");
+    const suspended = handle.getSnapshot();
+    expect(suspended.suspension).toMatchObject({ code: "stop_hook_feedback_exhausted" });
+    shouldBlock = false;
+    expect(handle.resume({
+      id: "resume-1",
+      suspension: suspended.suspension!.ref,
+      expectedRunRevision: suspended.runRevision,
+      origin: "user",
+      reason: "Continue after reviewing Hook feedback.",
+    }).status).toBe("accepted");
+    const result = await handle.wait();
 
     expect(result).toMatchObject({
-      status: "failed",
-      code: "task_fulfillment_failed",
-      failure: {
-        kind: "task_fulfillment",
-        failure: { code: "task_fulfillment_cancellation_unattributed" },
-      },
+      status: "succeeded",
+      finalOutput: { summary: "Accepted after resume" },
     });
+    expect(result.runId).toBe("run_001");
   });
 
   it("finalizes required Run-owned resources before terminal settlement", async () => {
@@ -384,37 +370,47 @@ describe("Runner semantic integration", () => {
 
     expect(result, JSON.stringify(result, null, 2)).toMatchObject({
       status: "failed",
-      code: "required_finalization_failed",
       finalOutput: null,
-      failure: {
+      cause: {
+        kind: "failure",
+        failure: {
         kind: "runtime",
         failure: { code: "runtime_resource_finalization_failed" },
+        },
       },
     });
   });
 
-  it("blocks completion when one mandatory Requirement remains unassessed", async () => {
+  it("suspends completion after bounded feedback for one unassessed mandatory Requirement", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];
-    const result = await createRunner(
-      new ScriptedController([complete("Not yet eligible")]),
+    const handle = createRunner(
+      new ScriptedController([
+        complete("Not yet eligible", "model_complete_1"),
+        complete("Still not eligible", "model_complete_2"),
+      ]),
       operations,
       { runtimeEventPublisher: { publish: (event) => events.push(event) } },
-    ).run(
+    ).start(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations, { verification: createMandatoryVerificationConfig("block") }),
+      createRunConfig(operations, {
+        verification: createMandatoryVerificationConfig("block"),
+        limits: { completionGate: { maxFeedbackRounds: 1 } },
+      }),
     );
 
-    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
-      status: "blocked",
-      code: "verification_blocked",
+    await waitUntil(() => handle.getSnapshot().status === "suspended");
+    expect(handle.getSnapshot().suspension).toMatchObject({
+      code: "completion_gate_feedback_exhausted",
     });
-    expect(result.items.some((item) => item.payload.kind === "verification_feedback")).toBe(true);
     expect(events).toContainEqual(expect.objectContaining({
       name: "verification.gate.evaluated",
       payload: expect.objectContaining({ status: "blocked_unassessed", disposition: "block" }),
     }));
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    expect((await handle.wait()).status).toBe("cancelled");
   });
 
   it("satisfies a mandatory Requirement through a pure automatic Check without fabricating action state", async () => {
@@ -511,10 +507,7 @@ describe("Runner semantic integration", () => {
       }),
     );
 
-    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
-      status: "succeeded",
-      code: null,
-    });
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(actionExecution.execute).toHaveBeenCalledTimes(1);
     const actions = result.items.filter(({ payload }) => payload.kind === "run_action");
     expect(actions).toHaveLength(1);
@@ -534,27 +527,39 @@ describe("Runner semantic integration", () => {
     }));
   });
 
-  it("rejects a previously satisfied Requirement after its subject becomes stale", async () => {
+  it("suspends after a previously satisfied Requirement becomes stale", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];
-    const result = await createRunner(
-      new ScriptedController([complete("Stale completion")]),
+    const handle = createRunner(
+      new ScriptedController([
+        complete("Stale completion", "model_complete_1"),
+        complete("Still stale", "model_complete_2"),
+      ]),
       operations,
       {
         verification: createVerificationScenario({ kind: "pure_automatic", stale: true }),
         runtimeEventPublisher: { publish: (event) => events.push(event) },
       },
-    ).run(
+    ).start(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations, { verification: createMandatoryVerificationConfig("block") }),
+      createRunConfig(operations, {
+        verification: createMandatoryVerificationConfig("block"),
+        limits: { completionGate: { maxFeedbackRounds: 1 } },
+      }),
     );
 
-    expect(result).toMatchObject({ status: "blocked", code: "verification_blocked" });
+    await waitUntil(() => handle.getSnapshot().status === "suspended");
+    expect(handle.getSnapshot().suspension).toMatchObject({
+      code: "completion_gate_feedback_exhausted",
+    });
     expect(events).toContainEqual(expect.objectContaining({
       name: "verification.gate.evaluated",
       payload: expect.objectContaining({ status: "blocked_stale", disposition: "block" }),
     }));
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    expect((await handle.wait()).status).toBe("cancelled");
   });
 
   it("waits for exact active mandatory Verification work without another Controller request", async () => {
@@ -591,12 +596,9 @@ describe("Runner semantic integration", () => {
     ));
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(handle.getSnapshot().status).toBe("waiting");
-    expect(handle.getSnapshot().stopReview.latestReview).not.toBeNull();
     expect(controller.calls).toHaveLength(1);
-    expect(events).toContainEqual(expect.objectContaining({
-      name: "run.stop.reviewed",
-      payload: expect.objectContaining({ decision: "wait" }),
-    }));
+    expect(handle.getSnapshot().verification?.gate).toMatchObject({ disposition: "wait" });
+    expect(events.filter(({ name }) => name === "run.lifecycle.event")).toHaveLength(0);
     settlement.resolve(completedVerificationInterpretation());
     const result = await handle.wait();
 
@@ -646,7 +648,7 @@ describe("Runner semantic integration", () => {
     )).toHaveLength(1);
   });
 
-  it("bounds required Stop Review feedback without bypassing the Completion Gate", async () => {
+  it("bounds Completion Gate feedback and suspends without fabricating a terminal result", async () => {
     const operations = createOperationFixture([]);
     const gate: CompletionGatePort = {
       async evaluate(input) {
@@ -672,12 +674,12 @@ describe("Runner semantic integration", () => {
         expect(input.context.blocks.some((block) =>
           block.payload.kind === "structured" &&
           isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_stop_feedback"
+          block.payload.value.kind === "verification_feedback"
         )).toBe(true);
         return complete("Not ready", "model_complete_2");
       },
     ]);
-    const result = await createRunner(controller, operations, {
+    const handle = createRunner(controller, operations, {
       verification: {
         executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
         completionGate: gate,
@@ -685,34 +687,30 @@ describe("Runner semantic integration", () => {
         settledOperationResults: null,
         checkResults: null,
       },
-    }).run(
+    }).start(
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
         limits: {
           maxIterations: 2,
-          stopReview: {
-            maxRequiredFeedbackRounds: 1,
-            maxAdvisoryFeedbackRounds: 1,
-          },
+          completionGate: { maxFeedbackRounds: 1 },
+          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
 
-    expect(result).toMatchObject({
-      status: "blocked",
-      code: "runtime_stop_feedback_exhausted",
+    await waitUntil(() => handle.getSnapshot().status === "suspended");
+    expect(handle.getSnapshot().suspension).toMatchObject({
+      code: "completion_gate_feedback_exhausted",
     });
     expect(controller.calls).toHaveLength(2);
-    expect(result.items.filter(({ payload }) => payload.kind === "stop_review"))
-      .toHaveLength(2);
-    expect(result.items.filter(({ payload }) => payload.kind === "stop_feedback"))
-      .toHaveLength(1);
-    expect(result.items.at(-1)?.payload).toMatchObject({
-      kind: "terminal_transition",
-      status: "blocked",
-      code: "runtime_stop_feedback_exhausted",
-    });
+    expect(handle.getSnapshot().result).toBeNull();
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    const result = await handle.wait();
+    expect(result.status).toBe("cancelled");
+    expect(result.items.filter(({ payload }) => payload.kind === "verification_feedback"))
+      .toHaveLength(3);
   });
 
   it("preserves a nested Verification Failure when Completion Gate execution fails", async () => {
@@ -752,18 +750,14 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "verification_failed",
-      failure: {
+      cause: {
+        kind: "failure",
+        failure: {
         kind: "verification",
         failure: { code: "verification_gate_provider_failed", stage: "completion_gate" },
+        },
       },
     });
-    expect(result.items).toContainEqual(expect.objectContaining({
-      payload: expect.objectContaining({
-        kind: "stop_review",
-        review: expect.objectContaining({ decision: "failed" }),
-      }),
-    }));
   });
 
   it("fails closed when a Completion Gate requests waiting without exact active work", async () => {
@@ -802,18 +796,14 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "verification_failed",
-      failure: {
+      cause: {
+        kind: "failure",
+        failure: {
         kind: "verification",
         failure: { code: "verification_gate_wait_without_pending_work" },
+        },
       },
     });
-    expect(result.items).toContainEqual(expect.objectContaining({
-      payload: expect.objectContaining({
-        kind: "stop_review",
-        review: expect.objectContaining({ decision: "failed" }),
-      }),
-    }));
   });
 
   it("does not turn Controller failure into completion-recovery feedback", async () => {
@@ -976,7 +966,13 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "context_projection_failed",
+      cause: {
+        kind: "failure",
+        failure: {
+          kind: "context",
+          failure: { code: "context_projection_contract_invalid" },
+        },
+      },
     });
     expect(controller.calls).toHaveLength(0);
     const projection = events.find(
@@ -1057,7 +1053,7 @@ describe("Runner semantic integration", () => {
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
-    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(handler.execute, JSON.stringify(result, null, 2)).toHaveBeenCalledTimes(1);
     const observation = observations(result).find(
       ({ payload }) => payload.kind === "operation",
     );
@@ -1319,10 +1315,12 @@ describe("Runner semantic integration", () => {
 
     expect(result, JSON.stringify(result, null, 2)).toMatchObject({
       status: "failed",
-      code: "tool_exposure_failed",
-      failure: {
+      cause: {
+        kind: "failure",
+        failure: {
         kind: "tool",
         failure: { code: "tool_availability_participant_failed" },
+        },
       },
     });
     expect(controller.calls).toHaveLength(0);
@@ -1832,99 +1830,6 @@ describe("Runner semantic integration", () => {
       ]);
   });
 
-  it("starts a dependent child Run with the exact trusted dependency result", async () => {
-    const childAgent = createAgent("agent_child", "1", "Child Agent");
-    let dependency: TestDelegationResultRef | null = null;
-    const events: RuntimeEvent[] = [];
-    const controller = new ScriptedController([
-      (input) => advance([toolCandidate(
-        "Agent",
-        { prompt: "Inspect the contracts." },
-        input.toolExposure.controllerRequestId,
-      )], "model_tool_1"),
-      complete("Initial child result", "model_child_initial"),
-      (input) => {
-        const output = projectedObservations(input.context).at(-1)?.payload.output;
-        expect(isRecord(output)).toBe(true);
-        dependency = projectedDelegationResultRef(output);
-        return advance([toolCandidate(
-          "Agent",
-          {
-            prompt: "Continue from the accepted result.",
-            dependency_result: dependency,
-          },
-          input.toolExposure.controllerRequestId,
-        )], "model_tool_2");
-      },
-      (input) => {
-        expect(input.context.blocks.some((block) =>
-          block.instructionRole === "data" &&
-          block.payload.kind === "structured" &&
-          isRecord(block.payload.value) &&
-          block.payload.value.kind === "delegation_result" &&
-          isRecord(block.payload.value.result) &&
-          block.payload.value.result.id === dependency?.id &&
-          block.payload.value.result.revision === dependency?.revision
-        )).toBe(true);
-        return complete("Continuation child result", "model_child_continuation");
-      },
-      complete("Parent complete", "model_parent_complete"),
-    ]);
-    const operations = createOperationFixture([], [], {
-      delegation: createTestDelegation(childAgent),
-    });
-    const tools = createSemanticToolSelection(operations, "Agent", {
-      kind: "descendant_agent",
-      agent: { id: childAgent.id, revision: childAgent.revision },
-      revision: "descendant-binding-1",
-    });
-
-    const result = await createRunner(controller, operations, {
-      runtimeEventPublisher: { publish: (event) => events.push(event) },
-    }).run(
-      createAgent(),
-      createRunInput(),
-      createRunConfig(operations, {
-        tools,
-        runTreeLimits: {
-          maxTotalDescendantRuns: 2,
-          maxActiveDescendantRuns: 1,
-          maxDescendantDepth: 1,
-        },
-      }),
-    );
-
-    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
-    expect(controller.calls.map(({ runId }) => runId)).toEqual([
-      "run_001",
-      "run_002",
-      "run_001",
-      "run_003",
-      "run_001",
-    ]);
-    const settled = events.filter((event) => event.name === "run.descendant.settled");
-    expect(settled).toHaveLength(2);
-    expect(settled[0]?.payload.dependencyResultId).toBeNull();
-    expect(settled[1]?.payload).toMatchObject({
-      childRunId: "run_003",
-      dependencyResultId: dependency?.id,
-      replacedResultId: null,
-      contextSourceCount: 1,
-    });
-    expect(settled[1]?.payload.requestId).not.toBe(settled[0]?.payload.requestId);
-    expect(settled[1]?.payload.resultId).not.toBe(settled[0]?.payload.resultId);
-    expect(events.filter((event) => event.name === "run.descendant.reserved")
-      .map(({ payload }) => ({
-        requestedDispatchForm: payload.requestedDispatchForm,
-        candidateIndex: payload.candidateIndex,
-        siblingIndex: payload.siblingIndex,
-        siblingCount: payload.siblingCount,
-      }))).toEqual([
-        { requestedDispatchForm: "single", candidateIndex: 0, siblingIndex: 0, siblingCount: 1 },
-        { requestedDispatchForm: "single", candidateIndex: 0, siblingIndex: 0, siblingCount: 1 },
-      ]);
-  });
-
   it("continues one settled child context once through SendMessage", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     let continuationTargetId = "";
@@ -1944,6 +1849,10 @@ describe("Runner semantic integration", () => {
           agent: { id: childAgent.id, revision: childAgent.revision },
         });
         expect(JSON.stringify(target)).not.toContain("Child context retained");
+        expect(projectedObservations(input.context).at(-1)?.payload.output).toMatchObject({
+          summary: "Child context retained",
+          agent_id: continuationTargetId,
+        });
         expect(input.toolExposure.catalog.tools.map(({ name }) => name))
           .toContain("SendMessage");
         return advance([{
@@ -1956,8 +1865,8 @@ describe("Runner semantic integration", () => {
         }, toolCandidate(
           "SendMessage",
           {
-            target: { kind: "continuation", id: continuationTargetId },
-            message: "Refine the retained finding.",
+            agent_id: continuationTargetId,
+            prompt: "Refine the retained finding.",
           },
           input.toolExposure.controllerRequestId,
         )], ["model_plan_1", "model_send_message_1"]);
@@ -1977,7 +1886,10 @@ describe("Runner semantic integration", () => {
         return complete("Continuation complete", "model_continuation_complete");
       },
       (input) => {
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+        const continuation = projectedObservations(input.context).find(({ payload }) =>
+          payload.kind === "descendant_run" && payload.childRunId === "run_003"
+        );
+        expect(continuation?.payload).toMatchObject({
           kind: "descendant_run",
           status: "succeeded",
           output: { summary: "Continuation complete" },
@@ -1988,16 +1900,22 @@ describe("Runner semantic integration", () => {
         return advance([toolCandidate(
           "SendMessage",
           {
-            target: { kind: "continuation", id: continuationTargetId },
-            message: "Attempt to consume the same continuation again.",
+            agent_id: continuationTargetId,
+            prompt: "Attempt to consume the same continuation again.",
           },
           input.toolExposure.controllerRequestId,
         )], "model_send_message_2");
       },
       (input) => {
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+        const staleTarget = projectedObservations(input.context).find(({ payload }) =>
+          payload.kind === "descendant_run" &&
+          payload.status === "unavailable" &&
+          payload.failure?.code === "agent_target_stale"
+        );
+        expect(staleTarget?.payload).toMatchObject({
           kind: "descendant_run",
-          status: "failed",
+          status: "unavailable",
+          failure: { code: "agent_target_stale" },
         });
         return complete("Parent complete", "model_parent_complete");
       },
@@ -2069,8 +1987,8 @@ describe("Runner semantic integration", () => {
         return advance([toolCandidate(
           "SendMessage",
           {
-            target: { kind: "continuation", id: firstContinuationId },
-            message: "Refine the original finding.",
+            agent_id: firstContinuationId,
+            prompt: "Refine the original finding.",
           },
           input.toolExposure.controllerRequestId,
         )], "model_send_message_1");
@@ -2088,8 +2006,8 @@ describe("Runner semantic integration", () => {
         return advance([toolCandidate(
           "SendMessage",
           {
-            target: { kind: "continuation", id: secondContinuationId },
-            message: "Refine the finding one final time.",
+            agent_id: secondContinuationId,
+            prompt: "Refine the finding one final time.",
           },
           input.toolExposure.controllerRequestId,
         )], "model_send_message_2");
@@ -2401,138 +2319,6 @@ describe("Runner semantic integration", () => {
     });
   });
 
-  it("composes nested partial replacement under narrowed authority and conserved tree resources", async () => {
-    const childAgent = createAgent("agent_child", "1", "Child Agent");
-    let replacedResult: TestDelegationResultRef | null = null;
-    const controller = new ScriptedController([
-      (input) => advance([toolCandidate(
-        "Agent",
-        { prompt: "Own one bounded child objective." },
-        input.toolExposure.controllerRequestId,
-      )], "model_root_delegate"),
-      (input) => advance([toolCandidate(
-        "Agent",
-        { prompt: "Produce an initial nested contribution." },
-        input.toolExposure.controllerRequestId,
-      )], "model_child_delegate"),
-      complete("Partial nested contribution", "model_grandchild_partial"),
-      (input) => {
-        const observation = projectedObservations(input.context).at(-1);
-        expect(observation?.payload).toMatchObject({
-          kind: "descendant_run",
-          status: "partial",
-          output: { summary: "Partial nested contribution" },
-        });
-        const output = observation?.payload.output;
-        expect(isRecord(output)).toBe(true);
-        replacedResult = projectedDelegationResultRef(output);
-        expect(input.toolExposure.catalog.tools.map(({ name }) => name))
-          .toEqual(["Agent"]);
-        return advance([toolCandidate(
-          "Agent",
-          {
-            prompt: "Replace the partial nested contribution.",
-            replaced_result: replacedResult,
-          },
-          input.toolExposure.controllerRequestId,
-        )], "model_child_replace");
-      },
-      complete("Replacement contribution", "model_replacement_complete"),
-      (input) => {
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
-          kind: "descendant_run",
-          status: "succeeded",
-          output: { summary: "Replacement contribution" },
-        });
-        expect(input.toolExposure.catalog.tools.map(({ name }) => name))
-          .not.toContain("SendMessage");
-        return complete("Child synthesis complete", "model_child_complete");
-      },
-      (input) => {
-        expect(input.toolExposure.catalog.tools.map(({ name }) => name))
-          .toContain("SendMessage");
-        return complete("Root synthesis complete", "model_root_complete");
-      },
-    ]);
-    const operations = createOperationFixture([], [], {
-      delegation: createTestDelegation(childAgent, {
-        narrowToolAuthority: true,
-        partialSummary: "Partial nested contribution",
-      }),
-    });
-    const tools = createSemanticToolSelectionSet(operations, [
-      {
-        name: "Agent",
-        binding: {
-          kind: "descendant_agent",
-          agent: { id: childAgent.id, revision: childAgent.revision },
-          revision: "descendant-binding-1",
-        },
-      },
-      {
-        name: "SendMessage",
-        binding: {
-          kind: "descendant_message",
-          agent: { id: childAgent.id, revision: childAgent.revision },
-          revision: "descendant-message-binding-1",
-        },
-      },
-    ]);
-    const handle = createRunner(controller, operations).start(
-      createAgent(),
-      createRunInput(),
-      createRunConfig(operations, {
-        tools,
-        runTreeLimits: {
-          maxTotalDescendantRuns: 3,
-          maxActiveDescendantRuns: 2,
-          maxDescendantDepth: 2,
-        },
-      }),
-    );
-    const result = await handle.wait();
-    const tree = handle.getSnapshot().runTree;
-
-    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
-    expect(result.finalOutput).toEqual({ summary: "Root synthesis complete" });
-    expect(controller.calls.map(({ runId }) => runId)).toEqual([
-      "run_001",
-      "run_002",
-      "run_003",
-      "run_002",
-      "run_004",
-      "run_002",
-      "run_001",
-    ]);
-    expect(tree).toMatchObject({
-      rootRunId: "run_001",
-      totalDescendantRuns: 3,
-      activeDescendantRuns: 0,
-      settlement: {
-        complete: true,
-        unsettledDescendantRuns: 0,
-        pendingResultTransfers: 0,
-      },
-    });
-    expect(tree.nodes.map(({ runId, parentRunId, relationKind, status }) => ({
-      runId,
-      parentRunId,
-      relationKind,
-      status,
-    })), JSON.stringify(tree, null, 2)).toEqual([
-      { runId: "run_001", parentRunId: null, relationKind: null, status: "succeeded" },
-      { runId: "run_002", parentRunId: "run_001", relationKind: "delegation", status: "succeeded" },
-      { runId: "run_003", parentRunId: "run_002", relationKind: "delegation", status: "succeeded" },
-      { runId: "run_004", parentRunId: "run_002", relationKind: "replacement", status: "succeeded" },
-    ]);
-    expect(tree.resources.controllerTurns).toMatchObject({
-      enforcement: "hard",
-      capacity: 256,
-      activeReserved: 0,
-    });
-    expect(tree.nodes.every(({ resources }) => resources.settled)).toBe(true);
-  });
-
   it("inherits the root invocation Action observer into descendant execution", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     const verificationOperation = operationRef("verification-check");
@@ -2793,14 +2579,6 @@ describe("Runner semantic integration", () => {
         });
         return complete("Planned", "model_complete_2");
       },
-      (input) => {
-        expect(input.context.blocks.some((block) =>
-          block.payload.kind === "structured" &&
-          isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_stop_feedback"
-        )).toBe(true);
-        return complete("Planned after advisory feedback", "model_complete_3");
-      },
     ]);
 
     const result = await createRunner(controller, operations).run(
@@ -2816,16 +2594,11 @@ describe("Runner semantic integration", () => {
     expect(observations(result)).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({ kind: "plan_update" }),
     }));
-    expect(result.items.filter(({ payload }) => payload.kind === "stop_feedback"))
-      .toHaveLength(1);
-    expect(result.items.find(({ payload }) =>
-      payload.kind === "stop_review" && payload.review.decision === "allow_stop"
-    )?.payload).toMatchObject({
-      kind: "stop_review",
-      review: {
-        limitations: [{ code: "plan_reconciliation_feedback_exhausted" }],
-      },
-    });
+    expect(result.items.filter(({ payload }) =>
+      payload.kind === "state_transition" && payload.transition === "plan"
+    ).map(({ payload }) => payload.kind === "state_transition" && payload.transition === "plan"
+      ? payload.plan.status
+      : null)).toEqual(["active", "abandoned"]);
   });
 
   it("does not invent a no-progress terminal state for ordinary Plan churn", async () => {
@@ -2841,16 +2614,8 @@ describe("Runner semantic integration", () => {
     });
     const controller = new ScriptedController([
       advance([planCandidate()], "model_plan_1"),
-      (input) => {
-        expect(input.context.blocks.some((block) =>
-          block.payload.kind === "structured" &&
-          isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_stop_feedback"
-        )).toBe(false);
-        return advance([planCandidate()], "model_plan_2");
-      },
+      advance([planCandidate()], "model_plan_2"),
       complete("Plan work is complete", "model_complete_3"),
-      complete("Plan work remains complete", "model_complete_4"),
     ]);
 
     const result = await createRunner(controller, operations, {
@@ -2860,45 +2625,28 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          maxIterations: 4,
+          maxIterations: 3,
           maxActions: 4,
-          stopReview: {
-            maxRequiredFeedbackRounds: 1,
-            maxAdvisoryFeedbackRounds: 1,
-          },
+          completionGate: { maxFeedbackRounds: 1 },
+          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
 
-    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
-      status: "succeeded",
-      code: null,
-    });
-    expect(controller.calls).toHaveLength(4);
-    const stopItems = result.items.filter(({ payload }) =>
-      payload.kind === "stop_review" || payload.kind === "stop_feedback"
-    );
-    expect(stopItems.slice(0, 2).map(({ payload }) => payload.kind)).toEqual([
-      "stop_review",
-      "stop_feedback",
-    ]);
-    expect(stopItems[0]?.committedInRevision).toBe(stopItems[1]?.committedInRevision);
-    expect(events.filter((event) => event.name.startsWith("run.stop.")).map(
-      (event) => event.name,
-    )).toEqual([
-      "run.stop.reviewed",
-      "run.stop.feedback_requested",
-      "run.stop.reviewed",
-    ]);
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls).toHaveLength(3);
+    expect(result.items.filter(({ payload }) =>
+      payload.kind === "state_transition" && payload.transition === "plan"
+    )).toHaveLength(2);
+    expect(result.items.filter(({ payload }) => payload.kind === "lifecycle_event"))
+      .toHaveLength(1);
     expect(result.items.at(-1)?.payload).toMatchObject({
       kind: "terminal_transition",
       status: "succeeded",
-      code: null,
-      failure: null,
     });
   });
 
-  it("continues the ordinary Loop when Stop feedback is followed by a new owner result", async () => {
+  it("continues the ordinary Loop after Plan state and a new owner result", async () => {
     const operation = operationRef("inspect-new-snapshot");
     const handler = internalHandler(
       "handler.inspect-new-snapshot",
@@ -2926,16 +2674,8 @@ describe("Runner semantic integration", () => {
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
       }], "model_plan_1"),
-      complete("Completion before the inspection", "model_complete_2"),
       advance([operationCandidate(operation, {})], "model_operation"),
-      (input) => {
-        expect(input.context.blocks.some((block) =>
-          block.payload.kind === "structured" &&
-          isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_stop_feedback"
-        )).toBe(true);
-        return complete("Recovered", "model_complete");
-      },
+      complete("Completed after inspection", "model_complete"),
     ]);
 
     const result = await createRunner(controller, operations).run(
@@ -2943,10 +2683,8 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          stopReview: {
-            maxRequiredFeedbackRounds: 1,
-            maxAdvisoryFeedbackRounds: 1,
-          },
+          completionGate: { maxFeedbackRounds: 1 },
+          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
@@ -2955,125 +2693,10 @@ describe("Runner semantic integration", () => {
     expect(result.items.some(({ payload }) =>
       payload.kind === "observation" && payload.observation.kind === "operation"
     )).toBe(true);
-    expect(result.items.some(({ payload }) => payload.kind === "stop_feedback"))
-      .toBe(true);
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" &&
-      payload.code === "runtime_stop_feedback_exhausted"
-    )).toBe(false);
+    expect(result.finalOutput).toEqual({ summary: "Completed after inspection" });
   });
 
-  it("lets cancellation outrank Stop Review while advisory feedback is active", async () => {
-    const operations = createOperationFixture([]);
-    const correctionTurnStarted = deferred<void>();
-    const controller = new ScriptedController([
-      advance([{
-        kind: "state_transition",
-        transition: "plan_update",
-        input: {
-          explanation: "Start with a declaration.",
-          plan: [{ step: "Inspect", status: "in_progress" }],
-        },
-      }], "model_plan_1"),
-      complete("Completion before Plan reconciliation", "model_complete_2"),
-      (input, context) => new Promise<ControllerDecision<TestOutput>>((resolve) => {
-        expect(input.context.blocks.some((block) =>
-          block.payload.kind === "structured" &&
-          isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_stop_feedback"
-        )).toBe(true);
-        correctionTurnStarted.resolve();
-        context.cancellation.signal.addEventListener("abort", () => {
-          resolve(complete("Too late", "model_late"));
-        }, { once: true });
-      }),
-    ]);
-    const handle = createRunner(controller, operations).start(
-      createAgent(),
-      createRunInput(),
-      createRunConfig(operations, {
-        limits: {
-          stopReview: {
-            maxRequiredFeedbackRounds: 1,
-            maxAdvisoryFeedbackRounds: 1,
-          },
-        },
-      }),
-    );
-    await correctionTurnStarted.promise;
-
-    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
-      .toBe("accepted");
-    const result = await handle.wait();
-
-    expect(result).toMatchObject({
-      status: "cancelled",
-      code: "runtime_cancelled",
-    });
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "stop_feedback"
-    )).toBe(true);
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" &&
-      payload.code === "runtime_stop_feedback_exhausted"
-    )).toBe(false);
-  });
-
-  it("lets the Run deadline outrank Stop Review while advisory feedback is active", async () => {
-    const operations = createOperationFixture([]);
-    let currentNow = NOW;
-    const expiredNow = new Date(Date.parse(NOW) + 20_000).toISOString();
-    const planCandidate = () => ({
-      kind: "state_transition" as const,
-      transition: "plan_update" as const,
-      input: {
-        explanation: "Keep declaring the same work.",
-        plan: [{ step: "Inspect", status: "in_progress" as const }],
-      },
-    });
-    const controller = new ScriptedController([
-      advance([planCandidate()], "model_plan_1"),
-      complete("Completion before Plan reconciliation", "model_complete_2"),
-      (input) => {
-        expect(input.context.blocks.some((block) =>
-          block.payload.kind === "structured" &&
-          isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_stop_feedback"
-        )).toBe(true);
-        currentNow = expiredNow;
-        return advance([planCandidate()], "model_plan_2");
-      },
-    ]);
-
-    const result = await createRunner(controller, operations, {
-      now: () => currentNow,
-    }).run(
-      createAgent(),
-      createRunInput(),
-      createRunConfig(operations, {
-        limits: {
-          stopReview: {
-            maxRequiredFeedbackRounds: 1,
-            maxAdvisoryFeedbackRounds: 1,
-          },
-        },
-      }),
-    );
-
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "runtime_deadline_exceeded",
-    });
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "stop_feedback"
-    )).toBe(true);
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" &&
-      payload.code === "runtime_stop_feedback_exhausted"
-    )).toBe(false);
-  });
-
-  it("lets an unknown Operation effect outrank Stop Review feedback", async () => {
+  it("lets an unknown Operation effect determine settlement after advisory Plan state", async () => {
     const operation = operationRef("unknown-effect-after-correction");
     const actionExecution = createVerificationActionExecutionFixture(operation, {
       status: "failed",
@@ -3100,15 +2723,7 @@ describe("Runner semantic integration", () => {
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
       }], "model_plan_1"),
-      complete("Completion before Plan reconciliation", "model_complete_2"),
-      (input) => {
-        expect(input.context.blocks.some((block) =>
-          block.payload.kind === "structured" &&
-          isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_stop_feedback"
-        )).toBe(true);
-        return advance([operationCandidate(operation, { target: "workspace" })], "model_operation");
-      },
+      advance([operationCandidate(operation, { target: "workspace" })], "model_operation"),
     ]);
 
     const result = await createRunner(controller, operations).run(
@@ -3117,32 +2732,32 @@ describe("Runner semantic integration", () => {
       createRunConfig(operations, {
         actionExecution: createVerificationActionExecutionConfig(),
         limits: {
-          stopReview: {
-            maxRequiredFeedbackRounds: 1,
-            maxAdvisoryFeedbackRounds: 1,
-          },
+          completionGate: { maxFeedbackRounds: 1 },
+          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
 
     expect(result, JSON.stringify(result, null, 2)).toMatchObject({
       status: "failed",
-      code: "unknown_effect",
+      cause: {
+        kind: "failure",
+        failure: {
+          kind: "operation",
+          failure: { owner: "executor", code: "executor_connection_lost" },
+        },
+      },
     });
     expect(actionExecution.execute).toHaveBeenCalledTimes(1);
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "stop_feedback"
-    )).toBe(true);
-    expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" &&
-      payload.code === "runtime_stop_feedback_exhausted"
-    )).toBe(false);
     const settlementIndex = result.items.findIndex(({ payload }) =>
       payload.kind === "model_call_settlement" &&
       payload.result.modelCallRef.id === "model_operation"
     );
     const terminalIndex = result.items.findIndex(({ payload }) =>
-      payload.kind === "terminal_transition" && payload.code === "unknown_effect"
+      payload.kind === "terminal_transition" &&
+      payload.cause.kind === "failure" &&
+      payload.cause.failure.kind === "operation" &&
+      payload.cause.failure.failure.code === "executor_connection_lost"
     );
     expect(settlementIndex).toBeGreaterThanOrEqual(0);
     expect(terminalIndex).toBeGreaterThan(settlementIndex);
@@ -3647,15 +3262,18 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "cancelled",
-      code: "runtime_cancelled",
-      cancellation: { origin: "user", reasonCode: "user_requested" },
+      cause: {
+        kind: "cancellation",
+        code: "runtime_cancelled",
+        cancellation: { origin: "user", reasonCode: "user_requested" },
+      },
     });
     expect(result.items.some(({ payload }) =>
       payload.kind === "terminal_transition" && payload.status === "succeeded"
     )).toBe(false);
   });
 
-  it("maps an explicit Controller stop to a blocked Run", async () => {
+  it("maps an explicit Controller stop to a resumable suspended Run", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([{
       kind: "propose_stop",
@@ -3663,16 +3281,21 @@ describe("Runner semantic integration", () => {
       modelItems: modelTextItems("model_stop_1", "No safe path remains."),
     }]);
 
-    const result = await createRunner(controller, operations).run(
+    const handle = createRunner(controller, operations).start(
       createAgent(),
       createRunInput(),
       createRunConfig(operations),
     );
 
-    expect(result).toMatchObject({
-      status: "blocked",
-      code: "runtime_no_safe_path",
+    await waitUntil(() => handle.getSnapshot().status === "suspended");
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "suspended",
+      result: null,
+      suspension: { code: "controller_stop_requested" },
     });
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    expect((await handle.wait()).status).toBe("cancelled");
   });
 
   it("rejects invalid config and incomplete Action composition before creating a Run", () => {
@@ -3690,14 +3313,11 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          stopReview: {
-            maxRequiredFeedbackRounds: -1,
-            maxAdvisoryFeedbackRounds: 1,
-          },
+          completionGate: { maxFeedbackRounds: -1 },
         },
       }),
     )).toThrow(
-      "RunStopReviewLimits.maxRequiredFeedbackRounds must be a non-negative safe integer",
+      "RunLimits.completionGate.maxFeedbackRounds must be a non-negative safe integer",
     );
 
     expect(() => runner.start(
@@ -3776,12 +3396,14 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "runtime_limit_exceeded",
-      failure: {
+      cause: {
+        kind: "failure",
+        failure: {
         kind: "runtime",
         failure: {
           code: "runtime_tree_resource_limit_exceeded",
           metadata: { dimension: "contextBytes" },
+        },
         },
       },
     });
@@ -3813,12 +3435,14 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "runtime_limit_exceeded",
-      failure: {
+      cause: {
+        kind: "failure",
+        failure: {
         kind: "runtime",
         failure: {
           code: "runtime_tree_resource_limit_exceeded",
           metadata: { dimension: "contextBytes" },
+        },
         },
       },
     });
@@ -3847,12 +3471,14 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "runtime_limit_exceeded",
-      failure: {
+      cause: {
+        kind: "failure",
+        failure: {
         kind: "runtime",
         failure: {
           code: "runtime_tree_resource_limit_exceeded",
           metadata: { dimension: "resultBytes" },
+        },
         },
       },
     });
@@ -3946,7 +3572,7 @@ function createOperationFixture(
     specs: Object.freeze([...specs]),
     catalog,
     bindings,
-    validateToolInput: () => true,
+    toolInputSemanticValidators: Object.freeze([]),
     internalHandlers: Object.freeze([...internalHandlers]),
     availability: extensions.availability ?? Object.freeze(
       catalog.entries.map((entry) =>
@@ -3963,8 +3589,6 @@ function createTestDelegation(
   agent: Agent<TestOutput>,
   options: {
     readonly mandatoryUnsupportedContext?: boolean;
-    readonly narrowToolAuthority?: boolean;
-    readonly partialSummary?: string;
   } = {},
 ): RunnerDelegationComposition {
   return Object.freeze({
@@ -3988,20 +3612,10 @@ function createTestDelegation(
             input.targetAgent.revision !== agent.revision) {
           throw new TypeError("Test descendant Agent is not admitted.");
         }
-        const candidate = input.toolCall.input as {
-          readonly prompt?: unknown;
-          readonly dependency_result?: unknown;
-          readonly replaced_result?: unknown;
-        };
+        const candidate = input.toolCall.input as { readonly prompt?: unknown };
         if (typeof candidate.prompt !== "string" || candidate.prompt.length === 0) {
           throw new TypeError("Test delegation requires a prompt.");
         }
-        const dependencyResult = candidate.dependency_result === undefined
-          ? null
-          : testDelegationResultRef(candidate.dependency_result);
-        const replacedResult = candidate.replaced_result === undefined
-          ? null
-          : testDelegationResultRef(candidate.replaced_result);
         const limits = createDelegationLimits({
           maxControllerTurns: input.limitCeiling.maxControllerTurns,
           maxActions: input.limitCeiling.maxActions,
@@ -4052,21 +3666,8 @@ function createTestDelegation(
               ]),
               maxContextBytes: limits.maxContextBytes,
             }),
-            authorityRestriction: options.narrowToolAuthority
-              ? Object.freeze(input.authorityCeiling.map((dimension) =>
-                  Object.freeze({
-                    kind: dimension.kind,
-                    allowed: Object.freeze(
-                      dimension.kind === "tool"
-                        ? dimension.allowed.slice(0, 1)
-                        : [...dimension.allowed],
-                    ),
-                    required: Object.freeze([...dimension.required]),
-                  })))
-              : null,
+            authorityRestriction: null,
             allocationRequest: limits,
-            dependencyResult,
-            replacedResult,
           }),
         });
       },
@@ -4104,8 +3705,6 @@ function createTestDelegation(
             }),
             authorityRestriction: null,
             allocationRequest: limits,
-            dependencyResult: null,
-            replacedResult: null,
           }),
         });
       },
@@ -4125,25 +3724,11 @@ function createTestDelegation(
       },
     }),
     resultProjection: Object.freeze({
-      project(result) {
+      project({ result, continuation }) {
         const output = Object.freeze({
           summary: result.narrative?.text ?? "",
-          result_ref: Object.freeze({
-            kind: "delegation_result" as const,
-            id: result.ref.id,
-            revision: result.ref.revision,
-          }),
+          ...(continuation === null ? {} : { agent_id: continuation.id }),
         });
-        if (
-          result.terminal.status === "succeeded" &&
-          result.narrative?.text === options.partialSummary
-        ) {
-          return Object.freeze({
-            status: "partial" as const,
-            output,
-            failure: operationFailure("agent-runtime", "descendant_partial"),
-          });
-        }
         return result.terminal.status === "succeeded"
           ? Object.freeze({
               status: "succeeded" as const,
@@ -4158,50 +3743,6 @@ function createTestDelegation(
       },
     }),
   });
-}
-
-type TestDelegationResultRef = Readonly<{
-  readonly kind: "delegation_result";
-  readonly id: string;
-  readonly revision: string;
-}>;
-
-function projectedDelegationResultRef(input: unknown): TestDelegationResultRef {
-  if (!isRecord(input) || !isRecord(input.result_ref)) {
-    throw new TypeError("Projected descendant output must contain result_ref.");
-  }
-  const ref = input.result_ref;
-  if (
-    Object.keys(ref).some((key) => key !== "kind" && key !== "id" && key !== "revision") ||
-    ref.kind !== "delegation_result" ||
-    typeof ref.id !== "string" || ref.id.length === 0 ||
-    typeof ref.revision !== "string" || ref.revision.length === 0
-  ) {
-    throw new TypeError("Projected descendant result_ref is invalid.");
-  }
-  return Object.freeze({
-    kind: "delegation_result",
-    id: ref.id,
-    revision: ref.revision,
-  });
-}
-
-function testDelegationResultRef(
-  input: unknown,
-): Readonly<{ readonly id: string; readonly revision: string }> {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("Test delegation source result must be an object.");
-  }
-  const ref = input as Readonly<Record<string, unknown>>;
-  if (
-    Object.keys(ref).some((key) => key !== "kind" && key !== "id" && key !== "revision") ||
-    ref.kind !== "delegation_result" ||
-    typeof ref.id !== "string" || ref.id.length === 0 ||
-    typeof ref.revision !== "string" || ref.revision.length === 0
-  ) {
-    throw new TypeError("Test delegation source result ref is invalid.");
-  }
-  return Object.freeze({ id: ref.id, revision: ref.revision });
 }
 
 function createVerificationActionExecutionFixture(
@@ -4525,10 +4066,6 @@ function createRunner(
     controller,
     contextProjection: createTestContextProjection(),
     operations,
-    completion: {
-      taskFulfillment: createFulfilledTaskEvaluator(),
-      maximumDurationMs: 5_000,
-    },
     verification: createTestVerificationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     now: () => NOW,
@@ -4537,47 +4074,35 @@ function createRunner(
   });
 }
 
-function createFulfilledTaskEvaluator(): TaskFulfillmentEvaluatorPort {
-  const ref = Object.freeze({ owner: "test-product", id: "test-task-fulfillment", revision: "1" });
-  return Object.freeze({
-    ref,
-    async evaluate(input: TaskFulfillmentEvaluationInput) {
-      return createTaskAssessmentResult(input, ref, "fulfilled");
-    },
-  });
-}
-
-function createTaskAssessmentResult(
-  input: TaskFulfillmentEvaluationInput,
-  evaluator: TaskFulfillmentEvaluatorPort["ref"],
-  status: "fulfilled" | "incomplete" | "uncertain",
+function createTestStopHookComposition(
+  handle: (
+    event: import("../lifecycle/index.js").StopLifecycleEvent,
+  ) => Promise<import("../hooks/index.js").StopHookDecision>,
 ) {
-  const fulfilled = status === "fulfilled";
-  return Object.freeze({
-    kind: "assessed" as const,
-    assessment: Object.freeze({
-      ref: input.assessment,
-      evaluator,
-      run: input.run,
-      turn: input.turn,
-      objective: input.objective,
-      proposal: input.proposal,
-      status,
-      rationale: fulfilled
-        ? "The scripted test evaluator accepts the completion proposal."
-        : "The scripted test evaluator found a requested outcome missing.",
-      findings: fulfilled
-        ? Object.freeze([])
-        : Object.freeze([Object.freeze({
-            kind: status === "incomplete" ? "missing_outcome" as const : "uncertainty" as const,
-            code: status === "incomplete" ? "task_outcome_missing" : "task_fulfillment_uncertain",
-            message: "Continue from the original Task objective.",
-          })]),
-      feedback: fulfilled
-        ? null
-        : "The original Task is not yet fulfilled. Continue from its requested outcomes.",
-      assessedAt: NOW,
-    }),
+  const handler = Object.freeze({ id: "test.stop-handler", revision: "1" });
+  return createRunLifecycleHookComposition({
+    id: "test.lifecycle-hooks",
+    revision: "1",
+    registrations: Object.freeze([Object.freeze({
+      ref: Object.freeze({ id: "test.stop-hook", revision: "1" }),
+      owner: Object.freeze({
+        owner: "test",
+        kind: "stop_hook",
+        id: "test.stop-hook",
+        revision: "1",
+        run: null,
+      }),
+      event: "Stop" as const,
+      runKinds: Object.freeze(["root" as const, "descendant" as const]),
+      handler,
+      timeoutMs: 5_000,
+      maximumResultBytes: 8_192,
+    })]),
+    bindings: Object.freeze([Object.freeze({
+      ref: handler,
+      event: "Stop" as const,
+      handler: Object.freeze({ handle }),
+    })]),
   });
 }
 
@@ -4691,10 +4216,8 @@ function createRunConfig(
         maxStepLength: 200,
         maxExplanationLength: 500,
       },
-      stopReview: {
-        maxRequiredFeedbackRounds: 2,
-        maxAdvisoryFeedbackRounds: 1,
-      },
+      completionGate: { maxFeedbackRounds: 2 },
+      stopHooks: { maxConsecutiveBlockingRounds: 1 },
       ...overrides.limits,
     },
     runTreeLimits: {
@@ -5208,6 +4731,10 @@ function advance(
       turnId,
       providerRequestId,
       ordinal,
+      candidate.kind === "tool_request" && isRecord(candidate.tool) &&
+          typeof candidate.tool.controllerRequestId === "string"
+        ? candidate.tool.controllerRequestId
+        : `${turnId}:controller`,
     ),
   }));
   const calls = normalizedCandidates.map((candidate, ordinal) =>
@@ -5281,11 +4808,12 @@ function testModelCallRef(
   turnId: string,
   providerRequestId: string,
   ordinal: number,
+  controllerRequestId: string,
 ): ModelCallRef {
   return Object.freeze({
     id,
     providerRequestId,
-    controllerRequestId: `${turnId}:controller`,
+    controllerRequestId,
     turnId,
     contentBlockOrdinal: ordinal,
     branchId: "run_001:main",

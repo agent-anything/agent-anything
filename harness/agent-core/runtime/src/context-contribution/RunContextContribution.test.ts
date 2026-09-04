@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { admitContextContribution } from "@agent-anything/context/active-context";
 import { ContextContractError } from "@agent-anything/context/contract";
 import {
-  createStopFeedbackContextAdmissionProfile,
-  createStopFeedbackContextContribution,
+  createLifecycleHookFeedbackContextAdmissionProfile,
+  createLifecycleHookFeedbackContextContribution,
   createTaskContextAdmissionProfile,
   createTaskContextContribution,
 } from "./RunContextContribution.js";
@@ -34,32 +34,32 @@ describe("Run Context Contribution admission", () => {
     )).toThrowError(ContextContractError);
   });
 
-  it("admits bounded Runner-owned Stop feedback as replaceable model Context", () => {
-    const contribution = createStopFeedbackContextContribution({
-      id: "stop-feedback-1",
+  it("admits bounded lifecycle Hook feedback as replaceable model Context", () => {
+    const contribution = createLifecycleHookFeedbackContextContribution({
+      id: "lifecycle-hook-feedback-1",
       revision: "1",
       runId: "run-1",
       feedback: {
-        review: { runId: "run-1", sequence: 1 },
-        owner: "task_fulfillment",
-        severity: "required",
+        eventId: "stop-event-1",
+        epoch: 1,
         round: 1,
-        code: "task_incomplete",
+        codes: ["task_incomplete"],
         message: "Continue the Run and complete the Task.",
+        omittedReasonCount: 0,
       },
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
     expect(() => admitContextContribution(
       contribution,
-      createStopFeedbackContextAdmissionProfile(),
+      createLifecycleHookFeedbackContextAdmissionProfile(),
     )).not.toThrow();
     expect(contribution).toMatchObject({
-      source: { owner: "agent-runtime", kind: "run_stop_feedback" },
+      source: { owner: "agent-runtime", kind: "lifecycle_hook_feedback" },
       disclosure: { sensitivity: "internal", audiences: ["model"] },
       handling: {
         retention: "current",
-        replacementKey: "run_stop_feedback",
+        replacementKey: "lifecycle_hook_feedback",
         instructionRole: "data",
         necessity: "mandatory",
       },

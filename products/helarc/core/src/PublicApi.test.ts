@@ -62,7 +62,6 @@ describe("Helarc public API", () => {
       "mapRuntimeEventToHelarcActivity",
       "projectHelarcProductResult",
       "resolveHelarcModelQualification",
-      "validateHelarcToolInput",
     ]);
     expect(controllerApi).toHaveProperty("buildHelarcProviderRequest");
     expect(controllerApi).toHaveProperty("parseHelarcProviderResponse");

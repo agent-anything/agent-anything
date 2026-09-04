@@ -9,6 +9,7 @@ import type {
 } from "@agent-anything/evaluation/definition";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
 import { providerResponseUsage, type Provider } from "@agent-anything/model-interaction";
+import { runSettlementCauseCode } from "@agent-anything/agent-runtime/run";
 import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 
 import type {
@@ -353,9 +354,7 @@ function productSettlementIsCoherent(
 ): boolean {
   if (material.product.status === "completed") return material.runResult.status === "succeeded";
   if (material.product.status === "cancelled") return material.runResult.status === "cancelled";
-  if (material.product.status === "blocked" || material.product.status === "rejected") {
-    return material.runResult.status === "blocked";
-  }
+  if (material.product.status === "rejected") return material.runResult.status === "failed";
   return material.runResult.status === "failed";
 }
 
@@ -486,7 +485,7 @@ function materialDigest(
 ): string {
   return digest({
     runStatus: material.runResult.status,
-    runCode: material.runResult.code,
+    runCode: runSettlementCauseCode(material.runResult.cause),
     productStatus: material.product.status,
     before: material.before.files.map((file) => ({ path: file.path, sha256: file.sha256 })),
     after: material.after.files.map((file) => ({ path: file.path, sha256: file.sha256 })),

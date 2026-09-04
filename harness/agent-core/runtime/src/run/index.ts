@@ -17,13 +17,14 @@ export type {
 export { createRunCancellationController, toRunCancellationSummary } from "./RunCancellation.js";
 export type {
   DescendantRunFailure,
+  RunContextFailure,
   RunFailureCause,
   RunFailureForKind,
   RunFailureKind,
   RuntimeFailure,
 } from "./RunFailure.js";
 export { createRunFailureCause, runFailureCode, runFailureMessage, runFailureMetadata } from "./RunFailure.js";
-export type { RunBlockedCode, RunCancelledCode, RunFailureCode, RunResultCode, RunResultStatus } from "./RunStatus.js";
+export type { ActiveRunStatus, RunResultStatus, RunStatus, TerminalRunStatus } from "./RunStatus.js";
 export type {
   PendingRunSubject,
   PendingRunSubjectProjection,
@@ -62,14 +63,37 @@ export {
   projectPermissionContext,
 } from "./RunPermissionState.js";
 export type {
-  BlockedRunResult,
   CancelledRunResult,
-  CreateRunResultBaseInput,
+  CreateRunResultInput,
   FailedRunResult,
   RunResult,
   SucceededRunResult,
 } from "./RunResult.js";
-export { createBlockedRunResult, createCancelledRunResult, createFailedRunResult, createSucceededRunResult } from "./RunResult.js";
+export { createRunResult } from "./RunResult.js";
+export type {
+  RunCausalLink,
+  RunCauseSourceRef,
+  RunSettlement,
+  RunSettlementCauseRecord,
+  RunSettlementCauseRef,
+} from "./RunSettlement.js";
+export {
+  runSettlementCauseCode,
+  runSettlementFailure,
+  snapshotRunCauseSourceRef,
+  snapshotRunSettlement,
+  snapshotRunSettlementCauseRecord,
+} from "./RunSettlement.js";
+export type {
+  RunResumeReceipt,
+  RunResumeRejectionCode,
+  RunResumeRequest,
+  RunResumeRequestInput,
+  RunSuspension,
+  RunSuspensionCode,
+  RunSuspensionRef,
+} from "./RunSuspension.js";
+export { sameRunSuspensionRef } from "./RunSuspension.js";
 export type { RunCounters, RunState, RunVerificationState } from "./RunState.js";
 export type {
   RunSteeringApplication,

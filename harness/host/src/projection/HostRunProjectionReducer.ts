@@ -5,7 +5,7 @@ import type { InteractionTransportReceipt } from "@agent-anything/interaction/re
 import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 import {
   snapshotHostCancellation,
-  projectHostRunStopReview,
+  projectHostRunLifecycleHooks,
   projectHostRunTree,
   type CreateHostRunProjectionStoreInput,
   type HostActionAttemptProjection,
@@ -66,6 +66,7 @@ export function reduceHostRunProjection(
           current.status !== "starting" &&
           current.status !== "running" &&
           current.status !== "waiting" &&
+          current.status !== "suspended" &&
           current.status !== "cancelling"
         ) {
           return rejected(current, "invalid_transition");
@@ -83,6 +84,7 @@ export function reduceHostRunProjection(
         }
         return applied(current, update.sequence, {
           status: update.terminal.status,
+          suspension: null,
           pendingInteractions: Object.freeze([]),
           activeDelegations: Object.freeze([]),
           continuationTargets: Object.freeze([]),
@@ -150,8 +152,9 @@ function applyRunOperation(
   if (snapshot.runTree.revision < current.runTree.revision) {
     return rejected(current, "run_tree_revision_regression");
   }
-  if (snapshot.stopReview.reviewSequence < current.stopReview.reviewSequence) {
-    return rejected(current, "run_stop_review_sequence_regression");
+  if (snapshot.lifecycleHooks.stopEventSequence < current.lifecycleHooks.stopEventSequence ||
+      snapshot.lifecycleHooks.stopFailureEventSequence < current.lifecycleHooks.stopFailureEventSequence) {
+    return rejected(current, "run_lifecycle_hook_sequence_regression");
   }
   const pendingInteractions = snapshot.pendingInteractions.map((pending) => {
     const prior = current.pendingInteractions.find((candidate) =>
@@ -174,7 +177,8 @@ function applyRunOperation(
     runTree: projectHostRunTree(snapshot.runTree),
     status,
     plan: snapshot.plan,
-    stopReview: projectHostRunStopReview(snapshot.stopReview),
+    suspension: snapshot.suspension,
+    lifecycleHooks: projectHostRunLifecycleHooks(snapshot.lifecycleHooks),
     pendingInteractions: Object.freeze(pendingInteractions),
     activeDelegations: Object.freeze(snapshot.activeDelegations.map((delegation) =>
       Object.freeze({
@@ -364,9 +368,9 @@ function activeStatus(
     case "initializing": return current;
     case "running": return "running";
     case "waiting": return "waiting";
+    case "suspended": return "suspended";
     case "cancelling": return "cancelling";
     case "succeeded":
-    case "blocked":
     case "failed":
     case "cancelled":
       return current;
@@ -418,8 +422,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
 }
 
 function isTerminal(status: HostRunProjection["status"]): boolean {
-  return status === "completed" || status === "blocked" ||
-    status === "failed" || status === "cancelled";
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function isDateTime(value: unknown): value is string {

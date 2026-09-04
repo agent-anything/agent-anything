@@ -157,11 +157,16 @@ export function evaluateSourceOwnershipRules({
     }
     if (
       path === "harness/agent-core/runtime/src/controller/ProviderBackedController.ts" &&
-      (!/inputAccounting\.verify\s*\(/.test(text) || !/request\.composition\b/.test(text))
+      (
+        !/snapshotProviderRequest\s*\(/.test(text) ||
+        !/request\.composition\.providerId\b/.test(text) ||
+        !/request\.composition\.model\b/.test(text) ||
+        !/prepareModelContextRequest\s*\(\s*request\b/.test(text)
+      )
     ) {
       reject(
         "model_input_composition_verification",
-        "The Provider-backed Controller must verify final messages against the accepted complete composition.",
+        "The Provider-backed Controller must snapshot and bind the complete composition before Provider-native context assessment.",
       );
     }
 
@@ -224,13 +229,14 @@ export function evaluateSourceOwnershipRules({
     if (
       path === "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
       (
-        !/const\s+completion\s*=\s*await\s+this\.evaluateRunStop\s*\(/.test(text) ||
-        !/if\s*\(completion\.kind\s*===\s*["']succeeded["']\)\s*\{[\s\S]*?this\.settle\s*\(\{\s*status:\s*["']succeeded["']/.test(text)
+        !/const\s+merged\s*=\s*await\s+invokeStopLifecycleHooks\s*\(/.test(text) ||
+        !/if\s*\(merged\.kind\s*===\s*["']block["']\)/.test(text) ||
+        !/kind:\s*["']completion_acceptance["']/.test(text)
       )
     ) {
       reject(
-        "runner_stop_review_required",
-        "RunExecution must evaluate Stop Review and may settle succeeded only from its succeeded branch.",
+        "runner_stop_lifecycle_required",
+        "RunExecution must emit Stop, execute lifecycle Hooks, honor blocking feedback, and record completion acceptance before success settlement.",
       );
     }
 

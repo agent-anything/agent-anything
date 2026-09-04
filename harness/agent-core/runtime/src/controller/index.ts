@@ -44,3 +44,10 @@ export {
   projectModelInteraction,
 } from "./ModelInteractionProjection.js";
 export { createControllerModelItems } from "./ControllerModelItems.js";
+export type {
+  ModelInputRecoveryCapability,
+  ModelInputRecoveryInput,
+  ModelInputRecoveryPort,
+  ModelInputRecoveryResult,
+} from "./ModelInputRecovery.js";
+export { unsupportedModelInputRecovery } from "./ModelInputRecovery.js";

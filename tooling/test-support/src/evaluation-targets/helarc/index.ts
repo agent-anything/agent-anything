@@ -106,10 +106,19 @@ export {
   HELARC_CHILD_DELEGATION_PROGRESSION_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcChildDelegationProgressionBaseline.js";
 export {
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcRunLifecycleSettlementBaseline.js";
+export {
   HELARC_RUN_STOP_OPERATIONAL_ACCEPTED_BASELINE,
   HELARC_RUN_STOP_OPERATIONAL_BASELINE_ACCEPTANCE,
   verifyHelarcRunStopOperationalAcceptedBaseline,
 } from "./baseline/HelarcRunStopOperationalBaseline.js";
+export {
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_ACCEPTED_BASELINE,
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_BASELINE_ACCEPTANCE,
+  verifyHelarcRunLifecycleSettlementOperationalAcceptedBaseline,
+} from "./baseline/HelarcRunLifecycleSettlementOperationalBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

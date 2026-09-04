@@ -18,7 +18,6 @@ export type {
   DescendantContinuationTargetProjection,
   DescendantTargetsProjection,
   DescendantMessageRequest,
-  DescendantMessageTarget,
 } from "./DelegationContinuation.js";
 export {
   deriveDelegationAuthority,

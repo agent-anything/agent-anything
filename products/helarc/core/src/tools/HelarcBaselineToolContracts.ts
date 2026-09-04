@@ -306,16 +306,9 @@ const ASK_USER_QUESTION = contract({
   },
 });
 
-const DELEGATION_RESULT_REF = objectSchema(["kind", "id", "revision"], {
-  kind: { const: "delegation_result" },
-  id: { type: "string", minLength: 1, maxLength: 1_024 },
-  revision: { type: "string", minLength: 1, maxLength: 256 },
-});
-
-const DELEGATION_RESULT_OUTPUT = objectSchema(["result_ref", "child_run_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
-  result_ref: DELEGATION_RESULT_REF,
-  child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
-  status: { enum: ["succeeded", "blocked", "failed", "cancelled"] },
+const DELEGATION_RESULT_OUTPUT = objectSchema(["agent_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
+  agent_id: { anyOf: [{ type: "string", minLength: 1, maxLength: 1_024 }, { type: "null" }] },
+  status: { enum: ["succeeded", "failed", "cancelled"] },
   summary: { type: "string", maxLength: 64_000 },
   artifact_refs: {
     type: "array",
@@ -336,8 +329,6 @@ const AGENT = contract({
   inputSchema: objectSchema(["prompt"], {
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
     description: { type: "string", minLength: 1, maxLength: 1_024 },
-    dependency_result: DELEGATION_RESULT_REF,
-    replaced_result: DELEGATION_RESULT_REF,
   }),
   outputSchema: DELEGATION_RESULT_OUTPUT,
   annotations: {},
@@ -350,24 +341,12 @@ const AGENT = contract({
 
 const SEND_MESSAGE = contract({
   name: "SendMessage",
-  description: "Send one bounded instruction to one exact active descendant or continuation target.",
-  inputSchema: objectSchema(["target", "message"], {
-    target: objectSchema(["kind", "id"], {
-      kind: { enum: ["active", "continuation"] },
-      id: { type: "string", minLength: 1, maxLength: 1_024 },
-    }),
-    message: { type: "string", minLength: 1, maxLength: 64_000 },
+  description: "Continue one exact retained descendant Agent context.",
+  inputSchema: objectSchema(["agent_id", "prompt"], {
+    agent_id: { type: "string", minLength: 1, maxLength: 1_024 },
+    prompt: { type: "string", minLength: 1, maxLength: 64_000 },
   }),
-  outputSchema: Object.freeze({
-    oneOf: [
-      objectSchema(["delivery", "child_run_id", "command_id"], {
-        delivery: { const: "active" },
-        child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
-        command_id: { type: "string", minLength: 1, maxLength: 1_024 },
-      }),
-      DELEGATION_RESULT_OUTPUT,
-    ],
-  }),
+  outputSchema: DELEGATION_RESULT_OUTPUT,
   annotations: {},
   binding: {
     kind: "descendant_message",

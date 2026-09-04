@@ -6,7 +6,6 @@ import {
 } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  createUtf8ModelInputAccounting,
   modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import { describe, expect, it } from "vitest";
@@ -149,25 +148,11 @@ function createRequest(requestId: string): ProviderRequest {
       additionalProperties: false,
     },
   }]);
-  const accounting = createUtf8ModelInputAccounting({
-    providerId: "fake-native-tool-provider",
-    model: "fake-model",
-    maximumInputBytes: 1_000_000,
-    limitSource: "host_configured",
-    estimator: { id: "fake-native.utf8", revision: "1" },
-    framing: { id: "fake-native.framing", revision: "1" },
-    renderRequest: (instructions, messages, requestInteraction) =>
-      JSON.stringify({ instructions, messages, interaction: requestInteraction }),
-  });
   const composition = composeModelInput({
     id: requestId,
     providerId: "fake-native-tool-provider",
     model: "fake-model",
-    accounting,
     interaction,
-    outputReserve: { unit: "bytes", amount: 0 },
-    contextBudget: { unit: "bytes", amount: 0 },
-    contextProjectedAmount: 0,
     sections: [{
       id: "instructions",
       source: source("instructions"),

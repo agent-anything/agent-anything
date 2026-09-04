@@ -3,12 +3,11 @@ import type { DelegationOriginCorrelation } from "@agent-anything/agent-core/del
 import type { ToolCall } from "@agent-anything/tools/invocation";
 import { describe, expect, it } from "vitest";
 import {
-  createFailedRunResult,
   createRunFailureCause,
-  createSucceededRunResult,
+  createRunResult,
+  type RunSettlementCauseRecord,
 } from "../run/index.js";
 import {
-  createDelegationContextMaterial,
   createDelegationContextPlan,
   createDelegationLimits,
   createDelegationResultExpectation,
@@ -140,21 +139,20 @@ describe("delegation request", () => {
     })).toThrow(/does not match the resolved child Agent/);
   });
 
-  it("rejects duplicate Context material and Product-assigned source-result material", () => {
+  it("rejects duplicate and unsupported Context material roles", () => {
     const parent = material("parent_fact", "parent-fact", "mandatory");
     expect(() => createDelegationContextPlan({
       entries: [parent, parent],
       maxContextBytes: 8_192,
     })).toThrow(/must be unique/);
 
-    expect(() => request({
-      preparation: preparation({
-        contextEntries: [
-          parent,
-          material("dependency_result", "result-old", "optional"),
-        ],
-      }),
-    })).toThrow(/cannot assign trusted source-result Context material/);
+    expect(() => createDelegationContextPlan({
+      entries: [{
+        ...parent,
+        role: "unsupported_material",
+      } as never],
+      maxContextBytes: 8_192,
+    })).toThrow(/role is unsupported/);
   });
 
   it("rejects request content changed after revision construction", () => {
@@ -192,32 +190,6 @@ describe("delegation request", () => {
     })).toThrow(/restriction presence disagree/);
   });
 
-  it("rejects a dependency result from another root Run", () => {
-    expect(() => request({
-      preparation: preparation({
-        dependencyResult: { id: "result-old", revision: "result-old-v1" },
-      }),
-      dependencyResult: {
-        correlation: {
-          kind: "dependency",
-          request: { id: "request-old", revision: "request-old-v1" },
-          result: { id: "result-old", revision: "result-old-v1" },
-          root: { id: "run-another-root" },
-          child: {
-            run: { id: "run-old-child" },
-            task: { id: "task-old-child" },
-            agent: CHILD_AGENT,
-          },
-        },
-        material: createDelegationContextMaterial({
-          owner: "agent-runtime",
-          kind: "delegation_result",
-          id: "result-old",
-          payload: Object.freeze({ summary: "Earlier result" }),
-        }),
-      },
-    })).toThrow(/same root Run/);
-  });
 });
 
 describe("delegation result", () => {
@@ -227,18 +199,12 @@ describe("delegation result", () => {
       resultId: "result-1",
       request: accepted,
       correlation: childCorrelation(accepted),
-      childResult: createSucceededRunResult({
-        runId: "run-child",
-        taskId: "task-child",
-        startingAgent: CHILD_AGENT,
-        finalActiveAgent: CHILD_AGENT,
-        startingInstructionBinding: childInstructionBinding("run-child"),
-        finalInstructionBinding: childInstructionBinding("run-child"),
-        startedAt: "2026-08-25T00:01:00.000Z",
-        completedAt: "2026-08-25T00:02:00.000Z",
-        evidenceRefs: ["evidence-1"],
-        artifactRefs: ["artifact-1"],
-      }, { summary: "child output" }),
+      childResult: succeededChildResult(
+        "run-child",
+        { summary: "child output" },
+        ["evidence-1"],
+        ["artifact-1"],
+      ),
       narrative: "Useful child findings.",
       verification: {
         status: "satisfied",
@@ -253,9 +219,9 @@ describe("delegation result", () => {
       createdAt: "2026-08-25T00:02:01.000Z",
     });
 
-    expect(result.terminal).toEqual({
+    expect(result.terminal).toMatchObject({
       status: "succeeded",
-      code: null,
+      code: "completion_accepted",
       failureKind: null,
       cancellationOrigin: null,
     });
@@ -275,25 +241,7 @@ describe("delegation result", () => {
       resultId: "result-failed",
       request: accepted,
       correlation: childCorrelation(accepted),
-      childResult: createFailedRunResult(
-        {
-          runId: "run-child",
-          taskId: "task-child",
-          startingAgent: CHILD_AGENT,
-          finalActiveAgent: CHILD_AGENT,
-          startingInstructionBinding: childInstructionBinding("run-child"),
-          finalInstructionBinding: childInstructionBinding("run-child"),
-          startedAt: "2026-08-25T00:01:00.000Z",
-          completedAt: "2026-08-25T00:02:00.000Z",
-        },
-        "runtime_execution_failed",
-        createRunFailureCause("runtime", {
-          code: "child_execution_failed",
-          message: "The child failed after a possible effect.",
-          retryable: false,
-          metadata: {},
-        }),
-      ),
+      childResult: failedChildResult("run-child"),
       narrative: "Some work may still be useful.",
       verification: {
         status: "unavailable",
@@ -329,16 +277,7 @@ describe("delegation result", () => {
       resultId: "result-wrong-child",
       request: accepted,
       correlation: childCorrelation(accepted),
-      childResult: createSucceededRunResult({
-        runId: "run-other",
-        taskId: "task-child",
-        startingAgent: CHILD_AGENT,
-        finalActiveAgent: CHILD_AGENT,
-        startingInstructionBinding: childInstructionBinding("run-other"),
-        finalInstructionBinding: childInstructionBinding("run-other"),
-        startedAt: "2026-08-25T00:01:00.000Z",
-        completedAt: "2026-08-25T00:02:00.000Z",
-      }, { summary: "done" }),
+      childResult: succeededChildResult("run-other", { summary: "done" }),
       narrative: null,
       verification: noVerification(),
       effects: noEffects(),
@@ -374,8 +313,6 @@ describe("delegation steering route", () => {
 function request(overrides: {
   readonly toolCall?: ToolCall;
   readonly preparation?: DelegationPreparation;
-  readonly dependencyResult?: Parameters<typeof materializeDelegationRequest>[0]["dependencyResult"];
-  readonly replacedResult?: Parameters<typeof materializeDelegationRequest>[0]["replacedResult"];
 } = {}) {
   return materializeDelegationRequest({
     requestId: "request-1",
@@ -384,8 +321,6 @@ function request(overrides: {
     preparation: overrides.preparation ?? preparation(),
     authorityDerivation: authorityDerivation(),
     limitDerivation: limitDerivation(),
-    dependencyResult: overrides.dependencyResult ?? null,
-    replacedResult: overrides.replacedResult ?? null,
     continuation: null,
     createdAt: "2026-08-25T00:00:10.000Z",
   });
@@ -395,8 +330,6 @@ function preparation(overrides: {
   readonly contextEntries?: readonly ReturnType<typeof material>[];
   readonly allocationRequest?: ReturnType<typeof limits>;
   readonly authorityRestriction?: readonly DelegationAuthorityDimensionInput[] | null;
-  readonly dependencyResult?: DelegationPreparation["dependencyResult"];
-  readonly replacedResult?: DelegationPreparation["replacedResult"];
 } = {}): DelegationPreparation {
   return {
     schemaVersion: 1,
@@ -427,13 +360,11 @@ function preparation(overrides: {
     }),
     authorityRestriction: overrides.authorityRestriction ?? null,
     allocationRequest: overrides.allocationRequest ?? limits(),
-    dependencyResult: overrides.dependencyResult ?? null,
-    replacedResult: overrides.replacedResult ?? null,
   };
 }
 
 function material(
-  role: "parent_fact" | "dependency_result" | "replaced_result",
+  role: "workspace" | "product_context" | "parent_fact",
   id: string,
   necessity: "mandatory" | "optional",
 ) {
@@ -614,6 +545,96 @@ function childInstructionBinding(runId: string) {
     id: `${runId}:agent-instruction-binding:0`,
     revision: `sha256:${"0".repeat(64)}`,
   });
+}
+
+function succeededChildResult(
+  runId: string,
+  output: unknown,
+  evidenceRefs: readonly string[] = [],
+  artifactRefs: readonly string[] = [],
+) {
+  const cause = completionCause(runId);
+  return createRunResult({
+    ...childResultIdentity(runId),
+    settlement: {
+      status: "succeeded",
+      completedAt: "2026-08-25T00:02:00.000Z",
+      cause: cause.ref,
+      output,
+    },
+    cause,
+    settlementCauses: [cause],
+    evidenceRefs,
+    artifactRefs,
+  });
+}
+
+function failedChildResult(runId: string) {
+  const failure = createRunFailureCause("runtime", {
+    code: "child_execution_failed",
+    message: "The child failed after a possible effect.",
+    retryable: false,
+    metadata: {},
+  });
+  const cause: Extract<RunSettlementCauseRecord, { kind: "failure" }> = {
+    ref: causeRef(runId),
+    kind: "failure",
+    failure,
+    source: causeSource(runId, "runtime_failure"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: "2026-08-25T00:02:00.000Z",
+  };
+  return createRunResult({
+    ...childResultIdentity(runId),
+    settlement: {
+      status: "failed",
+      completedAt: "2026-08-25T00:02:00.000Z",
+      cause: cause.ref,
+    },
+    cause,
+    settlementCauses: [cause],
+  });
+}
+
+function completionCause(
+  runId: string,
+): Extract<RunSettlementCauseRecord, { kind: "completion" }> {
+  return {
+    ref: causeRef(runId),
+    kind: "completion",
+    code: "completion_accepted",
+    source: causeSource(runId, "run_completion_acceptance"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: "2026-08-25T00:02:00.000Z",
+  };
+}
+
+function causeRef(runId: string) {
+  return { run: { id: runId }, id: `${runId}:cause:1`, revision: "1" };
+}
+
+function causeSource(runId: string, kind: string) {
+  return {
+    owner: "agent-runtime",
+    kind,
+    id: `${runId}:${kind}:1`,
+    revision: "1",
+    run: { id: runId },
+  };
+}
+
+function childResultIdentity(runId: string) {
+  return {
+    runId,
+    taskId: "task-child",
+    startingAgent: CHILD_AGENT,
+    finalActiveAgent: CHILD_AGENT,
+    startingInstructionBinding: childInstructionBinding(runId),
+    finalInstructionBinding: childInstructionBinding(runId),
+    startedAt: "2026-08-25T00:01:00.000Z",
+  };
 }
 
 function usage() {

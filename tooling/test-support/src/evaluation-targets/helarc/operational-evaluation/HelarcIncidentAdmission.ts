@@ -24,7 +24,7 @@ export interface HelarcEvaluationIncidentCandidate {
   readonly symptom: {
     readonly code: string;
     readonly summary: string;
-    readonly observedTerminal: "cancelled_by_user" | "failed" | "blocked" | "succeeded";
+    readonly observedTerminal: "cancelled_by_user" | "failed" | "succeeded";
   };
   readonly limitations: readonly string[];
 }

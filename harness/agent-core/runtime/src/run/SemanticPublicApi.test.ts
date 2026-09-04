@@ -3,7 +3,7 @@ import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunItem, RunResult } from "./index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as runApi from "./index.js";
-import { createSucceededRunResult } from "./index.js";
+import { createRunResult } from "./index.js";
 
 describe("Agent Core Run public API", () => {
   it("exposes Action and Run contracts without the Runner implementation", () => {
@@ -24,8 +24,22 @@ describe("Agent Core Run public API", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       payload: { kind: "run_action", action },
     };
-    const result = createSucceededRunResult(
-      {
+    const cause = {
+      ref: { run: { id: "run-1" }, id: "run-1:cause:1", revision: "1" },
+      kind: "completion" as const,
+      code: "completion_accepted" as const,
+      source: {
+        owner: "agent-runtime",
+        kind: "run_completion_acceptance",
+        id: "run-1:completion:1",
+        revision: "1",
+        run: { id: "run-1" },
+      },
+      underlying: [],
+      omittedUnderlyingCount: 0,
+      recordedAt: "2026-01-01T00:00:01.000Z",
+    };
+    const result = createRunResult({
         runId: "run-1",
         taskId: "task-1",
         startingAgent: { id: "agent-1", revision: "1" },
@@ -39,11 +53,16 @@ describe("Agent Core Run public API", () => {
           revision: `sha256:${"0".repeat(64)}`,
         },
         startedAt: "2026-01-01T00:00:00.000Z",
-        completedAt: "2026-01-01T00:00:01.000Z",
+        settlement: {
+          status: "succeeded",
+          completedAt: "2026-01-01T00:00:01.000Z",
+          cause: cause.ref,
+          output: { summary: "done" },
+        },
+        cause,
+        settlementCauses: [cause],
         items: [item],
-      },
-      { summary: "done" },
-    );
+      });
 
     expect(result.items).toEqual([item]);
     expect(result.status).toBe("succeeded");
@@ -52,7 +71,7 @@ describe("Agent Core Run public API", () => {
   });
 
   it("keeps Run semantics separate from Runner and Action Execution values", () => {
-    expect(runApi).toHaveProperty("createSucceededRunResult");
+    expect(runApi).toHaveProperty("createRunResult");
     expect(runApi).not.toHaveProperty("Runner");
     expect(runApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runApi).not.toHaveProperty("createSandboxExecutionGateway");

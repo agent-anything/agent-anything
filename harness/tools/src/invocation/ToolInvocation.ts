@@ -1,6 +1,11 @@
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
 import { createToolContractIdentity, toolRevisionKey, type ToolBindingRef, type ToolRevisionRef } from "../identity/index.js";
 import { findSelectedTool, type ToolExposureProof, type ToolRequestOrigin, type ToolSelectionRevision } from "../selection/index.js";
+import {
+  validateToolInput,
+  type ToolInputSemanticValidator,
+  type ToolInputValidationFailure,
+} from "../validation/index.js";
 
 export interface ToolCallCandidate {
   readonly name: string;
@@ -12,6 +17,7 @@ export interface ToolCallCandidate {
 
 export interface ToolCall<TInput = unknown> {
   readonly toolCallId: string;
+  readonly attempt: ToolCallAttemptRef;
   readonly parentRunAction: RunActionRef;
   readonly toolRevision: ToolRevisionRef;
   readonly binding: ToolBindingRef;
@@ -23,9 +29,36 @@ export interface ToolCall<TInput = unknown> {
   readonly createdAt: string;
 }
 
+export interface ToolCallAttemptRef {
+  readonly id: string;
+  readonly runAction: RunActionRef;
+  readonly modelCall: ToolCallModelCorrelationRef | null;
+}
+
+export interface ToolCallModelCorrelationRef {
+  readonly id: string;
+  readonly controllerRequestId: string;
+}
+
+export interface ToolCallAttempt {
+  readonly ref: ToolCallAttemptRef;
+  readonly requestedName: string;
+  readonly requestedRevision: string | null;
+  readonly selectedTool: ToolRevisionRef | null;
+  readonly origin: ToolRequestOrigin;
+  readonly inputDigest: string;
+  readonly createdAt: string;
+}
+
 export type ToolCallMaterialization =
-  | { readonly status: "trusted"; readonly call: ToolCall }
-  | { readonly status: "rejected"; readonly code: string; readonly message: string };
+  | { readonly status: "trusted"; readonly attempt: ToolCallAttempt; readonly call: ToolCall }
+  | {
+      readonly status: "rejected";
+      readonly attempt: ToolCallAttempt;
+      readonly code: string;
+      readonly message: string;
+      readonly validation: ToolInputValidationFailure | null;
+    };
 
 export function materializeToolCall(input: {
   readonly candidate: ToolCallCandidate;
@@ -33,27 +66,57 @@ export function materializeToolCall(input: {
   readonly exposure: ToolExposureProof | null;
   readonly parentRunAction: RunActionRef;
   readonly toolCallId: string;
+  readonly modelCall: ToolCallModelCorrelationRef | null;
   readonly createdAt: string;
-  readonly validateInput: (schema: unknown, candidate: unknown) => boolean;
+  readonly semanticValidators?: readonly ToolInputSemanticValidator[];
 }): ToolCallMaterialization {
   const selected = findSelectedTool(input.selection, input.candidate.name, input.candidate.origin);
-  if (selected === undefined) return rejected("tool_unavailable", "The requested Tool is not selected for this origin.");
+  const inputDigest = createToolContractIdentity("agent-anything.tool-call-input.v1", input.candidate.input);
+  if (selected === undefined) {
+    return rejected(
+      createAttempt(input, null, inputDigest),
+      "tool_unavailable",
+      "The requested Tool is not selected for this origin.",
+      null,
+    );
+  }
   const descriptor = selected.registration.descriptor;
-  if (input.candidate.revision !== null && input.candidate.revision !== descriptor.ref.revision) return rejected("tool_revision_mismatch", "The requested Tool revision is not selected.");
-  if (descriptor.retirement !== null) return rejected("tool_retired", "The requested Tool revision is retired.");
+  const attempt = createAttempt(input, descriptor.ref, inputDigest);
+  if (input.candidate.revision !== null && input.candidate.revision !== descriptor.ref.revision) {
+    return rejected(attempt, "tool_revision_mismatch", "The requested Tool revision is not selected.", null);
+  }
+  if (descriptor.retirement !== null) {
+    return rejected(attempt, "tool_retired", "The requested Tool revision is retired.", null);
+  }
   if (input.candidate.origin === "model") {
+    if (input.candidate.controllerRequestId !== input.modelCall?.controllerRequestId) {
+      return rejected(attempt, "tool_call_correlation_invalid", "The Tool attempt does not match its Model Call.", null);
+    }
     if (input.exposure === null || input.exposure.selectionRevision !== input.selection.revision ||
       input.candidate.controllerRequestId !== input.exposure.controllerRequestId ||
       !input.exposure.exposedTools.some((ref) => toolRevisionKey(ref) === toolRevisionKey(descriptor.ref))) {
-      return rejected("tool_not_exposed", "The requested Tool was not exposed to this Controller request.");
+      return rejected(attempt, "tool_not_exposed", "The requested Tool was not exposed to this Controller request.", null);
     }
   }
-  if (!input.validateInput(descriptor.inputSchema, input.candidate.input)) return rejected("tool_input_invalid", "The Tool input does not satisfy the selected schema revision.");
-  const inputDigest = createToolContractIdentity("agent-anything.tool-call-input.v1", input.candidate.input);
+  const validation = validateToolInput({
+    descriptor,
+    value: input.candidate.input,
+    semanticValidators: input.semanticValidators,
+  });
+  if (validation.status === "invalid") {
+    return rejected(
+      attempt,
+      validation.failure.code,
+      validation.message,
+      validation.failure,
+    );
+  }
   return Object.freeze({
     status: "trusted" as const,
+    attempt,
     call: Object.freeze({
-      toolCallId: token(input.toolCallId),
+      toolCallId: attempt.ref.id,
+      attempt: attempt.ref,
       parentRunAction: input.parentRunAction,
       toolRevision: descriptor.ref,
       binding: descriptor.binding,
@@ -74,8 +137,41 @@ export function validateExactToolCall(call: ToolCall, selection: ToolSelectionRe
       createToolContractIdentity("agent-anything.tool-binding.v1", call.binding);
 }
 
-function rejected(code: string, message: string): ToolCallMaterialization {
-  return Object.freeze({ status: "rejected" as const, code, message });
+function createAttempt(
+  input: Parameters<typeof materializeToolCall>[0],
+  selectedTool: ToolRevisionRef | null,
+  inputDigest: string,
+): ToolCallAttempt {
+  if (input.candidate.origin === "model" && input.modelCall === null) {
+    throw new TypeError("Model Tool attempts require exact Model Call correlation.");
+  }
+  return deepFreeze({
+    ref: {
+      id: token(input.toolCallId),
+      runAction: input.parentRunAction,
+      modelCall: input.modelCall === null
+        ? null
+        : Object.freeze({
+            id: token(input.modelCall.id),
+            controllerRequestId: token(input.modelCall.controllerRequestId),
+          }),
+    },
+    requestedName: token(input.candidate.name),
+    requestedRevision: input.candidate.revision,
+    selectedTool,
+    origin: input.candidate.origin,
+    inputDigest,
+    createdAt: dateTime(input.createdAt),
+  });
+}
+
+function rejected(
+  attempt: ToolCallAttempt,
+  code: string,
+  message: string,
+  validation: ToolInputValidationFailure | null,
+): ToolCallMaterialization {
+  return deepFreeze({ status: "rejected" as const, attempt, code, message, validation });
 }
 
 function token(input: unknown): string {

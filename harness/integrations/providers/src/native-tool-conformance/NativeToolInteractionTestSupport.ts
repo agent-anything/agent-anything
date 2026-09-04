@@ -1,4 +1,5 @@
 import {
+  assessModelContext,
   createNativeToolTurnInteraction,
   type ModelCallableDefinition,
   type ModelInstructions,
@@ -67,13 +68,9 @@ export function createNativeProviderRequest(
   ];
   const composition = composeModelInput({
     id: requestId,
-    providerId: provider.inputAccounting.providerId,
-    model: provider.inputAccounting.model,
-    accounting: provider.inputAccounting,
+    providerId: provider.modelContext.target.providerId,
+    model: provider.modelContext.target.model,
     interaction,
-    outputReserve: { unit: "bytes", amount: 0 },
-    contextBudget: { unit: "bytes", amount: 0 },
-    contextProjectedAmount: 0,
     sections,
     lineage: {
       instructionBinding: source("binding"),
@@ -83,8 +80,8 @@ export function createNativeProviderRequest(
       instructionResolver: source("instruction-resolver"),
       instructionContent: source("instruction-content"),
       instructionModel: {
-        providerId: provider.inputAccounting.providerId,
-        model: provider.inputAccounting.model,
+        providerId: provider.modelContext.target.providerId,
+        model: provider.modelContext.target.model,
       },
       instructionBlocks: instructions.content.map((_, index) =>
         source(`native-instruction-${index}`)
@@ -107,6 +104,21 @@ export function createNativeProviderRequest(
     composedAt: "2026-08-27T00:00:00.000Z",
   });
   const modelInput = modelInputFromComposition(composition);
+  const measuredAt = "2026-08-27T00:00:00.000Z";
+  const headroom = Object.freeze({
+    unit: "tokens" as const,
+    amount: 0,
+    policy: Object.freeze({ id: "native-tool-conformance", revision: "1" }),
+  });
+  const assessment = assessModelContext({
+    compositionId: composition.id,
+    capacity: provider.modelContext.capacity,
+    measurement: provider.modelContext.measure(composition, measuredAt),
+    requestedOutput: provider.modelContext.requestedOutput,
+    headroom,
+    assessedAt: measuredAt,
+    revision: "native-tool-conformance.v1",
+  });
   return {
     requestId: composition.id,
     purpose: "native-tool-conformance",
@@ -118,6 +130,11 @@ export function createNativeProviderRequest(
     messages: modelInput.messages,
     interaction: composition.interaction,
     composition,
+    modelContext: {
+      requestedOutput: provider.modelContext.requestedOutput,
+      headroom,
+      assessment,
+    },
     continuation: null,
     metadata: {},
   };

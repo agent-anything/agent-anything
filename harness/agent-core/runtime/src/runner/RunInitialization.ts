@@ -7,7 +7,7 @@ import {
   type RunState,
 } from "../run/index.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
-import { createInitialRunStopReviewState } from "../stop/index.js";
+import { createInitialRunLifecycleHookState } from "../hooks/index.js";
 import {
   assertAgentInstructionBindingMatches,
   snapshotAgentInstructionBindingRef,
@@ -56,18 +56,20 @@ export function createInitialRunState<TOutput>(input: {
     startedAt: input.startedAt,
     deadlineAt: input.deadlineAt,
     status: "initializing" as const,
-    code: null,
     finalOutput: null,
-    failure: null,
-    relatedFailures: Object.freeze([]) as readonly [],
+    settlement: null,
+    settlementCause: null,
+    settlementCauses: Object.freeze([]),
+    suspension: null,
     cancellationRequest: null,
     completedAt: null,
     permission: permissionState,
     verification: Object.freeze({
       snapshot: Object.freeze({ runId: input.runId, revision: 0 }),
       gate: null,
+      feedbackRounds: 0,
     }),
-    stopReview: createInitialRunStopReviewState(),
+    lifecycleHooks: createInitialRunLifecycleHookState(),
     context,
     plan: null,
     items: Object.freeze([]),

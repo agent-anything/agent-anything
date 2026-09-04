@@ -1,12 +1,12 @@
 {
   "name": "@agent-anything/agent-runtime",
   "version": "0.0.0",
-  "description": "Authoritative Run lifecycle, Agent Loop, Controller, planning, Stop Review, cancellation, retry, and termination for Agent Harness.",
+  "description": "Authoritative Run lifecycle, Agent Loop, Controller, planning, lifecycle Hooks, cancellation, retry, and settlement for Agent Harness.",
   "type": "module",
   "exports": {
-    "./completion": {
-      "types": "./src/completion/index.ts",
-      "import": "./dist/completion/index.js"
+    "./hooks": {
+      "types": "./src/hooks/index.ts",
+      "import": "./dist/hooks/index.js"
     },
     "./controller": {
       "types": "./src/controller/index.ts",
@@ -20,13 +20,13 @@
       "types": "./src/instructions/index.ts",
       "import": "./dist/instructions/index.js"
     },
+    "./lifecycle": {
+      "types": "./src/lifecycle/index.ts",
+      "import": "./dist/lifecycle/index.js"
+    },
     "./plan": {
       "types": "./src/plan/index.ts",
       "import": "./dist/plan/index.js"
-    },
-    "./stop": {
-      "types": "./src/stop/index.ts",
-      "import": "./dist/stop/index.js"
     },
     "./transcript": {
       "types": "./src/transcript/index.ts",

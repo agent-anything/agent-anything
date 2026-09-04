@@ -27,7 +27,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
   private readonly lineage: RunLineage;
   private nextSpanSequence = 1;
   private lastEventSequence = 0;
-  private terminalEvent: RuntimeEvent<"run.completed" | "run.blocked" | "run.failed" | "run.cancelled"> | null = null;
+  private terminalEvent: RuntimeEvent<"run.completed" | "run.failed" | "run.cancelled"> | null = null;
   private completed = false;
 
   constructor(private readonly input: CreateRunTraceAssemblerInput) {
@@ -257,7 +257,6 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
         });
         break;
       case "run.completed":
-      case "run.blocked":
       case "run.failed":
       case "run.cancelled":
         if (this.terminalEvent !== null) this.issue("duplicate_operation_settlement", event.id, this.input.runId);

@@ -4,9 +4,10 @@ import { OpenAICompatibleProvider } from "@agent-anything/provider-integrations/
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 
 export function createHelarcProvider(config: HelarcProviderConfig): Provider {
-  const inputLimit = Object.freeze({
+  const requestBodyTransportLimit = Object.freeze({
     maximumBytes: 512 * 1_024,
     source: "host_configured" as const,
+    revision: "helarc.desktop.provider-request-body-limit.v1",
   });
   if (config.providerKind === "ollama") {
     if (config.ollamaRuntime === null) {
@@ -18,7 +19,7 @@ export function createHelarcProvider(config: HelarcProviderConfig): Provider {
       timeoutMs: config.timeoutMs,
       runtime: config.ollamaRuntime,
       nativeToolInteraction: { supported: true },
-      inputLimit,
+      requestBodyTransportLimit,
     });
   }
   return new OpenAICompatibleProvider({
@@ -26,7 +27,8 @@ export function createHelarcProvider(config: HelarcProviderConfig): Provider {
     apiKey: config.apiKey,
     model: config.model,
     timeoutMs: config.timeoutMs,
+    maximumOutputTokens: 4_096,
     nativeToolInteraction: { supported: true },
-    inputLimit,
+    requestBodyTransportLimit,
   });
 }

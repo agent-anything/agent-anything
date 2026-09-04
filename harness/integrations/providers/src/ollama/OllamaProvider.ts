@@ -1,9 +1,11 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
   createModelCallRef,
+  createUnknownModelInputMeasurement,
   createModelTurnId,
   createProviderAttemptInterruption,
   providerResultFromInterruption,
+  snapshotProviderRequest,
   snapshotProviderResponse,
   type ModelJsonValue,
   type ModelInstructions,
@@ -15,13 +17,17 @@ import {
   type ProviderDescriptor,
   type ProviderFailure,
   type ProviderInteraction,
+  type ProviderModelContext,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
 import {
-  createUtf8ModelInputAccounting,
-  type ProviderModelInputAccounting,
-} from "@agent-anything/model-interaction/input";
+  accountProviderTransport,
+  verifyProviderTransportAccounting,
+  type ProviderTransportAccounting,
+  type ProviderTransportLimit,
+} from "@agent-anything/model-interaction/transport";
+import type { ModelInputComposition } from "@agent-anything/model-interaction/input";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
 import {
   classifyProviderHttpFailure,
@@ -56,31 +62,71 @@ export interface OllamaProviderConfig {
   readonly nativeToolInteraction: {
     readonly supported: boolean;
   };
-  readonly inputLimit: {
+  readonly requestBodyTransportLimit: {
     readonly maximumBytes: number;
     readonly source: "provider_reported" | "host_configured";
+    readonly revision: string;
   };
 }
 
 export class OllamaProvider implements Provider {
   readonly descriptor: ProviderDescriptor;
-  readonly inputAccounting: ProviderModelInputAccounting;
+  readonly modelContext: ProviderModelContext;
+  readonly requestBodyTransportLimit: ProviderTransportLimit;
 
   constructor(
     config: OllamaProviderConfig,
     private readonly fetchImpl: FetchLike = globalThis.fetch as FetchLike,
   ) {
     this.config = snapshotConfig(config);
-    this.inputAccounting = createUtf8ModelInputAccounting({
+    this.requestBodyTransportLimit = Object.freeze({
+      ...this.config.requestBodyTransportLimit,
+    });
+    const target = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      maximumInputBytes: this.config.inputLimit.maximumBytes,
-      limitSource: this.config.inputLimit.source,
-      estimator: { id: "ollama.api.utf8-content", revision: "1" },
-      framing: { id: "ollama.api-request-framing", revision: "2" },
-      renderRequest: (instructions, messages, interaction) =>
-        encodeOllamaRequest(this.config, instructions, messages, interaction),
+      revision: `ollama.api.target.v1:${this.config.model}`,
     });
+    const capacity = Object.freeze({
+      supported: true as const,
+      unit: "tokens" as const,
+      maximum: this.config.runtime.contextWindowTokens,
+      semantics: "input_and_output" as const,
+      source: "host_configured" as const,
+      providerId: PROVIDER_ID,
+      model: this.config.model,
+      revision: `ollama.api.context-window.v1:${this.config.runtime.contextWindowTokens}`,
+    });
+    const requestedOutput = Object.freeze({
+      unit: "tokens" as const,
+      maximum: this.config.runtime.maximumOutputTokens,
+      source: "host_configured" as const,
+      revision: `ollama.api.num-predict.v1:${this.config.runtime.maximumOutputTokens}`,
+    });
+    const inputPreservation = Object.freeze({
+      providerId: PROVIDER_ID,
+      model: this.config.model,
+      adapterRevision: "ollama.api.adapter.v4",
+      runtimeVersion: null,
+      truncation: "unknown" as const,
+      contextShift: "unknown" as const,
+      evidence: Object.freeze([]),
+      revision: "ollama.api.input-preservation.unqualified.v1",
+    });
+    const modelContext: ProviderModelContext = Object.freeze({
+      target,
+      capacity,
+      requestedOutput,
+      inputPreservation,
+      measure(composition: ModelInputComposition, measuredAt: string) {
+        return createUnknownModelInputMeasurement({
+          compositionId: composition.id,
+          measuredAt,
+          reason: "unsupported",
+        });
+      },
+    });
+    this.modelContext = modelContext;
     this.descriptor = Object.freeze({
       id: PROVIDER_ID,
       name: "Ollama API",
@@ -97,7 +143,7 @@ export class OllamaProvider implements Provider {
           : Object.freeze({ supported: false as const }),
         structuredGeneration: Object.freeze({ supported: true as const }),
         streaming: Object.freeze({ supported: false as const }),
-        modelInput: this.inputAccounting.capability,
+        modelContext: Object.freeze({ capacity, requestedOutput, inputPreservation }),
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
         usageMetering: Object.freeze({
@@ -117,6 +163,16 @@ export class OllamaProvider implements Provider {
     request: ProviderRequest,
     context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    try {
+      request = snapshotProviderRequest(request);
+    } catch (error) {
+      return failed(
+        "invalid_request",
+        "provider_request_invalid",
+        "Provider request does not satisfy the model-interaction Contract.",
+        { metadata: { causeName: error instanceof Error ? error.name : null } },
+      );
+    }
     if (request.continuation !== null) {
       return failed(
         "invalid_request",
@@ -134,11 +190,12 @@ export class OllamaProvider implements Provider {
         "The configured Ollama endpoint and model profile does not declare native Tool interaction.",
       );
     }
+    const endpoint = this.endpointUrl(request.interaction);
     const encoded = prepareEncodedRequest(
-      this.inputAccounting,
+      this.config,
       request,
-      (instructions, messages, interaction) =>
-        encodeOllamaRequest(this.config, instructions, messages, interaction),
+      endpoint,
+      this.requestBodyTransportLimit,
     );
     if (encoded.kind === "failed") return encoded.result;
 
@@ -147,7 +204,21 @@ export class OllamaProvider implements Provider {
       const interruptedBeforeRequest = providerResultFromInterruption(attempt.cause);
       if (interruptedBeforeRequest !== null) return interruptedBeforeRequest;
 
-      const response = await this.fetchImpl(this.endpointUrl(request.interaction), {
+      try {
+        verifyProviderTransportAccounting({
+          accounting: encoded.accounting,
+          encodedBody: encoded.body,
+          binding: transportBinding(endpoint),
+        });
+      } catch (error) {
+        return failed(
+          "transport",
+          "provider_transport_binding_mismatch",
+          "Provider request transport binding changed after accounting.",
+          { metadata: { causeName: error instanceof Error ? error.name : null } },
+        );
+      }
+      const response = await this.fetchImpl(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: encoded.body,
@@ -211,7 +282,11 @@ export class OllamaProvider implements Provider {
         );
       }
       const interruptedAfterBody = providerResultFromInterruption(attempt.cause);
-      return interruptedAfterBody ?? mapOllamaResponse(body, request);
+      return interruptedAfterBody ?? mapOllamaResponse(
+        body,
+        request,
+        this.modelContext.inputPreservation.revision,
+      );
     } catch (error) {
       const interruption = providerResultFromInterruption(attempt.cause);
       if (interruption !== null) return interruption;
@@ -230,51 +305,46 @@ export class OllamaProvider implements Provider {
 }
 
 function prepareEncodedRequest(
-  accounting: ProviderModelInputAccounting,
+  config: Readonly<OllamaProviderConfig>,
   request: ProviderRequest,
-  encode: (
-    instructions: ModelInstructions,
-    messages: readonly ModelMessage[],
-    interaction: ProviderInteraction,
-  ) => string,
-): { readonly kind: "encoded"; readonly body: string } |
+  endpoint: string,
+  limit: ProviderTransportLimit,
+): { readonly kind: "encoded"; readonly body: string; readonly accounting: ProviderTransportAccounting } |
   { readonly kind: "failed"; readonly result: ProviderCallResult } {
-  try {
-    accounting.verify({
-      providerId: accounting.providerId,
-      model: accounting.model,
-      instructions: request.instructions,
-      messages: request.messages,
-      interaction: request.interaction,
-      composition: request.composition,
-    });
-  } catch (error) {
+  if (request.modelContext.assessment === null) {
     return Object.freeze({
       kind: "failed",
       result: failed(
         "invalid_request",
-        "provider_input_accounting_invalid",
-        "Provider request does not match its verified model-input composition.",
-        { metadata: { causeName: error instanceof Error ? error.name : null } },
+        "provider_context_assessment_missing",
+        "Provider request has no model-context assessment.",
       ),
     });
   }
   try {
-    const body = encode(
+    const body = encodeOllamaRequest(
+      config,
       request.instructions,
       request.messages,
       request.interaction,
     );
-    accounting.verifyEncoded({
-      providerId: accounting.providerId,
-      model: accounting.model,
-      instructions: request.instructions,
-      messages: request.messages,
-      interaction: request.interaction,
-      composition: request.composition,
-      encodedRequest: body,
+    const accounting = accountProviderTransport({
+      encodedBody: body,
+      binding: transportBinding(endpoint),
+      limit,
     });
-    return Object.freeze({ kind: "encoded", body });
+    if (accounting.disposition === "exceeds_limit") {
+      return Object.freeze({
+        kind: "failed",
+        result: failed(
+          "transport_limit",
+          "provider_transport_request_too_large",
+          "Encoded Provider request exceeds the configured request-body transport limit.",
+          { metadata: { accounting } },
+        ),
+      });
+    }
+    return Object.freeze({ kind: "encoded", body, accounting });
   } catch (error) {
     return Object.freeze({
       kind: "failed",
@@ -286,6 +356,15 @@ function prepareEncodedRequest(
       ),
     });
   }
+}
+
+function transportBinding(endpoint: string) {
+  return Object.freeze({
+    method: "POST" as const,
+    endpoint,
+    contentType: "application/json",
+    encoding: "utf-8" as const,
+  });
 }
 
 function encodeOllamaRequest(
@@ -408,15 +487,20 @@ function ollamaFormatField(
   return format === null ? {} : { format };
 }
 
-function mapOllamaResponse(value: unknown, request: ProviderRequest): ProviderCallResult {
+function mapOllamaResponse(
+  value: unknown,
+  request: ProviderRequest,
+  inputPreservationRevision: string,
+): ProviderCallResult {
   return request.interaction.kind === "native_tool_turn"
-    ? mapOllamaChatResponse(value, request)
-    : mapOllamaGenerateResponse(value, request.interaction);
+    ? mapOllamaChatResponse(value, request, inputPreservationRevision)
+    : mapOllamaGenerateResponse(value, request, inputPreservationRevision);
 }
 
 function mapOllamaChatResponse(
   value: unknown,
   request: ProviderRequest,
+  inputPreservationRevision: string,
 ): ProviderCallResult {
   try {
     if (!isRecord(value) || value.done !== true || !isRecord(value.message)) {
@@ -494,7 +578,7 @@ function mapOllamaChatResponse(
         },
       },
       continuation: null,
-      metadata: {},
+      metadata: providerContextMetadata(request, inputPreservationRevision),
     });
   } catch (error) {
     return failed(
@@ -570,8 +654,13 @@ function readOllamaUsage(value: Record<string, unknown>) {
 
 function mapOllamaGenerateResponse(
   value: unknown,
-  interaction: Exclude<ProviderInteraction, { readonly kind: "native_tool_turn" }>,
+  request: ProviderRequest,
+  inputPreservationRevision: string,
 ): ProviderCallResult {
+  const interaction = request.interaction;
+  if (interaction.kind === "native_tool_turn") {
+    return failed("response", "provider_response_malformed", "Provider interaction kind changed.");
+  }
   if (!isRecord(value) || typeof value.response !== "string") {
     return failed(
       "response",
@@ -602,7 +691,7 @@ function mapOllamaGenerateResponse(
       output: decoded.output,
       usage: readOllamaUsage(value),
       continuation: null,
-      metadata: {},
+      metadata: providerContextMetadata(request, inputPreservationRevision),
     });
   }
   return succeeded({
@@ -611,8 +700,19 @@ function mapOllamaGenerateResponse(
     output: value.response,
     usage: readOllamaUsage(value),
     continuation: null,
-    metadata: {},
+    metadata: providerContextMetadata(request, inputPreservationRevision),
   });
+}
+
+function providerContextMetadata(
+  request: ProviderRequest,
+  inputPreservationRevision: string,
+) {
+  return {
+    modelContextAssessmentId: request.modelContext.assessment?.id ?? null,
+    modelContextDisposition: request.modelContext.assessment?.disposition ?? null,
+    inputPreservationRevision,
+  };
 }
 
 function renderGenerationText(message: ModelMessage): string {
@@ -751,13 +851,15 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
     throw new TypeError("Ollama native Tool interaction configuration is invalid.");
   }
   if (
-    !isRecord(input.inputLimit) ||
-    !Number.isSafeInteger(input.inputLimit.maximumBytes) ||
-    input.inputLimit.maximumBytes <= 0 ||
-    (input.inputLimit.source !== "provider_reported" &&
-      input.inputLimit.source !== "host_configured")
+    !isRecord(input.requestBodyTransportLimit) ||
+    !Number.isSafeInteger(input.requestBodyTransportLimit.maximumBytes) ||
+    input.requestBodyTransportLimit.maximumBytes <= 0 ||
+    (input.requestBodyTransportLimit.source !== "provider_reported" &&
+      input.requestBodyTransportLimit.source !== "host_configured") ||
+    typeof input.requestBodyTransportLimit.revision !== "string" ||
+    input.requestBodyTransportLimit.revision.trim().length === 0
   ) {
-    throw new TypeError("Ollama input limit is invalid.");
+    throw new TypeError("Ollama request-body transport limit is invalid.");
   }
   return Object.freeze({
     baseUrl,
@@ -770,6 +872,6 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
     nativeToolInteraction: Object.freeze({
       supported: input.nativeToolInteraction.supported,
     }),
-    inputLimit: Object.freeze({ ...input.inputLimit }),
+    requestBodyTransportLimit: Object.freeze({ ...input.requestBodyTransportLimit }),
   });
 }

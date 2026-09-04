@@ -10,15 +10,18 @@ import type {
   RunCancellationReceipt,
   RunCancellationRequestInput,
   RunResult,
+  RunResumeReceipt,
+  RunResumeRequestInput,
   RunSteeringInput,
   RunSteeringSubmissionReceipt,
 } from "../run/index.js";
+import type { RunSuspension } from "../run/index.js";
 import type { PlanProjection } from "../plan/index.js";
 import {
-  createInitialRunStopReviewState,
-  projectRunStopReview,
-  type RunStopReviewProjection,
-} from "../stop/index.js";
+  createInitialRunLifecycleHookState,
+  projectRunLifecycleHooks,
+  type RunLifecycleHookProjection,
+} from "../hooks/index.js";
 import type { RetryEvent } from "../retry/index.js";
 import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
@@ -47,7 +50,7 @@ export interface RunRetryProjection {
 export interface ActiveDelegationProjection {
   readonly request: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly relation: Readonly<{ readonly id: string }>;
-  readonly relationKind: "delegation" | "replacement" | "continuation";
+  readonly relationKind: "delegation" | "continuation";
   readonly child: Readonly<{ readonly id: string }>;
   readonly childRunRevision: number;
   readonly childStatus: RunLifecycleStatus;
@@ -62,7 +65,8 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly lastRunItemSequence: number;
   readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
-  readonly stopReview: RunStopReviewProjection;
+  readonly suspension: RunSuspension | null;
+  readonly lifecycleHooks: RunLifecycleHookProjection;
   readonly retry: RunRetryProjection | null;
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -81,6 +85,7 @@ export interface RunHandle<TOutput = unknown> {
   getSnapshot(): RunOperationSnapshot<TOutput>;
   subscribe(listener: RunOperationListener<TOutput>): () => void;
   cancel(input: RunCancellationRequestInput): RunCancellationReceipt;
+  resume(input: RunResumeRequestInput): RunResumeReceipt;
   steer(input: RunSteeringInput): RunSteeringSubmissionReceipt;
   steerDescendant(input: DelegationSteeringRoute): DelegationSteeringReceipt;
   submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome;
@@ -94,7 +99,8 @@ export interface RunExecutionUpdate<TOutput> {
   readonly lastRunItemSequence: number;
   readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
-  readonly stopReview: RunStopReviewProjection;
+  readonly suspension: RunSuspension | null;
+  readonly lifecycleHooks: RunLifecycleHookProjection;
   readonly retry: RunRetryProjection | null;
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -113,6 +119,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private settlementApplied = false;
   private submitInteractionImpl: ((input: InteractionSubmissionInput) => InteractionSubmissionOutcome) | null = null;
   private steerImpl: ((input: RunSteeringInput) => RunSteeringSubmissionReceipt) | null = null;
+  private resumeImpl: ((input: RunResumeRequestInput) => RunResumeReceipt) | null = null;
   private steerDescendantImpl:
     ((input: DelegationSteeringRoute) => DelegationSteeringReceipt) | null = null;
 
@@ -132,7 +139,8 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       lastRunItemSequence: 0,
       instructionBinding: null,
       plan: null,
-      stopReview: projectRunStopReview(createInitialRunStopReviewState()),
+      suspension: null,
+      lifecycleHooks: projectRunLifecycleHooks(createInitialRunLifecycleHookState()),
       retry: null,
       verification: null,
       pendingInteractions: Object.freeze([]),
@@ -173,7 +181,8 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       lastRunItemSequence: update.lastRunItemSequence,
       instructionBinding: update.instructionBinding,
       plan: update.plan,
-      stopReview: update.stopReview,
+      suspension: update.suspension,
+      lifecycleHooks: update.lifecycleHooks,
       retry: update.retry,
       verification: update.verification,
       pendingInteractions: update.pendingInteractions,
@@ -232,6 +241,31 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       status: "run_settled" as const,
       request: receipt.request,
     });
+  }
+
+  bindResume(resume: (input: RunResumeRequestInput) => RunResumeReceipt): void {
+    if (this.resumeImpl !== null) throw new TypeError("Run resume is already bound.");
+    this.resumeImpl = resume;
+  }
+
+  resume(input: RunResumeRequestInput): RunResumeReceipt {
+    if (this.snapshot.result !== null) {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "run_settled" as const,
+        requestId: typeof input?.id === "string" ? input.id : "",
+        currentRunRevision: this.snapshot.runRevision,
+      });
+    }
+    if (this.resumeImpl === null) {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "run_not_suspended" as const,
+        requestId: typeof input?.id === "string" ? input.id : "",
+        currentRunRevision: this.snapshot.runRevision,
+      });
+    }
+    return this.resumeImpl(input);
   }
 
   bindSteering(
@@ -313,7 +347,8 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         lastRunItemSequence: result.items.at(-1)?.ref.sequence ?? 0,
         instructionBinding: this.snapshot.instructionBinding,
         plan: this.snapshot.plan,
-        stopReview: this.snapshot.stopReview,
+        suspension: null,
+        lifecycleHooks: this.snapshot.lifecycleHooks,
         retry: this.snapshot.retry,
         verification: this.snapshot.verification,
         pendingInteractions: Object.freeze([]),
@@ -343,7 +378,7 @@ function rejectedSteering(
 
 function terminalStatus<TOutput>(
   result: RunResult<TOutput>,
-): Extract<RunLifecycleStatus, "succeeded" | "blocked" | "failed" | "cancelled"> {
+): Extract<RunLifecycleStatus, "succeeded" | "failed" | "cancelled"> {
   return result.status;
 }
 
@@ -363,14 +398,33 @@ function freezeSnapshot<TOutput>(
 ): RunOperationSnapshot<TOutput> {
   return Object.freeze({
     ...snapshot,
-    stopReview: Object.freeze({
-      ...snapshot.stopReview,
-      latestReview: snapshot.stopReview.latestReview === null
-        ? null
-        : Object.freeze({ ...snapshot.stopReview.latestReview }),
-      limitations: Object.freeze(snapshot.stopReview.limitations.map((limitation) =>
-        Object.freeze({ ...limitation })
+    suspension: snapshot.suspension === null
+      ? null
+      : Object.freeze({
+          ...snapshot.suspension,
+          ref: Object.freeze({
+            ...snapshot.suspension.ref,
+            run: Object.freeze({ ...snapshot.suspension.ref.run }),
+          }),
+          source: Object.freeze({
+            ...snapshot.suspension.source,
+            run: snapshot.suspension.source.run === null
+              ? null
+              : Object.freeze({ ...snapshot.suspension.source.run }),
+          }),
+        }),
+    lifecycleHooks: Object.freeze({
+      ...snapshot.lifecycleHooks,
+      latestInvocations: Object.freeze(snapshot.lifecycleHooks.latestInvocations.map(
+        (invocation) => Object.freeze({ ...invocation }),
       )),
+      latestFeedback: snapshot.lifecycleHooks.latestFeedback === null
+        ? null
+        : Object.freeze({
+            ...snapshot.lifecycleHooks.latestFeedback,
+            codes: Object.freeze([...snapshot.lifecycleHooks.latestFeedback.codes]),
+          }),
+      limitations: Object.freeze([...snapshot.lifecycleHooks.limitations]),
     }),
     retry: snapshot.retry === null
       ? null

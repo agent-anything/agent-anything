@@ -126,7 +126,7 @@ describe("Helarc unified Run projection", () => {
 
   it("gives non-success host terminals precedence over product state", () => {
     const activeProduct = createHelarcProductRunProjection("run-1");
-    for (const status of ["blocked", "failed", "cancelled"] as const) {
+    for (const status of ["failed", "cancelled"] as const) {
       expect(createHelarcRunProjection({
         host: hostProjection({ status }),
         product: activeProduct,
@@ -135,7 +135,7 @@ describe("Helarc unified Run projection", () => {
   });
 
   it("lets product rejection or failure refine host completion", () => {
-    for (const status of ["rejected", "blocked", "failed"] as const) {
+    for (const status of ["rejected", "failed"] as const) {
       const product = applyProduct(createHelarcProductRunProjection("run-1"), {
         kind: "result_settled",
         runId: "run-1",
@@ -360,13 +360,22 @@ function activity(sequence: number): HelarcActivityItem {
 }
 
 function productResult(status: HelarcProductResult["status"]): HelarcProductResult {
+  const runtimeStatus = status === "cancelled"
+    ? "cancelled" as const
+    : status === "failed"
+      ? "failed" as const
+      : "succeeded" as const;
   return {
     status,
     qualification: qualification(),
     runResult: {
       runId: "harness-run-1",
-      status: status === "cancelled" ? "cancelled" : "succeeded",
-      code: status === "cancelled" ? "runtime_cancelled" : null,
+      status: runtimeStatus,
+      code: runtimeStatus === "cancelled"
+        ? "runtime_cancelled"
+        : runtimeStatus === "failed"
+          ? "provider_request_failed"
+          : "completion_accepted",
       startedAt: "2026-07-17T00:00:00.000Z",
       completedAt: "2026-07-17T00:00:01.000Z",
     },
@@ -374,7 +383,7 @@ function productResult(status: HelarcProductResult["status"]): HelarcProductResu
       taskId: "task-1",
       workspace: { primaryId: "workspace-1", additionalIds: [] },
       agentSummary: "Done",
-      runtimeStatus: status === "cancelled" ? "cancelled" : "succeeded",
+      runtimeStatus,
       enforcement: { selected: "disabled", status: "not_exercised", code: null },
       safeErrors: [],
     },

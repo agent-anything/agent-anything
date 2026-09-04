@@ -170,7 +170,7 @@ describe("Helarc workbench shell", () => {
               },
               depth: 1,
               status: "cancelling",
-              resultCode: null,
+              terminal: null,
               startedAt: "2026-07-05T01:00:01.000Z",
               completedAt: null,
               resourcesSettled: false,
@@ -192,7 +192,15 @@ describe("Helarc workbench shell", () => {
               },
               depth: 2,
               status: "failed",
-              resultCode: "controller_failed",
+              terminal: {
+                causeId: "cause-1",
+                causeRevision: "1",
+                causeKind: "failure",
+                code: "controller_failed",
+                sourceOwner: "controller",
+                sourceKind: "controller_turn",
+                sourceId: "controller-turn-2",
+              },
               startedAt: "2026-07-05T01:00:01.000Z",
               completedAt: "2026-07-05T01:00:02.000Z",
               resourcesSettled: true,
@@ -375,7 +383,6 @@ describe("Helarc workbench shell", () => {
   it.each([
     ["completed", "Run completed", "succeeded"],
     ["failed", "Run failed", "failed"],
-    ["blocked", "Run blocked", "blocked"],
     ["cancelled", "Run cancelled", "cancelled"],
   ] as const)("renders terminal %s output", (status, title, runtimeStatus) => {
     const html = renderToStaticMarkup(
@@ -399,29 +406,29 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Event summary");
   });
 
-  it("explains exhausted required Stop Review feedback", () => {
+  it("shows lifecycle Hook activity on a terminal Run", () => {
     const html = renderToStaticMarkup(
       <RunTerminalPanel
-        title="Run blocked"
+        title="Run failed"
         run={runProjection({
-          status: "blocked",
-          runtimeStatus: "blocked",
-          terminalCode: "runtime_stop_feedback_exhausted",
-          stopReview: {
-            reviewSequence: 3,
-            requiredFeedbackRounds: 2,
-            advisoryFeedbackRounds: 0,
+          status: "failed",
+          runtimeStatus: "failed",
+          lifecycleHooks: {
+            stopEventSequence: 3,
+            stopFailureEventSequence: 0,
+            feedbackEpoch: 1,
+            consecutiveBlockingRounds: 2,
+            latestEventId: "stop-event-3",
+            latestInvocations: [],
+            latestFeedback: null,
             limitations: [],
           },
         })}
       />,
     );
 
-    expect(html).toContain("Stop review");
-    expect(html).toContain("review 3, 2 required and 0 advisory feedback rounds");
-    expect(html).toContain(
-      "The Run stopped after required completion feedback was exhausted.",
-    );
+    expect(html).toContain("Lifecycle hooks");
+    expect(html).toContain("3 stop events, 2 consecutive blocking rounds");
   });
 });
 
@@ -502,12 +509,12 @@ function unconfiguredSnapshot(): HelarcMainSnapshot {
 }
 
 function runProjection(input: {
-  status?: "running" | "completed" | "blocked" | "failed" | "cancelled";
-  runtimeStatus?: "succeeded" | "blocked" | "failed" | "cancelled";
+  status?: "running" | "completed" | "failed" | "cancelled";
+  runtimeStatus?: "succeeded" | "failed" | "cancelled";
   activity?: ReturnType<typeof event>[];
   runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
   activeDelegations?: NonNullable<HelarcMainSnapshot["run"]>["host"]["activeDelegations"];
-  stopReview?: NonNullable<HelarcMainSnapshot["run"]>["host"]["stopReview"];
+  lifecycleHooks?: NonNullable<HelarcMainSnapshot["run"]>["host"]["lifecycleHooks"];
   terminalCode?: NonNullable<
     NonNullable<HelarcMainSnapshot["run"]>["host"]["terminal"]
   >["code"];
@@ -517,12 +524,10 @@ function runProjection(input: {
   const activity = input.activity ?? [];
   const terminal = status !== "running";
   const code = input.terminalCode ?? (status === "completed"
-    ? null
-    : status === "blocked"
-      ? "runtime_no_safe_path" as const
-      : status === "cancelled"
-        ? "runtime_cancelled" as const
-         : "runtime_limit_exceeded" as const);
+    ? "completion_accepted" as const
+    : status === "cancelled"
+      ? "runtime_cancelled" as const
+      : "runtime_limit_exceeded" as const);
   const qualification = modelQualificationSnapshot();
   return {
     productRunId: "product-run-1",
@@ -536,10 +541,14 @@ function runProjection(input: {
       runTree: input.runTree ?? rootRunTree(),
       activeDelegations: input.activeDelegations ?? [],
       continuationTargets: [],
-      stopReview: input.stopReview ?? {
-        reviewSequence: 0,
-        requiredFeedbackRounds: 0,
-        advisoryFeedbackRounds: 0,
+      lifecycleHooks: input.lifecycleHooks ?? {
+        stopEventSequence: 0,
+        stopFailureEventSequence: 0,
+        feedbackEpoch: 0,
+        consecutiveBlockingRounds: 0,
+        latestEventId: null,
+        latestInvocations: [],
+        latestFeedback: null,
         limitations: [],
       },
       verification: null,

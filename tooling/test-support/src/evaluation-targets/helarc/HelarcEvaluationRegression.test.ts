@@ -76,6 +76,10 @@ import {
   HELARC_CHILD_DELEGATION_PROGRESSION_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcChildDelegationProgressionBaseline.js";
 import {
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcRunLifecycleSettlementBaseline.js";
+import {
   runDelegationTransferDeterministicEvaluation,
 } from "../../delegation-transfer-evaluation/DelegationTransferEvaluation.js";
 import {
@@ -86,7 +90,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the Child delegation-progression successor", async () => {
+  it("preserves accepted history and proves the Run lifecycle-settlement successor", async () => {
     const baselines = [
       HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
       HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -108,15 +112,16 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
       HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
       HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
+      HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
     ];
     const historyBefore = baselines.map((baseline) => JSON.stringify(baseline));
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
+      HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
+      HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
       candidate,
     );
 
@@ -124,7 +129,8 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       status: "incomparable",
       differences: ["target_snapshot_ref", "target_manifest", "corpus_revision"],
     });
-    expect(acceptedComparison.status).toBe("equivalent");
+    expect(acceptedComparison.status, JSON.stringify(acceptedComparison, null, 2))
+      .toBe("equivalent");
     expect(acceptedComparison.pairedComparisons).toHaveLength(4);
     expect(acceptedComparison.pairedComparisons.every((item) =>
       item.pairs.length === 20 && item.exclusions.length === 0)).toBe(true);
@@ -135,15 +141,15 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
     expect(baselines.map((baseline) => JSON.stringify(baseline))).toEqual(historyBefore);
     expect(candidate.report.ref)
-      .toEqual(HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.ref)
-      .toEqual(HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
     expect(HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef);
@@ -181,6 +187,8 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toEqual(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.reportRef);
     expect(HELARC_CHILD_DELEGATION_PROGRESSION_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.reportRef);
+    expect(HELARC_RUN_LIFECYCLE_SETTLEMENT_BASELINE_ACCEPTANCE.predecessorReportRef)
+      .toEqual(HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.reportRef);
     expect(Object.isFrozen(HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE)).toBe(true);
@@ -194,6 +202,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(Object.isFrozen(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE)).toBe(true);
+    expect(Object.isFrozen(HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE)).toBe(true);
   }, 120_000);
 
   it("reports a safety regression even when paired latency improves", () => {
@@ -234,7 +243,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
         toolCallCount: 2,
         humanInteractionEvents: 0,
         modelTurnCount: 8,
-        latencyMs: 279,
+        latencyMs: 296,
         terminalOutcome: "succeeded",
       },
       invariants: {
@@ -252,7 +261,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toBe("delegation-transfer-deterministic-evaluation-v1");
     expect(accepted.metrics.latencyMs).toBe(283);
     expect(accepted.metrics.modelTurnCount).toBe(5);
-    expect(candidate.metrics.latencyMs).toBe(279);
+    expect(candidate.metrics.latencyMs).toBe(296);
     expect(candidate.digest).not.toBe(accepted.reportDigest);
     expect(HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef);

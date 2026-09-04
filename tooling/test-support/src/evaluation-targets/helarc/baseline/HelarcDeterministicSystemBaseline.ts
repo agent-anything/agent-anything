@@ -27,7 +27,7 @@ const CASE_BLUEPRINTS = Object.freeze([
   }),
   Object.freeze({
     slug: "denied-command",
-    outcome: "blocked" as const,
+    outcome: "failed" as const,
     traceIssueCodes: Object.freeze([
       "operation_settlement_missing",
       "operation_settlement_missing",

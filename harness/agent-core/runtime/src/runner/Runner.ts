@@ -7,8 +7,9 @@ import type {
   RuntimeEventPublisher,
 } from "@agent-anything/observability";
 import {
-  createFailedRunResult,
+  createRunResult,
   createRunCancellationController,
+  type RunSettlementCauseRecord,
   type RunResult,
 } from "../run/index.js";
 import { createRunFailureCause } from "../run/RunFailure.js";
@@ -29,7 +30,7 @@ import type {
   RunConfig,
   ValidatedRunConfig,
 } from "./RunConfig.js";
-import { RunTreeExecution } from "./RunTreeExecution.js";
+import { projectRunTreeTerminal, RunTreeExecution } from "./RunTreeExecution.js";
 import type {
   CreateRunnerIdentityInput,
   ResolvedRunnerDependencies,
@@ -63,7 +64,7 @@ import {
   snapshotRootRunConfig,
   snapshotRunInput,
 } from "./RunnerValidation.js";
-import { snapshotTaskFulfillmentEvaluatorRef } from "../completion/index.js";
+import { createEmptyRunLifecycleHookComposition } from "../hooks/index.js";
 
 export class Runner {
   private readonly dependencies: ResolvedRunnerDependencies;
@@ -78,24 +79,16 @@ export class Runner {
         typeof dependencies.verification.completionGate?.evaluate !== "function") {
       throw new TypeError("Runner requires explicit Verification execution and Completion Gate dependencies.");
     }
-    if (!dependencies.completion ||
-        typeof dependencies.completion.taskFulfillment?.evaluate !== "function" ||
-        !Number.isSafeInteger(dependencies.completion.maximumDurationMs) ||
-        dependencies.completion.maximumDurationMs < 1) {
-      throw new TypeError("Runner requires an explicit bounded Task Fulfillment evaluator.");
-    }
-
     const now = dependencies.now ?? (() => new Date().toISOString());
     const contextProjection = snapshotRunnerContextProjection(
       dependencies.contextProjection,
     );
     const operations = snapshotRunnerOperationComposition(dependencies.operations);
-    const completion = snapshotRunnerCompletionComposition(dependencies.completion);
     this.dependencies = Object.freeze({
       ...dependencies,
       contextProjection,
       operations,
-      completion,
+      lifecycleHooks: dependencies.lifecycleHooks ?? createEmptyRunLifecycleHookComposition(),
       now,
       createRunId: dependencies.createRunId ?? createDefaultRunIdentity,
       createId: dependencies.createId ?? createDefaultIdentity,
@@ -439,7 +432,12 @@ export class Runner {
       tree.getSnapshot(),
       (result) => {
         try {
-          tree.settleRun(runId, result.status, result.code, result.completedAt);
+          tree.settleRun(
+            runId,
+            result.status,
+            projectRunTreeTerminal(result.cause),
+            result.completedAt,
+          );
           handle.publishRunTree(tree.getSnapshot());
         } finally {
           this.activeRunIds.delete(runId);
@@ -489,6 +487,7 @@ export class Runner {
       execution.submitInteraction(submission)
     );
     handle.bindSteering((steering) => execution.submitSteering(steering));
+    handle.bindResume((resume) => execution.submitResume(resume));
     handle.bindDescendantSteering((route) =>
       execution.submitDescendantSteering(route)
     );
@@ -501,20 +500,6 @@ export class Runner {
     handle.start(() => execution.run());
     return handle;
   }
-}
-
-function snapshotRunnerCompletionComposition(
-  input: RunnerDependencies["completion"],
-): RunnerDependencies["completion"] {
-  const evaluator = input.taskFulfillment;
-  const ref = snapshotTaskFulfillmentEvaluatorRef(evaluator.ref);
-  return Object.freeze({
-    taskFulfillment: Object.freeze({
-      ref,
-      evaluate: evaluator.evaluate.bind(evaluator),
-    }),
-    maximumDurationMs: input.maximumDurationMs,
-  });
 }
 
 function snapshotRunnerContextProjection(
@@ -680,22 +665,43 @@ function createEmergencyRunResult<TOutput>(
     retryable: false,
     metadata: Object.freeze({}),
   }));
-  return createFailedRunResult<TOutput>(
-    {
-      runId,
-      taskId,
-      startingAgent: unknownAgent,
-      finalActiveAgent: unknownAgent,
-      startingInstructionBinding: unknownInstructionBinding,
-      finalInstructionBinding: unknownInstructionBinding,
-      startedAt: completedAt,
-      completedAt,
-      items: Object.freeze([]),
-      metadata: Object.freeze({ emergencySettlement: true }),
-    },
-    "runtime_execution_failed",
+  const cause: RunSettlementCauseRecord = Object.freeze({
+    ref: Object.freeze({
+      run: Object.freeze({ id: runId }),
+      id: `${runId}:run-settlement-cause:emergency`,
+      revision: "1",
+    }),
+    kind: "failure" as const,
     failure,
-  );
+    source: Object.freeze({
+      owner: "agent-runtime",
+      kind: "emergency_settlement",
+      id: `${runId}:emergency-settlement`,
+      revision: null,
+      run: Object.freeze({ id: runId }),
+    }),
+    underlying: Object.freeze([]),
+    omittedUnderlyingCount: 0,
+    recordedAt: completedAt,
+  });
+  return createRunResult<TOutput>({
+    runId,
+    taskId,
+    startingAgent: unknownAgent,
+    finalActiveAgent: unknownAgent,
+    startingInstructionBinding: unknownInstructionBinding,
+    finalInstructionBinding: unknownInstructionBinding,
+    startedAt: completedAt,
+    settlement: Object.freeze({
+      status: "failed" as const,
+      completedAt,
+      cause: cause.ref,
+    }),
+    cause,
+    settlementCauses: Object.freeze([cause]),
+    items: Object.freeze([]),
+    metadata: Object.freeze({ emergencySettlement: true }),
+  });
 }
 
 function createDelegatedRunInput(input: {

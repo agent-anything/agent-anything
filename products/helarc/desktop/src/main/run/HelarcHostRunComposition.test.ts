@@ -20,7 +20,7 @@ import {
   type ModelJsonValue,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
+import { createFakeProviderContext } from "@agent-anything/test-support";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -63,6 +63,22 @@ async function executeTestHostRun(input: RunHelarcTestInput) {
   const prepared = await prepareTestHostRun(input);
   const composition = prepared.start();
   return composition.result;
+}
+
+async function executeSuspendedThenCancelledTestHostRun(input: RunHelarcTestInput) {
+  const prepared = await prepareTestHostRun(input);
+  const composition = prepared.start();
+  await waitUntil(() => composition.activeRun.getStatus().status === "suspended");
+  const suspended = composition.activeRun.getStatus();
+  const cancellation = composition.activeRun.cancel({
+    origin: "user",
+    reasonCode: "user_requested",
+  });
+  return Object.freeze({
+    suspended,
+    cancellation,
+    result: await composition.result,
+  });
 }
 
 async function prepareTestHostRun(input: RunHelarcTestInput) {
@@ -113,7 +129,7 @@ function createTestProviderProfile(
       : "openai-compatible",
     displayName: "Test Provider",
     baseUrl: "https://provider.local/v1",
-    model: provider.inputAccounting.model,
+    model: provider.modelContext.target.model,
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
     qualificationPolicy: "allow_experimental",
@@ -242,12 +258,15 @@ describe("Helarc Host Run composition", () => {
       "run.item.appended",
       "controller.tool_exposure.resolved",
       "controller.finished",
-      "run.item.appended",
       "verification.gate.evaluated",
       "context.transition.committed",
       "run.item.appended",
       "run.item.appended",
-      "run.stop.reviewed",
+      "run.lifecycle.emitted",
+      "run.item.appended",
+      "run.lifecycle.hook.completed",
+      "run.item.appended",
+      "run.item.appended",
       "run.item.appended",
       "run.completed",
     ]);
@@ -256,28 +275,39 @@ describe("Helarc Host Run composition", () => {
         item.metadata.itemKind === "model_call_settlement",
     );
     expect(modelCallSettlement).toBeDefined();
+    const stopLifecycle = result.activity.find(
+      (item) => item.kind === "run.lifecycle.emitted" &&
+        item.metadata.eventName === "Stop",
+    );
+    expect(stopLifecycle).toBeDefined();
     expect(modelCallSettlement!.sequence).toBeLessThan(
-      result.activity.find((item) => item.kind === "run.stop.reviewed")!.sequence,
+      stopLifecycle!.sequence,
     );
-    const fulfillmentAssessment = result.activity.find(
-      (item) => item.kind === "run.item.appended" &&
-        item.metadata.itemKind === "task_fulfillment_assessment",
+    const taskFulfillmentHook = result.activity.find(
+      (item) => item.kind === "run.lifecycle.hook.completed" &&
+        item.metadata.hookId === "helarc.task-fulfillment.stop",
     );
-    expect(fulfillmentAssessment).toBeDefined();
-    expect(fulfillmentAssessment!.sequence).toBeLessThan(
+    expect(taskFulfillmentHook).toBeDefined();
+    expect(taskFulfillmentHook!.sequence).toBeGreaterThan(
       result.activity.find((item) => item.kind === "verification.gate.evaluated")!.sequence,
     );
-    expect(result.activity.find((item) => item.kind === "run.stop.reviewed"))
+    expect(stopLifecycle)
       .toMatchObject({
-        title: "Run stop review allow_stop",
-        detail: "allow_stop",
+        title: "Lifecycle Stop emitted",
         metadata: {
-          reviewSequence: 1,
-          decision: "allow_stop",
-          checkCount: 2,
-          limitationCount: 0,
+          eventName: "Stop",
+          sequence: 1,
         },
       });
+    expect(taskFulfillmentHook).toMatchObject({
+      title: "Lifecycle Hook allow",
+      metadata: {
+        hookId: "helarc.task-fulfillment.stop",
+        status: "allow",
+        code: null,
+        stale: false,
+      },
+    });
     const contextProjection = result.activity.find(
       (item) => item.kind === "context.projection.completed",
     );
@@ -525,12 +555,13 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.status).toBe("failed");
     expect(result.runResult).toMatchObject({
       status: "failed",
-      code: "controller_failed",
-      failure: {
-        kind: "provider",
-        failure: { code: "provider_request_failed" },
+      cause: {
+        kind: "failure",
+        failure: {
+          kind: "provider",
+          failure: { code: "provider_request_failed" },
+        },
       },
-      relatedFailures: [],
     });
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "run_action"
@@ -554,15 +585,18 @@ describe("Helarc Host Run composition", () => {
         reason: "Permission was denied.",
       },
     ]);
-    const result = await executeTestHostRun({
+    const execution = await executeSuspendedThenCancelledTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       enableShell: true,
       permissionPreset: "approve_for_me",
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
+    const { result } = execution;
 
-    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("blocked");
+    expect(execution.suspended.status).toBe("suspended");
+    expect(execution.cancellation.status).toBe("accepted");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("cancelled");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -588,15 +622,18 @@ describe("Helarc Host Run composition", () => {
       },
     ]);
 
-    const result = await executeTestHostRun({
+    const execution = await executeSuspendedThenCancelledTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       enableShell: true,
       permissionPreset: "approve_for_me",
       automaticApprovalReviewer: unavailableAutomaticReviewer(),
     });
+    const { result } = execution;
 
-    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("blocked");
+    expect(execution.suspended.status).toBe("suspended");
+    expect(execution.cancellation.status).toBe("accepted");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("cancelled");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -755,15 +792,6 @@ describe("Helarc Host Run composition", () => {
           { step: "Finish task", status: "pending" },
         ],
       },
-      {
-        id: `${result.harnessRunId}:plan:1`,
-        version: 1,
-        status: "active",
-        steps: [
-          { step: "Inspect workspace", status: "in_progress" },
-          { step: "Finish task", status: "pending" },
-        ],
-      },
     ]);
   });
 
@@ -889,14 +917,16 @@ describe("Helarc Host Run composition", () => {
       { kind: "stop", reason: "The requested file change was declined." },
     ]);
 
-    const result = await executeTestHostRun({
+    const execution = await executeSuspendedThenCancelledTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       permissionPreset: "approve_for_me",
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
+    const { result } = execution;
 
-    expect(result.product.status).toBe("blocked");
+    expect(execution.suspended.status).toBe("suspended");
+    expect(result.product.status).toBe("cancelled");
     expect(result.product.output.enforcement.status).toBe("denied");
     await expect(access(targetPath)).rejects.toThrow();
   });
@@ -918,12 +948,15 @@ describe("Helarc Host Run composition", () => {
       { kind: "stop", reason: "The exact edit was ambiguous." },
     ]);
 
-    const result = await executeTestHostRun({
+    const execution = await executeSuspendedThenCancelledTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       permissionPreset: "full_access",
     });
+    const { result } = execution;
 
+    expect(execution.suspended.status).toBe("suspended");
+    expect(result.product.status).toBe("cancelled");
     expect(result.product.output.safeErrors).toContainEqual(expect.objectContaining({
       code: "file_edit_ambiguous",
     }));
@@ -947,7 +980,7 @@ describe("Helarc Host Run composition", () => {
       { kind: "stop", reason: "The prepared baseline became stale." },
     ]);
 
-    const result = await executeTestHostRun({
+    const execution = await executeSuspendedThenCancelledTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       permissionPreset: "approve_for_me",
@@ -955,7 +988,10 @@ describe("Helarc Host Run composition", () => {
         await writeFile(targetPath, "changed externally\n");
       }),
     });
+    const { result } = execution;
 
+    expect(execution.suspended.status).toBe("suspended");
+    expect(result.product.status).toBe("cancelled");
     expect(result.product.output.safeErrors).toContainEqual(expect.objectContaining({
       code: "file_target_changed",
     }));
@@ -1043,7 +1079,12 @@ function unavailableAutomaticReviewer() {
 }
 
 class ScriptedProvider implements Provider {
-  readonly inputAccounting = createHostRunTestInputAccounting("scripted-helarc-provider");
+  private readonly context = createFakeProviderContext(
+    "scripted-helarc-provider",
+    "host-run-test-model",
+  );
+  readonly modelContext = this.context.modelContext;
+  readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
     id: "scripted-helarc-provider",
     name: "Scripted Helarc Provider",
@@ -1058,7 +1099,7 @@ class ScriptedProvider implements Provider {
       },
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
-      modelInput: this.inputAccounting.capability,
+      modelContext: providerModelContextCapability(this.modelContext),
       continuation: { supported: false as const },
       compaction: { supported: false as const },
       usageMetering: {
@@ -1117,7 +1158,12 @@ class ScriptedProvider implements Provider {
 }
 
 class RetryThenCompleteProvider implements Provider {
-  readonly inputAccounting = createHostRunTestInputAccounting("retry-then-complete-provider");
+  private readonly context = createFakeProviderContext(
+    "retry-then-complete-provider",
+    "host-run-test-model",
+  );
+  readonly modelContext = this.context.modelContext;
+  readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
     id: "retry-then-complete-provider",
     name: "Retry Then Complete Provider",
@@ -1132,7 +1178,7 @@ class RetryThenCompleteProvider implements Provider {
       },
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
-      modelInput: this.inputAccounting.capability,
+      modelContext: providerModelContextCapability(this.modelContext),
       continuation: { supported: false as const },
       compaction: { supported: false as const },
       usageMetering: {
@@ -1301,17 +1347,12 @@ function providerTestFailure(code: string): ProviderCallResult {
   };
 }
 
-function createHostRunTestInputAccounting(providerId: string) {
-  return createUtf8ModelInputAccounting({
-    providerId,
-    model: "host-run-test-model",
-    maximumInputBytes: 4 * 1_024 * 1_024,
-    limitSource: "host_configured",
-    estimator: { id: `${providerId}.utf8-content`, revision: "1" },
-    framing: { id: `${providerId}.framing`, revision: "1" },
-    renderRequest: (instructions, messages, interaction) =>
-      JSON.stringify({ instructions, messages, interaction }),
-  });
+function providerModelContextCapability(modelContext: Provider["modelContext"]) {
+  return {
+    capacity: modelContext.capacity,
+    requestedOutput: modelContext.requestedOutput,
+    inputPreservation: modelContext.inputPreservation,
+  };
 }
 
 function createTask(workspaceRoot: string) {

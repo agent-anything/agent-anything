@@ -14,8 +14,8 @@ import {
   type ControllerDecision,
   type ControllerInput,
 } from "../controller/index.js";
+import { projectRunLifecycleHooks } from "../hooks/index.js";
 import { projectPlan } from "../plan/index.js";
-import { projectRunStopReview } from "../stop/index.js";
 import {
   projectPendingRunSubject,
   projectPermissionContext,
@@ -107,7 +107,7 @@ export function prepareControllerOperation<TOutput>(
     }),
     plan: input.state.plan === null ? null : projectPlan(input.state.plan),
     planLimits: input.config.limits.plan,
-    stopReview: projectRunStopReview(input.state.stopReview),
+    lifecycleHooks: projectRunLifecycleHooks(input.state.lifecycleHooks),
     verification: Object.freeze({
       snapshot: Object.freeze({ ...input.state.verification.snapshot }),
       gate: input.state.verification.gate === null

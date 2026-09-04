@@ -68,7 +68,6 @@ export type HelarcPersistedRunStatus =
   | "inactive"
   | "completed"
   | "rejected"
-  | "blocked"
   | "failed"
   | "cancelled";
 
@@ -477,7 +476,7 @@ export function deriveHelarcPersistedRunStatus(run: HelarcPersistedRun): HelarcP
   if (terminal === null) return "inactive";
   if (terminal.host.status !== "completed") return terminal.host.status;
   const productStatus = terminal.product?.status ?? null;
-  return productStatus === "rejected" || productStatus === "blocked" || productStatus === "failed"
+  return productStatus === "rejected" || productStatus === "failed"
     ? productStatus
     : "completed";
 }
@@ -1120,7 +1119,6 @@ function isHostRunProjection(value: unknown): value is HostRunProjection {
     (projection.sequence ?? -1) >= 0 &&
     projection.terminal === null &&
     projection.status !== "completed" &&
-    projection.status !== "blocked" &&
     projection.status !== "failed" &&
     projection.status !== "cancelled";
 }
@@ -1145,7 +1143,7 @@ function isCompatibleProductTerminal(
   if (product === null) return true;
   if (
     product.status !== "completed" && product.status !== "rejected" &&
-    product.status !== "blocked" && product.status !== "failed" &&
+    product.status !== "failed" &&
     product.status !== "cancelled"
   ) {
     return false;
@@ -1193,32 +1191,26 @@ function isModelQualificationSafeProjection(value: unknown): boolean {
 function isHostTerminalProjection(value: HostTerminalRunProjection): boolean {
   if (
     !isHostTerminalStatus(value.status) ||
-    (value.code !== null && !hasText(value.code)) ||
+    !hasText(value.code) ||
     !isNullableNonNegativeInteger(value.durationMs) ||
     !isNonNegativeInteger(value.itemCount) ||
     !isNonNegativeInteger(value.evidenceCount) ||
     !isNonNegativeInteger(value.artifactCount) ||
     !isHostTerminalFailure(value.failure) ||
-    !Array.isArray(value.relatedFailures) ||
-    !value.relatedFailures.every((failure) =>
-      failure !== null && isHostTerminalFailure(failure)
-    ) ||
+    value.source === null || typeof value.source !== "object" ||
+    !hasText(value.source.owner) || !hasText(value.source.kind) || !hasText(value.source.id) ||
+    !Array.isArray(value.causalLinks) ||
+    !isNonNegativeInteger(value.omittedCausalLinkCount) ||
     !isCancellationSummary(value.cancellation)
   ) {
     return false;
   }
   if (value.status === "completed") {
-    return value.code === null && value.failure === null &&
-      value.relatedFailures.length === 0 && value.cancellation === null;
-  }
-  if (value.status === "blocked") {
-    return value.code === "runtime_no_safe_path" && value.failure === null &&
-      value.relatedFailures.length === 0 &&
+    return value.code === "completion_accepted" && value.failure === null &&
       value.cancellation === null;
   }
   if (value.status === "cancelled") {
     return value.code === "runtime_cancelled" && value.failure === null &&
-      value.relatedFailures.length === 0 &&
       value.cancellation !== null;
   }
   return value.code !== null && value.failure !== null;

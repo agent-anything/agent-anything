@@ -17,7 +17,7 @@ import {
   snapshotProviderResponse,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
+import { createFakeProviderContext } from "@agent-anything/test-support";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -462,7 +462,11 @@ describe("HelarcMainController", () => {
         product: { result: { output: { runtimeStatus: "succeeded" } } },
         host: {
           status: "completed",
-          terminal: { status: "completed", code: null, cancellation: null },
+          terminal: {
+            status: "completed",
+            code: "completion_accepted",
+            cancellation: null,
+          },
         },
       },
     });
@@ -572,7 +576,7 @@ describe("HelarcMainController", () => {
     }
     expect(snapshot.run?.product.result?.runResult).toMatchObject({
       status: "failed",
-      code: "controller_failed",
+      code: "provider_request_failed",
     });
     expect(snapshot.run?.product.result).not.toHaveProperty("items");
   });
@@ -825,10 +829,9 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForPendingApproval(controller);
-    const blocked = waitForSnapshot(
+    const suspended = waitForSnapshot(
       controller,
-      (snapshot) => snapshot.status === "blocked"
-        && snapshot.threadSummaries[0]?.latestRun?.status === "blocked",
+      (snapshot) => snapshot.status === "suspended",
     );
     const result = await controller.startRun({
       taskText: "Run command",
@@ -928,33 +931,25 @@ describe("HelarcMainController", () => {
       },
     });
 
-    const blockedSnapshot = await blocked;
-    expect(blockedSnapshot).toMatchObject({
-      status: "blocked",
+    const suspendedSnapshot = await suspended;
+    expect(suspendedSnapshot).toMatchObject({
+      status: "suspended",
       run: {
-        display: { status: "blocked", statusSource: "host" },
-        host: { status: "blocked", terminal: { status: "blocked" } },
-        product: {
-          result: {
-            output: {
-              safeErrors: [{
-                code: "approval_declined",
-                message: "Approval could not be completed.",
-              }],
-            },
-          },
-        },
+        display: { status: "suspended", statusSource: "host" },
+        host: { status: "suspended", terminal: null },
       },
-      threadSummaries: [{ latestRun: { runId: "helarc-run-1", status: "blocked" } }],
-      activeThread: { messages: [{ role: "user" }, { role: "assistant", content: "Run blocked." }] },
     });
-    expect(JSON.stringify(blockedSnapshot.activeThread)).not.toContain("pendingApproval");
+    expect(JSON.stringify(suspendedSnapshot.activeThread)).not.toContain("pendingApproval");
     expect(dispatchApprovalCommand(controller, {
       ...decline,
       submissionId: "desktop-late-1",
     })).toMatchObject({
-      status: "rejected",
-      code: "host_command_run_not_active",
+      status: "handled",
+      kind: "interaction.submit",
+      result: {
+        status: "rejected",
+        code: "interaction_not_pending",
+      },
     });
     await expect(access(markerPath)).rejects.toThrow();
   });
@@ -1560,7 +1555,9 @@ describe("HelarcMainController", () => {
 });
 
 class CompleteProvider implements Provider {
-  readonly inputAccounting = createDesktopTestInputAccounting("complete-provider");
+  private readonly context = createFakeProviderContext("complete-provider", "desktop-test-model");
+  readonly modelContext = this.context.modelContext;
+  readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
     id: "complete-provider",
     name: "Complete Provider",
@@ -1568,7 +1565,7 @@ class CompleteProvider implements Provider {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
-      modelInput: this.inputAccounting.capability,
+      modelContext: providerModelContextCapability(this.modelContext),
       continuation: { supported: false as const },
       compaction: { supported: false as const },
       usageMetering: {
@@ -1660,7 +1657,9 @@ class DeferredCompleteProvider extends CompleteProvider {
 }
 
 class SecretFailingProvider implements Provider {
-  readonly inputAccounting = createDesktopTestInputAccounting("secret-failing-provider");
+  private readonly context = createFakeProviderContext("secret-failing-provider", "desktop-test-model");
+  readonly modelContext = this.context.modelContext;
+  readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
     id: "secret-failing-provider",
     name: "Secret failing Provider",
@@ -1668,7 +1667,7 @@ class SecretFailingProvider implements Provider {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
-      modelInput: this.inputAccounting.capability,
+      modelContext: providerModelContextCapability(this.modelContext),
       continuation: { supported: false as const },
       compaction: { supported: false as const },
       usageMetering: {
@@ -1700,7 +1699,9 @@ class SecretFailingProvider implements Provider {
 }
 
 class ScriptedProvider implements Provider {
-  readonly inputAccounting = createDesktopTestInputAccounting("scripted-provider");
+  private readonly context = createFakeProviderContext("scripted-provider", "desktop-test-model");
+  readonly modelContext = this.context.modelContext;
+  readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
     id: "scripted-provider",
     name: "Scripted Provider",
@@ -1708,7 +1709,7 @@ class ScriptedProvider implements Provider {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
-      modelInput: this.inputAccounting.capability,
+      modelContext: providerModelContextCapability(this.modelContext),
       continuation: { supported: false as const },
       compaction: { supported: false as const },
       usageMetering: {
@@ -1907,17 +1908,12 @@ function isDesktopRecord(value: unknown): value is Readonly<Record<string, unkno
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function createDesktopTestInputAccounting(providerId: string) {
-  return createUtf8ModelInputAccounting({
-    providerId,
-    model: "desktop-test-model",
-    maximumInputBytes: 4 * 1_024 * 1_024,
-    limitSource: "host_configured",
-    estimator: { id: `${providerId}.utf8-content`, revision: "1" },
-    framing: { id: `${providerId}.framing`, revision: "1" },
-    renderRequest: (instructions, messages, interaction) =>
-      JSON.stringify({ instructions, messages, interaction }),
-  });
+function providerModelContextCapability(modelContext: Provider["modelContext"]) {
+  return {
+    capacity: modelContext.capacity,
+    requestedOutput: modelContext.requestedOutput,
+    inputPreservation: modelContext.inputPreservation,
+  };
 }
 
 function desktopProviderProfile(

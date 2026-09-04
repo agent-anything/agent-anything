@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  createBlockedRunResult,
-  createCancelledRunResult,
-  createFailedRunResult,
-  createSucceededRunResult,
-  type CreateRunResultBaseInput,
+  createRunResult,
+  type CreateRunResultInput,
 } from "./RunResult.js";
 import type { RunFailureCause } from "./RunFailure.js";
+import type {
+  RunSettlement,
+  RunSettlementCauseRecord,
+} from "./RunSettlement.js";
 
 const startedAt = "2026-07-13T00:00:00.000Z";
 const completedAt = "2026-07-13T00:00:01.000Z";
@@ -16,147 +17,122 @@ const TEST_INSTRUCTION_BINDING = Object.freeze({
 });
 
 describe("RunResult", () => {
-  it("constructs structurally distinct terminal results", () => {
-    const input = base();
-    const failure = runtimeFailure();
-    const cancellation = cancellationSummary();
+  it("constructs the three structurally distinct terminal settlements", () => {
+    const completion = completionCause();
+    const failure = failureCause();
+    const cancellation = cancellationCause();
 
-    expect(createSucceededRunResult(input, { answer: "done" })).toMatchObject({
+    expect(createRunResult(input(
+      { status: "succeeded", completedAt, cause: completion.ref, output: { answer: "done" } },
+      completion,
+    ))).toMatchObject({
       status: "succeeded",
-      code: null,
       finalOutput: { answer: "done" },
-      cancellation: null,
-      failure: null,
-      relatedFailures: [],
+      cause: { kind: "completion", code: "completion_accepted" },
     });
-    expect(createBlockedRunResult(input, "runtime_no_safe_path")).toMatchObject({
-      status: "blocked",
-      code: "runtime_no_safe_path",
-      finalOutput: null,
-      cancellation: null,
-      failure: null,
-      relatedFailures: [],
-    });
-    expect(createBlockedRunResult(input, "runtime_stop_feedback_exhausted")).toMatchObject({
-      status: "blocked",
-      code: "runtime_stop_feedback_exhausted",
-      finalOutput: null,
-      failure: null,
-    });
-    expect(createFailedRunResult(
-      input,
-      "runtime_execution_failed",
+    expect(createRunResult(input(
+      { status: "failed", completedAt, cause: failure.ref },
       failure,
-    )).toMatchObject({
+    ))).toMatchObject({
       status: "failed",
-      code: "runtime_execution_failed",
       finalOutput: null,
-      cancellation: null,
-      failure,
-      relatedFailures: [],
+      cause: {
+        kind: "failure",
+        failure: { kind: "runtime", failure: { code: "runtime_test_failure" } },
+      },
     });
-    expect(createCancelledRunResult(input, cancellation)).toMatchObject({
-      status: "cancelled",
-      code: "runtime_cancelled",
-      finalOutput: null,
+    expect(createRunResult(input(
+      { status: "cancelled", completedAt, cause: cancellation.ref },
       cancellation,
-      failure: null,
-      relatedFailures: [],
+    ))).toMatchObject({
+      status: "cancelled",
+      finalOutput: null,
+      cause: {
+        kind: "cancellation",
+        code: "runtime_cancelled",
+        cancellation: { requestId: "cancel-1" },
+      },
     });
   });
 
   it("allows null when it is the Agent-validated successful output", () => {
-    expect(createSucceededRunResult(base<null>(), null)).toMatchObject({
-      status: "succeeded",
-      finalOutput: null,
-    });
+    const cause = completionCause();
+    expect(createRunResult(input<null>(
+      { status: "succeeded", completedAt, cause: cause.ref, output: null },
+      cause,
+    ))).toMatchObject({ status: "succeeded", finalOutput: null });
   });
 
-  it("rejects a failed result without a primary failure", () => {
-    expect(() => createFailedRunResult(
-      base(),
-      "runtime_execution_failed",
-      // @ts-expect-error Runtime validation also protects untyped callers.
-      null,
-    )).toThrow("failure must be a valid RunFailureCause");
+  it("rejects settlement and direct-cause disagreement", () => {
+    const failure = failureCause();
+    expect(() => createRunResult(input(
+      { status: "succeeded", completedAt, cause: failure.ref, output: "invalid" },
+      failure,
+    ))).toThrow("status disagrees with its cause record");
   });
 
-  it("accepts a Product-owned Task Fulfillment failure", () => {
-    expect(createFailedRunResult(
-      base(),
-      "task_fulfillment_failed",
-      {
-        kind: "task_fulfillment",
-        failure: {
-          code: "task_fulfillment_provider_failed",
-          message: "The Product evaluator failed.",
-          retryable: true,
-          metadata: {},
-        },
-      },
-    )).toMatchObject({
-      status: "failed",
-      code: "task_fulfillment_failed",
-      failure: { kind: "task_fulfillment" },
-    });
+  it("rejects a direct cause missing from the bounded cause record set", () => {
+    const cause = failureCause();
+    expect(() => createRunResult({
+      ...input({ status: "failed", completedAt, cause: cause.ref }, cause),
+      settlementCauses: [],
+    })).toThrow("settlement cause is missing");
   });
 
   it("rejects RunItems from a different Run", () => {
+    const cause = failureCause();
     const mismatchedItem = {
-      ref: {
-        run: { id: "run-2" },
-        id: "item-1",
-        sequence: 1,
-      },
+      ref: { run: { id: "run-2" }, id: "item-1", sequence: 1 },
       committedInRevision: 1,
       createdAt: startedAt,
-      payload: {
-        kind: "terminal_transition",
-        status: "blocked",
-        code: "runtime_no_safe_path",
-        output: null,
-        failure: null,
-      },
+      payload: { kind: "state_transition" },
     };
 
-    expect(() => createBlockedRunResult({
-      ...base(),
+    expect(() => createRunResult({
+      ...input({ status: "failed", completedAt, cause: cause.ref }, cause),
       items: [mismatchedItem as never],
-    }, "runtime_no_safe_path")).toThrow("does not belong to Run run-1");
+    })).toThrow("does not belong to Run run-1");
   });
 
   it("rejects incomplete identity and incoherent terminal time", () => {
-    expect(() => createBlockedRunResult({
-      ...base(),
+    const cause = failureCause();
+    expect(() => createRunResult({
+      ...input({ status: "failed", completedAt, cause: cause.ref }, cause),
       // @ts-expect-error Runtime validation also protects untyped callers.
       startingAgent: null,
-    }, "runtime_no_safe_path")).toThrow("startingAgent must be an Agent revision");
+    })).toThrow("startingAgent must be an Agent revision");
 
-    expect(() => createBlockedRunResult({
-      ...base(),
+    expect(() => createRunResult({
+      ...input({ status: "failed", completedAt: startedAt, cause: cause.ref }, cause),
       startedAt: completedAt,
-      completedAt: startedAt,
-    }, "runtime_no_safe_path")).toThrow("cannot complete before it starts");
+    })).toThrow("cannot complete before it starts");
   });
 
   it("freezes terminal structure and owned collections", () => {
-    const result = createSucceededRunResult({
-      ...base(),
+    const cause = completionCause();
+    const result = createRunResult({
+      ...input(
+        { status: "succeeded", completedAt, cause: cause.ref, output: { answer: "done" } },
+        cause,
+      ),
       evidenceRefs: ["evidence-1"],
       artifactRefs: ["artifact-1"],
       metadata: { source: "test" },
-    }, { answer: "done" });
+    });
 
     expect(Object.isFrozen(result)).toBe(true);
-    expect(Object.isFrozen(result.startingAgent)).toBe(true);
+    expect(Object.isFrozen(result.cause)).toBe(true);
+    expect(Object.isFrozen(result.settlement)).toBe(true);
+    expect(Object.isFrozen(result.settlementCauses)).toBe(true);
     expect(Object.isFrozen(result.items)).toBe(true);
-    expect(Object.isFrozen(result.evidenceRefs)).toBe(true);
-    expect(Object.isFrozen(result.artifactRefs)).toBe(true);
     expect(Object.isFrozen(result.metadata)).toBe(true);
   });
 });
 
-function base<TOutput = unknown>(): CreateRunResultBaseInput<TOutput> {
+function input<TOutput>(
+  settlement: RunSettlement<TOutput>,
+  cause: RunSettlementCauseRecord,
+): CreateRunResultInput<TOutput> {
   return {
     runId: "run-1",
     taskId: "task-1",
@@ -165,7 +141,65 @@ function base<TOutput = unknown>(): CreateRunResultBaseInput<TOutput> {
     startingInstructionBinding: TEST_INSTRUCTION_BINDING,
     finalInstructionBinding: TEST_INSTRUCTION_BINDING,
     startedAt,
-    completedAt,
+    settlement,
+    cause,
+    settlementCauses: [cause],
+  };
+}
+
+function completionCause(): Extract<RunSettlementCauseRecord, { kind: "completion" }> {
+  return {
+    ref: causeRef(),
+    kind: "completion",
+    code: "completion_accepted",
+    source: source("run_completion_acceptance"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: completedAt,
+  };
+}
+
+function failureCause(): Extract<RunSettlementCauseRecord, { kind: "failure" }> {
+  return {
+    ref: causeRef(),
+    kind: "failure",
+    failure: runtimeFailure(),
+    source: source("runtime_failure"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: completedAt,
+  };
+}
+
+function cancellationCause(): Extract<RunSettlementCauseRecord, { kind: "cancellation" }> {
+  return {
+    ref: causeRef(),
+    kind: "cancellation",
+    code: "runtime_cancelled",
+    cancellation: {
+      requestId: "cancel-1",
+      origin: "user",
+      reasonCode: "user_requested",
+      requestedAt: startedAt,
+    },
+    source: source("run_cancellation"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: completedAt,
+  };
+}
+
+function causeRef() {
+  return { run: { id: "run-1" }, id: "run-1:cause:1", revision: "1" };
+}
+
+function source(kind: string) {
+  return {
+    owner: "agent-runtime",
+    kind,
+    id: `run-1:${kind}:1`,
+    revision: "1",
+    run: { id: "run-1" },
   };
 }
 
@@ -178,14 +212,5 @@ function runtimeFailure(): RunFailureCause {
       retryable: false,
       metadata: {},
     },
-  };
-}
-
-function cancellationSummary() {
-  return {
-    requestId: "cancel-1",
-    origin: "user" as const,
-    reasonCode: "user_requested" as const,
-    requestedAt: startedAt,
   };
 }

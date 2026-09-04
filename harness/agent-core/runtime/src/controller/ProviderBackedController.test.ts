@@ -7,10 +7,9 @@ import type {
   ModelToolCall,
 } from "@agent-anything/model-interaction";
 import { providerGeneratedOutput } from "@agent-anything/model-interaction";
-import { FakeProvider } from "@agent-anything/test-support";
+import { createFakeProviderContext, FakeProvider } from "@agent-anything/test-support";
 import {
   composeModelInput,
-  createUtf8ModelInputAccounting,
   modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import {
@@ -40,6 +39,10 @@ import {
   systemRetryClock,
 } from "../retry/index.js";
 import { createAgentInstructionBinding } from "../instructions/index.js";
+import {
+  createInitialRunLifecycleHookState,
+  projectRunLifecycleHooks,
+} from "../hooks/index.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -1245,7 +1248,7 @@ function createController(
     continuation: ModelContinuationLifecycle;
   }> = {},
 ): ProviderBackedController<TestOutput> {
-  const accountedProvider = ensureTestProviderAccounting(provider);
+  const accountedProvider = ensureTestProviderContext(provider);
   const buildRequest = overrides.buildRequest ?? (() => request("Choose the next action."));
   return new ProviderBackedController({
     provider: accountedProvider,
@@ -1348,16 +1351,11 @@ function createControllerInput(): ControllerInput<TestOutput> {
       maxStepLength: 200,
       maxExplanationLength: 500,
     }),
-    stopReview: {
-      reviewSequence: 0,
-      requiredFeedbackRounds: 0,
-      advisoryFeedbackRounds: 0,
-      latestReview: null,
-      limitations: [],
-    },
+    lifecycleHooks: projectRunLifecycleHooks(createInitialRunLifecycleHookState()),
     verification: { snapshot: { runId: "run_001", revision: 0 }, gate: null },
     permission: testPermissionProjection(),
     pending: [],
+    descendants: { active: [], continuations: [] },
     workspace: {
       id: "workspace_001",
       name: "Test workspace",
@@ -1484,29 +1482,28 @@ function request(content: string): TestProviderRequest {
   };
 }
 
-function ensureTestProviderAccounting(provider: Provider): Provider {
-  if (provider.inputAccounting !== undefined) {
+function ensureTestProviderContext(provider: Provider): Provider {
+  if (provider.modelContext !== undefined) {
     return provider;
   }
-  const inputAccounting = createUtf8ModelInputAccounting({
-    providerId: provider.descriptor.id,
-    model: "runtime-controller-test-model",
-    maximumInputBytes: 4 * 1_024 * 1_024,
-    limitSource: "host_configured",
-    estimator: { id: `${provider.descriptor.id}.utf8-content`, revision: "1" },
-    framing: { id: `${provider.descriptor.id}.framing`, revision: "1" },
-    renderRequest: (instructions, messages, interaction) =>
-      JSON.stringify({ instructions, messages, interaction }),
-  });
+  const context = createFakeProviderContext(
+    provider.descriptor.id,
+    "runtime-controller-test-model",
+  );
   return {
     descriptor: {
       ...provider.descriptor,
       capabilities: {
         ...provider.descriptor.capabilities,
-        modelInput: inputAccounting.capability,
+        modelContext: {
+          capacity: context.modelContext.capacity,
+          requestedOutput: context.modelContext.requestedOutput,
+          inputPreservation: context.modelContext.inputPreservation,
+        },
       },
     },
-    inputAccounting,
+    modelContext: context.modelContext,
+    requestBodyTransportLimit: context.requestBodyTransportLimit,
     send: provider.send.bind(provider),
   };
 }
@@ -1541,13 +1538,9 @@ function accountTestRequest(
   const sections = Object.freeze([...instructionSections, ...requestSections]);
   const composition = composeModelInput({
     id: `${input.runId}:test-model-input:${context.attemptNumber}`,
-    providerId: provider.inputAccounting.providerId,
-    model: provider.inputAccounting.model,
-    accounting: provider.inputAccounting,
+    providerId: context.target.providerId,
+    model: context.target.model,
     interaction: request.interaction,
-    outputReserve: Object.freeze({ unit: "bytes", amount: 0 }),
-    contextBudget: Object.freeze({ unit: "bytes", amount: 0 }),
-    contextProjectedAmount: 0,
     sections,
     lineage: Object.freeze({
       instructionBinding: Object.freeze({
@@ -1587,8 +1580,8 @@ function accountTestRequest(
         revision: `sha256:${input.agent.instructions.contentDigest.value}`,
       }),
       instructionModel: Object.freeze({
-        providerId: provider.inputAccounting.providerId,
-        model: provider.inputAccounting.model,
+        providerId: context.target.providerId,
+        model: context.target.model,
       }),
       instructionBlocks: Object.freeze(input.agent.instructions.blocks.map((block) =>
         Object.freeze({ ...block.source })
@@ -1652,6 +1645,15 @@ function accountTestRequest(
     instructions: modelInput.instructions,
     messages: modelInput.messages,
     composition,
+    modelContext: Object.freeze({
+      requestedOutput: context.requestedOutput,
+      headroom: Object.freeze({
+        unit: "tokens" as const,
+        amount: 0,
+        policy: Object.freeze({ id: "runtime-controller-test", revision: "1" }),
+      }),
+      assessment: null,
+    }),
   });
 }
 
@@ -1871,6 +1873,7 @@ function throwingProvider(): Provider {
 }
 
 function providerDescriptor(id: string) {
+  const context = createFakeProviderContext(id, "runtime-controller-test-model");
   return {
     id,
     name: id,
@@ -1878,9 +1881,18 @@ function providerDescriptor(id: string) {
       nativeToolInteraction: { supported: false as const },
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
-      modelInput: { supported: false as const },
+      modelContext: {
+        capacity: context.modelContext.capacity,
+        requestedOutput: context.modelContext.requestedOutput,
+        inputPreservation: context.modelContext.inputPreservation,
+      },
       continuation: { supported: false as const },
       compaction: { supported: false as const },
+      usageMetering: {
+        inputTokens: "unavailable" as const,
+        outputTokens: "unavailable" as const,
+        costUnits: "unavailable" as const,
+      },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},

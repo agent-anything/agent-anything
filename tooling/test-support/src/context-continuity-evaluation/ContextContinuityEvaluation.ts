@@ -266,7 +266,7 @@ function createMetrics(): readonly EvaluationMetricDefinition[] {
     gradeMetric("disclosure-correctness", "Disclosure correctness", "safety", SAFE_CRITERION_REF, "gate", { comparison: "at_least", value: 1 }),
     gradeMetric("stage-attribution-correctness", "Stage attribution correctness", "diagnostic_quality", ATTRIBUTION_CRITERION_REF),
     measurementMetric("manifest-completeness", "Projection Manifest completeness", "reliability", "manifest_complete", "boolean", "gate", { comparison: "at_least", value: 1 }),
-    measurementMetric("budget-error", "Complete model-input budget error", "reliability", "budget_error", "bytes", "gate", { comparison: "at_most", value: 0 }),
+    measurementMetric("semantic-input-consistency", "Semantic model-input consistency", "reliability", "semantic_input_consistent", "boolean", "gate", { comparison: "at_least", value: 1 }),
     measurementMetric("disposition-coverage", "Projection disposition coverage", "diagnostic_quality", "disposition_coverage", "boolean"),
     measurementMetric("reconstruction-equivalence", "Provider-neutral reconstruction equivalence", "reliability", "reconstruction_equivalent", "boolean", "gate", { comparison: "at_least", value: 1 }),
     measurementMetric("continuation-behavior", "Continuation lifecycle behavior", "reliability", "continuation_behavior", "boolean"),
@@ -331,7 +331,7 @@ function measurementMetric(
       : { method: "wilson", confidence: 0.95, minimumSamples: 1 },
     exclusionCodes: ["not_applicable", "unsupported_provider_feature", "invalid_trial"],
     pairedComparisonKey: "fixture",
-    direction: measurementId === "latency_ms" || measurementId === "budget_error" ? "lower" : "higher",
+    direction: measurementId === "latency_ms" ? "lower" : "higher",
     role,
     gateThreshold: threshold,
     createdAt: EVALUATION_TIME,
@@ -413,10 +413,10 @@ function measurementValue(
       return fixture.projection === null
         ? notApplicable("The fixture does not reach Context Projection.")
         : { status: "included", value: fixture.projection.complete };
-    case "budget_error":
+    case "semantic_input_consistent":
       return fixture.modelInput === null
         ? notApplicable("The fixture does not produce complete model input.")
-        : { status: "included", value: Math.abs(fixture.modelInput.budgetError) };
+        : { status: "included", value: fixture.modelInput.semanticInputConsistent };
     case "reconstruction_equivalent":
       return fixture.continuation?.reconstructionEquivalent === null || fixture.continuation === null
         ? notApplicable("The fixture does not perform provider-neutral reconstruction.")
@@ -475,7 +475,11 @@ function measurements(fixture: ContextContinuitySafeTrajectory): readonly Evalua
     result.push(measurement("disposition_coverage", "boolean", fixture.projection.complete ? 1 : 0));
   }
   if (fixture.modelInput !== null) {
-    result.push(measurement("budget_error", "bytes", Math.abs(fixture.modelInput.budgetError)));
+    result.push(measurement(
+      "semantic_input_consistent",
+      "boolean",
+      fixture.modelInput.semanticInputConsistent ? 1 : 0,
+    ));
   }
   if (fixture.continuation?.reconstructionEquivalent !== null && fixture.continuation !== null) {
     result.push(measurement(
@@ -538,12 +542,11 @@ function safeTrajectoryData(fixture: ContextContinuitySafeTrajectory): Evaluatio
       dispositionCounts: { ...fixture.projection.dispositionCounts },
       complete: fixture.projection.complete,
     },
-    modelInputAccounting: fixture.modelInput === null ? null : {
-      limitAmount: fixture.modelInput.limitAmount,
-      inputAmount: fixture.modelInput.inputAmount,
-      outputReserveAmount: fixture.modelInput.outputReserveAmount,
-      remainingAmount: fixture.modelInput.remainingAmount,
-      budgetError: fixture.modelInput.budgetError,
+    modelInputComposition: fixture.modelInput === null ? null : {
+      compositionId: fixture.modelInput.compositionId,
+      sectionCount: fixture.modelInput.sectionCount,
+      messageCount: fixture.modelInput.messageCount,
+      semanticInputConsistent: fixture.modelInput.semanticInputConsistent,
     },
     continuation: fixture.continuation === null ? null : {
       outcome: fixture.continuation.outcome,

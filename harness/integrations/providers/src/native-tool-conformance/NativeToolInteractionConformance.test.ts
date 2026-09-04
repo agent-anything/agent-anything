@@ -35,7 +35,11 @@ const ADAPTERS: readonly AdapterCase[] = [{
       timeoutMs: 1_000,
       runtime: { contextWindowTokens: 16_384, maximumOutputTokens: 2_048 },
       nativeToolInteraction: { supported },
-      inputLimit: { maximumBytes: 1_000_000, source: "host_configured" },
+      requestBodyTransportLimit: {
+        maximumBytes: 1_000_000,
+        source: "host_configured",
+        revision: "test-transport-limit-1",
+      },
     }, async () => okResponse(response));
   },
   response(input) {
@@ -63,8 +67,13 @@ const ADAPTERS: readonly AdapterCase[] = [{
       apiKey: "",
       model: "model-a",
       timeoutMs: 1_000,
+      maximumOutputTokens: 2_048,
       nativeToolInteraction: { supported },
-      inputLimit: { maximumBytes: 1_000_000, source: "host_configured" },
+      requestBodyTransportLimit: {
+        maximumBytes: 1_000_000,
+        source: "host_configured",
+        revision: "test-transport-limit-1",
+      },
     }, async () => okResponse(response));
   },
   response(input) {
@@ -202,15 +211,24 @@ for (const adapter of ADAPTERS) {
             timeoutMs: 1_000,
             runtime: { contextWindowTokens: 16_384, maximumOutputTokens: 2_048 },
             nativeToolInteraction: { supported: false },
-            inputLimit: { maximumBytes: 1_000_000, source: "host_configured" },
+            requestBodyTransportLimit: {
+              maximumBytes: 1_000_000,
+              source: "host_configured",
+              revision: "test-transport-limit-1",
+            },
           }, fetchImpl)
         : new OpenAICompatibleProvider({
             baseUrl: "https://provider.local/v1",
             apiKey: "",
             model: "model-a",
             timeoutMs: 1_000,
+            maximumOutputTokens: 2_048,
             nativeToolInteraction: { supported: false },
-            inputLimit: { maximumBytes: 1_000_000, source: "host_configured" },
+            requestBodyTransportLimit: {
+              maximumBytes: 1_000_000,
+              source: "host_configured",
+              revision: "test-transport-limit-1",
+            },
           }, fetchImpl);
       await expect(provider.send(createNativeProviderRequest(provider), context()))
         .resolves.toMatchObject({

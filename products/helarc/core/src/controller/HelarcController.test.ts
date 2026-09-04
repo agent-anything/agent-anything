@@ -11,15 +11,18 @@ import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/age
 import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
 import {
   createModelCallRef,
+  createUnknownModelInputMeasurement,
   type ModelAssistantContentBlock,
+  type ModelInputComposition,
   type ModelJsonValue,
   type ModelTurnFinish,
   type Provider,
   type ProviderCallResult,
+  type ProviderModelContext,
   type ProviderRequest,
   type ProviderResponse,
+  type ProviderTransportLimit,
 } from "@agent-anything/model-interaction";
-import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
 import { createToolCatalogSnapshot, type ToolDescriptorInput } from "@agent-anything/tools/catalog";
 import { createToolContractIdentity } from "@agent-anything/tools/identity";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
@@ -39,15 +42,14 @@ import {
   resolveHelarcModelQualification,
 } from "../composition/HelarcModelUseAdmission.js";
 
-const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
-  providerId: "fake-provider",
-  model: "helarc-controller-test-model",
-  maximumInputBytes: 4 * 1_024 * 1_024,
-  limitSource: "host_configured",
-  estimator: { id: "fake-provider.utf8-content", revision: "1" },
-  framing: { id: "fake-provider.framing", revision: "1" },
-  renderRequest: (instructions, messages, interaction) =>
-    JSON.stringify({ instructions, messages, interaction }),
+const TEST_MODEL_CONTEXT = createTestProviderModelContext(
+  "fake-provider",
+  "helarc-controller-test-model",
+);
+const TEST_TRANSPORT_LIMIT: ProviderTransportLimit = Object.freeze({
+  maximumBytes: 4 * 1024 * 1024,
+  source: "host_configured",
+  revision: "test.transport-limit.v1",
 });
 
 function buildHelarcProviderRequest(
@@ -102,16 +104,10 @@ function createTestQualification(
 function testQualificationProvider(
   input: ControllerInput<HelarcAgentOutput>,
 ): Provider {
-  const accounting = createUtf8ModelInputAccounting({
-    providerId: input.agent.instructions.model.providerId,
-    model: input.agent.instructions.model.modelId,
-    maximumInputBytes: 4 * 1_024 * 1_024,
-    limitSource: "host_configured",
-    estimator: { id: "qualification-test.utf8", revision: "1" },
-    framing: { id: "qualification-test.framing", revision: "1" },
-    renderRequest: (instructions, messages, interaction) =>
-      JSON.stringify({ instructions, messages, interaction }),
-  });
+  const modelContext = createTestProviderModelContext(
+    input.agent.instructions.model.providerId,
+    input.agent.instructions.model.modelId,
+  );
   return Object.freeze({
     descriptor: Object.freeze({
       id: input.agent.instructions.model.providerId,
@@ -127,14 +123,16 @@ function testQualificationProvider(
         }),
         structuredGeneration: Object.freeze({ supported: true as const }),
         streaming: Object.freeze({ supported: false as const }),
-        modelInput: accounting.capability,
+        modelContext: providerModelContextCapability(modelContext),
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
+        usageMetering: unavailableUsageMetering(),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({}),
     }),
-    inputAccounting: accounting,
+    modelContext,
+    requestBodyTransportLimit: TEST_TRANSPORT_LIMIT,
     async send() {
       throw new Error("Test qualification Provider does not send requests.");
     },
@@ -244,31 +242,21 @@ describe("Helarc native Tool controller", () => {
   it("uses the same guidance-bound callable catalog for allocation and request construction", () => {
     const input = createControllerInput();
     const protocol = createTestControllerProtocol(input);
-    const observedInteractions: unknown[] = [];
-    const accounting = Object.freeze({
-      ...TEST_INPUT_ACCOUNTING,
-      estimateFraming(
-        instructions: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[0],
-        messages: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[1],
-        interaction: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[2],
-      ) {
-        observedInteractions.push(interaction);
-        return TEST_INPUT_ACCOUNTING.estimateFraming(instructions, messages, interaction);
-      },
-    });
-    const configuration = createHelarcContextProjectionConfiguration(accounting, protocol);
+    const configuration = createHelarcContextProjectionConfiguration();
     const { context: _context, contextManifest: _manifest, ...preProjection } = input;
 
     configuration.allocate(preProjection);
-    const request = buildProviderRequest(input, {
-      ...requestBuildContext(),
-      inputAccounting: accounting,
-    }, protocol, createTestQualification(input, protocol));
+    const request = buildProviderRequest(
+      input,
+      requestBuildContext(),
+      protocol,
+      createTestQualification(input, protocol),
+    );
 
-    expect(observedInteractions[0]).toEqual(request.interaction);
     expect(request.metadata.modelCallableCatalogRevision).toBe(
       protocol.createCallableCatalog(input.toolExposure, input.planLimits).revision,
     );
+    expect(request.composition.interaction).toStrictEqual(request.interaction);
   });
 
   it("fails missing guidance and changes catalog identity with model-visible definitions", () => {
@@ -384,7 +372,7 @@ describe("Helarc native Tool controller", () => {
     if (userMessage?.role !== "user") throw new TypeError("Expected one user message.");
     expect(userMessage.content.map(({ text }) => text)).toEqual(expect.arrayContaining([
       expect.stringMatching(/^Task:\n/),
-      expect.stringMatching(/^Current stop review:\n/),
+      expect.stringMatching(/^Current lifecycle Hook state:\n/),
       "Pending interactions:\n[]",
     ]));
   });
@@ -450,40 +438,27 @@ describe("Helarc native Tool controller", () => {
     }, requestBuildContext())).toThrow("while a model call is unsettled");
   });
 
-  it("fails complete mandatory input instead of omitting callable definitions", () => {
-    const accounting = createUtf8ModelInputAccounting({
-      providerId: "tiny-provider",
-      model: "tiny-model",
-      maximumInputBytes: 1_024,
-      limitSource: "host_configured",
-      estimator: { id: "tiny-provider.utf8-content", revision: "1" },
-      framing: { id: "tiny-provider.framing", revision: "1" },
-      renderRequest: (instructions, messages, interaction) =>
-        JSON.stringify({ instructions, messages, interaction }),
-    });
-
-    expect(() => buildHelarcProviderRequest(createControllerInput("tiny-provider", "tiny-model"), {
+  it("preserves complete mandatory input for Provider-side context assessment", () => {
+    const request = buildHelarcProviderRequest(
+      createControllerInput("tiny-provider", "tiny-model"),
+      {
       attemptNumber: 1,
       correction: null,
-      inputAccounting: accounting,
-    })).toThrow("Complete mandatory model input exceeds the effective input limit.");
+        target: { providerId: "tiny-provider", model: "tiny-model", revision: "1" },
+        requestedOutput: TEST_MODEL_CONTEXT.requestedOutput,
+      },
+    );
+
+    expect(request.composition.sections).not.toHaveLength(0);
+    expect(request.modelContext.assessment).toBeNull();
   });
 
   it("rejects an instruction binding for a different Provider model", () => {
     expect(() => buildHelarcProviderRequest(createControllerInput(), {
       attemptNumber: 1,
       correction: null,
-      inputAccounting: createUtf8ModelInputAccounting({
-        providerId: "other-provider",
-        model: "other-model",
-        maximumInputBytes: 4 * 1_024 * 1_024,
-        limitSource: "host_configured",
-        estimator: { id: "other.utf8", revision: "1" },
-        framing: { id: "other.framing", revision: "1" },
-        renderRequest: (instructions, messages) =>
-          instructions.content.map((block) => block.text).join("\n") +
-          messageText(messages),
-      }),
+      target: { providerId: "other-provider", model: "other-model", revision: "1" },
+      requestedOutput: TEST_MODEL_CONTEXT.requestedOutput,
     })).toThrow("must match");
   });
 
@@ -747,11 +722,14 @@ function createControllerInput(
       maxStepLength: 500,
       maxExplanationLength: 2_000,
     },
-    stopReview: {
-      reviewSequence: 0,
-      requiredFeedbackRounds: 0,
-      advisoryFeedbackRounds: 0,
-      latestReview: null,
+    lifecycleHooks: {
+      stopEventSequence: 0,
+      stopFailureEventSequence: 0,
+      feedbackEpoch: 0,
+      consecutiveBlockingRounds: 0,
+      latestEventId: null,
+      latestInvocations: [],
+      latestFeedback: null,
       limitations: [],
     },
     verification: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
@@ -1035,7 +1013,8 @@ function requestBuildContext() {
   return {
     attemptNumber: 1,
     correction: null,
-    inputAccounting: TEST_INPUT_ACCOUNTING,
+    target: TEST_MODEL_CONTEXT.target,
+    requestedOutput: TEST_MODEL_CONTEXT.requestedOutput,
   };
 }
 
@@ -1172,7 +1151,8 @@ function expectControllerFailure(action: () => unknown, helarcCode: string): voi
 }
 
 class FakeProvider implements Provider {
-  readonly inputAccounting = TEST_INPUT_ACCOUNTING;
+  readonly modelContext = TEST_MODEL_CONTEXT;
+  readonly requestBodyTransportLimit = TEST_TRANSPORT_LIMIT;
   readonly descriptor = {
     id: "fake-provider",
     name: "Fake provider",
@@ -1187,9 +1167,10 @@ class FakeProvider implements Provider {
       },
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
-      modelInput: this.inputAccounting.capability,
+      modelContext: providerModelContextCapability(this.modelContext),
       continuation: { supported: false as const },
       compaction: { supported: false as const },
+      usageMetering: unavailableUsageMetering(),
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1220,4 +1201,55 @@ function requestText(request: ProviderRequest): string {
     ...request.instructions.content.map((block) => block.text),
     messageText(request.messages),
   ].join("\n");
+}
+
+function createTestProviderModelContext(
+  providerId: string,
+  model: string,
+): ProviderModelContext {
+  const requestedOutput = Object.freeze({
+    unit: "tokens" as const,
+    maximum: 1_024,
+    source: "host_configured" as const,
+    revision: "test.requested-output.v1",
+  });
+  const inputPreservation = Object.freeze({
+    providerId,
+    model,
+    adapterRevision: "test.adapter.v1",
+    runtimeVersion: null,
+    truncation: "disabled" as const,
+    contextShift: "disabled" as const,
+    evidence: Object.freeze([]),
+    revision: "test.input-preservation.v1",
+  });
+  return Object.freeze({
+    target: Object.freeze({ providerId, model, revision: "test.target.v1" }),
+    capacity: Object.freeze({ supported: false as const }),
+    requestedOutput,
+    inputPreservation,
+    measure(composition: ModelInputComposition, measuredAt: string) {
+      return createUnknownModelInputMeasurement({
+        compositionId: composition.id,
+        measuredAt,
+        reason: "unsupported",
+      });
+    },
+  });
+}
+
+function providerModelContextCapability(modelContext: ProviderModelContext) {
+  return Object.freeze({
+    capacity: modelContext.capacity,
+    requestedOutput: modelContext.requestedOutput,
+    inputPreservation: modelContext.inputPreservation,
+  });
+}
+
+function unavailableUsageMetering() {
+  return Object.freeze({
+    inputTokens: "unavailable" as const,
+    outputTokens: "unavailable" as const,
+    costUnits: "unavailable" as const,
+  });
 }

@@ -89,7 +89,7 @@ describe("Helarc deterministic Evaluation target", () => {
       !item.outcomeGradePassed ||
       !item.safetyGradePassed)).toEqual([]);
     expect(denied).toHaveLength(2);
-    expect(denied.every((item) => item.targetOutcomeStatus === "blocked")).toBe(true);
+    expect(denied.every((item) => item.targetOutcomeStatus === "cancelled")).toBe(true);
     expect(malformed).toHaveLength(2);
     expect(malformed.every((item) => item.targetOutcomeStatus === "succeeded")).toBe(true);
     expect(baselineCandidate.report.gateOutcomes.map((gate) => gate.status)).toEqual([
@@ -120,8 +120,8 @@ describe("Helarc deterministic Evaluation target", () => {
       ["ordinary_shell_verification", "succeeded", "satisfied", "completion_eligible"],
       ["failed_check_recovery", "succeeded", "satisfied", "completion_eligible"],
       ["multi_file_mutation", "succeeded", "satisfied", "completion_eligible"],
-      ["stale_evidence", "blocked", "violated", "blocked_violated"],
-      ["premature_completion", "blocked", "violated", "blocked_violated"],
+      ["stale_evidence", "cancelled", "violated", "blocked_violated"],
+      ["premature_completion", "cancelled", "violated", "blocked_violated"],
     ] as const;
 
     const outcomes = await Promise.all(expectations.map(async ([scenario]) =>
@@ -255,7 +255,7 @@ describe("Helarc deterministic Evaluation target", () => {
     });
   }, 120_000);
 
-  it("retains typed Product, Permission, and Provider outcome owners", async () => {
+  it("retains typed Product, Runtime, Permission, and Provider facts", async () => {
     const corpus = createHelarcEvaluationCorpus();
     const completed = await invokeCase(corpus, requireCase(corpus, "inspect_and_complete"));
     const denied = await invokeCase(corpus, requireCase(corpus, "denied_command"));
@@ -290,8 +290,12 @@ describe("Helarc deterministic Evaluation target", () => {
       denied.observation.outcome,
       JSON.stringify(denied.observation, null, 2),
     ).toMatchObject({
-      status: "blocked",
-      owner: "permission",
+      status: "cancelled",
+      owner: "runtime",
+      code: "runtime_cancelled",
+      data: {
+        enforcementStatus: "denied",
+      },
     });
     expect(providerFailure.observation.outcome).toMatchObject({
       status: "failed",

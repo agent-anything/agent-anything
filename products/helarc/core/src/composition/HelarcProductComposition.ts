@@ -3,6 +3,7 @@ import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/age
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
+import type { RunLifecycleHookComposition } from "@agent-anything/agent-runtime/hooks";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { Agent } from "@agent-anything/agent-core/agent";
@@ -77,8 +78,10 @@ import {
   type HelarcProductRunProjectionListener,
   type HelarcProductRunProjectionUpdate,
 } from "../run/HelarcRunProjection.js";
-import { HelarcTaskFulfillmentEvaluator } from "../task-fulfillment/index.js";
-import type { TaskFulfillmentEvaluatorPort } from "@agent-anything/agent-runtime/completion";
+import {
+  createHelarcTaskFulfillmentHookComposition,
+  type HelarcTaskFulfillmentHook,
+} from "../task-fulfillment/index.js";
 
 type HelarcProductProjectionUpdatePayload =
   HelarcProductRunProjectionUpdate extends infer TUpdate
@@ -113,7 +116,8 @@ export interface HelarcProductComposition {
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
   readonly verification: HelarcVerificationComposition;
-  readonly taskFulfillment: TaskFulfillmentEvaluatorPort;
+  readonly lifecycleHooks: RunLifecycleHookComposition;
+  readonly taskFulfillment: HelarcTaskFulfillmentHook;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
@@ -134,8 +138,8 @@ export async function createHelarcProductComposition(
   const now = input.now ?? (() => new Date().toISOString());
   const admittedAt = now();
   const providerId = input.provider.descriptor.id;
-  const modelId = input.provider.inputAccounting.model;
-  if (providerId !== input.provider.inputAccounting.providerId) {
+  const modelId = input.provider.modelContext.target.model;
+  if (providerId !== input.provider.modelContext.target.providerId) {
     throw new TypeError("Helarc Provider descriptor and Model Input Accounting identities differ.");
   }
   const agent = createHelarcAgent({
@@ -154,7 +158,7 @@ export async function createHelarcProductComposition(
     admittedAt,
     now,
   });
-  const taskFulfillment = new HelarcTaskFulfillmentEvaluator(input.provider, now);
+  const taskFulfillment = createHelarcTaskFulfillmentHookComposition(input.provider, now);
   const actions = createHelarcActionComposition({
     admittedAt,
     file: input.fileActions,
@@ -279,7 +283,8 @@ export async function createHelarcProductComposition(
     interactions,
     delegation: descendant.delegation,
     verification,
-    taskFulfillment,
+    lifecycleHooks: taskFulfillment.composition,
+    taskFulfillment: taskFulfillment.hook,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {
       return productProjection;

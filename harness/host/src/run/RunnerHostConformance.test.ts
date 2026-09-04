@@ -32,10 +32,6 @@ import {
   type RunConfig,
   type RunnerOperationComposition,
 } from "@agent-anything/agent-runtime/runner";
-import type {
-  TaskFulfillmentEvaluationInput,
-  TaskFulfillmentEvaluatorPort,
-} from "@agent-anything/agent-runtime/completion";
 import {
   createTestContextProjection,
   createTestVerificationExecutionFactory,
@@ -56,7 +52,7 @@ describe("Runner and generic Host conformance", () => {
 
     expect(outcome).toMatchObject({
       runId: "run-host-conformance",
-      terminal: { status: "completed", code: null },
+      terminal: { status: "completed", code: "completion_accepted" },
       runResult: {
         status: "succeeded",
         finalOutput: { summary: "Done" },
@@ -93,8 +89,12 @@ describe("Runner and generic Host conformance", () => {
     expect(outcome).toMatchObject({
       runResult: {
         status: "cancelled",
-        code: "runtime_cancelled",
-        cancellation: { origin: "user", reasonCode: "user_requested" },
+        settlement: { status: "cancelled" },
+        cause: {
+          kind: "cancellation",
+          code: "runtime_cancelled",
+          cancellation: { origin: "user", reasonCode: "user_requested" },
+        },
       },
       terminal: { status: "cancelled", code: "runtime_cancelled" },
     });
@@ -121,41 +121,12 @@ function createManager(controller: Controller<TestOutput>) {
     controller,
     contextProjection: createTestContextProjection(),
     operations: emptyOperations(),
-    completion: {
-      taskFulfillment: fulfilledEvaluator(),
-      maximumDurationMs: 5_000,
-    },
     verification: createTestVerificationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     createRunId: () => "run-host-conformance",
     now: () => NOW,
   });
   return createHostRunManager({ runner, now: () => NOW });
-}
-
-function fulfilledEvaluator(): TaskFulfillmentEvaluatorPort {
-  const ref = Object.freeze({ owner: "test-product", id: "host-task-fulfillment", revision: "1" });
-  return Object.freeze({
-    ref,
-    async evaluate(input: TaskFulfillmentEvaluationInput) {
-      return Object.freeze({
-        kind: "assessed" as const,
-        assessment: Object.freeze({
-          ref: input.assessment,
-          evaluator: ref,
-          run: input.run,
-          turn: input.turn,
-          objective: input.objective,
-          proposal: input.proposal,
-          status: "fulfilled" as const,
-          rationale: "Host conformance uses an explicitly fulfilled test Task.",
-          findings: Object.freeze([]),
-          feedback: null,
-          assessedAt: NOW,
-        }),
-      });
-    },
-  });
 }
 
 function emptyOperations(): RunnerOperationComposition {
@@ -275,9 +246,11 @@ function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/age
         maxStepLength: 100,
         maxExplanationLength: 200,
       },
-      stopReview: {
-        maxRequiredFeedbackRounds: 2,
-        maxAdvisoryFeedbackRounds: 1,
+      completionGate: {
+        maxFeedbackRounds: 2,
+      },
+      stopHooks: {
+        maxConsecutiveBlockingRounds: 2,
       },
     },
     runTreeLimits: {

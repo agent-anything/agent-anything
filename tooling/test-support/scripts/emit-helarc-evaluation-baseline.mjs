@@ -1,5 +1,6 @@
 import {
   HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
   HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
@@ -9,19 +10,19 @@ import {
   runContextContinuityEvaluationCandidate,
 } from "../dist/context-continuity-evaluation/index.js";
 import {
-  runRunStopReviewDeterministicEvaluation,
-} from "../dist/run-stop-review-evaluation/index.js";
+  runRunLifecycleHookDeterministicEvaluation,
+} from "../dist/run-lifecycle-hook-evaluation/index.js";
 
 const systemCandidate = await runHelarcEvaluationBaselineCandidate();
 const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
-const runStopReview = await runRunStopReviewDeterministicEvaluation();
+const runLifecycleHooks = runRunLifecycleHookDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
   HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
   systemCandidate,
 );
 
@@ -33,14 +34,14 @@ process.stdout.write(`${JSON.stringify({
     acceptanceRef: HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.acceptanceRef,
   },
   acceptedSuccessor: {
-    reportRef: HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef,
+    reportRef: HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),
   acceptedSuccessorComparison: projectPredecessorComparison(acceptedComparison),
   contextContinuity: projectContextContinuityCandidate(contextContinuity),
-  runStopReview,
+  runLifecycleHooks,
   limitations: [
     "The deterministic candidate does not claim general model intelligence.",
     "Context-specific metrics have no fabricated predecessor samples.",

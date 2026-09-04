@@ -32,7 +32,7 @@ import {
 } from "@agent-anything/evaluation/campaign";
 import type { HelarcExactTargetVerificationRequirement } from "@agent-anything/helarc/verification";
 import { createHelarcAgent } from "@agent-anything/helarc/agent";
-import { HELARC_TASK_FULFILLMENT_EVALUATOR_REVISION } from "@agent-anything/helarc/task-fulfillment";
+import { HELARC_TASK_FULFILLMENT_HOOK_REVISION } from "@agent-anything/helarc/task-fulfillment";
 import { HELARC_SHELL_COMMAND_OUTCOME_REVISION } from "@agent-anything/helarc-local-environment/command";
 import {
   fakeNativeModelOutput,
@@ -42,9 +42,9 @@ import {
 
 export const HELARC_EVALUATION_TIME = "2026-09-01T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-child-delegation-progression-corpus-v1";
+  "helarc-run-lifecycle-settlement-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-child-delegation-progression-target-v1";
+  "helarc-run-lifecycle-settlement-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -83,8 +83,8 @@ export interface HelarcEvaluationScript {
 export interface HelarcEvaluationExpectedClaim {
   readonly ref: EvaluationRecordRef;
   readonly caseRef: EvaluationRecordRef;
-  readonly productStatus: "completed" | "blocked";
-  readonly runStatus: "succeeded" | "blocked";
+  readonly productStatus: "completed" | "failed" | "cancelled";
+  readonly runStatus: "succeeded" | "failed" | "cancelled";
   readonly agentSummary: string | null;
   readonly workspaceFiles: readonly HelarcEvaluationFixtureFile[];
   readonly requiredActionNames: readonly string[];
@@ -160,7 +160,7 @@ export function createHelarcEvaluationCorpus(): HelarcEvaluationCorpus {
   const cases = createCases();
   const suite = createEvaluationSuite({
     ref: REFS.suite,
-    name: "Helarc Phase26 deterministic regression suite",
+    name: "Helarc deterministic regression suite",
     caseRefs: cases.map((item) => item.definition.ref),
     distribution: { kind: "complete_declared_corpus", caseCount: cases.length },
     selectionRules: { kind: "all", repetitions: 2 },
@@ -183,7 +183,7 @@ export function createHelarcEvaluationCorpus(): HelarcEvaluationCorpus {
     metricDefinitionRefs: metrics.map((item) => item.ref),
     environmentProtocolRef: REFS.environmentProtocol,
     repetitions: 2,
-    seedSchedule: ["phase26-seed-a", "phase26-seed-b"],
+    seedSchedule: ["deterministic-seed-a", "deterministic-seed-b"],
     pairing: {
       kind: "by_case",
       caseKeys: cases.map((item) => ({
@@ -285,10 +285,16 @@ function createObjective(): EvaluationObjective {
     requirement("controller-control-set.revision", "helarc.code-agent"),
     requirement("model-interaction.protocol.revision", "model-interaction"),
     requirement("run-interaction-records.revision", "agent-runtime"),
-    requirement("task-fulfillment-contract.revision", "agent-core"),
-    requirement("task-fulfillment-evaluator.revision", "helarc.product"),
-    requirement("completion-gate.revision", "agent-runtime"),
-    requirement("run-stop-review.revision", "agent-runtime"),
+    requirement("run-lifecycle.revision", "agent-runtime"),
+    requirement("run-settlement.revision", "agent-runtime"),
+    requirement("run-lifecycle-hooks.revision", "agent-runtime"),
+    requirement("task-fulfillment-hook.revision", "helarc.product"),
+    requirement("verification-completion-gate.revision", "verification"),
+    requirement("tool-input-validation.revision", "tools"),
+    requirement("agent-continuation.revision", "agent-runtime"),
+    requirement("model-context-assessment.revision", "model-interaction"),
+    requirement("provider-transport-accounting.revision", "model-interaction"),
+    requirement("context-recovery.revision", "agent-runtime"),
     requirement("activity-accounting.revision", "agent-runtime"),
     requirement("shell-execution-session.revision", "helarc.local-environment"),
     requirement("shell-command-outcome.revision", "helarc.local-environment"),
@@ -349,7 +355,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v17-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v18-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -360,7 +366,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-child-delegation-progression-v1",
+    "product.revision": "helarc-product-run-lifecycle-settlement-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -370,18 +376,24 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "controller-control-set.revision": "helarc.controller-controls.v1",
     "model-interaction.protocol.revision": "provider-native-tool-interaction.v1",
     "run-interaction-records.revision": "model-turn-and-settlement.v1",
-    "task-fulfillment-contract.revision": "agent-core.task-fulfillment.v1",
-    "task-fulfillment-evaluator.revision": HELARC_TASK_FULFILLMENT_EVALUATOR_REVISION,
-    "completion-gate.revision": "task-fulfillment-before-verification.v1",
-    "run-stop-review.revision": "agent-runtime.run-stop-review.v1",
+    "run-lifecycle.revision": "agent-runtime.run-lifecycle.v2",
+    "run-settlement.revision": "agent-runtime.run-terminal-settlement.v1",
+    "run-lifecycle-hooks.revision": "agent-runtime.stop-lifecycle-hooks.v1",
+    "task-fulfillment-hook.revision": HELARC_TASK_FULFILLMENT_HOOK_REVISION,
+    "verification-completion-gate.revision": "verification.current-completion-gate.v1",
+    "tool-input-validation.revision": "tools.tool-call-attempt-validation.v1",
+    "agent-continuation.revision": "agent-runtime.opaque-agent-continuation.v1",
+    "model-context-assessment.revision": "model-interaction.provider-context-assessment.v1",
+    "provider-transport-accounting.revision": "model-interaction.request-body-transport-accounting.v1",
+    "context-recovery.revision": "agent-runtime.model-input-recovery-entry.v1",
     "activity-accounting.revision": "agent-runtime.exact-activity.v1",
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-child-delegation-progression-v1",
+    "source.revision": "helarc-run-lifecycle-settlement-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
-    "tool-profile.revision": "ordinary-child-delegation-v1",
+    "tool-profile.revision": "validated-tool-input-and-continuation-v1",
     "delegation-contract.revision": "ordinary-child-sibling-dispatch-v1",
     "delegation-dispatch.revision": "agent-runtime.model-authored-sibling-dispatch.v1",
     "delegation-tool-inheritance.revision": "agent-runtime.exact-parent-tool-selection.v1",
@@ -390,14 +402,14 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
     "context-projector.revision": "helarc-context-projector-v1",
-    "run-limits.revision": "helarc-child-delegation-progression-limits-v1",
+    "run-limits.revision": "helarc-run-lifecycle-settlement-limits-v1",
     "run-tree-resource-account.revision": "agent-runtime.run-tree-resource-account.v3",
     "run-tree-authority.revision": "agent-runtime.run-tree-authority.v3",
     "run-tree-approval-account.revision": "agent-runtime.run-tree-approval-account.v1",
     "run-tree-settlement.revision": "agent-runtime.run-tree-settlement.v3",
     "descendant-projection.revision": "host.descendant-dispatch-projection.v1",
-    "retry-policy.revision": "phase26-retry-policy-v1",
-    "cancellation-limits.revision": "phase26-cancellation-v1",
+    "retry-policy.revision": "helarc-deterministic-retry-policy-v1",
+    "cancellation-limits.revision": "helarc-deterministic-cancellation-v1",
     "fixture-manifest.revision": HELARC_EVALUATION_CORPUS_REVISION,
     "expected-claims.revision": HELARC_EVALUATION_CORPUS_REVISION,
     "environment.operating-system": process.platform,
@@ -564,8 +576,8 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         },
         { kind: "stop", reason: "The requested command was denied." },
       ],
-      productStatus: "blocked",
-      runStatus: "blocked",
+      productStatus: "cancelled",
+      runStatus: "cancelled",
       agentSummary: null,
       expectedAddedFiles: {},
       requiredActionNames: [process.platform === "win32" ? "PowerShell" : "Bash"],
@@ -723,8 +735,8 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         { kind: "completion", summary: "Replaced the tracked file." },
         { kind: "completion", summary: "Replaced the tracked file." },
       ],
-      productStatus: "blocked",
-      runStatus: "blocked",
+      productStatus: "cancelled",
+      runStatus: "cancelled",
       agentSummary: null,
       expectedAddedFiles: { "tracked.txt": "changed\n" },
       requiredActionNames: ["Write"],
@@ -748,8 +760,8 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         { kind: "completion", summary: "The requested file is ready." },
         { kind: "completion", summary: "The requested file is ready." },
       ],
-      productStatus: "blocked",
-      runStatus: "blocked",
+      productStatus: "cancelled",
+      runStatus: "cancelled",
       agentSummary: null,
       expectedAddedFiles: {},
       requiredActionNames: [],

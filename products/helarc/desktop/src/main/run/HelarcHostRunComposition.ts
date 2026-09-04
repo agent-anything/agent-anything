@@ -44,7 +44,6 @@ import {
 import type { HelarcPermissionPreset } from "@agent-anything/helarc/configuration";
 import {
   createHelarcProductComposition,
-  validateHelarcToolInput,
   type HelarcActivityItem,
   type HelarcProductResult,
 } from "@agent-anything/helarc/composition";
@@ -96,10 +95,8 @@ const DEFAULT_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxDurationMs: HELARC_RUN_MAX_DURATION_MS,
   maxPendingInteractions: 8,
   plan: Object.freeze({ maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 }),
-  stopReview: Object.freeze({
-    maxRequiredFeedbackRounds: 2,
-    maxAdvisoryFeedbackRounds: 1,
-  }),
+  completionGate: Object.freeze({ maxFeedbackRounds: 2 }),
+  stopHooks: Object.freeze({ maxConsecutiveBlockingRounds: 2 }),
 });
 const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxIterations: 256,
@@ -108,10 +105,8 @@ const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxDurationMs: 2 * 60 * 60_000,
   maxPendingInteractions: 32,
   plan: Object.freeze({ maxSteps: 64, maxStepLength: 2_000, maxExplanationLength: 8_000 }),
-  stopReview: Object.freeze({
-    maxRequiredFeedbackRounds: 8,
-    maxAdvisoryFeedbackRounds: 4,
-  }),
+  completionGate: Object.freeze({ maxFeedbackRounds: 8 }),
+  stopHooks: Object.freeze({ maxConsecutiveBlockingRounds: 8 }),
 });
 const DEFAULT_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
   maxTotalDescendantRuns: 8,
@@ -124,9 +119,10 @@ const HARD_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
   maxDescendantDepth: 8,
 });
 
-export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan" | "stopReview">> & {
+export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan" | "completionGate" | "stopHooks">> & {
   readonly plan?: Partial<RunLimits["plan"]>;
-  readonly stopReview?: Partial<RunLimits["stopReview"]>;
+  readonly completionGate?: Partial<RunLimits["completionGate"]>;
+  readonly stopHooks?: Partial<RunLimits["stopHooks"]>;
 };
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
@@ -314,10 +310,7 @@ export async function prepareHelarcHostRun(
     ...product.runMetadata,
     enforcement,
   });
-  const baseContextProjection = createHelarcContextProjectionConfiguration(
-    input.provider.inputAccounting,
-    product.controllerProtocol,
-  );
+  const baseContextProjection = createHelarcContextProjectionConfiguration();
   const contextProjection = input.contextManifestPersistence === undefined
     ? baseContextProjection
     : Object.freeze({
@@ -327,14 +320,11 @@ export async function prepareHelarcHostRun(
   const runner = new Runner({
     controller: product.controller,
     contextProjection,
-    completion: {
-      taskFulfillment: product.taskFulfillment,
-      maximumDurationMs: 15_000,
-    },
+    lifecycleHooks: product.lifecycleHooks,
     operations: {
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
-      validateToolInput: validateHelarcToolInput,
+      toolInputSemanticValidators: Object.freeze([]),
       internalHandlers: Object.freeze([]),
       availability: product.actions.operationAvailability,
       actionExecution: {
@@ -610,9 +600,10 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
     ...DEFAULT_HELARC_RUN_LIMITS,
     ...input,
     plan: { ...DEFAULT_HELARC_RUN_LIMITS.plan, ...input?.plan },
-    stopReview: { ...DEFAULT_HELARC_RUN_LIMITS.stopReview, ...input?.stopReview },
+    completionGate: { ...DEFAULT_HELARC_RUN_LIMITS.completionGate, ...input?.completionGate },
+    stopHooks: { ...DEFAULT_HELARC_RUN_LIMITS.stopHooks, ...input?.stopHooks },
   };
-  const fields: Array<keyof Omit<RunLimits, "plan" | "stopReview">> = [
+  const fields: Array<keyof Omit<RunLimits, "plan" | "completionGate" | "stopHooks">> = [
     "maxIterations", "maxActions", "maxConsecutiveActionFailures", "maxDurationMs",
     "maxPendingInteractions",
   ];
@@ -626,19 +617,21 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
       throw new TypeError(`Helarc Plan limit '${field}' is outside the admitted range.`);
     }
   }
-  for (const field of ["maxRequiredFeedbackRounds", "maxAdvisoryFeedbackRounds"] as const) {
-    if (
-      !Number.isSafeInteger(value.stopReview[field]) ||
-      value.stopReview[field] < 0 ||
-      value.stopReview[field] > HARD_HELARC_RUN_LIMITS.stopReview[field]
-    ) {
-      throw new TypeError(`Helarc Stop Review limit '${field}' is outside the admitted range.`);
-    }
+  if (!Number.isSafeInteger(value.completionGate.maxFeedbackRounds) ||
+      value.completionGate.maxFeedbackRounds < 0 ||
+      value.completionGate.maxFeedbackRounds > HARD_HELARC_RUN_LIMITS.completionGate.maxFeedbackRounds) {
+    throw new TypeError("Helarc Completion Gate feedback limit is outside the admitted range.");
+  }
+  if (!Number.isSafeInteger(value.stopHooks.maxConsecutiveBlockingRounds) ||
+      value.stopHooks.maxConsecutiveBlockingRounds < 0 ||
+      value.stopHooks.maxConsecutiveBlockingRounds > HARD_HELARC_RUN_LIMITS.stopHooks.maxConsecutiveBlockingRounds) {
+    throw new TypeError("Helarc Stop Hook feedback limit is outside the admitted range.");
   }
   return Object.freeze({
     ...value,
     plan: Object.freeze(value.plan),
-    stopReview: Object.freeze(value.stopReview),
+    completionGate: Object.freeze(value.completionGate),
+    stopHooks: Object.freeze(value.stopHooks),
   });
 }
 

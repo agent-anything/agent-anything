@@ -30,7 +30,7 @@ const ADDED_CASES = Object.freeze([
 const CASES = Object.freeze([
   caseBlueprint("controlled-file-write", "succeeded", 103, 0,
     "ac6ed2d40188758cb5eb3a1f17f16aa24cc2f1551d4911afacc77ff92f19c384"),
-  caseBlueprint("denied-command", "blocked", 112, 0,
+  caseBlueprint("denied-command", "failed", 112, 0,
     "c9c6a93cf0063ca1ac961d5f6c7eea39a82f46e96977304283a23da5682dc256"),
   caseBlueprint("failed-check-recovery", "succeeded", 175, 0,
     "d2379d2d6ec9f591a7140804a2704b6606ee1ce09f1ce0568ab233d197e4b41e"),
@@ -42,11 +42,11 @@ const CASES = Object.freeze([
     "131195dd7ebc6cad8a170f1d1e674d144f7f7d8f53361810f8b642bf3a63989f"),
   caseBlueprint("ordinary-shell-validation", "succeeded", 114, 0,
     "578cccf55a4fb8e6c76eb20dc9a5f616c486ebba268e6b637d68421617f28293"),
-  caseBlueprint("premature-completion", "blocked", 67, 0,
+  caseBlueprint("premature-completion", "failed", 67, 0,
     "1cf6c6aab24bc7502585538f342a545067435331dfa924ceb002e6772c1bb085"),
   caseBlueprint("search", "succeeded", 102, 0,
     "d72e9ccd242d5ca6c1e6e55033d43954b2efe1b1d610eee2b60d5728ef835ea6"),
-  caseBlueprint("stale-evidence", "blocked", 135, 0,
+  caseBlueprint("stale-evidence", "failed", 135, 0,
     "2a08c4ae856fb2eafad47911c77260162ad522e8093edca4fbd81591b1e09429"),
 ]);
 
@@ -253,7 +253,7 @@ function validationCompletionMetricResultRef(refValue: {
 
 function caseBlueprint(
   slug: string,
-  targetOutcomeStatus: "succeeded" | "blocked",
+  targetOutcomeStatus: "succeeded" | "failed",
   latency: number,
   retryCount: number,
   semanticDigest: string,

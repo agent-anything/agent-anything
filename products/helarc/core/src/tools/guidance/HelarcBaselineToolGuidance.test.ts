@@ -67,13 +67,16 @@ describe("Helarc baseline Tool Guidance", () => {
     expect(windowsPowerShell.ref.revision).not.toBe(powerShell7.ref.revision);
   });
 
-  it("tells the Parent to round-trip exact Agent result references", () => {
+  it("describes self-contained delegation and opaque continuation identity", () => {
     const agent = guidanceSource("Agent");
+    const sendMessage = guidanceSource("SendMessage");
 
-    expect(agent.modelDescription).toContain("Copy that entire result_ref unchanged");
-    expect(agent.modelDescription).toContain("summarize ordinary Tool evidence");
-    expect(agent.inputFieldDescriptions["/properties/dependency_result/properties/kind"])
-      .toContain("delegation_result");
+    expect(agent.modelDescription).toContain("self-contained objective");
+    expect(agent.modelDescription).toContain("agent_id");
+    expect(agent.inputFieldDescriptions["/properties/prompt"])
+      .toContain("Self-contained delegated objective");
+    expect(sendMessage.inputFieldDescriptions["/properties/agent_id"])
+      .toContain("Opaque continuation identity");
   });
 
   it("rejects a Shell runtime profile attached to another Tool", () => {

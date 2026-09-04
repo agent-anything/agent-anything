@@ -161,8 +161,6 @@ export function createHelarcDescendantAgentContribution(
               }),
               authorityRestriction: null,
               allocationRequest: limits,
-              dependencyResult: delegated.dependencyResult,
-              replacedResult: delegated.replacedResult,
             }),
           });
         },
@@ -208,8 +206,6 @@ export function createHelarcDescendantAgentContribution(
               }),
               authorityRestriction: null,
               allocationRequest: limits,
-              dependencyResult: null,
-              replacedResult: null,
             }),
           });
         },
@@ -244,42 +240,31 @@ export function createHelarcDescendantAgentContribution(
 function snapshotDelegatedInput(candidate: unknown): {
   readonly prompt: string;
   readonly description: string | null;
-  readonly dependencyResult: { readonly id: string; readonly revision: string } | null;
-  readonly replacedResult: { readonly id: string; readonly revision: string } | null;
 } {
   if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
     throw new TypeError("Agent Tool input must be an object.");
   }
   const input = candidate as Record<string, unknown>;
-  if (Object.keys(input).some((key) =>
-    key !== "prompt" && key !== "description" &&
-    key !== "dependency_result" && key !== "replaced_result")) {
+  if (Object.keys(input).some((key) => key !== "prompt" && key !== "description")) {
     throw new TypeError("Agent Tool input contains an unsupported field.");
   }
   const prompt = boundedText(input.prompt, 64_000, "prompt");
   const description = input.description === undefined
     ? null
     : boundedText(input.description, 1_024, "description");
-  const dependencyResult = input.dependency_result === undefined
-    ? null
-    : snapshotSourceResult(input.dependency_result, "dependency_result");
-  const replacedResult = input.replaced_result === undefined
-    ? null
-    : snapshotSourceResult(input.replaced_result, "replaced_result");
-  return Object.freeze({ prompt, description, dependencyResult, replacedResult });
+  return Object.freeze({ prompt, description });
 }
 
 function projectDescendantResult(
-  result: DelegationResult,
+  input: {
+    readonly result: DelegationResult;
+    readonly continuation: Readonly<{ readonly id: string; readonly revision: string }> | null;
+  },
 ): import("@agent-anything/agent-runtime/runner").DescendantOperationOutcome {
+  const result = input.result;
   const artifacts = result.artifacts.refs;
   const output = Object.freeze({
-    result_ref: Object.freeze({
-      kind: "delegation_result" as const,
-      id: result.ref.id,
-      revision: result.ref.revision,
-    }),
-    child_run_id: result.correlation.child.run.id,
+    agent_id: input.continuation?.id ?? null,
     status: result.terminal.status,
     summary: result.narrative?.text ?? "",
     artifact_refs: artifacts,
@@ -303,7 +288,6 @@ function projectDescendantResult(
   }
   if (
     result.terminal.status === "succeeded" ||
-    result.terminal.status === "blocked" ||
     output.summary.length > 0 ||
     output.artifact_refs.length > 0
   ) {
@@ -333,27 +317,6 @@ function projectDescendantResult(
       result.terminal.code ?? "descendant_run_failed",
       "Descendant Run failed.",
     ),
-  });
-}
-
-function snapshotSourceResult(candidate: unknown, field: string): {
-  readonly id: string;
-  readonly revision: string;
-} {
-  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
-    throw new TypeError(`${field} must be an object.`);
-  }
-  const value = candidate as Record<string, unknown>;
-  if (Object.keys(value).some((key) =>
-    key !== "kind" && key !== "id" && key !== "revision")) {
-    throw new TypeError(`${field} contains an unsupported field.`);
-  }
-  if (value.kind !== "delegation_result") {
-    throw new TypeError(`${field}.kind must be delegation_result.`);
-  }
-  return Object.freeze({
-    id: boundedText(value.id, 1_024, `${field}.id`),
-    revision: boundedText(value.revision, 256, `${field}.revision`),
   });
 }
 

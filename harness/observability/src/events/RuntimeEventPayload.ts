@@ -7,12 +7,15 @@ export type RuntimeRunItemKind =
   | "pending_transition"
   | "cancellation_transition"
   | "verification_feedback"
-  | "task_fulfillment_assessment"
-  | "stop_review"
-  | "stop_feedback"
+  | "lifecycle_event"
+  | "lifecycle_hook_invocation"
+  | "lifecycle_hook_feedback"
+  | "completion_acceptance"
+  | "suspension_transition"
+  | "settlement_cause"
   | "terminal_transition";
 
-export type RuntimeTerminalStatus = "succeeded" | "blocked" | "failed" | "cancelled";
+export type RuntimeTerminalStatus = "succeeded" | "failed" | "cancelled";
 
 export interface RunStartedRuntimeEventPayload {
   readonly status: "running";
@@ -28,21 +31,29 @@ export interface RunItemAppendedRuntimeEventPayload {
   readonly itemSequence: number;
 }
 
-export interface RunStopReviewedRuntimeEventPayload {
-  readonly reviewSequence: number;
-  readonly decision: "allow_stop" | "continue_run" | "wait" | "failed";
-  readonly checkCount: number;
-  readonly limitationCount: number;
-  readonly requiredFeedbackRounds: number;
-  readonly advisoryFeedbackRounds: number;
+export interface RunLifecycleEventEmittedRuntimeEventPayload {
+  readonly eventId: string;
+  readonly eventName: "Stop" | "StopFailure";
+  readonly sequence: number;
+  readonly eventRevision: string;
 }
 
-export interface RunStopFeedbackRequestedRuntimeEventPayload {
-  readonly reviewSequence: number;
-  readonly owner: "task_fulfillment" | "verification" | "plan";
-  readonly severity: "required" | "advisory";
+export interface RunLifecycleHookCompletedRuntimeEventPayload {
+  readonly eventId: string;
+  readonly hookId: string;
+  readonly hookRevision: string;
+  readonly status: "allow" | "block" | "non_blocking_error";
+  readonly code: string | null;
+  readonly durationMs: number;
+  readonly stale: boolean;
+}
+
+export interface RunLifecycleHookFeedbackRuntimeEventPayload {
+  readonly eventId: string;
+  readonly epoch: number;
   readonly round: number;
-  readonly code: string;
+  readonly codeCount: number;
+  readonly omittedReasonCount: number;
 }
 
 export type RuntimeDescendantRequestedDispatchForm =
@@ -61,15 +72,13 @@ export interface RunDescendantDispatchRuntimeEventPayload {
 export interface RunDescendantRuntimeEventPayload
   extends RunDescendantDispatchRuntimeEventPayload {
   readonly relationId: string;
-  readonly relationKind: "delegation" | "replacement" | "continuation";
+  readonly relationKind: "delegation" | "continuation";
   readonly parentRunActionId: string;
   readonly childRunId: string;
   readonly childAgentId: string;
   readonly childAgentRevision: string;
   readonly requestId: string;
   readonly requestRevision: string;
-  readonly dependencyResultId: string | null;
-  readonly replacedResultId: string | null;
   readonly contextSourceCount: number;
   readonly authorityDerivationId: string;
   readonly limitDerivationId: string;
@@ -111,7 +120,7 @@ export interface RunDescendantRejectedRuntimeEventPayload
 export interface RunDescendantSettledRuntimeEventPayload
   extends RunDescendantRuntimeEventPayload {
   readonly status: RuntimeTerminalStatus;
-  readonly code: string | null;
+  readonly code: string;
   readonly resultId: string;
   readonly resultRevision: string;
   readonly expectationPresentCount: number;
@@ -185,7 +194,6 @@ interface TerminalRuntimeEventPayload<TStatus extends RuntimeTerminalStatus> {
 }
 
 export type RunCompletedRuntimeEventPayload = TerminalRuntimeEventPayload<"succeeded">;
-export type RunBlockedRuntimeEventPayload = TerminalRuntimeEventPayload<"blocked">;
 export type RunFailedRuntimeEventPayload = TerminalRuntimeEventPayload<"failed">;
 export type RunCancelledRuntimeEventPayload = TerminalRuntimeEventPayload<"cancelled">;
 
@@ -215,6 +223,16 @@ export interface ControllerFinishedRuntimeEventPayload {
   readonly status: "decided" | "failed" | "interrupted";
   readonly code: string | null;
   readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
+}
+
+export interface ToolInputRejectedRuntimeEventPayload {
+  readonly attemptId: string;
+  readonly requestedName: string;
+  readonly selectedToolRevision: string | null;
+  readonly code: string;
+  readonly issueCount: number;
+  readonly omittedIssueCount: number;
+  readonly modelCallId: string | null;
 }
 
 export type RuntimeOperationBindingKind = "internal" | "direct" | "hosted" | "composite" | "descendant_agent";
@@ -298,8 +316,9 @@ export interface VerificationGateEvaluatedRuntimeEventPayload {
 export interface RuntimeEventPayloadMap {
   readonly "run.started": RunStartedRuntimeEventPayload;
   readonly "run.item.appended": RunItemAppendedRuntimeEventPayload;
-  readonly "run.stop.reviewed": RunStopReviewedRuntimeEventPayload;
-  readonly "run.stop.feedback_requested": RunStopFeedbackRequestedRuntimeEventPayload;
+  readonly "run.lifecycle.emitted": RunLifecycleEventEmittedRuntimeEventPayload;
+  readonly "run.lifecycle.hook.completed": RunLifecycleHookCompletedRuntimeEventPayload;
+  readonly "run.lifecycle.hook.feedback": RunLifecycleHookFeedbackRuntimeEventPayload;
   readonly "run.descendant.reserved": RunDescendantReservedRuntimeEventPayload;
   readonly "run.descendant.started": RunDescendantStartedRuntimeEventPayload;
   readonly "run.descendant.rejected": RunDescendantRejectedRuntimeEventPayload;
@@ -307,12 +326,12 @@ export interface RuntimeEventPayloadMap {
   readonly "context.transition.committed": ContextTransitionCommittedRuntimeEventPayload;
   readonly "context.projection.completed": ContextProjectionCompletedRuntimeEventPayload;
   readonly "run.completed": RunCompletedRuntimeEventPayload;
-  readonly "run.blocked": RunBlockedRuntimeEventPayload;
   readonly "run.failed": RunFailedRuntimeEventPayload;
   readonly "run.cancelled": RunCancelledRuntimeEventPayload;
   readonly "controller.started": ControllerStartedRuntimeEventPayload;
   readonly "controller.tool_exposure.resolved": ControllerToolExposureResolvedRuntimeEventPayload;
   readonly "controller.finished": ControllerFinishedRuntimeEventPayload;
+  readonly "tool.input.rejected": ToolInputRejectedRuntimeEventPayload;
   readonly "operation.started": OperationStartedRuntimeEventPayload;
   readonly "operation.finished": OperationFinishedRuntimeEventPayload;
   readonly "interaction.opened": InteractionOpenedRuntimeEventPayload;

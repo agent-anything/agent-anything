@@ -14,8 +14,9 @@ import type {
   RunCancellationRequest,
   RunCancellationRequestInput,
   RunCancellationReceipt,
-  RunResultCode,
+  RunSettlementCauseRecord,
 } from "../run/index.js";
+import { runSettlementCauseCode } from "../run/index.js";
 import type { RunTreeLimits } from "./RunConfig.js";
 import {
   RunTreeResourceAccount,
@@ -119,13 +120,23 @@ export interface RunTreeNodeProjection {
   readonly dispatch: DescendantDispatchProvenance | null;
   readonly depth: number;
   readonly status: RunLifecycleStatus;
-  readonly resultCode: RunResultCode | null;
+  readonly terminal: RunTreeTerminalProjection | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
   readonly resources: RunTreeNodeResourceSnapshot;
   readonly authorityRevision: string;
   readonly cancellation: RunTreeCancellationProjection | null;
   readonly resultTransfer: DescendantResultTransferStatus;
+}
+
+export interface RunTreeTerminalProjection {
+  readonly causeId: string;
+  readonly causeRevision: string;
+  readonly causeKind: RunSettlementCauseRecord["kind"];
+  readonly code: string;
+  readonly sourceOwner: string;
+  readonly sourceKind: string;
+  readonly sourceId: string;
 }
 
 export interface RunTreeSettlementProjection {
@@ -198,7 +209,7 @@ interface MutableRunTreeNode {
   readonly acceptedOrder: number;
   readonly dispatch: DescendantDispatchProvenance | null;
   status: RunLifecycleStatus;
-  resultCode: RunResultCode | null;
+  terminal: RunTreeTerminalProjection | null;
   startedAt: string | null;
   completedAt: string | null;
   readonly admittedAuthorityRevision: string;
@@ -262,7 +273,7 @@ export class RunTreeExecution {
       acceptedOrder: 0,
       dispatch: null,
       status: "initializing",
-      resultCode: null,
+      terminal: null,
       startedAt: input.startedAt,
       completedAt: null,
       admittedAuthorityRevision: input.rootAuthorityRevision,
@@ -335,7 +346,7 @@ export class RunTreeExecution {
       acceptedOrder: this.totalDescendantRuns,
       dispatch,
       status: "initializing",
-      resultCode: null,
+      terminal: null,
       startedAt: null,
       completedAt: null,
       admittedAuthorityRevision: input.authorityRevision,
@@ -502,11 +513,20 @@ export class RunTreeExecution {
 
   settleRun(
     runId: string,
-    status: Extract<RunLifecycleStatus, "succeeded" | "blocked" | "failed" | "cancelled">,
-    resultCode: RunResultCode | null,
+    status: Extract<RunLifecycleStatus, "succeeded" | "failed" | "cancelled">,
+    terminal: RunTreeTerminalProjection,
     completedAt: string,
   ): void {
     assertDateTime(completedAt, "completedAt");
+    const projectedTerminal = snapshotRunTreeTerminalProjection(terminal);
+    const expectedCauseKind = status === "succeeded"
+      ? "completion"
+      : status === "failed"
+        ? "failure"
+        : "cancellation";
+    if (projectedTerminal.causeKind !== expectedCauseKind) {
+      throw new TypeError("Run Tree terminal cause kind disagrees with lifecycle status.");
+    }
     const node = this.requireNode(runId);
     if (isTerminal(node.status)) {
       throw new TypeError("A Run cannot settle more than once.");
@@ -526,7 +546,7 @@ export class RunTreeExecution {
       throw new TypeError("The root Run cannot settle before the aggregate barrier closes.");
     }
     node.status = status;
-    node.resultCode = resultCode;
+    node.terminal = projectedTerminal;
     node.completedAt = completedAt;
     if (runId !== this.input.rootRunId) {
       this.activeDescendantRuns -= 1;
@@ -536,13 +556,29 @@ export class RunTreeExecution {
   }
 
   failStart(runId: string, completedAt: string): void {
-    this.settleRun(runId, "failed", "runtime_execution_failed", completedAt);
+    this.settleRun(runId, "failed", Object.freeze({
+      causeId: `${runId}:start-failure`,
+      causeRevision: "1",
+      causeKind: "failure",
+      code: "runtime_execution_failed",
+      sourceOwner: "agent-runtime",
+      sourceKind: "run_start_failure",
+      sourceId: `${runId}:start-failure`,
+    }), completedAt);
     this.settleDescendantTransfer(runId, "not_required");
   }
 
   cancelBeforeStart(runId: string, completedAt: string): void {
     this.settleResources(runId);
-    this.settleRun(runId, "cancelled", "runtime_cancelled", completedAt);
+    this.settleRun(runId, "cancelled", Object.freeze({
+      causeId: `${runId}:pre-start-cancellation`,
+      causeRevision: "1",
+      causeKind: "cancellation",
+      code: "runtime_cancelled",
+      sourceOwner: "agent-runtime",
+      sourceKind: "run_cancellation_request",
+      sourceId: `${runId}:pre-start-cancellation`,
+    }), completedAt);
     this.settleDescendantTransfer(runId, "not_required");
   }
 
@@ -727,7 +763,7 @@ export class RunTreeExecution {
         dispatch: node.dispatch,
         depth: node.lineage.depth,
         status: node.status,
-        resultCode: node.resultCode,
+        terminal: node.terminal,
         startedAt: node.startedAt,
         completedAt: node.completedAt,
         resources: this.resources.getNodeSnapshot(runId),
@@ -787,8 +823,39 @@ function sameLineage(left: RunLineage, right: RunLineage): boolean {
 }
 
 function isTerminal(status: RunLifecycleStatus): boolean {
-  return status === "succeeded" || status === "blocked" ||
-    status === "failed" || status === "cancelled";
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+export function projectRunTreeTerminal(
+  cause: RunSettlementCauseRecord,
+): RunTreeTerminalProjection {
+  return Object.freeze({
+    causeId: cause.ref.id,
+    causeRevision: cause.ref.revision,
+    causeKind: cause.kind,
+    code: runSettlementCauseCode(cause),
+    sourceOwner: cause.source.owner,
+    sourceKind: cause.source.kind,
+    sourceId: cause.source.id,
+  });
+}
+
+function snapshotRunTreeTerminalProjection(
+  input: RunTreeTerminalProjection,
+): RunTreeTerminalProjection {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Run Tree terminal projection must be an object.");
+  }
+  assertToken(input.causeId, "terminal.causeId");
+  assertToken(input.causeRevision, "terminal.causeRevision");
+  assertToken(input.code, "terminal.code");
+  assertToken(input.sourceOwner, "terminal.sourceOwner");
+  assertToken(input.sourceKind, "terminal.sourceKind");
+  assertToken(input.sourceId, "terminal.sourceId");
+  if (!["completion", "failure", "cancellation"].includes(input.causeKind)) {
+    throw new TypeError("Run Tree terminal cause kind is unsupported.");
+  }
+  return Object.freeze({ ...input });
 }
 
 function notify(

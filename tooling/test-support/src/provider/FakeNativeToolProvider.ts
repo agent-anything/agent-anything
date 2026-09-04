@@ -12,10 +12,7 @@ import {
   type ProviderRequest,
   type ProviderUsage,
 } from "@agent-anything/model-interaction";
-import {
-  createUtf8ModelInputAccounting,
-  type ProviderModelInputAccounting,
-} from "@agent-anything/model-interaction/input";
+import { createFakeProviderContext } from "./FakeProviderContext.js";
 
 export type FakeNativeToolProviderStep =
   | {
@@ -37,23 +34,17 @@ export interface FakeNativeToolProviderInput {
 
 export class FakeNativeToolProvider implements Provider {
   readonly descriptor: ProviderDescriptor;
-  readonly inputAccounting: ProviderModelInputAccounting;
+  readonly modelContext: Provider["modelContext"];
+  readonly requestBodyTransportLimit: Provider["requestBodyTransportLimit"];
   private readonly steps: FakeNativeToolProviderStep[];
   private readonly recordedRequests: ProviderRequest[] = [];
 
   constructor(input: FakeNativeToolProviderInput = {}) {
     const providerId = input.descriptor?.id ?? "fake-native-tool-provider";
     const model = input.model ?? "fake-model";
-    this.inputAccounting = createUtf8ModelInputAccounting({
-      providerId,
-      model,
-      maximumInputBytes: 4 * 1_024 * 1_024,
-      limitSource: "host_configured",
-      estimator: { id: `${providerId}.utf8-content`, revision: "1" },
-      framing: { id: `${providerId}.framing`, revision: "1" },
-      renderRequest: (instructions, messages, interaction) =>
-        JSON.stringify({ instructions, messages, interaction }),
-    });
+    const context = createFakeProviderContext(providerId, model);
+    this.modelContext = context.modelContext;
+    this.requestBodyTransportLimit = context.requestBodyTransportLimit;
     this.descriptor = Object.freeze({
       id: providerId,
       name: input.descriptor?.name ?? "Fake Native Tool Provider",
@@ -69,7 +60,11 @@ export class FakeNativeToolProvider implements Provider {
         }),
         structuredGeneration: Object.freeze({ supported: true as const }),
         streaming: Object.freeze({ supported: false as const }),
-        modelInput: this.inputAccounting.capability,
+        modelContext: Object.freeze({
+          capacity: this.modelContext.capacity,
+          requestedOutput: this.modelContext.requestedOutput,
+          inputPreservation: this.modelContext.inputPreservation,
+        }),
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
         usageMetering: Object.freeze({

@@ -2,8 +2,8 @@ export type RunLifecycleStatus =
   | "initializing"
   | "running"
   | "waiting"
+  | "suspended"
   | "cancelling"
   | "succeeded"
-  | "blocked"
   | "failed"
   | "cancelled";

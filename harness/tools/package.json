@@ -24,6 +24,10 @@
       "types": "./src/invocation/index.ts",
       "import": "./dist/invocation/index.js"
     },
+    "./validation": {
+      "types": "./src/validation/index.ts",
+      "import": "./dist/validation/index.js"
+    },
     "./result": {
       "types": "./src/result/index.ts",
       "import": "./dist/result/index.js"
@@ -51,7 +55,8 @@
   "private": true,
   "dependencies": {
     "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/operation-catalog": "workspace:*"
+    "@agent-anything/operation-catalog": "workspace:*",
+    "ajv": "8.20.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1"

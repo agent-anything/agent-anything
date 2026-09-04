@@ -7,7 +7,6 @@ export type AuditOutcome = "succeeded" | "failed" | "blocked" | "cancelled";
 export type AuditRecordName =
   | "run.started"
   | "run.succeeded"
-  | "run.blocked"
   | "run.failed"
   | "run.cancelled"
   | "approval.requested"
@@ -94,7 +93,7 @@ export interface AuditSandboxAttemptTarget {
 }
 
 export interface AuditRunLifecyclePayload<
-  TStatus extends "started" | "succeeded" | "blocked" | "failed" | "cancelled",
+  TStatus extends "started" | "succeeded" | "failed" | "cancelled",
 > {
   readonly status: TStatus;
   readonly activeAgentId: string;
@@ -160,12 +159,6 @@ interface AuditRecordContractMap {
     readonly target: AuditRunTarget;
     readonly outcome: "succeeded";
     readonly payload: AuditRunLifecyclePayload<"succeeded">;
-  };
-  readonly "run.blocked": {
-    readonly action: "runner.blocked";
-    readonly target: AuditRunTarget;
-    readonly outcome: "blocked";
-    readonly payload: AuditRunLifecyclePayload<"blocked">;
   };
   readonly "run.failed": {
     readonly action: "runner.failed";

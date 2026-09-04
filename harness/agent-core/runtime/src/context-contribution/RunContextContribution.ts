@@ -4,7 +4,7 @@ import type { ContextContribution, ContextInstructionRole } from "@agent-anythin
 import { measureContextPayload } from "@agent-anything/context/contribution";
 import type { ContextAdmissionProfile } from "@agent-anything/context/active-context";
 import type { PlanProjection } from "../plan/index.js";
-import type { RunStopFeedback } from "../stop/index.js";
+import type { StopHookFeedbackRecord } from "../hooks/index.js";
 import type { RunObservation, RunState } from "../run/index.js";
 import type {
   DelegationContextMaterial,
@@ -88,8 +88,6 @@ export function createDelegationSelectedContextContribution(input: {
   readonly necessity: "mandatory" | "optional";
   readonly createdAt: string;
 }): ContextContribution {
-  const sourceResult = input.role === "dependency_result" ||
-    input.role === "replaced_result";
   return createRunContextContribution({
     id: input.id,
     revision: input.material.ref.revision,
@@ -101,13 +99,13 @@ export function createDelegationSelectedContextContribution(input: {
     observedAt: input.createdAt,
     payload: input.material.payload,
     payloadKind: "structured",
-    retention: sourceResult ? "history" : "current",
-    replacementKey: sourceResult ? null : `delegation_${input.role}`,
+    retention: "current",
+    replacementKey: `delegation_${input.role}`,
     instructionRole: "data",
     necessity: input.necessity,
-    precedence: sourceResult ? 80 : 85,
+    precedence: 85,
     audiences: Object.freeze(["model", "runtime"]),
-    provenanceKind: sourceResult ? "delegation_result" : "delegation_context_material",
+    provenanceKind: "delegation_context_material",
     provenanceId: input.material.ref.id,
     provenanceRevision: input.material.ref.revision,
   });
@@ -134,11 +132,11 @@ export function createSteeringContextContribution(input: { readonly id: string; 
   });
 }
 
-export function createStopFeedbackContextContribution(input: {
+export function createLifecycleHookFeedbackContextContribution(input: {
   readonly id: string;
   readonly revision: string;
   readonly runId: string;
-  readonly feedback: RunStopFeedback;
+  readonly feedback: StopHookFeedbackRecord;
   readonly createdAt: string;
 }): ContextContribution {
   return createRunContextContribution({
@@ -146,27 +144,27 @@ export function createStopFeedbackContextContribution(input: {
     revision: input.revision,
     runId: input.runId,
     owner: "agent-runtime",
-    sourceKind: "run_stop_feedback",
-    sourceId: input.runId,
+    sourceKind: "lifecycle_hook_feedback",
+    sourceId: input.feedback.eventId,
     sourceRevision: input.revision,
     observedAt: input.createdAt,
     payload: toContextJsonValue({
-      kind: "run_stop_feedback",
-      owner: input.feedback.owner,
-      severity: input.feedback.severity,
+      kind: "lifecycle_hook_feedback",
+      eventId: input.feedback.eventId,
+      epoch: input.feedback.epoch,
       round: input.feedback.round,
-      code: input.feedback.code,
+      codes: input.feedback.codes,
       message: input.feedback.message,
     }),
     payloadKind: "structured",
     retention: "current",
-    replacementKey: "run_stop_feedback",
+    replacementKey: "lifecycle_hook_feedback",
     instructionRole: "data",
     necessity: "mandatory",
     precedence: 92,
     audiences: Object.freeze(["model"]),
-    provenanceKind: "run_stop_review",
-    provenanceId: `${input.runId}:${input.feedback.review.sequence}`,
+    provenanceKind: "lifecycle_hook_event",
+    provenanceId: input.feedback.eventId,
     provenanceRevision: input.revision,
   });
 }
@@ -220,15 +218,14 @@ export function createDelegationSelectedContextAdmissionProfile(
   role: DelegationContextMaterialRole,
   necessity: "mandatory" | "optional",
 ): ContextAdmissionProfile {
-  const sourceResult = role === "dependency_result" || role === "replaced_result";
   return admissionProfile({
     owner: material.ref.owner,
     sourceKinds: [material.ref.kind],
     audiences: ["model", "runtime"],
-    retention: [sourceResult ? "history" : "current"],
+    retention: ["current"],
     instructionRoles: ["data"],
     necessities: [necessity],
-    maximumPrecedence: sourceResult ? 80 : 85,
+    maximumPrecedence: 85,
   });
 }
 
@@ -291,10 +288,10 @@ export function createSteeringContextAdmissionProfile(): ContextAdmissionProfile
   });
 }
 
-export function createStopFeedbackContextAdmissionProfile(): ContextAdmissionProfile {
+export function createLifecycleHookFeedbackContextAdmissionProfile(): ContextAdmissionProfile {
   return admissionProfile({
     owner: "agent-runtime",
-    sourceKinds: ["run_stop_feedback"],
+    sourceKinds: ["lifecycle_hook_feedback"],
     audiences: ["model"],
     retention: ["current"],
     instructionRoles: ["data"],

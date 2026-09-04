@@ -1,9 +1,11 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
   createModelCallRef,
+  createUnknownModelInputMeasurement,
   createModelTurnId,
   createProviderAttemptInterruption,
   providerResultFromInterruption,
+  snapshotProviderRequest,
   snapshotProviderResponse,
   type ModelJsonValue,
   type ModelInstructions,
@@ -15,13 +17,17 @@ import {
   type ProviderDescriptor,
   type ProviderFailure,
   type ProviderInteraction,
+  type ProviderModelContext,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
 import {
-  createUtf8ModelInputAccounting,
-  type ProviderModelInputAccounting,
-} from "@agent-anything/model-interaction/input";
+  accountProviderTransport,
+  verifyProviderTransportAccounting,
+  type ProviderTransportAccounting,
+  type ProviderTransportLimit,
+} from "@agent-anything/model-interaction/transport";
+import type { ModelInputComposition } from "@agent-anything/model-interaction/input";
 import {
   classifyProviderHttpFailure,
   readProviderHttpFailureMetadata,
@@ -53,34 +59,66 @@ export interface OpenAICompatibleProviderConfig {
   readonly apiKey: string;
   readonly model: string;
   readonly timeoutMs: number;
+  readonly maximumOutputTokens: number;
   readonly nativeToolInteraction: {
     readonly supported: boolean;
   };
-  readonly inputLimit: {
+  readonly requestBodyTransportLimit: {
     readonly maximumBytes: number;
     readonly source: "provider_reported" | "host_configured";
+    readonly revision: string;
   };
 }
 
 export class OpenAICompatibleProvider implements Provider {
   readonly descriptor: ProviderDescriptor;
-  readonly inputAccounting: ProviderModelInputAccounting;
+  readonly modelContext: ProviderModelContext;
+  readonly requestBodyTransportLimit: ProviderTransportLimit;
 
   constructor(
     config: OpenAICompatibleProviderConfig,
     private readonly fetchImpl: FetchLike = globalThis.fetch as FetchLike,
   ) {
     this.config = snapshotConfig(config);
-    this.inputAccounting = createUtf8ModelInputAccounting({
+    this.requestBodyTransportLimit = Object.freeze({
+      ...this.config.requestBodyTransportLimit,
+    });
+    const target = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      maximumInputBytes: this.config.inputLimit.maximumBytes,
-      limitSource: this.config.inputLimit.source,
-      estimator: { id: "openai-compatible.utf8-content", revision: "1" },
-      framing: { id: "openai-compatible.chat-completions-framing", revision: "3" },
-      renderRequest: (instructions, messages, interaction) =>
-        encodeOpenAIRequest(this.config.model, instructions, messages, interaction),
+      revision: `openai-compatible.chat-completions.target.v1:${this.config.model}`,
     });
+    const capacity = Object.freeze({ supported: false as const });
+    const requestedOutput = Object.freeze({
+      unit: "tokens" as const,
+      maximum: this.config.maximumOutputTokens,
+      source: "host_configured" as const,
+      revision: `openai-compatible.max-tokens.v1:${this.config.maximumOutputTokens}`,
+    });
+    const inputPreservation = Object.freeze({
+      providerId: PROVIDER_ID,
+      model: this.config.model,
+      adapterRevision: "openai-compatible.chat-completions.adapter.v4",
+      runtimeVersion: null,
+      truncation: "unknown" as const,
+      contextShift: "unknown" as const,
+      evidence: Object.freeze([]),
+      revision: "openai-compatible.input-preservation.unknown.v1",
+    });
+    const modelContext: ProviderModelContext = Object.freeze({
+      target,
+      capacity,
+      requestedOutput,
+      inputPreservation,
+      measure(composition: ModelInputComposition, measuredAt: string) {
+        return createUnknownModelInputMeasurement({
+          compositionId: composition.id,
+          measuredAt,
+          reason: "unsupported",
+        });
+      },
+    });
+    this.modelContext = modelContext;
     this.descriptor = Object.freeze({
       id: PROVIDER_ID,
       name: "OpenAI-compatible Chat Completions",
@@ -97,7 +135,7 @@ export class OpenAICompatibleProvider implements Provider {
           : Object.freeze({ supported: false as const }),
         structuredGeneration: Object.freeze({ supported: true as const }),
         streaming: Object.freeze({ supported: false as const }),
-        modelInput: this.inputAccounting.capability,
+        modelContext: Object.freeze({ capacity, requestedOutput, inputPreservation }),
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
         usageMetering: Object.freeze({
@@ -117,6 +155,16 @@ export class OpenAICompatibleProvider implements Provider {
     request: ProviderRequest,
     context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    try {
+      request = snapshotProviderRequest(request);
+    } catch (error) {
+      return failed(
+        "invalid_request",
+        "provider_request_invalid",
+        "Provider request does not satisfy the model-interaction Contract.",
+        { metadata: { causeName: error instanceof Error ? error.name : null } },
+      );
+    }
     if (request.continuation !== null) {
       return failed(
         "invalid_request",
@@ -134,10 +182,12 @@ export class OpenAICompatibleProvider implements Provider {
         "The configured OpenAI-compatible endpoint and model profile does not declare native Tool interaction.",
       );
     }
+    const endpoint = this.endpointUrl();
     const encoded = prepareEncodedRequest(
-      this.inputAccounting,
-      this.config.model,
+      this.config,
       request,
+      endpoint,
+      this.requestBodyTransportLimit,
     );
     if (encoded.kind === "failed") return encoded.result;
 
@@ -146,7 +196,21 @@ export class OpenAICompatibleProvider implements Provider {
       const interruptedBeforeRequest = providerResultFromInterruption(attempt.cause);
       if (interruptedBeforeRequest !== null) return interruptedBeforeRequest;
 
-      const response = await this.fetchImpl(this.endpointUrl(), {
+      try {
+        verifyProviderTransportAccounting({
+          accounting: encoded.accounting,
+          encodedBody: encoded.body,
+          binding: transportBinding(endpoint),
+        });
+      } catch (error) {
+        return failed(
+          "transport",
+          "provider_transport_binding_mismatch",
+          "Provider request transport binding changed after accounting.",
+          { metadata: { causeName: error instanceof Error ? error.name : null } },
+        );
+      }
+      const response = await this.fetchImpl(endpoint, {
         method: "POST",
         headers: this.headers(),
         body: encoded.body,
@@ -205,7 +269,11 @@ export class OpenAICompatibleProvider implements Provider {
         );
       }
       const interruptedAfterBody = providerResultFromInterruption(attempt.cause);
-      return interruptedAfterBody ?? mapChatCompletionResponse(body, request);
+      return interruptedAfterBody ?? mapChatCompletionResponse(
+        body,
+        request,
+        this.modelContext.inputPreservation.revision,
+      );
     } catch (error) {
       const interruption = providerResultFromInterruption(attempt.cause);
       if (interruption !== null) return interruption;
@@ -231,48 +299,47 @@ export class OpenAICompatibleProvider implements Provider {
 }
 
 function prepareEncodedRequest(
-  accounting: ProviderModelInputAccounting,
-  model: string,
+  config: Readonly<OpenAICompatibleProviderConfig>,
   request: ProviderRequest,
-): { readonly kind: "encoded"; readonly body: string } |
+  endpoint: string,
+  limit: ProviderTransportLimit,
+): { readonly kind: "encoded"; readonly body: string; readonly accounting: ProviderTransportAccounting } |
   { readonly kind: "failed"; readonly result: ProviderCallResult } {
-  try {
-    accounting.verify({
-      providerId: accounting.providerId,
-      model: accounting.model,
-      instructions: request.instructions,
-      messages: request.messages,
-      interaction: request.interaction,
-      composition: request.composition,
-    });
-  } catch (error) {
+  if (request.modelContext.assessment === null) {
     return Object.freeze({
       kind: "failed",
       result: failed(
         "invalid_request",
-        "provider_input_accounting_invalid",
-        "Provider request does not match its verified model-input composition.",
-        { metadata: { causeName: error instanceof Error ? error.name : null } },
+        "provider_context_assessment_missing",
+        "Provider request has no model-context assessment.",
       ),
     });
   }
   try {
     const body = encodeOpenAIRequest(
-      model,
+      config.model,
+      config.maximumOutputTokens,
       request.instructions,
       request.messages,
       request.interaction,
     );
-    accounting.verifyEncoded({
-      providerId: accounting.providerId,
-      model: accounting.model,
-      instructions: request.instructions,
-      messages: request.messages,
-      interaction: request.interaction,
-      composition: request.composition,
-      encodedRequest: body,
+    const accounting = accountProviderTransport({
+      encodedBody: body,
+      binding: transportBinding(endpoint),
+      limit,
     });
-    return Object.freeze({ kind: "encoded", body });
+    if (accounting.disposition === "exceeds_limit") {
+      return Object.freeze({
+        kind: "failed",
+        result: failed(
+          "transport_limit",
+          "provider_transport_request_too_large",
+          "Encoded Provider request exceeds the configured request-body transport limit.",
+          { metadata: { accounting } },
+        ),
+      });
+    }
+    return Object.freeze({ kind: "encoded", body, accounting });
   } catch (error) {
     return Object.freeze({
       kind: "failed",
@@ -286,14 +353,25 @@ function prepareEncodedRequest(
   }
 }
 
+function transportBinding(endpoint: string) {
+  return Object.freeze({
+    method: "POST" as const,
+    endpoint,
+    contentType: "application/json",
+    encoding: "utf-8" as const,
+  });
+}
+
 function encodeOpenAIRequest(
   model: string,
+  maximumOutputTokens: number,
   instructions: ModelInstructions,
   messages: readonly ModelMessage[],
   interaction: ProviderInteraction,
 ): string {
   return JSON.stringify({
     model,
+    max_tokens: maximumOutputTokens,
     messages: interaction.kind === "native_tool_turn"
       ? encodeOpenAINativeMessages(instructions, messages)
       : [
@@ -408,15 +486,17 @@ function openAIResponseFormat(
 function mapChatCompletionResponse(
   value: unknown,
   request: ProviderRequest,
+  inputPreservationRevision: string,
 ): ProviderCallResult {
   return request.interaction.kind === "native_tool_turn"
-    ? mapNativeChatCompletionResponse(value, request)
-    : mapGeneratedChatCompletionResponse(value, request.interaction);
+    ? mapNativeChatCompletionResponse(value, request, inputPreservationRevision)
+    : mapGeneratedChatCompletionResponse(value, request, inputPreservationRevision);
 }
 
 function mapNativeChatCompletionResponse(
   value: unknown,
   request: ProviderRequest,
+  inputPreservationRevision: string,
 ): ProviderCallResult {
   try {
     const choice = readSingleChoice(value);
@@ -501,7 +581,7 @@ function mapNativeChatCompletionResponse(
         },
       },
       continuation: null,
-      metadata: {},
+      metadata: providerContextMetadata(request, inputPreservationRevision),
     });
   } catch (error) {
     return failed(
@@ -570,9 +650,14 @@ function openAIFinish(
 
 function mapGeneratedChatCompletionResponse(
   value: unknown,
-  interaction: Exclude<ProviderInteraction, { readonly kind: "native_tool_turn" }>,
+  request: ProviderRequest,
+  inputPreservationRevision: string,
 ): ProviderCallResult {
   try {
+    const interaction = request.interaction;
+    if (interaction.kind === "native_tool_turn") {
+      throw new TypeError("Provider interaction kind changed.");
+    }
     const choice = readSingleChoice(value);
     if (!isRecord(choice.message) || typeof choice.message.content !== "string") {
       throw new TypeError("Chat Completion response did not contain generated content.");
@@ -603,7 +688,7 @@ function mapGeneratedChatCompletionResponse(
         output: decoded.output,
         usage: readUsage(isRecord(value) ? value.usage : null),
         continuation: null,
-        metadata: {},
+        metadata: providerContextMetadata(request, inputPreservationRevision),
       });
     }
     return succeeded({
@@ -615,7 +700,7 @@ function mapGeneratedChatCompletionResponse(
       output: choice.message.content,
       usage: readUsage(isRecord(value) ? value.usage : null),
       continuation: null,
-      metadata: {},
+      metadata: providerContextMetadata(request, inputPreservationRevision),
     });
   } catch (error) {
     return failed(
@@ -625,6 +710,17 @@ function mapGeneratedChatCompletionResponse(
       { metadata: { causeName: error instanceof Error ? error.name : null } },
     );
   }
+}
+
+function providerContextMetadata(
+  request: ProviderRequest,
+  inputPreservationRevision: string,
+) {
+  return {
+    modelContextAssessmentId: request.modelContext.assessment?.id ?? null,
+    modelContextDisposition: request.modelContext.assessment?.disposition ?? null,
+    inputPreservationRevision,
+  };
 }
 
 function readSingleChoice(value: unknown): Record<string, unknown> {
@@ -823,29 +919,42 @@ function snapshotConfig(
     apiKey: requiredString(input.apiKey, "OpenAI-compatible API key", true),
     model: requiredString(input.model, "OpenAI-compatible model"),
     timeoutMs: positiveTimeout(input.timeoutMs),
+    maximumOutputTokens: positiveInteger(input.maximumOutputTokens, "OpenAI-compatible maximum output tokens"),
     nativeToolInteraction: Object.freeze({
       supported: input.nativeToolInteraction.supported,
     }),
-    inputLimit: snapshotInputLimit(input.inputLimit, "OpenAI-compatible"),
+    requestBodyTransportLimit: snapshotTransportLimit(
+      input.requestBodyTransportLimit,
+      "OpenAI-compatible",
+    ),
   });
 }
 
-function snapshotInputLimit(
-  input: OpenAICompatibleProviderConfig["inputLimit"],
+function snapshotTransportLimit(
+  input: OpenAICompatibleProviderConfig["requestBodyTransportLimit"],
   owner: string,
-): OpenAICompatibleProviderConfig["inputLimit"] {
+): OpenAICompatibleProviderConfig["requestBodyTransportLimit"] {
   if (
     !isRecord(input) ||
     !Number.isSafeInteger(input.maximumBytes) ||
     input.maximumBytes <= 0 ||
-    (input.source !== "provider_reported" && input.source !== "host_configured")
+    (input.source !== "provider_reported" && input.source !== "host_configured") ||
+    typeof input.revision !== "string" || input.revision.trim().length === 0
   ) {
-    throw new TypeError(`${owner} input limit is invalid.`);
+    throw new TypeError(`${owner} request-body transport limit is invalid.`);
   }
   return Object.freeze({
     maximumBytes: input.maximumBytes,
     source: input.source,
+    revision: input.revision.trim(),
   });
+}
+
+function positiveInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive integer.`);
+  }
+  return value;
 }
 
 function validatedBaseUrl(value: string): string {
