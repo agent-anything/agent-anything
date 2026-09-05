@@ -107,8 +107,8 @@ import {
   createDelegationLimits,
   createDelegationResultExpectation,
 } from "../delegation/index.js";
-import { createRunLifecycleHookComposition } from "../hooks/index.js";
 import { Runner } from "./Runner.js";
+import type { ActiveDelegationProjection, RunHandle } from "./RunHandle.js";
 import { createStaticOperationToolAvailabilityParticipant } from "./RunToolExposureCoordinator.js";
 
 interface TestOutput {
@@ -174,12 +174,11 @@ describe("Runner semantic integration", () => {
       "verification_feedback",
       "controller_turn",
       "verification_feedback",
-      "lifecycle_event",
       "completion_acceptance",
       "settlement_cause",
       "terminal_transition",
     ]);
-    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(controller.calls).toHaveLength(1);
     expect(controller.calls[0]?.instructionBinding).toMatchObject({
       run: { id: "run_001" },
@@ -239,99 +238,31 @@ describe("Runner semantic integration", () => {
     expect(records.at(-1)?.item).toEqual(result.items.at(-1));
   });
 
-  it("continues after blocking Stop Hook feedback and succeeds after reassessment", async () => {
+  it("commits generic Controller feedback and continues to a later decision", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([
-      complete("Explained what should be done", "model_complete_1"),
+      Object.freeze({
+        kind: "continue_with_feedback" as const,
+        feedback: Object.freeze({
+          source: Object.freeze({ owner: "test-controller", kind: "assessment", id: "assessment-1", revision: "1" }),
+          code: "work_incomplete",
+          message: "Perform the requested work.",
+        }),
+        modelItems: modelTextItems("model_continue_1", "Continue."),
+      }),
       complete("Performed the requested work", "model_complete_2"),
     ]);
-    let invocationCount = 0;
 
-    const result = await createRunner(controller, operations, {
-      lifecycleHooks: createTestStopHookComposition(async () => {
-        invocationCount += 1;
-        return invocationCount === 1
-          ? { kind: "block", code: "work_incomplete", reason: "Perform the requested work." }
-          : { kind: "allow" };
-      }),
-    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+    const result = await createRunner(controller, operations)
+      .run(createAgent(), createRunInput(), createRunConfig(operations));
 
     expect(result).toMatchObject({
       status: "succeeded",
       finalOutput: { summary: "Performed the requested work" },
     });
     expect(controller.calls).toHaveLength(2);
-    expect(result.items.filter(({ payload }) => payload.kind === "lifecycle_event"))
-      .toHaveLength(2);
-    expect(result.items.filter(({ payload }) => payload.kind === "lifecycle_hook_feedback"))
+    expect(result.items.filter(({ payload }) => payload.kind === "controller_feedback"))
       .toHaveLength(1);
-  });
-
-  it("treats ordinary Stop Hook failure as attributed non-blocking limitation", async () => {
-    const operations = createOperationFixture([]);
-
-    const result = await createRunner(
-      new ScriptedController([complete("Done")]),
-      operations,
-      {
-        lifecycleHooks: createTestStopHookComposition(async () => {
-          throw new Error("Hook owner is unavailable.");
-        }),
-      },
-    ).run(createAgent(), createRunInput(), createRunConfig(operations));
-
-    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
-    expect(result.items).toContainEqual(expect.objectContaining({
-      payload: expect.objectContaining({
-        kind: "lifecycle_hook_invocation",
-        invocation: expect.objectContaining({
-          outcome: expect.objectContaining({ status: "non_blocking_error" }),
-        }),
-      }),
-    }));
-  });
-
-  it("suspends after bounded Stop Hook feedback and resumes the same Run revision", async () => {
-    const operations = createOperationFixture([]);
-    let shouldBlock = true;
-    const handle = createRunner(
-      new ScriptedController([
-        complete("First proposal", "model_complete_1"),
-        complete("Second proposal", "model_complete_2"),
-        complete("Accepted after resume", "model_complete_3"),
-      ]),
-      operations,
-      {
-        lifecycleHooks: createTestStopHookComposition(async () => shouldBlock
-          ? { kind: "block", code: "work_incomplete", reason: "Continue." }
-          : { kind: "allow" }),
-      },
-    ).start(
-      createAgent(),
-      createRunInput(),
-      createRunConfig(operations, {
-        limits: { stopHooks: { maxConsecutiveBlockingRounds: 1 } },
-      }),
-    );
-
-    await waitUntil(() => handle.getSnapshot().status === "suspended");
-    const suspended = handle.getSnapshot();
-    expect(suspended.suspension).toMatchObject({ code: "stop_hook_feedback_exhausted" });
-    shouldBlock = false;
-    expect(handle.resume({
-      id: "resume-1",
-      suspension: suspended.suspension!.ref,
-      expectedRunRevision: suspended.runRevision,
-      origin: "user",
-      reason: "Continue after reviewing Hook feedback.",
-    }).status).toBe("accepted");
-    const result = await handle.wait();
-
-    expect(result).toMatchObject({
-      status: "succeeded",
-      finalOutput: { summary: "Accepted after resume" },
-    });
-    expect(result.runId).toBe("run_001");
   });
 
   it("finalizes required Run-owned resources before terminal settlement", async () => {
@@ -694,7 +625,6 @@ describe("Runner semantic integration", () => {
         limits: {
           maxIterations: 2,
           completionGate: { maxFeedbackRounds: 1 },
-          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
@@ -1451,6 +1381,275 @@ describe("Runner semantic integration", () => {
       "run_002",
       "run_001",
     ]);
+  });
+
+  it("returns suspended Child progress, resumes the same Run, and transfers its terminal result once", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const childMayComplete = deferred<void>();
+    const childSettled = deferred<void>();
+    const events: RuntimeEvent[] = [];
+    const controllerCalls: ControllerInput<TestOutput>[] = [];
+    let rootTurn = 0;
+    let childTurn = 0;
+    const controller: Controller<TestOutput> = {
+      resourceMetering: Object.freeze({
+        modelInputTokens: "not_applicable" as const,
+        modelOutputTokens: "not_applicable" as const,
+        costUnits: "not_applicable" as const,
+      }),
+      async next(input) {
+        controllerCalls.push(input);
+        if (input.runId === "run_002") {
+          childTurn += 1;
+          if (childTurn === 1) {
+            return Object.freeze({
+              kind: "propose_stop" as const,
+              reason: "The Child needs Parent direction.",
+              modelItems: modelTextItems(
+                "model_child_stop",
+                "The Child needs Parent direction.",
+              ),
+            });
+          }
+          await childMayComplete.promise;
+          expect(input.context.blocks.some((block) =>
+            block.instructionRole === "user" &&
+            block.payload.kind === "text" &&
+            block.payload.text === "Continue with the focused check."
+          )).toBe(true);
+          return complete("Child completed after same-Run recovery", "model_child_complete");
+        }
+        if (input.runId !== "run_001") {
+          throw new Error(`Unexpected Run '${input.runId}'.`);
+        }
+        rootTurn += 1;
+        if (rootTurn === 1) {
+          return advance([toolCandidate(
+            "Agent",
+            { prompt: "Inspect the contracts and stop if direction is needed." },
+            input.toolExposure.controllerRequestId,
+          )], "model_agent_1");
+        }
+        if (rootTurn === 2) {
+          const active = input.descendants.active[0];
+          expect(active).toMatchObject({
+            target: { kind: "active", id: "run_002" },
+            relationKind: "delegation",
+            status: "suspended",
+          });
+          expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+            kind: "descendant_progress",
+            progress: {
+              childRun: { id: "run_002" },
+              suspension: { code: "controller_stop_requested" },
+            },
+            output: { agent_id: "run_002", status: "suspended" },
+            toolResult: { status: "succeeded" },
+          });
+          return advance([toolCandidate(
+            "SendMessage",
+            {
+              agent_id: active!.target.id,
+              prompt: "Continue with the focused check.",
+            },
+            input.toolExposure.controllerRequestId,
+          )], "model_send_message_1");
+        }
+        if (rootTurn === 3) {
+          childMayComplete.resolve();
+          await childSettled.promise;
+          return complete("Parent attempted completion before transfer", "model_parent_stale");
+        }
+        expect(input.descendants.active).toEqual([]);
+        expect(projectedObservations(input.context).some(({ payload }) =>
+          payload.kind === "descendant_result_transfer" &&
+          payload.childRunId === "run_002" &&
+          payload.status === "succeeded"
+        )).toBe(true);
+        return complete("Parent consumed the transferred Child result", "model_parent_complete");
+      },
+    };
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelectionSet(operations, [
+      {
+        name: "Agent",
+        binding: {
+          kind: "descendant_agent",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-binding-1",
+        },
+      },
+      {
+        name: "SendMessage",
+        binding: {
+          kind: "descendant_message",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-message-binding-1",
+        },
+      },
+    ]);
+
+    const handle = createRunner(controller, operations, {
+      runtimeEventPublisher: {
+        publish(event) {
+          events.push(event);
+          if (event.name === "run.descendant.settled" && event.payload.childRunId === "run_002") {
+            childSettled.resolve();
+          }
+        },
+      },
+    }).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+    const result = await handle.wait();
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controllerCalls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_001",
+      "run_002",
+      "run_001",
+      "run_001",
+    ]);
+    expect(observations(result).filter(({ payload }) =>
+      payload.kind === "descendant_progress" && payload.progress.childRun.id === "run_002"
+    )).toHaveLength(1);
+    expect(observations(result).filter(({ payload }) =>
+      payload.kind === "descendant_result_transfer" && payload.childRunId === "run_002"
+    )).toHaveLength(1);
+    expect(result.items.filter(({ payload }) => payload.kind === "model_call_settlement"))
+      .toHaveLength(2);
+    expect(events.filter(({ name }) => name === "run.descendant.started")).toHaveLength(1);
+    expect(events.filter(({ name }) => name === "run.descendant.settled")).toHaveLength(1);
+    expect(handle.getSnapshot().runTree.nodes.map(({ runId }) => runId))
+      .toEqual(["run_001", "run_002"]);
+    expect(handle.getSnapshot().runTree.settlement).toMatchObject({
+      complete: true,
+      pendingResultTransfers: 0,
+    });
+  });
+
+  it("reports each later suspension once while Host recovery resumes the same Child", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const parentControllerEntered = deferred<void>();
+    const releaseParentDecision = deferred<void>();
+    const firstSuspension = deferred<ReturnType<RunHandle["getSnapshot"]>["activeDelegations"][number]>();
+    const secondSuspension = deferred<ReturnType<RunHandle["getSnapshot"]>["activeDelegations"][number]>();
+    const childTransferred = deferred<void>();
+    const observedSuspensions = new Set<string>();
+    let rootTurn = 0;
+    let childTurn = 0;
+    const controller: Controller<TestOutput> = {
+      resourceMetering: Object.freeze({
+        modelInputTokens: "not_applicable" as const,
+        modelOutputTokens: "not_applicable" as const,
+        costUnits: "not_applicable" as const,
+      }),
+      async next(input) {
+        if (input.runId === "run_002") {
+          childTurn += 1;
+          if (childTurn <= 2) {
+            return Object.freeze({
+              kind: "propose_stop" as const,
+              reason: `Child suspension ${childTurn}.`,
+              modelItems: modelTextItems(
+                `model_child_stop_${childTurn}`,
+                `Child suspension ${childTurn}.`,
+              ),
+            });
+          }
+          return complete("Child completed after two recoveries", "model_child_complete");
+        }
+        rootTurn += 1;
+        if (rootTurn === 1) {
+          return advance([toolCandidate(
+            "Agent",
+            { prompt: "Inspect and suspend twice for direction." },
+            input.toolExposure.controllerRequestId,
+          )], "model_agent_1");
+        }
+        if (rootTurn === 2) {
+          parentControllerEntered.resolve();
+          await releaseParentDecision.promise;
+          return complete("Parent decision computed while Child progressed", "model_parent_stale");
+        }
+        expect(input.descendants.active).toEqual([]);
+        return complete("Parent consumed the final Child transfer", "model_parent_complete");
+      },
+    };
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelectionSet(operations, [{
+      name: "Agent",
+      binding: {
+        kind: "descendant_agent",
+        agent: { id: childAgent.id, revision: childAgent.revision },
+        revision: "descendant-binding-1",
+      },
+    }]);
+    const handle = createRunner(controller, operations).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+    handle.subscribe((snapshot) => {
+      const active = snapshot.activeDelegations[0];
+      if (active !== undefined && active.suspension !== null) {
+        const key = `${active.suspension.ref.id}@${active.suspension.ref.revision}`;
+        if (!observedSuspensions.has(key)) {
+          observedSuspensions.add(key);
+          (observedSuspensions.size === 1 ? firstSuspension : secondSuspension).resolve(active);
+        }
+      }
+      if (
+        snapshot.activeDelegations.length === 0 &&
+        snapshot.runTree.nodes.some((node) => node.runId === "run_002") &&
+        snapshot.runTree.settlement.pendingResultTransfers === 0
+      ) childTransferred.resolve();
+    });
+
+    const first = await firstSuspension.promise;
+    await parentControllerEntered.promise;
+    expect(handle.resumeDescendant(hostResumeRoute(first, "host-resume-1"))).toMatchObject({
+      status: "routed",
+      resume: { status: "accepted" },
+    });
+    expect(handle.resumeDescendant(hostResumeRoute(first, "host-resume-duplicate"))).toMatchObject({
+      status: "routed",
+      resume: { status: "rejected" },
+    });
+    const second = await secondSuspension.promise;
+    expect(second.child.id).toBe(first.child.id);
+    expect(second.suspension?.ref.id).not.toBe(first.suspension?.ref.id);
+    expect(handle.resumeDescendant(hostResumeRoute(second, "host-resume-2"))).toMatchObject({
+      status: "routed",
+      resume: { status: "accepted" },
+    });
+    await childTransferred.promise;
+    releaseParentDecision.resolve();
+    const result = await handle.wait();
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(observations(result).filter(({ payload }) =>
+      payload.kind === "descendant_progress" && payload.progress.childRun.id === "run_002"
+    )).toHaveLength(2);
+    expect(observations(result).filter(({ payload }) =>
+      payload.kind === "descendant_result_transfer" && payload.childRunId === "run_002"
+    )).toHaveLength(1);
+    expect(result.items.filter(({ payload }) => payload.kind === "model_call_settlement"))
+      .toHaveLength(1);
+    expect(handle.getSnapshot().runTree.nodes.map(({ runId }) => runId))
+      .toEqual(["run_001", "run_002"]);
+    expect(handle.resumeDescendant(hostResumeRoute(second, "host-resume-terminal"))).toMatchObject({
+      status: "rejected",
+      code: "delegation_child_settled",
+    });
   });
 
   it("launches contiguous Agent calls as concurrent siblings and commits Parent outcomes in candidate order", async () => {
@@ -2628,7 +2827,6 @@ describe("Runner semantic integration", () => {
           maxIterations: 3,
           maxActions: 4,
           completionGate: { maxFeedbackRounds: 1 },
-          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
@@ -2638,8 +2836,6 @@ describe("Runner semantic integration", () => {
     expect(result.items.filter(({ payload }) =>
       payload.kind === "state_transition" && payload.transition === "plan"
     )).toHaveLength(2);
-    expect(result.items.filter(({ payload }) => payload.kind === "lifecycle_event"))
-      .toHaveLength(1);
     expect(result.items.at(-1)?.payload).toMatchObject({
       kind: "terminal_transition",
       status: "succeeded",
@@ -2684,7 +2880,6 @@ describe("Runner semantic integration", () => {
       createRunConfig(operations, {
         limits: {
           completionGate: { maxFeedbackRounds: 1 },
-          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
@@ -2733,7 +2928,6 @@ describe("Runner semantic integration", () => {
         actionExecution: createVerificationActionExecutionConfig(),
         limits: {
           completionGate: { maxFeedbackRounds: 1 },
-          stopHooks: { maxConsecutiveBlockingRounds: 1 },
         },
       }),
     );
@@ -3723,6 +3917,19 @@ function createTestDelegation(
         return null;
       },
     }),
+    progressProjection: Object.freeze({
+      project({ progress }) {
+        return Object.freeze({
+          status: "succeeded" as const,
+          output: Object.freeze({
+            agent_id: progress.childRun.id,
+            status: "suspended",
+            child_run_revision: progress.childRunRevision,
+          }),
+          failure: null,
+        });
+      },
+    }),
     resultProjection: Object.freeze({
       project({ result, continuation }) {
         const output = Object.freeze({
@@ -4074,38 +4281,6 @@ function createRunner(
   });
 }
 
-function createTestStopHookComposition(
-  handle: (
-    event: import("../lifecycle/index.js").StopLifecycleEvent,
-  ) => Promise<import("../hooks/index.js").StopHookDecision>,
-) {
-  const handler = Object.freeze({ id: "test.stop-handler", revision: "1" });
-  return createRunLifecycleHookComposition({
-    id: "test.lifecycle-hooks",
-    revision: "1",
-    registrations: Object.freeze([Object.freeze({
-      ref: Object.freeze({ id: "test.stop-hook", revision: "1" }),
-      owner: Object.freeze({
-        owner: "test",
-        kind: "stop_hook",
-        id: "test.stop-hook",
-        revision: "1",
-        run: null,
-      }),
-      event: "Stop" as const,
-      runKinds: Object.freeze(["root" as const, "descendant" as const]),
-      handler,
-      timeoutMs: 5_000,
-      maximumResultBytes: 8_192,
-    })]),
-    bindings: Object.freeze([Object.freeze({
-      ref: handler,
-      event: "Stop" as const,
-      handler: Object.freeze({ handle }),
-    })]),
-  });
-}
-
 function createAgent(
   id = "agent_001",
   revision = "1",
@@ -4217,7 +4392,6 @@ function createRunConfig(
         maxExplanationLength: 500,
       },
       completionGate: { maxFeedbackRounds: 2 },
-      stopHooks: { maxConsecutiveBlockingRounds: 1 },
       ...overrides.limits,
     },
     runTreeLimits: {
@@ -5026,6 +5200,24 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function hostResumeRoute(active: ActiveDelegationProjection, id: string) {
+  if (active.suspension === null) {
+    throw new TypeError("The active descendant is not suspended.");
+  }
+  return {
+    request: active.request,
+    relation: active.relation,
+    child: active.child,
+    resume: {
+      id,
+      expectedRunRevision: active.suspension.runRevision,
+      suspension: active.suspension.ref,
+      origin: "host" as const,
+      reason: "Resume the suspended Child from the Host.",
+    },
+  };
 }
 
 function canonicalWorkspace() {

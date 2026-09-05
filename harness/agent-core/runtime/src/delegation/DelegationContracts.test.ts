@@ -32,7 +32,10 @@ import {
   createDelegationResult,
   snapshotDelegationResult,
 } from "./DelegationResult.js";
-import { snapshotDelegationSteeringRoute } from "./DelegationControl.js";
+import {
+  snapshotDelegationResumeRoute,
+  snapshotDelegationSteeringRoute,
+} from "./DelegationControl.js";
 
 const CHILD_AGENT: AgentRevisionRef = Object.freeze({
   id: "agent-child",
@@ -307,6 +310,36 @@ describe("delegation steering route", () => {
     expect(route.steering).not.toHaveProperty("approval");
     expect(route.child.id).toBe("run-child");
     expect(Object.isFrozen(route)).toBe(true);
+  });
+
+  it("snapshots an exact same-Run resume route and rejects extra fields", () => {
+    const accepted = request();
+    const route = snapshotDelegationResumeRoute({
+      request: accepted.ref,
+      relation: { id: "relation-1" },
+      child: { id: "run-child" },
+      resume: {
+        id: "resume-1",
+        expectedRunRevision: 4,
+        suspension: {
+          run: { id: "run-child" },
+          id: "suspension-1",
+          revision: "suspension-1-v1",
+        },
+        origin: "host",
+        reason: "Continue the suspended Child.",
+      },
+    });
+
+    expect(route.resume.origin).toBe("host");
+    expect(Object.isFrozen(route.resume.suspension.run)).toBe(true);
+    expect(() => snapshotDelegationResumeRoute({
+      ...route,
+      resume: {
+        ...route.resume,
+        unsupported: true,
+      },
+    } as never)).toThrow(/unsupported fields/);
   });
 });
 

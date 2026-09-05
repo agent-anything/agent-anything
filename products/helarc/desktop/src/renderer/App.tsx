@@ -333,6 +333,45 @@ export function App() {
     }
   }
 
+  async function resumeDescendant(
+    delegation: ActiveRunProjection["host"]["activeDelegations"][number],
+  ) {
+    const api = getHelarcApi();
+    const runId = snapshot.run?.harnessRunId;
+    if (!api || !runId || delegation.suspension === null) return;
+
+    setIsBusy(true);
+    try {
+      const response = await api.resumeDescendant({
+        commandId: createCommandId("descendant.resume"),
+        runId,
+        request: delegation.request,
+        relation: delegation.relation,
+        child: delegation.child,
+        expectedRunRevision: delegation.suspension.runRevision,
+        suspension: {
+          id: delegation.suspension.id,
+          revision: delegation.suspension.revision,
+        },
+        reason: "Resume requested from Helarc desktop.",
+      });
+      setSnapshot(response.snapshot);
+      let error: string | null = null;
+      if (response.receipt.status === "rejected") {
+        error = response.receipt.code;
+      } else if (response.receipt.kind === "descendant.resume") {
+        if (response.receipt.result.status === "rejected") {
+          error = response.receipt.result.code;
+        } else if (response.receipt.result.resume.status === "rejected") {
+          error = response.receipt.result.resume.code;
+        }
+      }
+      setRunControlError(error);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   const workspaceLabel = snapshot.workspace
     ? snapshot.workspace.path
     : "No workspace selected";
@@ -438,6 +477,8 @@ export function App() {
             <RunTimelinePanel
               run={snapshot.run}
               acceptedTask={snapshot.acceptedTask}
+              isBusy={isBusy}
+              onResumeDescendant={(delegation) => void resumeDescendant(delegation)}
             />
           </div>
         </section>
@@ -586,9 +627,15 @@ export function ThreadTimeline({
 export function RunTimelinePanel({
   run,
   acceptedTask,
+  isBusy = false,
+  onResumeDescendant,
 }: {
   run: HelarcMainSnapshot["run"];
   acceptedTask: HelarcMainSnapshot["acceptedTask"];
+  isBusy?: boolean;
+  onResumeDescendant?: (
+    delegation: ActiveRunProjection["host"]["activeDelegations"][number],
+  ) => void;
 }) {
   const activity = run?.product.activity ?? [];
   if (run === null && activity.length === 0) {
@@ -618,6 +665,8 @@ export function RunTimelinePanel({
         <RunTreePanel
           tree={run.host.runTree}
           activeDelegations={run.host.activeDelegations}
+          isBusy={isBusy}
+          onResumeDescendant={onResumeDescendant}
         />
       ) : null}
       {activity.length === 0 ? (
@@ -693,12 +742,6 @@ export function RunTerminalPanel({
           <dt>Model use</dt>
           <dd>{run.product.qualification.status}</dd>
         </div>
-        {run.host.lifecycleHooks.stopEventSequence > 0 ? (
-          <div>
-            <dt>Lifecycle hooks</dt>
-            <dd>{runLifecycleHookLabel(run.host.lifecycleHooks)}</dd>
-          </div>
-        ) : null}
         {terminal.code ? (
           <div>
             <dt>Code</dt>
@@ -1273,9 +1316,15 @@ export function ClarificationPromptPanel({
 export function RunTreePanel({
   tree,
   activeDelegations,
+  isBusy = false,
+  onResumeDescendant,
 }: {
   tree: ActiveRunProjection["host"]["runTree"];
   activeDelegations: ActiveRunProjection["host"]["activeDelegations"];
+  isBusy?: boolean;
+  onResumeDescendant?: (
+    delegation: ActiveRunProjection["host"]["activeDelegations"][number],
+  ) => void;
 }) {
   return (
     <section className="run-tree" aria-label="Run hierarchy">
@@ -1311,8 +1360,28 @@ export function RunTreePanel({
               ) : null}
               {activeDelegation !== undefined ? (
                 <small title={activeDelegation.request.id}>
-                  Steerable at revision {activeDelegation.childRunRevision}
+                  {activeDelegation.suspension === null
+                    ? `Active at revision ${activeDelegation.childRunRevision}`
+                    : `Suspended at revision ${activeDelegation.suspension.runRevision}: ${activeDelegation.suspension.reason}`}
                 </small>
+              ) : null}
+              {activeDelegation !== undefined ? (
+                <small>{activeDelegation.admittedControls.join(" / ")}; result transfer pending</small>
+              ) : null}
+              {activeDelegation !== undefined &&
+              activeDelegation.suspension !== null &&
+              activeDelegation.admittedControls.includes("resume") &&
+              onResumeDescendant ? (
+                <button
+                  className="secondary-button compact-icon"
+                  type="button"
+                  onClick={() => onResumeDescendant(activeDelegation)}
+                  disabled={isBusy}
+                  title="Resume descendant run"
+                >
+                  <Play size={14} aria-hidden="true" />
+                  Resume
+                </button>
               ) : null}
               {node.terminal !== null ? <small>{node.terminal.code}</small> : null}
             </div>
@@ -1420,13 +1489,6 @@ function enforcementLabel(
     case "interrupted": return "Interrupted";
     case "failed": return "Failed";
   }
-}
-
-function runLifecycleHookLabel(hooks: ActiveRunProjection["host"]["lifecycleHooks"]): string {
-  const limitations = hooks.limitations.length === 0
-    ? ""
-    : `, ${hooks.limitations.length} limitations`;
-  return `${hooks.stopEventSequence} stop events, ${hooks.consecutiveBlockingRounds} consecutive blocking rounds${limitations}`;
 }
 
 function verificationLabel(

@@ -18,9 +18,9 @@
       "types": "./src/context-continuity-evaluation/index.ts",
       "import": "./dist/context-continuity-evaluation/index.js"
     },
-    "./run-lifecycle-hook-evaluation": {
-      "types": "./src/run-lifecycle-hook-evaluation/index.ts",
-      "import": "./dist/run-lifecycle-hook-evaluation/index.js"
+    "./agent-hook-evaluation": {
+      "types": "./src/agent-hook-evaluation/index.ts",
+      "import": "./dist/agent-hook-evaluation/index.js"
     },
     "./current-turn-tool-exposure-evaluation": {
       "types": "./src/current-turn-tool-exposure-evaluation/index.ts",
@@ -42,13 +42,13 @@
     "test": "vitest run --passWithNoTests",
     "test:context-continuity": "vitest run src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/context-continuity-evaluation/ContextContinuityPublicApi.test.ts",
     "test:verification-behavior": "vitest run src/verification-behavior/VerificationBehaviorConformance.test.ts src/verification-behavior/VerificationBehaviorEvaluation.test.ts",
-    "test:run-lifecycle-hooks": "vitest run src/run-lifecycle-hook-evaluation/RunLifecycleHookEvaluation.test.ts",
+    "test:agent-hooks": "vitest run src/agent-hook-evaluation/AgentHookEvaluation.test.ts",
     "test:tool-exposure": "vitest run src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts",
     "test:delegation-transfer": "vitest run src/delegation-transfer-evaluation/DelegationTransferEvaluation.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluationPublicApi.test.ts",
     "test:agent-instructions": "vitest run src/evaluation-targets/helarc/HelarcProductEffectivenessSuite.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessProtocol.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessCapture.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessComparison.test.ts src/evaluation-targets/helarc/HelarcAgentInstructionEvaluation.test.ts src/evaluation-targets/helarc/HelarcAgentInstructionCampaign.test.ts src/evaluation-targets/helarc/HelarcEvaluationPublicApi.test.ts",
     "test:operational-evaluation": "vitest run src/evaluation-targets/helarc/operational-evaluation/HelarcOperationalEvaluation.test.ts src/evaluation-targets/helarc/operational-evaluation/HelarcOperationalConformanceExecution.test.ts src/evaluation-targets/helarc/baseline/HelarcOperationalConformanceBaseline.test.ts src/evaluation-targets/helarc/HelarcEvaluationPublicApi.test.ts",
     "test:operational-conformance": "vitest run src/evaluation-targets/helarc/operational-evaluation/HelarcOperationalConformanceExecution.test.ts src/evaluation-targets/helarc/baseline/HelarcOperationalConformanceBaseline.test.ts",
-    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessSuite.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessProtocol.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessCapture.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessComparison.test.ts src/evaluation-targets/helarc/HelarcAgentInstructionEvaluation.test.ts src/evaluation-targets/helarc/HelarcAgentInstructionCampaign.test.ts src/evaluation-targets/helarc/operational-evaluation/HelarcOperationalEvaluation.test.ts src/evaluation-targets/helarc/operational-evaluation/HelarcOperationalConformanceExecution.test.ts src/evaluation-targets/helarc/baseline/HelarcOperationalConformanceBaseline.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/verification-behavior/VerificationBehaviorEvaluation.test.ts src/run-lifecycle-hook-evaluation/RunLifecycleHookEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluation.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluationPublicApi.test.ts",
+    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessSuite.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessProtocol.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessCapture.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessComparison.test.ts src/evaluation-targets/helarc/HelarcAgentInstructionEvaluation.test.ts src/evaluation-targets/helarc/HelarcAgentInstructionCampaign.test.ts src/evaluation-targets/helarc/operational-evaluation/HelarcOperationalEvaluation.test.ts src/evaluation-targets/helarc/operational-evaluation/HelarcOperationalConformanceExecution.test.ts src/evaluation-targets/helarc/baseline/HelarcOperationalConformanceBaseline.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/verification-behavior/VerificationBehaviorEvaluation.test.ts src/agent-hook-evaluation/AgentHookEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluation.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluationPublicApi.test.ts",
     "evaluation:baseline:candidate": "node scripts/emit-helarc-evaluation-baseline.mjs",
     "evaluation:product-effectiveness:compare": "node scripts/compare-helarc-product-effectiveness.mjs"
   },
@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/agent-hooks": "workspace:*",
     "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",

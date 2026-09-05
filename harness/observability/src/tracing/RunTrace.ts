@@ -87,7 +87,7 @@ export type ContextProjectionTraceRecord = ContextProjectionCompletedRuntimeEven
 export interface ControllerTurnTraceAttributes {
   readonly turnId: string;
   readonly iteration: number;
-  readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
+  readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | "propose_stop" | null;
   readonly code: string | null;
   readonly toolExposure: ControllerToolExposureTraceRecord | null;
 }

@@ -1,7 +1,6 @@
 import type { ActionExecutionNotification } from "@agent-anything/action-execution/enforcement";
 import type { SandboxEnforcement } from "@agent-anything/action-execution/sandbox";
 import type { PlanProjection } from "@agent-anything/agent-runtime/plan";
-import type { RunLifecycleHookProjection } from "@agent-anything/agent-runtime/hooks";
 import type {
   RunCancellationSummary,
   RunCausalLink,
@@ -40,32 +39,6 @@ export type HostRunProjectionStatus =
   | "cancelled";
 
 export type HostPlanProjection = PlanProjection;
-
-export interface HostRunLifecycleHookProjection {
-  readonly stopEventSequence: number;
-  readonly stopFailureEventSequence: number;
-  readonly feedbackEpoch: number;
-  readonly consecutiveBlockingRounds: number;
-  readonly latestEventId: string | null;
-  readonly latestInvocations: readonly Readonly<{
-    readonly hookId: string;
-    readonly hookRevision: string;
-    readonly eventId: string;
-    readonly status: "allow" | "block" | "non_blocking_error";
-    readonly code: string | null;
-    readonly durationMs: number;
-    readonly stale: boolean;
-  }>[];
-  readonly latestFeedback: Readonly<{
-    readonly eventId: string;
-    readonly epoch: number;
-    readonly round: number;
-    readonly codes: readonly string[];
-    readonly message: string;
-    readonly omittedReasonCount: number;
-  }> | null;
-  readonly limitations: readonly string[];
-}
 
 export interface HostPendingInteractionProjection {
   readonly request: InteractionRequestRef;
@@ -300,7 +273,6 @@ export interface HostRunProjection {
   readonly runTree: HostRunTreeProjection;
   readonly plan: HostPlanProjection | null;
   readonly suspension: RunSuspension | null;
-  readonly lifecycleHooks: HostRunLifecycleHookProjection;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly activeDelegations: readonly HostActiveDelegationProjection[];
   readonly continuationTargets: readonly HostContinuationTargetProjection[];
@@ -379,7 +351,6 @@ export type HostRunProjectionRejectionCode =
   | "invalid_update"
   | "interaction_correlation_mismatch"
   | "run_operation_sequence_regression"
-  | "run_lifecycle_hook_sequence_regression"
   | "terminal_projection_mismatch";
 
 export type HostRunProjectionReduction =
@@ -433,7 +404,6 @@ export function createHostRunProjection(
     runTree: projectRunTree(input.runTree),
     plan: null,
     suspension: null,
-    lifecycleHooks: createInitialHostRunLifecycleHookProjection(),
     pendingInteractions: Object.freeze([]),
     activeDelegations: Object.freeze([]),
     continuationTargets: Object.freeze([]),
@@ -454,62 +424,6 @@ export function projectHostRunTree(
   input: RunTreeExecutionSnapshot,
 ): HostRunTreeProjection {
   return projectRunTree(input);
-}
-
-export function projectHostRunLifecycleHooks(
-  input: RunLifecycleHookProjection,
-): HostRunLifecycleHookProjection {
-  const counters = [
-    input.stopEventSequence,
-    input.stopFailureEventSequence,
-    input.feedbackEpoch,
-    input.consecutiveBlockingRounds,
-  ];
-  if (counters.some((value) => !Number.isSafeInteger(value) || value < 0)) {
-    throw new TypeError("Lifecycle Hook counters must be non-negative safe integers.");
-  }
-  return Object.freeze({
-    stopEventSequence: input.stopEventSequence,
-    stopFailureEventSequence: input.stopFailureEventSequence,
-    feedbackEpoch: input.feedbackEpoch,
-    consecutiveBlockingRounds: input.consecutiveBlockingRounds,
-    latestEventId: input.latestEventId,
-    latestInvocations: Object.freeze(input.latestInvocations.map((invocation) => Object.freeze({
-      hookId: invocation.hook.id,
-      hookRevision: invocation.hook.revision,
-      eventId: invocation.eventId,
-      status: invocation.outcome.status === "non_blocking_error"
-        ? "non_blocking_error" as const
-        : invocation.outcome.decision.kind,
-      code: invocation.outcome.status === "non_blocking_error"
-        ? invocation.outcome.code
-        : invocation.outcome.decision.kind === "block"
-          ? invocation.outcome.decision.code
-          : null,
-      durationMs: invocation.durationMs,
-      stale: invocation.stale,
-    }))),
-    latestFeedback: input.latestFeedback === null
-      ? null
-      : Object.freeze({
-          ...input.latestFeedback,
-          codes: Object.freeze([...input.latestFeedback.codes]),
-        }),
-    limitations: Object.freeze([...input.limitations]),
-  });
-}
-
-function createInitialHostRunLifecycleHookProjection(): HostRunLifecycleHookProjection {
-  return Object.freeze({
-    stopEventSequence: 0,
-    stopFailureEventSequence: 0,
-    feedbackEpoch: 0,
-    consecutiveBlockingRounds: 0,
-    latestEventId: null,
-    latestInvocations: Object.freeze([]),
-    latestFeedback: null,
-    limitations: Object.freeze([]),
-  });
 }
 
 function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection {

@@ -64,7 +64,6 @@ import {
   snapshotRootRunConfig,
   snapshotRunInput,
 } from "./RunnerValidation.js";
-import { createEmptyRunLifecycleHookComposition } from "../hooks/index.js";
 
 export class Runner {
   private readonly dependencies: ResolvedRunnerDependencies;
@@ -88,7 +87,6 @@ export class Runner {
       ...dependencies,
       contextProjection,
       operations,
-      lifecycleHooks: dependencies.lifecycleHooks ?? createEmptyRunLifecycleHookComposition(),
       now,
       createRunId: dependencies.createRunId ?? createDefaultRunIdentity,
       createId: dependencies.createId ?? createDefaultIdentity,
@@ -491,6 +489,9 @@ export class Runner {
     handle.bindDescendantSteering((route) =>
       execution.submitDescendantSteering(route)
     );
+    handle.bindDescendantResume((route) =>
+      execution.submitDescendantResume(route)
+    );
     this.activeRunIds.add(runId);
     tree.registerCancellation(runId, cancellation);
     tree.markStarted(runId, startedAt);
@@ -625,6 +626,9 @@ function snapshotRunnerDelegationComposition(
     input.narrativeProjection === null ||
     typeof input.narrativeProjection !== "object" ||
     typeof input.narrativeProjection.project !== "function" ||
+    input.progressProjection === null ||
+    typeof input.progressProjection !== "object" ||
+    typeof input.progressProjection.project !== "function" ||
     input.resultProjection === null ||
     typeof input.resultProjection !== "object" ||
     typeof input.resultProjection.project !== "function"
@@ -642,6 +646,9 @@ function snapshotRunnerDelegationComposition(
     }),
     narrativeProjection: Object.freeze({
       project: input.narrativeProjection.project.bind(input.narrativeProjection),
+    }),
+    progressProjection: Object.freeze({
+      project: input.progressProjection.project.bind(input.progressProjection),
     }),
     resultProjection: Object.freeze({
       project: input.resultProjection.project.bind(input.resultProjection),

@@ -8,6 +8,7 @@ const channels = Object.freeze({
   getRunStatus: "helarc:get-run-status",
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
+  resumeDescendant: "helarc:resume-descendant",
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
@@ -17,7 +18,7 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
-  bridgeVersion: 10,
+  bridgeVersion: 11,
   productId: "helarc",
   chooseWorkspace: (input) => ipcRenderer.invoke(
     channels.chooseWorkspace,
@@ -86,6 +87,24 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
     payload: {
       expectedRunRevision: input?.expectedRunRevision,
       instruction: input?.instruction,
+    },
+  }),
+  resumeDescendant: (input) => ipcRenderer.invoke(channels.resumeDescendant, {
+    version: COMMAND_VERSION,
+    commandId: input?.commandId,
+    runId: input?.runId,
+    kind: "descendant.resume",
+    payload: {
+      request: input?.request,
+      relation: input?.relation,
+      child: input?.child,
+      expectedRunRevision: input?.expectedRunRevision,
+      suspension: {
+        run: input?.child,
+        id: input?.suspension?.id,
+        revision: input?.suspension?.revision,
+      },
+      reason: input?.reason,
     },
   }),
   submitInteraction: (input) => ipcRenderer.invoke(channels.submitInteraction, {

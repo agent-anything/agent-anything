@@ -39,10 +39,6 @@ import {
   systemRetryClock,
 } from "../retry/index.js";
 import { createAgentInstructionBinding } from "../instructions/index.js";
-import {
-  createInitialRunLifecycleHookState,
-  projectRunLifecycleHooks,
-} from "../hooks/index.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -1351,7 +1347,6 @@ function createControllerInput(): ControllerInput<TestOutput> {
       maxStepLength: 200,
       maxExplanationLength: 500,
     }),
-    lifecycleHooks: projectRunLifecycleHooks(createInitialRunLifecycleHookState()),
     verification: { snapshot: { runId: "run_001", revision: 0 }, gate: null },
     permission: testPermissionProjection(),
     pending: [],

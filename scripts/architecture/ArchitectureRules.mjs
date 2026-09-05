@@ -108,9 +108,14 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/verification",
     "@agent-anything/workspace",
   ],
+  "@agent-anything/agent-hooks": [
+    "@agent-anything/agent-core",
+    "@agent-anything/agent-runtime",
+  ],
   "@agent-anything/helarc": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
+    "@agent-anything/agent-hooks",
     "@agent-anything/canonical-action",
     "@agent-anything/context",
     "@agent-anything/helarc-code-agent",
@@ -160,6 +165,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
 export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/test-support": [
     "@agent-anything/action-execution",
+    "@agent-anything/agent-hooks",
     "@agent-anything/agent-runtime",
     "@agent-anything/canonical-action",
     "@agent-anything/context",

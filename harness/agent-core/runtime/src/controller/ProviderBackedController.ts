@@ -1027,6 +1027,30 @@ export function validateControllerDecision<TOutput>(
         modelItems,
       });
 
+    case "continue_with_feedback": {
+      if (modelCalls.size !== 0) {
+        throw decisionContractError("controller_feedback_with_model_calls");
+      }
+      if (!isRecord(candidate.feedback) || !isRecord(candidate.feedback.source)) {
+        throw decisionContractError("controller_feedback_invalid");
+      }
+      const source = candidate.feedback.source;
+      return Object.freeze({
+        kind: "continue_with_feedback",
+        feedback: Object.freeze({
+          source: Object.freeze({
+            owner: nonEmptyDecisionText(source.owner),
+            kind: nonEmptyDecisionText(source.kind),
+            id: nonEmptyDecisionText(source.id),
+            revision: nonEmptyDecisionText(source.revision),
+          }),
+          code: nonEmptyDecisionText(candidate.feedback.code),
+          message: boundedDecisionText(candidate.feedback.message, 8_192),
+        }),
+        modelItems,
+      });
+    }
+
     default:
       throw decisionContractError("controller_decision_kind_invalid");
   }

@@ -134,7 +134,7 @@ export function createHelarcProductEffectivenessTargetValues(input: {
       fullTextExcluded: true,
     }),
     product_protocol: Object.freeze({
-      promptArchitectureRevision: "helarc-prompt-v6",
+      promptArchitectureRevision: "helarc-prompt-v7",
       controllerProtocolRevision: HELARC_NATIVE_TOOL_PROTOCOL_REVISION,
       controllerControlGuidanceRevision: HELARC_CONTROLLER_CONTROL_GUIDANCE.revision,
       toolGuidanceReleaseId: HELARC_BASELINE_TOOL_GUIDANCE_RELEASE_ID,

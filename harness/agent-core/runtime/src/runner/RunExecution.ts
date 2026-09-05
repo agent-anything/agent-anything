@@ -146,18 +146,6 @@ import {
   projectPlan,
 } from "../plan/index.js";
 import { snapshotRetryEvent, type RetryEventSink } from "../retry/index.js";
-import {
-  advanceRunLifecycleHookFeedbackEpoch,
-  invokeStopLifecycleHooks,
-  observeStopFailureLifecycleHooks,
-  projectRunLifecycleHooks,
-  type StopHookFeedbackRecord,
-} from "../hooks/index.js";
-import {
-  snapshotStopFailureLifecycleEvent,
-  snapshotStopLifecycleEvent,
-  type StopCandidateBasis,
-} from "../lifecycle/index.js";
 import { RunTranscriptRecorder } from "../transcript/index.js";
 import {
   createRunResult,
@@ -188,6 +176,7 @@ import {
   type RunSuspension,
   type RunSuspensionCode,
   type RuntimeRunAction,
+  snapshotRunResumeRequestInput,
   snapshotRunSteeringInput,
 } from "../run/index.js";
 import type { RunExecutionUpdate, RunHandle } from "./RunHandle.js";
@@ -207,9 +196,11 @@ import {
   deriveDelegationAuthority,
   deriveDelegationLimits,
   constructDelegationResult,
+  createDescendantProgress,
   createDescendantContinuationTargetProjection,
   materializeDelegationRequest,
   snapshotDelegationSteeringRoute,
+  snapshotDelegationResumeRoute,
   snapshotDelegationPreparation,
   snapshotDelegationContextMaterial,
   snapshotDescendantMessageRequest,
@@ -225,6 +216,9 @@ import {
   type DelegationResult,
   type DelegationSteeringReceipt,
   type DelegationSteeringRoute,
+  type DelegationResumeReceipt,
+  type DelegationResumeRoute,
+  type DescendantProgress,
   type DescendantContinuationTargetProjection,
 } from "../delegation/index.js";
 import { createDelegationContractIdentity } from "../delegation/DelegationContract.js";
@@ -281,8 +275,8 @@ import {
   createDelegationSelectedContextContribution,
   createObservationContextAdmissionProfile,
   createObservationContextContribution,
-  createLifecycleHookFeedbackContextAdmissionProfile,
-  createLifecycleHookFeedbackContextContribution,
+  createControllerFeedbackContextAdmissionProfile,
+  createControllerFeedbackContextContribution,
   createSteeringContextAdmissionProfile,
   createSteeringContextContribution,
   createTaskContextAdmissionProfile,
@@ -420,6 +414,12 @@ type DescendantExecutionOutcome =
       readonly resourceSettlement: RunTreeResourceSettlement;
     }
   | {
+      readonly status: "suspended";
+      readonly relationId: string;
+      readonly childRunId: string;
+      readonly progress: DescendantProgress;
+    }
+  | {
       readonly status: "rejected";
       readonly relationId: string | null;
       readonly childRunId: string | null;
@@ -475,6 +475,27 @@ interface RuntimeContinuationRecord {
   status: "available" | "starting" | "consumed";
 }
 
+interface ManagedActiveDescendant {
+  readonly relationId: string;
+  readonly relation: DescendantRunRelation;
+  readonly request: DelegationRequest;
+  readonly childRunId: string;
+  readonly handle: RunHandle;
+  readonly action: RuntimeRunAction;
+  readonly composition: NonNullable<ResolvedRunnerDependencies["operations"]["delegation"]>;
+  readonly pending: PendingRunSubject;
+  readonly resourceSettlement: Promise<RunTreeResourceSettlement>;
+  readonly continuationModelInteractionSeed: readonly ModelMessage[];
+  readonly initialBoundary: Promise<DescendantExecutionOutcome>;
+  resolveInitialBoundary(outcome: DescendantExecutionOutcome): void;
+  readonly initialDelivery: Promise<void>;
+  markInitialDelivered(): void;
+  initialBoundaryKind: "pending" | "suspended" | "terminal";
+  readonly reportedSuspensions: Set<string>;
+  transferState: "pending" | "settled" | "failed";
+  unsubscribe: () => void;
+}
+
 interface InteractionActionContext {
   readonly action: RuntimeRunAction;
   readonly toolCall: ToolCall | null;
@@ -504,11 +525,7 @@ export class RunExecution<TOutput> {
     Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"],
     number
   >();
-  private readonly childHandles = new Map<string, {
-    readonly request: DelegationRequest;
-    readonly childRunId: string;
-    readonly handle: import("./RunHandle.js").RunHandle;
-  }>();
+  private readonly childHandles = new Map<string, ManagedActiveDescendant>();
   private readonly settledDelegations = new Map<string, {
     readonly result: DelegationResult;
   }>();
@@ -695,33 +712,29 @@ export class RunExecution<TOutput> {
   submitResume(input: RunResumeRequestInput): RunResumeReceipt {
     const current = this.writer.getSnapshot();
     const requestId = typeof input?.id === "string" ? input.id : "";
-    if (!isValidResumeInput(input)) {
+    let candidate: RunResumeRequestInput;
+    try {
+      candidate = snapshotRunResumeRequestInput(input);
+    } catch {
       return rejectedResume("resume_invalid", requestId, current.revision);
     }
     if (current.status === "cancelling") {
-      return rejectedResume("run_cancelling", input.id, current.revision);
+      return rejectedResume("run_cancelling", candidate.id, current.revision);
     }
     if (current.status === "succeeded" || current.status === "failed" || current.status === "cancelled") {
-      return rejectedResume("run_settled", input.id, current.revision);
+      return rejectedResume("run_settled", candidate.id, current.revision);
     }
     if (current.status !== "suspended" || this.suspendedWaiter === null) {
-      return rejectedResume("run_not_suspended", input.id, current.revision);
+      return rejectedResume("run_not_suspended", candidate.id, current.revision);
     }
-    if (input.expectedRunRevision !== current.revision) {
-      return rejectedResume("run_revision_stale", input.id, current.revision);
+    if (candidate.expectedRunRevision !== current.revision) {
+      return rejectedResume("run_revision_stale", candidate.id, current.revision);
     }
-    if (!sameRunSuspensionRef(input.suspension, current.suspension.ref)) {
-      return rejectedResume("suspension_stale", input.id, current.revision);
+    if (!sameRunSuspensionRef(candidate.suspension, current.suspension.ref)) {
+      return rejectedResume("suspension_stale", candidate.id, current.revision);
     }
     const request: RunResumeRequest = Object.freeze({
-      id: input.id,
-      expectedRunRevision: input.expectedRunRevision,
-      suspension: Object.freeze({
-        ...input.suspension,
-        run: Object.freeze({ ...input.suspension.run }),
-      }),
-      origin: input.origin,
-      reason: input.reason.trim(),
+      ...candidate,
       run: current.run,
       requestedAt: this.now(),
     });
@@ -734,7 +747,6 @@ export class RunExecution<TOutput> {
     }, () => Object.freeze({
       status: "running" as const,
       suspension: null,
-      lifecycleHooks: advanceRunLifecycleHookFeedbackEpoch(current.lifecycleHooks),
     }));
     this.suspendedWaiter = null;
     waiter.resolve();
@@ -958,6 +970,68 @@ export class RunExecution<TOutput> {
     );
   }
 
+  submitDescendantResume(input: DelegationResumeRoute): DelegationResumeReceipt {
+    let route: DelegationResumeRoute;
+    try {
+      route = snapshotDelegationResumeRoute(input);
+    } catch {
+      return rejectedDelegationResume("delegation_route_invalid", null, null);
+    }
+    const direct = this.childHandles.get(route.relation.id);
+    if (direct !== undefined) {
+      if (
+        direct.request.ref.id !== route.request.id ||
+        direct.request.ref.revision !== route.request.revision ||
+        direct.childRunId !== route.child.id
+      ) {
+        return rejectedDelegationResume(
+          "delegation_route_mismatch",
+          route.relation,
+          route.child,
+        );
+      }
+      if (direct.handle.getResult() !== null) {
+        return rejectedDelegationResume(
+          "delegation_child_settled",
+          route.relation,
+          route.child,
+        );
+      }
+      return Object.freeze({
+        status: "routed" as const,
+        relation: route.relation,
+        child: route.child,
+        resume: direct.handle.resume(route.resume),
+      });
+    }
+    const settled = [...this.settledDelegations.values()].find(({ result }) =>
+      result.correlation.relation.ref.id === route.relation.id
+    );
+    if (settled !== undefined) {
+      return rejectedDelegationResume(
+        settled.result.request.id === route.request.id &&
+          settled.result.request.revision === route.request.revision &&
+          settled.result.correlation.child.run.id === route.child.id
+          ? "delegation_child_settled"
+          : "delegation_route_mismatch",
+        route.relation,
+        route.child,
+      );
+    }
+    for (const { handle } of this.childHandles.values()) {
+      const nested = handle.resumeDescendant(route);
+      if (
+        nested.status !== "rejected" ||
+        nested.code !== "delegation_relation_unknown"
+      ) return nested;
+    }
+    return rejectedDelegationResume(
+      "delegation_relation_unknown",
+      route.relation,
+      route.child,
+    );
+  }
+
   async run(): Promise<RunResult<TOutput>> {
     this.interruptionCoordinator.start();
     try {
@@ -1081,11 +1155,14 @@ export class RunExecution<TOutput> {
           );
           continue;
         }
+        if (decision.decision.kind === "continue_with_feedback") {
+          this.commitControllerFeedback(decision.decision.feedback);
+          continue;
+        }
         if (decision.decision.kind === "propose_completion") {
           const completion = await this.evaluateRunStop(
             decision.turn,
             decision.decision.output,
-            decision.prepared.input.interaction,
           );
           if (completion.kind === "succeeded") {
             return await this.settle({
@@ -1272,7 +1349,6 @@ export class RunExecution<TOutput> {
       const failure = this.failureFromError(error);
       if (error instanceof ControllerError) {
         const source = failure.source ?? this.failureSource(failure.failure, "controller_failure");
-        await this.emitStopFailureLifecycleEvent(failure.failure, source);
         return await this.settle(Object.freeze({ ...failure, source }));
       }
       return await this.settle(failure);
@@ -1332,13 +1408,12 @@ export class RunExecution<TOutput> {
   private async evaluateRunStop(
     turn: ControllerTurnRef,
     output: TOutput,
-    interaction: ModelInteractionProjection,
   ): Promise<
     | { readonly kind: "succeeded"; readonly source: RunCauseSourceRef }
     | { readonly kind: "continue" | "cancelled" }
     | {
         readonly kind: "suspend";
-        readonly code: "completion_gate_feedback_exhausted" | "stop_hook_feedback_exhausted";
+        readonly code: "completion_gate_feedback_exhausted";
       }
     | {
         readonly kind: "wait";
@@ -1356,6 +1431,22 @@ export class RunExecution<TOutput> {
     const runState = this.writer.getSnapshot();
     if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
     if (runState.status !== "running" && runState.status !== "waiting") {
+      return { kind: "continue" };
+    }
+    const activeRequiredDescendants = runState.pending.filter(
+      (pending) => pending.kind === "descendant_run" && pending.required,
+    );
+    if (activeRequiredDescendants.length > 0) {
+      this.commitControllerFeedback(Object.freeze({
+        source: Object.freeze({
+          owner: "agent-runtime",
+          kind: "active_descendant_completion_obligation",
+          id: this.runId,
+          revision: String(runState.revision),
+        }),
+        code: "active_descendant_result_pending",
+        message: "The Run cannot complete while required descendant work remains active. Continue other work, steer or resume the exact active Child, or cancel it before stopping.",
+      }));
       return { kind: "continue" };
     }
     const current = await execution.readCurrentSnapshot();
@@ -1466,14 +1557,7 @@ export class RunExecution<TOutput> {
     await this.commitVerificationFeedback(decision);
 
     if (decision.status === "completion_eligible") {
-      return this.evaluateStopHooks({
-        turn,
-        proposal,
-        output,
-        interaction,
-        verificationSnapshot: recorded.current.ref,
-        completionGate: invocation,
-      });
+      return this.acceptRunCompletion(proposal);
     }
     if (decision.status === "invalid" || decision.status === "failed") {
       return Object.freeze({ kind: "failed" as const, owner: "verification" as const, failure: decision.failure });
@@ -1528,186 +1612,53 @@ export class RunExecution<TOutput> {
       : Object.freeze({ kind: "continue" as const });
   }
 
-  private async evaluateStopHooks(input: {
-    readonly turn: ControllerTurnRef;
-    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
-    readonly output: TOutput;
-    readonly interaction: ModelInteractionProjection;
-    readonly verificationSnapshot: Readonly<{ readonly runId: string; readonly revision: number }>;
-    readonly completionGate: Readonly<{ readonly id: string; readonly revision: string }>;
-  }): Promise<
-    | { readonly kind: "succeeded"; readonly source: RunCauseSourceRef }
-    | { readonly kind: "continue" | "cancelled" }
-    | { readonly kind: "suspend"; readonly code: "stop_hook_feedback_exhausted" }
-  > {
-    const state = this.writer.getSnapshot();
-    const pendingRevision = await createCanonicalSha256Digest(
-      "agent-anything.run-pending-set.v1",
-      state.pending,
-    );
-    const basis: StopCandidateBasis = Object.freeze({
-      runRevision: state.revision,
-      steeringEpoch: this.steeringEpoch,
-      controllerTurn: input.turn,
-      completionProposal: input.proposal,
-      activeAgent: state.activeAgent,
-      instructionBinding: state.activeInstructionBinding,
-      verificationSnapshot: input.verificationSnapshot,
-      completionGate: input.completionGate,
-      planRevision: state.plan?.version ?? null,
-      pendingRevision,
+  private commitControllerFeedback(
+    feedback: import("../controller/index.js").ControllerFeedback,
+  ): void {
+    const current = this.writer.getSnapshot();
+    const contribution = createControllerFeedbackContextContribution({
+      id: this.currentContextContributionId(
+        current.context,
+        feedback.source.owner,
+        "controller_feedback",
+      ) ?? this.id("context_contribution"),
+      revision: feedback.source.revision,
+      runId: this.runId,
+      feedback,
+      createdAt: this.now(),
     });
-    const sequence = state.lifecycleHooks.stopEventSequence + 1;
-    const eventId = this.id("run_lifecycle_event");
-    const eventRevision = await createCanonicalSha256Digest(
-      "agent-anything.run-lifecycle-stop.v1",
-      { runId: this.runId, sequence, basis },
-    );
-    const event = snapshotStopLifecycleEvent({
-      ref: Object.freeze({
-        run: state.run,
-        id: eventId,
-        sequence,
-        revision: eventRevision,
-      }),
-      name: "Stop",
-      run: state.run,
-      task: this.input.task,
-      basis,
-      output: input.output,
-      interaction: input.interaction,
-      emittedAt: this.now(),
-    });
-    this.writer.commit({ kind: "lifecycle_event", event }, (current) => Object.freeze({
-      lifecycleHooks: Object.freeze({
-        ...current.lifecycleHooks,
-        stopEventSequence: sequence,
-        latestEventId: event.ref.id,
-      }),
-    }));
-    const eventCommittedRevision = this.writer.getSnapshot().revision;
-    const merged = await invokeStopLifecycleHooks({
-      composition: this.dependencies.lifecycleHooks,
-      runKind: this.lineage.kind === "root" ? "root" : "descendant",
-      event,
-      interruption: this.invocationInterruption(),
-      runDeadlineAt: state.deadlineAt,
-      now: () => this.now(),
-    });
-    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
-
-    const after = this.writer.getSnapshot();
-    const currentVerification = await this.requireVerificationExecution().readCurrentSnapshot();
-    const currentPendingRevision = await createCanonicalSha256Digest(
-      "agent-anything.run-pending-set.v1",
-      after.pending,
-    );
-    const basisCurrent = after.revision === eventCommittedRevision &&
-      this.steeringEpoch === basis.steeringEpoch &&
-      sameAgentRef(after.activeAgent, basis.activeAgent) &&
-      after.activeInstructionBinding.id === basis.instructionBinding.id &&
-      after.activeInstructionBinding.revision === basis.instructionBinding.revision &&
-      currentVerification.ref.runId === basis.verificationSnapshot.runId &&
-      currentVerification.ref.revision === basis.verificationSnapshot.revision &&
-      after.verification.gate?.id === basis.completionGate.id &&
-      after.verification.gate?.revision === basis.completionGate.revision &&
-      (after.plan?.version ?? null) === basis.planRevision &&
-      currentPendingRevision === basis.pendingRevision;
-    const invocations = Object.freeze(merged.invocations.map((invocation) => Object.freeze({
-      ...invocation,
-      stale: !basisCurrent,
-    })));
-    const invocationItems = invocations.map((invocation) => Object.freeze({
-      kind: "lifecycle_hook_invocation" as const,
-      invocation,
-    }));
-    const limitations = Object.freeze([
-      ...after.lifecycleHooks.limitations,
-      ...invocations.flatMap((invocation) => invocation.outcome.status === "non_blocking_error"
-        ? [`${invocation.hook.id}:${invocation.outcome.code}`]
-        : []),
-    ]);
-    if (!basisCurrent) {
-      if (invocationItems.length > 0) {
-        this.writer.commitItems(Object.freeze(invocationItems), (current) => Object.freeze({
-          lifecycleHooks: Object.freeze({
-            ...current.lifecycleHooks,
-            latestInvocations: invocations,
-            limitations,
-          }),
-        }));
-      }
-      return { kind: "continue" };
-    }
-
-    if (merged.kind === "block") {
-      const round = after.lifecycleHooks.consecutiveBlockingRounds + 1;
-      const feedback: StopHookFeedbackRecord = Object.freeze({
-        eventId: event.ref.id,
-        epoch: after.lifecycleHooks.feedbackEpoch,
-        round,
-        codes: merged.blockCodes,
-        message: merged.feedback ?? "A lifecycle Hook requested more work before completion.",
-        omittedReasonCount: merged.omittedReasonCount,
-      });
-      const contribution = createLifecycleHookFeedbackContextContribution({
-        id: this.currentContextContributionId(
-          after.context,
-          "agent-runtime",
-          "lifecycle_hook_feedback",
-        ) ?? this.id("context_contribution"),
-        revision: `${feedback.epoch}:${feedback.round}`,
-        runId: this.runId,
-        feedback,
-        createdAt: this.now(),
-      });
-      this.writer.commitItems(Object.freeze([
-        ...invocationItems,
-        Object.freeze({ kind: "lifecycle_hook_feedback" as const, feedback }),
-      ]), (current) => Object.freeze({
-        lifecycleHooks: Object.freeze({
-          ...current.lifecycleHooks,
-          consecutiveBlockingRounds: round,
-          latestInvocations: invocations,
-          latestFeedback: feedback,
-          limitations,
-        }),
+    this.writer.commit(
+      { kind: "controller_feedback", feedback },
+      (state) => Object.freeze({
         context: this.applyContextContributions(
-          current.context,
+          state.context,
           Object.freeze([contribution]),
-          createLifecycleHookFeedbackContextAdmissionProfile(),
-          "lifecycle_hook_feedback",
-          event.ref.id,
+          createControllerFeedbackContextAdmissionProfile(feedback.source.owner),
+          "controller_feedback",
+          feedback.source.id,
         ),
-      }));
-      return round > this.config.limits.stopHooks.maxConsecutiveBlockingRounds
-        ? Object.freeze({ kind: "suspend" as const, code: "stop_hook_feedback_exhausted" as const })
-        : Object.freeze({ kind: "continue" as const });
-    }
+      }),
+    );
+  }
 
+  private acceptRunCompletion(
+    proposal: Readonly<{ readonly id: string; readonly revision: string }>,
+  ): { readonly kind: "succeeded"; readonly source: RunCauseSourceRef } {
+    const state = this.writer.getSnapshot();
     const source: RunCauseSourceRef = Object.freeze({
       owner: "agent-runtime",
       kind: "run_completion_acceptance",
       id: this.id("run_completion_acceptance"),
-      revision: event.ref.revision,
+      revision: proposal.revision,
       run: state.run,
     });
-    this.writer.commitItems(Object.freeze([
-      ...invocationItems,
-      Object.freeze({
-        kind: "completion_acceptance" as const,
-        source,
-        eventId: event.ref.id,
-        candidateRevision: input.proposal.revision,
-        acceptedAt: this.now(),
-      }),
-    ]), (current) => Object.freeze({
-      lifecycleHooks: Object.freeze({
-        ...current.lifecycleHooks,
-        latestInvocations: invocations,
-        limitations,
-      }),
-    }));
+    this.writer.commitItems(Object.freeze([Object.freeze({
+      kind: "completion_acceptance" as const,
+      source,
+      candidateId: proposal.id,
+      candidateRevision: proposal.revision,
+      acceptedAt: this.now(),
+    })]));
     return Object.freeze({ kind: "succeeded" as const, source });
   }
 
@@ -3839,6 +3790,37 @@ export class RunExecution<TOutput> {
       );
       return;
     }
+    if (descendant.status === "suspended") {
+      const managed = this.childHandles.get(descendant.relationId);
+      try {
+        let mapped: import("./RunnerDependencies.js").DescendantOperationOutcome;
+        try {
+          mapped = this.dependencies.operations.delegation!.progressProjection.project(
+            Object.freeze({ progress: descendant.progress }),
+          );
+        } catch {
+          mapped = Object.freeze({
+            status: "failed" as const,
+            output: null,
+            failure: operationFailure(
+              "agent-runtime",
+              "delegation_progress_projection_failed",
+            ),
+          });
+        }
+        this.commitDescendantProgressObservation(
+          action,
+          call,
+          descendant.progress,
+          mapped,
+          startedAt,
+        );
+      } finally {
+        // Terminal transfer cannot remain blocked if Parent-side projection fails.
+        managed?.markInitialDelivered();
+      }
+      return;
+    }
     let mapped: import("./RunnerDependencies.js").DescendantOperationOutcome;
     try {
       mapped = this.dependencies.operations.delegation!.resultProjection.project(
@@ -3900,6 +3882,87 @@ export class RunExecution<TOutput> {
       );
       return;
     }
+    const active = [...this.childHandles.values()].find(
+      (candidate) => candidate.childRunId === request.agent_id,
+    );
+    if (active !== undefined) {
+      if (!sameAgentRef(active.request.childAgent, targetAgent)) {
+        this.commitDescendantToolObservation(
+          action, call, active.relationId, active.childRunId, "invalid", null,
+          operationFailure("agent-runtime", "agent_target_incompatible"),
+          startedAt, null,
+        );
+        return;
+      }
+      const before = active.handle.getSnapshot();
+      const steering = active.handle.steer({
+        commandId: `${call.toolCallId}:steer`,
+        expectedRunRevision: before.runRevision,
+        instruction: request.prompt,
+        attribution: Object.freeze({ origin: "model", actorId: this.activeAgent.id }),
+        submittedAt: this.now(),
+      });
+      if (steering.status === "rejected") {
+        this.commitDescendantToolObservation(
+          action, call, active.relationId, active.childRunId, "unavailable", null,
+          operationFailure("agent-runtime", steering.code),
+          startedAt, null,
+        );
+        return;
+      }
+      let resumed = false;
+      if (before.status === "suspended" && before.suspension !== null) {
+        const receipt = active.handle.resume({
+          id: `${call.toolCallId}:resume`,
+          expectedRunRevision: before.runRevision,
+          suspension: before.suspension.ref,
+          origin: "model",
+          reason: "The Parent Agent supplied new steering for this suspended Child Run.",
+        });
+        if (receipt.status === "rejected") {
+          this.commitDescendantToolObservation(
+            action, call, active.relationId, active.childRunId, "partial",
+            Object.freeze({
+              agent_id: active.childRunId,
+              status: "suspended",
+              child_run_revision: receipt.currentRunRevision,
+              summary: "Steering was accepted, but the exact Child suspension could not be resumed.",
+              admitted_controls: Object.freeze(["steer", "resume", "cancel"]),
+              steering_status: steering.status,
+              resume_status: receipt.code,
+            }),
+            operationFailure("agent-runtime", receipt.code),
+            startedAt, null,
+          );
+          return;
+        }
+        resumed = true;
+      }
+      const after = active.handle.getSnapshot();
+      this.commitDescendantToolObservation(
+        action,
+        call,
+        active.relationId,
+        active.childRunId,
+        "succeeded",
+        Object.freeze({
+          agent_id: active.childRunId,
+          status: after.status === "suspended" && !resumed ? "suspended" : "running",
+          child_run_revision: after.runRevision,
+          summary: resumed
+            ? "The existing Child Run accepted steering and resumed."
+            : "The existing Child Run accepted steering.",
+          admitted_controls: Object.freeze(["steer", "resume", "cancel"]),
+          steering_status: steering.status,
+          resume_status: resumed ? "accepted" : "not_required",
+        }),
+        null,
+        startedAt,
+        null,
+      );
+      return;
+    }
+
     const target = this.continuationRecords.get(request.agent_id);
     if (target === undefined) {
       this.commitDescendantToolObservation(
@@ -3945,6 +4008,10 @@ export class RunExecution<TOutput> {
         startedAt,
         null,
       );
+      return;
+    }
+    if (descendant.status === "suspended") {
+      this.commitDescendantExecutionOutcome(action, call, descendant, startedAt);
       return;
     }
     let mapped: import("./RunnerDependencies.js").DescendantOperationOutcome;
@@ -4393,11 +4460,6 @@ export class RunExecution<TOutput> {
     );
 
     const child = started.handle;
-    this.childHandles.set(relationId, Object.freeze({
-      request,
-      childRunId: child.runId,
-      handle: child,
-    }));
     const pending: PendingRunSubject = Object.freeze({
       kind: "descendant_run",
       relationId,
@@ -4406,115 +4468,269 @@ export class RunExecution<TOutput> {
       required: true,
       openedInRunRevision: this.writer.getSnapshot().revision,
     });
+
+    let resolveInitialBoundary!: (outcome: DescendantExecutionOutcome) => void;
+    let initialBoundaryResolved = false;
+    const initialBoundary = new Promise<DescendantExecutionOutcome>((resolve) => {
+      resolveInitialBoundary = resolve;
+    });
+    let resolveInitialDelivery!: () => void;
+    let initialDeliveryResolved = false;
+    const initialDelivery = new Promise<void>((resolve) => {
+      resolveInitialDelivery = resolve;
+    });
+    const managed: ManagedActiveDescendant = {
+      relationId,
+      relation: started.relation,
+      request,
+      childRunId: child.runId,
+      handle: child,
+      action,
+      composition,
+      pending,
+      resourceSettlement: started.resourceSettlement,
+      continuationModelInteractionSeed,
+      initialBoundary,
+      resolveInitialBoundary(outcome) {
+        if (initialBoundaryResolved) return;
+        initialBoundaryResolved = true;
+        resolveInitialBoundary(outcome);
+      },
+      initialDelivery,
+      markInitialDelivered() {
+        if (initialDeliveryResolved) return;
+        initialDeliveryResolved = true;
+        resolveInitialDelivery();
+      },
+      initialBoundaryKind: "pending",
+      reportedSuspensions: new Set<string>(),
+      transferState: "pending",
+      unsubscribe: () => {},
+    };
+    this.childHandles.set(relationId, managed);
     this.addPending(pending);
-    const unsubscribe = child.subscribe(() => this.publishCurrentState());
-    let transferStatus: "settled" | "failed" | "unknown" = "unknown";
-    try {
-      const result = await child.wait();
-      const resourceSettlement = await started.resourceSettlement;
-      let delegationResult: DelegationResult;
-      try {
-        const narrative = composition.narrativeProjection.project({
-          request,
-          childResult: result,
-        });
-        delegationResult = constructDelegationResult({
-          resultId: this.id("delegation_result"),
-          request,
-          correlation: Object.freeze({
-            request: request.ref,
-            origin: request.origin,
-            relation: started.relation,
-            child: Object.freeze({
-              run: started.relation.child,
-              task: Object.freeze({ id: result.taskId }),
-              agent: request.childAgent,
-            }),
-          }),
-          childResult: result,
-          narrative,
-          resourceSettlement,
-          createdAt: this.now(),
-        });
-      } catch {
-        transferStatus = "failed";
-        return rejectedDescendant(
-          relationId,
-          "delegation_result_invalid",
-          child.runId,
-          "failed",
-        );
+    managed.unsubscribe = child.subscribe((snapshot) => {
+      this.publishCurrentState();
+      if (
+        snapshot.result === null &&
+        snapshot.status === "suspended" &&
+        snapshot.suspension !== null
+      ) {
+        this.observeManagedDescendantSuspension(managed, snapshot);
       }
-      this.settledDelegations.set(delegationResult.ref.id, Object.freeze({
-        result: delegationResult,
+    });
+    void child.wait().then(
+      (result) => this.finalizeManagedDescendant(managed, result, dispatch),
+      () => this.failManagedDescendant(managed, "delegation_result_invalid"),
+    );
+    return initialBoundary;
+  }
+
+  private observeManagedDescendantSuspension(
+    managed: ManagedActiveDescendant,
+    snapshot: ReturnType<RunHandle["getSnapshot"]>,
+  ): void {
+    const suspension = snapshot.suspension;
+    if (suspension === null || managed.transferState !== "pending") return;
+    const key = `${suspension.ref.id}@${suspension.ref.revision}:${snapshot.runRevision}`;
+    if (managed.reportedSuspensions.has(key)) return;
+    managed.reportedSuspensions.add(key);
+    const progress = createDescendantProgress({
+      relation: managed.relation.ref,
+      request: managed.request.ref,
+      childRun: managed.relation.child,
+      childRunRevision: snapshot.runRevision,
+      suspension,
+      admittedControls: Object.freeze(["steer", "resume", "cancel"]),
+      observedAt: this.now(),
+    });
+    if (managed.initialBoundaryKind === "pending") {
+      managed.initialBoundaryKind = "suspended";
+      managed.resolveInitialBoundary(Object.freeze({
+        status: "suspended" as const,
+        relationId: managed.relationId,
+        childRunId: managed.childRunId,
+        progress,
       }));
-      const continuation = this.retainDescendantContinuation(
-        request,
-        delegationResult,
-        result,
-        continuationModelInteractionSeed,
-      );
-      transferStatus = "settled";
-      this.runTree.settleDescendantTransfer(child.runId, transferStatus);
-      this.eventStream.emit("run.descendant.settled", {
-        ...descendantDispatchEventPayload(dispatch),
-        relationId: started.relation.ref.id,
-        relationKind: started.relation.kind,
-        parentRunActionId: started.relation.parentRunAction.id,
-        childRunId: started.relation.child.id,
-        childAgentId: request.childAgent.id,
-        childAgentRevision: request.childAgent.revision,
-        requestId: request.ref.id,
-        requestRevision: request.ref.revision,
-        contextSourceCount: request.contextPlan.entries.length,
-        authorityDerivationId: request.authorityDerivation.id,
-        limitDerivationId: request.limitDerivation.id,
-        depth: started.relation.depth,
-        status: delegationResult.terminal.status,
-        code: delegationResult.terminal.code,
-        resultId: delegationResult.ref.id,
-        resultRevision: delegationResult.ref.revision,
-        expectationPresentCount: delegationResult.expectationCoverage.filter(
-          ({ disposition }) => disposition === "present",
-        ).length,
-        expectationUnmetCount: delegationResult.expectationCoverage.filter(
-          ({ required, disposition }) => required && disposition !== "present",
-        ).length,
-        evidenceCount: delegationResult.evidence.totalCount,
-        artifactCount: delegationResult.artifacts.totalCount,
-        verificationStatus: delegationResult.verification.status,
-        effectStatus: delegationResult.effects.status,
-        uncertaintyCount: delegationResult.uncertainty.length,
-        controllerTurns: delegationResult.usage.controllerTurns.status === "measured"
-          ? delegationResult.usage.controllerTurns.value
-          : 0,
-        actions: delegationResult.usage.actions.status === "measured"
-          ? delegationResult.usage.actions.value
-          : 0,
-        modelUsageStatus: delegationModelUsageStatus(delegationResult),
-        limitStatus: delegationResult.limitDisposition.status,
-        exhaustedLimit: delegationResult.limitDisposition.exhaustedLimit,
-        treeRevision: this.runTree.getSnapshot().revision,
-      });
-      return Object.freeze({
-        status: "settled" as const,
-        relationId,
-        childRunId: child.runId,
-        result: delegationResult,
-        continuation: continuation?.ref ?? null,
-        resourceSettlement,
-      });
-    } finally {
-      const childNode = this.runTree.getSnapshot().nodes.find(
-        (node) => node.runId === child.runId,
-      );
-      if (childNode?.resultTransfer === "pending") {
-        this.runTree.settleDescendantTransfer(child.runId, transferStatus);
-      }
-      unsubscribe();
-      this.childHandles.delete(relationId);
-      this.removePending(pending, "resolved", null);
+      return;
     }
+    void managed.initialDelivery.then(() => {
+      if (
+        managed.transferState !== "pending" ||
+        managed.handle.getResult() !== null ||
+        this.terminalResult !== null
+      ) return;
+      this.commitAsyncDescendantProgress(managed, progress);
+    });
+  }
+
+  private async finalizeManagedDescendant(
+    managed: ManagedActiveDescendant,
+    result: RunResult,
+    dispatch: DescendantDispatchProvenance,
+  ): Promise<void> {
+    let resourceSettlement: RunTreeResourceSettlement;
+    let delegationResult: DelegationResult;
+    try {
+      resourceSettlement = await managed.resourceSettlement;
+      const narrative = managed.composition.narrativeProjection.project({
+        request: managed.request,
+        childResult: result,
+      });
+      delegationResult = constructDelegationResult({
+        resultId: this.id("delegation_result"),
+        request: managed.request,
+        correlation: Object.freeze({
+          request: managed.request.ref,
+          origin: managed.request.origin,
+          relation: managed.relation,
+          child: Object.freeze({
+            run: managed.relation.child,
+            task: Object.freeze({ id: result.taskId }),
+            agent: managed.request.childAgent,
+          }),
+        }),
+        childResult: result,
+        narrative,
+        resourceSettlement,
+        createdAt: this.now(),
+      });
+    } catch {
+      this.failManagedDescendant(managed, "delegation_result_invalid");
+      return;
+    }
+
+    this.settledDelegations.set(delegationResult.ref.id, Object.freeze({
+      result: delegationResult,
+    }));
+    const continuation = this.retainDescendantContinuation(
+      managed.request,
+      delegationResult,
+      result,
+      managed.continuationModelInteractionSeed,
+    );
+    managed.transferState = "settled";
+    this.runTree.settleDescendantTransfer(managed.childRunId, "settled");
+    this.emitDescendantSettled(managed, delegationResult, dispatch);
+    const outcome: DescendantExecutionOutcome = Object.freeze({
+      status: "settled" as const,
+      relationId: managed.relationId,
+      childRunId: managed.childRunId,
+      result: delegationResult,
+      continuation: continuation?.ref ?? null,
+      resourceSettlement,
+    });
+    if (managed.initialBoundaryKind === "pending") {
+      managed.initialBoundaryKind = "terminal";
+      managed.resolveInitialBoundary(outcome);
+    } else {
+      await managed.initialDelivery;
+      if (this.terminalResult === null) {
+        this.commitDescendantResultTransfer(managed, delegationResult, continuation?.ref ?? null);
+      }
+    }
+    this.cleanupManagedDescendant(managed, "resolved", delegationResult.ref.id);
+  }
+
+  private failManagedDescendant(
+    managed: ManagedActiveDescendant,
+    code: "delegation_result_invalid",
+  ): void {
+    if (managed.transferState !== "pending") return;
+    managed.transferState = "failed";
+    const childNode = this.runTree.getSnapshot().nodes.find(
+      (node) => node.runId === managed.childRunId,
+    );
+    if (childNode?.resultTransfer === "pending") {
+      this.runTree.settleDescendantTransfer(managed.childRunId, "failed");
+    }
+    if (managed.initialBoundaryKind === "pending") {
+      managed.initialBoundaryKind = "terminal";
+      managed.resolveInitialBoundary(rejectedDescendant(
+        managed.relationId,
+        code,
+        managed.childRunId,
+        "failed",
+      ));
+    } else {
+      void managed.initialDelivery.then(() => {
+        if (this.terminalResult !== null) return;
+        this.commitObservation(managed.action, {
+          kind: "descendant_result_transfer",
+          childRunId: managed.childRunId,
+          result: null,
+          status: "failed",
+          output: null,
+          failure: operationFailure("agent-runtime", code),
+        }, [{
+          owner: "agent-runtime",
+          kind: "descendant_result_transfer",
+          id: managed.childRunId,
+          revision: "failed",
+        }], "agent-runtime");
+      });
+    }
+    this.cleanupManagedDescendant(managed, "failed", null);
+  }
+
+  private cleanupManagedDescendant(
+    managed: ManagedActiveDescendant,
+    transition: "resolved" | "failed",
+    recordRef: string | null,
+  ): void {
+    managed.unsubscribe();
+    if (this.childHandles.get(managed.relationId) === managed) {
+      this.childHandles.delete(managed.relationId);
+    }
+    this.removePending(managed.pending, transition, recordRef);
+    this.publishCurrentState();
+  }
+
+  private emitDescendantSettled(
+    managed: ManagedActiveDescendant,
+    result: DelegationResult,
+    dispatch: DescendantDispatchProvenance,
+  ): void {
+    this.eventStream.emit("run.descendant.settled", {
+      ...descendantDispatchEventPayload(dispatch),
+      relationId: managed.relation.ref.id,
+      relationKind: managed.relation.kind,
+      parentRunActionId: managed.relation.parentRunAction.id,
+      childRunId: managed.relation.child.id,
+      childAgentId: managed.request.childAgent.id,
+      childAgentRevision: managed.request.childAgent.revision,
+      requestId: managed.request.ref.id,
+      requestRevision: managed.request.ref.revision,
+      contextSourceCount: managed.request.contextPlan.entries.length,
+      authorityDerivationId: managed.request.authorityDerivation.id,
+      limitDerivationId: managed.request.limitDerivation.id,
+      depth: managed.relation.depth,
+      status: result.terminal.status,
+      code: result.terminal.code,
+      resultId: result.ref.id,
+      resultRevision: result.ref.revision,
+      expectationPresentCount: result.expectationCoverage.filter(
+        ({ disposition }) => disposition === "present",
+      ).length,
+      expectationUnmetCount: result.expectationCoverage.filter(
+        ({ required, disposition }) => required && disposition !== "present",
+      ).length,
+      evidenceCount: result.evidence.totalCount,
+      artifactCount: result.artifacts.totalCount,
+      verificationStatus: result.verification.status,
+      effectStatus: result.effects.status,
+      uncertaintyCount: result.uncertainty.length,
+      controllerTurns: result.usage.controllerTurns.status === "measured"
+        ? result.usage.controllerTurns.value
+        : 0,
+      actions: result.usage.actions.status === "measured"
+        ? result.usage.actions.value
+        : 0,
+      modelUsageStatus: delegationModelUsageStatus(result),
+      limitStatus: result.limitDisposition.status,
+      exhaustedLimit: result.limitDisposition.exhaustedLimit,
+      treeRevision: this.runTree.getSnapshot().revision,
+    });
   }
 
   private emitDescendantLifecycle(
@@ -4647,6 +4863,7 @@ export class RunExecution<TOutput> {
                   | "initializing"
                   | "running"
                   | "waiting"
+                  | "suspended"
                   | "cancelling",
               })]
             : [];
@@ -4678,6 +4895,114 @@ export class RunExecution<TOutput> {
       code,
       treeRevision,
     });
+  }
+
+  private commitDescendantProgressObservation(
+    action: RuntimeRunAction,
+    call: ToolCall,
+    progress: DescendantProgress,
+    projected: import("./RunnerDependencies.js").DescendantOperationOutcome,
+    startedAt: string,
+  ): void {
+    const finishedAt = this.now();
+    const settlement = Object.freeze({
+      owner: "agent-runtime",
+      kind: "descendant_progress",
+      id: progress.childRun.id,
+      revision: String(progress.childRunRevision),
+    });
+    const toolResult = projected.status === "succeeded"
+      ? succeededToolResult(call, settlement, projected.output, startedAt, finishedAt)
+      : projected.status === "partial"
+        ? partialToolResult(
+            call,
+            settlement,
+            projected.output,
+            projected.failure,
+            startedAt,
+            finishedAt,
+          )
+        : failedToolResult(
+            call,
+            settlement,
+            projected.failure.code,
+            projected.failure.message,
+            startedAt,
+            finishedAt,
+            projected.status === "timed_out" ? "timeout" : "failed",
+          );
+    this.commitObservation(action, {
+      kind: "descendant_progress",
+      progress,
+      output: projected.output,
+      toolResult,
+    }, [
+      {
+        owner: "agent-runtime",
+        kind: "descendant_progress",
+        id: progress.childRun.id,
+        revision: String(progress.childRunRevision),
+      },
+      toolResultLowerRef(toolResult),
+    ], "agent-runtime");
+  }
+
+  private commitAsyncDescendantProgress(
+    managed: ManagedActiveDescendant,
+    progress: DescendantProgress,
+  ): void {
+    let output: unknown = null;
+    try {
+      output = managed.composition.progressProjection.project(
+        Object.freeze({ progress }),
+      ).output;
+    } catch {
+      // The Core progress record remains authoritative even if Product projection fails.
+    }
+    this.commitObservation(managed.action, {
+      kind: "descendant_progress",
+      progress,
+      output,
+      toolResult: null,
+    }, [{
+      owner: "agent-runtime",
+      kind: "descendant_progress",
+      id: progress.childRun.id,
+      revision: String(progress.childRunRevision),
+    }], "agent-runtime");
+  }
+
+  private commitDescendantResultTransfer(
+    managed: ManagedActiveDescendant,
+    result: DelegationResult,
+    continuation: Readonly<{ readonly id: string; readonly revision: string }> | null,
+  ): void {
+    let projected: import("./RunnerDependencies.js").DescendantOperationOutcome;
+    try {
+      projected = managed.composition.resultProjection.project({ result, continuation });
+    } catch {
+      projected = Object.freeze({
+        status: "failed" as const,
+        output: null,
+        failure: operationFailure(
+          "agent-runtime",
+          "delegation_result_projection_failed",
+        ),
+      });
+    }
+    this.commitObservation(managed.action, {
+      kind: "descendant_result_transfer",
+      childRunId: managed.childRunId,
+      result,
+      status: projected.status,
+      output: projected.output,
+      failure: projected.failure,
+    }, [{
+      owner: "agent-runtime",
+      kind: "delegation_result",
+      id: result.ref.id,
+      revision: result.ref.revision,
+    }], "agent-runtime");
   }
 
   private commitDescendantToolObservation(
@@ -4856,7 +5181,6 @@ export class RunExecution<TOutput> {
       payload,
     });
     const failed = observationFailed(observation);
-    const resetsHookFeedback = !failed && observation.payload.kind !== "plan_update";
     const contribution = createObservationContextContribution({
       id: this.id("context_contribution"),
       observation,
@@ -4876,9 +5200,6 @@ export class RunExecution<TOutput> {
           ? current.counters.consecutiveActionFailures + 1
           : 0,
       }),
-      lifecycleHooks: resetsHookFeedback
-        ? advanceRunLifecycleHookFeedbackEpoch(current.lifecycleHooks)
-        : current.lifecycleHooks,
     }));
   }
 
@@ -5889,56 +6210,6 @@ export class RunExecution<TOutput> {
     };
   }
 
-  private async emitStopFailureLifecycleEvent(
-    failure: RunFailureCause,
-    source: RunCauseSourceRef,
-  ): Promise<void> {
-    const state = this.writer.getSnapshot();
-    const failedTurn = [...state.items].reverse().find((item) =>
-      item.payload.kind === "controller_turn" && item.payload.status === "failed"
-    );
-    if (failedTurn === undefined || failedTurn.payload.kind !== "controller_turn") return;
-    const sequence = state.lifecycleHooks.stopFailureEventSequence + 1;
-    const revision = await createCanonicalSha256Digest(
-      "agent-anything.run-lifecycle-stop-failure.v1",
-      {
-        runId: this.runId,
-        sequence,
-        turn: failedTurn.payload.turn,
-        failureKind: failure.kind,
-        failureCode: failure.failure.code,
-        source,
-      },
-    );
-    const event = snapshotStopFailureLifecycleEvent({
-      ref: Object.freeze({
-        run: state.run,
-        id: this.id("run_lifecycle_event"),
-        sequence,
-        revision,
-      }),
-      name: "StopFailure",
-      run: state.run,
-      turn: failedTurn.payload.turn,
-      failure,
-      source,
-      emittedAt: this.now(),
-    });
-    this.writer.commit({ kind: "lifecycle_event", event }, (current) => Object.freeze({
-      lifecycleHooks: Object.freeze({
-        ...current.lifecycleHooks,
-        stopFailureEventSequence: sequence,
-        latestEventId: event.ref.id,
-      }),
-    }));
-    observeStopFailureLifecycleHooks({
-      composition: this.dependencies.lifecycleHooks,
-      runKind: this.lineage.kind === "root" ? "root" : "descendant",
-      event,
-      interruption: this.invocationInterruption(),
-    });
-  }
-
   private async closeVerification(closedAt: string): Promise<void> {
     if (this.verificationExecution === null || this.verificationClosed) return;
     this.verificationClosed = true;
@@ -6158,43 +6429,7 @@ export class RunExecution<TOutput> {
         itemKind: item.payload.kind,
         itemSequence: item.ref.sequence,
       }, item.createdAt);
-      if (item.payload.kind === "lifecycle_event") {
-        const event = item.payload.event;
-        this.emit("run.lifecycle.emitted", {
-          eventId: event.ref.id,
-          eventName: event.name,
-          sequence: event.ref.sequence,
-          eventRevision: event.ref.revision,
-        }, item.createdAt);
-      } else if (item.payload.kind === "lifecycle_hook_invocation") {
-        const invocation = item.payload.invocation;
-        const status = invocation.outcome.status === "non_blocking_error"
-          ? "non_blocking_error" as const
-          : invocation.outcome.decision.kind;
-        const code = invocation.outcome.status === "non_blocking_error"
-          ? invocation.outcome.code
-          : invocation.outcome.decision.kind === "block"
-            ? invocation.outcome.decision.code
-            : null;
-        this.emit("run.lifecycle.hook.completed", {
-          eventId: invocation.eventId,
-          hookId: invocation.hook.id,
-          hookRevision: invocation.hook.revision,
-          status,
-          code,
-          durationMs: invocation.durationMs,
-          stale: invocation.stale,
-        }, item.createdAt);
-      } else if (item.payload.kind === "lifecycle_hook_feedback") {
-        const feedback = item.payload.feedback;
-        this.emit("run.lifecycle.hook.feedback", {
-          eventId: feedback.eventId,
-          epoch: feedback.epoch,
-          round: feedback.round,
-          codeCount: feedback.codes.length,
-          omittedReasonCount: feedback.omittedReasonCount,
-        }, item.createdAt);
-      } else if (item.payload.kind === "controller_turn") {
+      if (item.payload.kind === "controller_turn") {
         const exposure = item.payload.toolExposure;
         this.emit("controller.tool_exposure.resolved", {
           turnId: item.payload.turn.id,
@@ -6253,7 +6488,6 @@ export class RunExecution<TOutput> {
       }),
       plan: state.plan === null ? null : projectPlan(state.plan),
       suspension: state.suspension,
-      lifecycleHooks: projectRunLifecycleHooks(state.lifecycleHooks),
       retry: this.retryProjection,
       verification: this.verificationHostProjection,
       pendingInteractions: Object.freeze([
@@ -6275,6 +6509,13 @@ export class RunExecution<TOutput> {
                 child: Object.freeze({ id: child.childRunId }),
                 childRunRevision: snapshot.runRevision,
                 childStatus: snapshot.status,
+                suspension: snapshot.suspension,
+                admittedControls: Object.freeze([
+                  "steer" as const,
+                  "resume" as const,
+                  "cancel" as const,
+                ]),
+                resultTransfer: "pending" as const,
                 steerable: true as const,
               })]
             : [];
@@ -6743,6 +6984,11 @@ function observationFailed(observation: RunObservation): boolean {
     case "descendant_run":
       return observation.payload.status !== "succeeded" &&
         observation.payload.status !== "partial";
+    case "descendant_progress":
+      return false;
+    case "descendant_result_transfer":
+      return observation.payload.status !== "succeeded" &&
+        observation.payload.status !== "partial";
     case "plan_update":
       return observation.payload.result.status === "rejected";
   }
@@ -6785,6 +7031,14 @@ function rejectedDelegationSteering(
   relation: Extract<DelegationSteeringReceipt, { readonly status: "rejected" }>["relation"],
   child: Extract<DelegationSteeringReceipt, { readonly status: "rejected" }>["child"],
 ): DelegationSteeringReceipt {
+  return Object.freeze({ status: "rejected" as const, code, relation, child });
+}
+
+function rejectedDelegationResume(
+  code: Extract<DelegationResumeReceipt, { readonly status: "rejected" }>["code"],
+  relation: Extract<DelegationResumeReceipt, { readonly status: "rejected" }>["relation"],
+  child: Extract<DelegationResumeReceipt, { readonly status: "rejected" }>["child"],
+): DelegationResumeReceipt {
   return Object.freeze({ status: "rejected" as const, code, relation, child });
 }
 
@@ -7081,6 +7335,33 @@ function projectObservationSettlement(observation: RunObservation): {
               },
         },
       );
+    case "descendant_progress":
+      return modelSettlement("succeeded", {
+        kind: payload.kind,
+        status: "suspended",
+        childRunId: payload.progress.childRun.id,
+        childRunRevision: payload.progress.childRunRevision,
+        suspension: payload.progress.suspension,
+        admittedControls: payload.progress.admittedControls,
+        output: payload.output,
+      });
+    case "descendant_result_transfer":
+      return modelSettlement(
+        operationModelSettlement(payload.status),
+        {
+          kind: payload.kind,
+          status: payload.status,
+          childRunId: payload.childRunId,
+          output: payload.output,
+          failure: payload.failure === null
+            ? null
+            : {
+                owner: payload.failure.owner,
+                code: payload.failure.code,
+                message: payload.failure.message,
+              },
+        },
+      );
   }
 }
 
@@ -7179,18 +7460,6 @@ function controllerTurnSource(turn: ControllerTurnRef): RunCauseSourceRef {
 function boundedReason(value: string): string {
   const normalized = value.trim();
   return (normalized.length === 0 ? "Run progression requires explicit resume." : normalized).slice(0, 2_048);
-}
-
-function isValidResumeInput(input: RunResumeRequestInput): boolean {
-  return typeof input === "object" && input !== null &&
-    typeof input.id === "string" && input.id.trim().length > 0 && input.id === input.id.trim() &&
-    Number.isSafeInteger(input.expectedRunRevision) && input.expectedRunRevision >= 0 &&
-    typeof input.suspension === "object" && input.suspension !== null &&
-    typeof input.suspension.id === "string" && input.suspension.id.trim().length > 0 &&
-    typeof input.suspension.revision === "string" && input.suspension.revision.trim().length > 0 &&
-    typeof input.suspension.run?.id === "string" && input.suspension.run.id.trim().length > 0 &&
-    (input.origin === "user" || input.origin === "host") &&
-    typeof input.reason === "string" && input.reason.trim().length > 0 && input.reason.trim().length <= 500;
 }
 
 function rejectedResume(

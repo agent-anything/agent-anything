@@ -13,7 +13,6 @@ describe("Helarc Desktop IPC projection", () => {
       "activeDelegations",
       "continuationTargets",
       "instructionBinding",
-      "lifecycleHooks",
       "pendingInteractions",
       "runRevision",
       "runTree",
@@ -52,16 +51,6 @@ describe("Helarc Desktop IPC projection", () => {
       recoveryNeeded: true,
       safeReasons: ["verification_pending"],
       updatedAt: "2026-07-19T00:00:00.000Z",
-    });
-    expect(projected.run?.host.lifecycleHooks).toEqual({
-      stopEventSequence: 3,
-      stopFailureEventSequence: 0,
-      feedbackEpoch: 1,
-      consecutiveBlockingRounds: 1,
-      latestEventId: "stop-event-3",
-      latestInvocations: [],
-      latestFeedback: null,
-      limitations: ["task_fulfillment_incomplete"],
     });
     expect(projected.run?.host.instructionBinding).toMatchObject({
       agent: { id: "helarc", revision: "agent-revision-1" },
@@ -244,17 +233,6 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       }),
       activeDelegations: [],
       continuationTargets: [],
-      lifecycleHooks: {
-        stopEventSequence: 3,
-        stopFailureEventSequence: 0,
-        feedbackEpoch: 1,
-        consecutiveBlockingRounds: 1,
-        latestEventId: "stop-event-3",
-        latestInvocations: [],
-        latestFeedback: null,
-        limitations: ["task_fulfillment_incomplete"],
-        privateHookState: SECRET,
-      },
       plan: { privatePlanState: SECRET },
       pendingInteractions,
       retry: { privateRetryState: SECRET },

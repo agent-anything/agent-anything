@@ -214,12 +214,23 @@ describe("Helarc workbench shell", () => {
             child: { id: "harness-run-2" },
             relationKind: "delegation",
             childRunRevision: 6,
-            childStatus: "running",
+            childStatus: "suspended",
+            suspension: {
+              id: "suspension-1",
+              revision: "suspension-1-v1",
+              code: "controller_stop_requested",
+              reason: "Waiting for direction.",
+              runRevision: 6,
+              suspendedAt: "2026-07-05T01:00:01.000Z",
+            },
+            admittedControls: ["steer", "resume", "cancel"],
+            resultTransfer: "pending",
             steerable: true,
           }],
           activity: [event("event-1", "run.completed", "Run completed", "info")],
         })}
         acceptedTask={{ id: "task-1", prompt: "Inspect code" }}
+        onResumeDescendant={() => undefined}
       />,
     );
 
@@ -232,7 +243,9 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Created by action-1");
     expect(html).toContain("Concurrent request 1 of 2");
     expect(html).toContain("Concurrent request 2 of 2");
-    expect(html).toContain("Steerable at revision 6");
+    expect(html).toContain("Suspended at revision 6: Waiting for direction.");
+    expect(html).toContain("steer / resume / cancel; result transfer pending");
+    expect(html).toContain("Resume descendant run");
     expect(html).toContain("cancelling");
     expect(html).toContain("controller_failed");
     expect(html).not.toContain("delegatedPrompt");
@@ -406,30 +419,6 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Event summary");
   });
 
-  it("shows lifecycle Hook activity on a terminal Run", () => {
-    const html = renderToStaticMarkup(
-      <RunTerminalPanel
-        title="Run failed"
-        run={runProjection({
-          status: "failed",
-          runtimeStatus: "failed",
-          lifecycleHooks: {
-            stopEventSequence: 3,
-            stopFailureEventSequence: 0,
-            feedbackEpoch: 1,
-            consecutiveBlockingRounds: 2,
-            latestEventId: "stop-event-3",
-            latestInvocations: [],
-            latestFeedback: null,
-            limitations: [],
-          },
-        })}
-      />,
-    );
-
-    expect(html).toContain("Lifecycle hooks");
-    expect(html).toContain("3 stop events, 2 consecutive blocking rounds");
-  });
 });
 
 function pendingApproval(
@@ -514,7 +503,6 @@ function runProjection(input: {
   activity?: ReturnType<typeof event>[];
   runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
   activeDelegations?: NonNullable<HelarcMainSnapshot["run"]>["host"]["activeDelegations"];
-  lifecycleHooks?: NonNullable<HelarcMainSnapshot["run"]>["host"]["lifecycleHooks"];
   terminalCode?: NonNullable<
     NonNullable<HelarcMainSnapshot["run"]>["host"]["terminal"]
   >["code"];
@@ -541,16 +529,6 @@ function runProjection(input: {
       runTree: input.runTree ?? rootRunTree(),
       activeDelegations: input.activeDelegations ?? [],
       continuationTargets: [],
-      lifecycleHooks: input.lifecycleHooks ?? {
-        stopEventSequence: 0,
-        stopFailureEventSequence: 0,
-        feedbackEpoch: 0,
-        consecutiveBlockingRounds: 0,
-        latestEventId: null,
-        latestInvocations: [],
-        latestFeedback: null,
-        limitations: [],
-      },
       verification: null,
       pendingInteractions: [],
       terminal: terminal

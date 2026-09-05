@@ -390,7 +390,7 @@ async function aggregateHelarcCampaign(input: {
         requestedAt: HELARC_EVALUATION_TIME,
         metadata: {
           product: "helarc",
-          evaluation: "run-lifecycle-settlement-v1",
+          evaluation: "descendant-suspension-progression-v1",
         },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
@@ -404,7 +404,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.run-lifecycle-settlement-baseline-result`,
+      id: `${definition.ref.id}.descendant-suspension-progression-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -415,7 +415,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.run-lifecycle-settlement.report.baseline",
+      id: "helarc.descendant-suspension-progression.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -461,7 +461,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.child-delegation-progression.report.baseline",
+      id: "helarc.run-lifecycle-settlement.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -477,13 +477,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.run-lifecycle-settlement.baseline-acceptance",
+      id: "helarc.descendant-suspension-progression.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "run-lifecycle-settlement-v1",
+      revision: "descendant-suspension-progression-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -492,14 +492,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Reviewed as the exact Run lifecycle, terminal settlement, lifecycle Hook, Tool input trust, Agent continuation, and Provider context successor to the Child delegation-progression baseline.",
+      "Reviewed as the exact Agent Hook ownership and same-Run Descendant suspension, Parent progression, Host recovery, and terminal result-transfer successor to the Run lifecycle-settlement baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.child-delegation-progression.baseline-acceptance",
+      id: "helarc.run-lifecycle-settlement.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -524,10 +524,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v18-")) {
-    throw new TypeError(`Unknown Run lifecycle settlement Target revision '${revision}'.`);
+  if (!revision.startsWith("v19-")) {
+    throw new TypeError(`Unknown Descendant suspension-progression Target revision '${revision}'.`);
   }
-  return revision.replace(/^v18-/, "v17-");
+  return revision.replace(/^v19-/, "v18-");
 }
 
 function gradeExpectedOutcome(

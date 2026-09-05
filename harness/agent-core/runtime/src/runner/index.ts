@@ -10,6 +10,7 @@ export type {
   DelegationPreparationResult,
   DelegationNarrativeProjectionPort,
   DelegationResultProjectionPort,
+  DelegationProgressProjectionPort,
   DescendantOperationOutcome,
   OperationToolAvailabilityParticipant,
   RunnerContextProjection,

@@ -8,9 +8,7 @@ import type {
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as controllerApi from "./controller/index.js";
 import * as delegationApi from "./delegation/index.js";
-import * as hooksApi from "./hooks/index.js";
 import * as instructionsApi from "./instructions/index.js";
-import * as lifecycleApi from "./lifecycle/index.js";
 import * as planApi from "./plan/index.js";
 import * as retryApi from "./retry/index.js";
 import * as runApi from "./run/index.js";
@@ -44,6 +42,7 @@ describe("Agent Core Runtime public API", () => {
       "createDelegationResult",
       "createDelegationResultExpectation",
       "createDescendantContinuationTargetProjection",
+      "createDescendantProgress",
       "deriveDelegationAuthority",
       "deriveDelegationLimits",
       "materializeDelegationRequest",
@@ -57,6 +56,7 @@ describe("Agent Core Runtime public API", () => {
       "snapshotDelegationRequest",
       "snapshotDelegationResult",
       "snapshotDelegationResultExpectation",
+      "snapshotDelegationResumeRoute",
       "snapshotDelegationSteeringRoute",
       "snapshotDescendantMessageRequest",
     ]);
@@ -108,18 +108,16 @@ describe("Agent Core Runtime public API", () => {
       "sameRunSuspensionRef",
       "snapshotResolvedRunPermissionConfig",
       "snapshotRunCauseSourceRef",
+      "snapshotRunResumeRequestInput",
       "snapshotRunSettlement",
       "snapshotRunSettlementCauseRecord",
       "snapshotRunSteeringInput",
       "toRunCancellationSummary",
     ]);
     expect(Object.keys(runnerApi)).toEqual(["Runner"]);
-    expect(Object.keys(hooksApi)).toContain("createEmptyRunLifecycleHookComposition");
-    expect(Object.keys(lifecycleApi)).toContain("snapshotStopLifecycleEvent");
     expect(runnerApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runnerApi).not.toHaveProperty("RunState");
     expect(runnerApi).not.toHaveProperty("RuntimeEventEmitter");
-    expect(hooksApi).not.toHaveProperty("Runner");
     expect(transcriptApi).not.toHaveProperty("Runner");
   });
 });

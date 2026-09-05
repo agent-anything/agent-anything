@@ -28,7 +28,7 @@ describe("Current-turn Tool Exposure deterministic Evaluation", () => {
       recoveryPreservedSelection: true,
       recoveryChangedContent: true,
       permissionIndependent: true,
-      lifecycleHookIndependent: true,
+      agentHookIndependent: true,
       equivalentContentUsesDistinctRequestProofs: true,
       systemTarget: {
         trialCount: 20,

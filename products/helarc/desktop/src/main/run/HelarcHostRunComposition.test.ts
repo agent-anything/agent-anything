@@ -262,10 +262,6 @@ describe("Helarc Host Run composition", () => {
       "context.transition.committed",
       "run.item.appended",
       "run.item.appended",
-      "run.lifecycle.emitted",
-      "run.item.appended",
-      "run.lifecycle.hook.completed",
-      "run.item.appended",
       "run.item.appended",
       "run.item.appended",
       "run.completed",
@@ -275,39 +271,6 @@ describe("Helarc Host Run composition", () => {
         item.metadata.itemKind === "model_call_settlement",
     );
     expect(modelCallSettlement).toBeDefined();
-    const stopLifecycle = result.activity.find(
-      (item) => item.kind === "run.lifecycle.emitted" &&
-        item.metadata.eventName === "Stop",
-    );
-    expect(stopLifecycle).toBeDefined();
-    expect(modelCallSettlement!.sequence).toBeLessThan(
-      stopLifecycle!.sequence,
-    );
-    const taskFulfillmentHook = result.activity.find(
-      (item) => item.kind === "run.lifecycle.hook.completed" &&
-        item.metadata.hookId === "helarc.task-fulfillment.stop",
-    );
-    expect(taskFulfillmentHook).toBeDefined();
-    expect(taskFulfillmentHook!.sequence).toBeGreaterThan(
-      result.activity.find((item) => item.kind === "verification.gate.evaluated")!.sequence,
-    );
-    expect(stopLifecycle)
-      .toMatchObject({
-        title: "Lifecycle Stop emitted",
-        metadata: {
-          eventName: "Stop",
-          sequence: 1,
-        },
-      });
-    expect(taskFulfillmentHook).toMatchObject({
-      title: "Lifecycle Hook allow",
-      metadata: {
-        hookId: "helarc.task-fulfillment.stop",
-        status: "allow",
-        code: null,
-        stale: false,
-      },
-    });
     const contextProjection = result.activity.find(
       (item) => item.kind === "context.projection.completed",
     );
@@ -319,7 +282,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(2);
     expect(provider.lastControllerInputContexts).toEqual([0, 1]);
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata).toMatchObject({
-      promptArchitectureVersion: "helarc-prompt-v6",
+      promptArchitectureVersion: "helarc-prompt-v7",
       toolExposureVersion: "trusted-tool-exposure-v1",
     });
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata)

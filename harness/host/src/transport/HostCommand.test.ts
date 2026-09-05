@@ -13,6 +13,7 @@ import {
   createHostCommandDispatcher,
   HOST_COMMAND_VERSION,
   snapshotHostCommand,
+  type HostDescendantResumeCommand,
   type HostInteractionSubmissionCommand,
   type HostRunCancellationCommand,
   type HostRunSteeringCommand,
@@ -29,6 +30,7 @@ describe("Host command transport", () => {
 
     expect(snapshotHostCommand(cancellationCommand())).toEqual(cancellationCommand());
     expect(snapshotHostCommand(steeringCommand())).toEqual(steeringCommand());
+    expect(snapshotHostCommand(descendantResumeCommand())).toEqual(descendantResumeCommand());
     expect(interaction).toMatchObject({
       kind: "interaction.submit",
       payload: {
@@ -43,6 +45,31 @@ describe("Host command transport", () => {
       ...cancellationCommand(),
       legacyApproval: true,
     })).toThrow("unsupported fields");
+  });
+
+  it("routes one exact descendant resume request through the active Parent Run", () => {
+    const active = fakeActiveRun();
+    const command = descendantResumeCommand();
+
+    const receipt = createDispatcher(active).dispatch(command, "descendant.resume");
+
+    expect(receipt).toMatchObject({
+      status: "handled",
+      kind: "descendant.resume",
+      result: { status: "routed", resume: { status: "accepted" } },
+    });
+    expect(active.resumeDescendant).toHaveBeenCalledWith({
+      request: command.payload.request,
+      relation: command.payload.relation,
+      child: command.payload.child,
+      resume: {
+        id: command.commandId,
+        expectedRunRevision: command.payload.expectedRunRevision,
+        suspension: command.payload.suspension,
+        origin: "host",
+        reason: command.payload.reason,
+      },
+    });
   });
 
   it("routes steering as an acknowledged Run command without claiming application", () => {
@@ -204,6 +231,30 @@ function steeringCommand(
   };
 }
 
+function descendantResumeCommand(
+  overrides: Partial<HostDescendantResumeCommand> = {},
+): HostDescendantResumeCommand {
+  return {
+    version: HOST_COMMAND_VERSION,
+    commandId: "command-resume-1",
+    runId: "run-1",
+    kind: "descendant.resume",
+    payload: {
+      request: { id: "request-1", revision: "request-1-v1" },
+      relation: { id: "relation-1" },
+      child: { id: "run-child" },
+      expectedRunRevision: 4,
+      suspension: {
+        run: { id: "run-child" },
+        id: "suspension-1",
+        revision: "suspension-1-v1",
+      },
+      reason: "Continue the suspended Child.",
+    },
+    ...overrides,
+  };
+}
+
 function fakeActiveRun(runId = "run-1") {
   const projection: HostRunProjection = createHostRunProjection({
     sessionId: "session-1",
@@ -243,10 +294,25 @@ function fakeActiveRun(runId = "run-1") {
       acceptedRunRevision: input.expectedRunRevision,
     },
   }));
+  const resumeDescendant = vi.fn((input: Parameters<HostActiveRun["resumeDescendant"]>[0]) => ({
+    status: "routed" as const,
+    relation: input.relation,
+    child: input.child,
+    resume: {
+      status: "accepted" as const,
+      request: {
+        ...input.resume,
+        run: input.child,
+        requestedAt: NOW,
+      },
+      currentRunRevision: input.resume.expectedRunRevision + 1,
+    },
+  }));
   const active: HostActiveRun & {
     cancel: typeof cancel;
     steer: typeof steer;
     submitInteraction: typeof submitInteraction;
+    resumeDescendant: typeof resumeDescendant;
   } = {
     sessionId: "session-1",
     runId,
@@ -255,6 +321,7 @@ function fakeActiveRun(runId = "run-1") {
     subscribe: () => () => undefined,
     submitInteraction,
     steer,
+    resumeDescendant,
     cancel,
     wait: () => new Promise(() => undefined),
     getResult: () => null,

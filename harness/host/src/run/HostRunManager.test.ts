@@ -126,6 +126,35 @@ describe("HostRunManager", () => {
     expect(active.getStatus().runRevision).toBe(3);
   });
 
+  it("routes exact descendant resume through the owned RunHandle", () => {
+    const fixture = createFakeRunner();
+    const manager = createHostRunManager({ runner: fixture.runner, now: () => NOW });
+    const active = manager.start(startInput());
+    const route = {
+      request: { id: "delegation-request-1", revision: "1" },
+      relation: { id: "descendant-relation-1" },
+      child: { id: "child-run-1" },
+      resume: {
+        id: "resume-1",
+        expectedRunRevision: 7,
+        suspension: {
+          run: { id: "child-run-1" },
+          id: "child-suspension-1",
+          revision: "7",
+        },
+        origin: "host" as const,
+        reason: "Resume the exact suspended Child.",
+      },
+    };
+
+    expect(active.resumeDescendant(route)).toMatchObject({
+      status: "routed",
+      child: { id: "child-run-1" },
+      resume: { status: "accepted" },
+    });
+    expect(fixture.resumeDescendant).toHaveBeenCalledWith(route);
+  });
+
   it("rejects duplicate Runner-created Run identity without replacing the original", () => {
     const first = createFakeRunner();
     const second = createFakeHandle("run-1");
@@ -176,16 +205,6 @@ function createFakeHandle(runId: string) {
     instructionBinding: null,
     plan: null,
     suspension: null,
-    lifecycleHooks: {
-      stopEventSequence: 0,
-      stopFailureEventSequence: 0,
-      feedbackEpoch: 0,
-      consecutiveBlockingRounds: 0,
-      latestEventId: null,
-      latestInvocations: [],
-      latestFeedback: null,
-      limitations: [],
-    },
     retry: null,
     pendingInteractions: [],
     activeDelegations: [],
@@ -232,6 +251,20 @@ function createFakeHandle(runId: string) {
       acceptedRunRevision: input.expectedRunRevision,
     },
   }));
+  const resumeDescendant = vi.fn((input: Parameters<RunHandle["resumeDescendant"]>[0]) => ({
+    status: "routed" as const,
+    relation: input.relation,
+    child: input.child,
+    resume: {
+      status: "accepted" as const,
+      request: {
+        ...input.resume,
+        run: input.child,
+        requestedAt: NOW,
+      },
+      currentRunRevision: input.resume.expectedRunRevision + 1,
+    },
+  }));
   const handle: RunHandle = {
     runId,
     getSnapshot: () => snapshot,
@@ -244,6 +277,7 @@ function createFakeHandle(runId: string) {
     resume: vi.fn(() => ({ status: "not_suspended" as const })),
     steer,
     steerDescendant: vi.fn(() => ({ status: "not_found" as const })),
+    resumeDescendant,
     submitInteraction,
     wait: () => completion,
     getResult: () => result,
@@ -252,6 +286,7 @@ function createFakeHandle(runId: string) {
     handle,
     cancel,
     steer,
+    resumeDescendant,
     submitInteraction,
     publishSnapshot(overrides: Partial<RunOperationSnapshot>) {
       snapshot = Object.freeze({ ...snapshot, ...overrides });

@@ -40,11 +40,11 @@ import {
   type FakeNativeToolProviderStep,
 } from "../../provider/FakeNativeToolProvider.js";
 
-export const HELARC_EVALUATION_TIME = "2026-09-01T00:00:00.000Z";
+export const HELARC_EVALUATION_TIME = "2026-09-05T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-run-lifecycle-settlement-corpus-v1";
+  "helarc-descendant-suspension-progression-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-run-lifecycle-settlement-target-v1";
+  "helarc-descendant-suspension-progression-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -287,7 +287,7 @@ function createObjective(): EvaluationObjective {
     requirement("run-interaction-records.revision", "agent-runtime"),
     requirement("run-lifecycle.revision", "agent-runtime"),
     requirement("run-settlement.revision", "agent-runtime"),
-    requirement("run-lifecycle-hooks.revision", "agent-runtime"),
+    requirement("agent-hooks.revision", "agent-hooks"),
     requirement("task-fulfillment-hook.revision", "helarc.product"),
     requirement("verification-completion-gate.revision", "verification"),
     requirement("tool-input-validation.revision", "tools"),
@@ -318,6 +318,9 @@ function createObjective(): EvaluationObjective {
     requirement("run-tree-approval-account.revision", "agent-core"),
     requirement("run-tree-settlement.revision", "agent-core"),
     requirement("descendant-projection.revision", "host"),
+    requirement("descendant-suspension.revision", "agent-runtime"),
+    requirement("descendant-result-transfer.revision", "agent-runtime"),
+    requirement("host-descendant-recovery.revision", "host"),
     requirement("retry-policy.revision", "agent-core"),
     requirement("cancellation-limits.revision", "agent-core"),
     requirement("fixture-manifest.revision", "evaluation.target"),
@@ -355,7 +358,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v18-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v19-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -366,19 +369,19 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-run-lifecycle-settlement-v1",
+    "product.revision": "helarc-product-descendant-suspension-progression-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
     "agent.instructions.digest": `sha256:${agent.instructions.contentDigest.value}`,
-    "prompt.revision": "helarc-prompt-v6",
+    "prompt.revision": "helarc-prompt-v7",
     "controller-protocol.revision": "helarc.provider-native-tool-interaction.v1",
     "controller-control-set.revision": "helarc.controller-controls.v1",
     "model-interaction.protocol.revision": "provider-native-tool-interaction.v1",
     "run-interaction-records.revision": "model-turn-and-settlement.v1",
-    "run-lifecycle.revision": "agent-runtime.run-lifecycle.v2",
+    "run-lifecycle.revision": "agent-runtime.run-lifecycle.v3",
     "run-settlement.revision": "agent-runtime.run-terminal-settlement.v1",
-    "run-lifecycle-hooks.revision": "agent-runtime.stop-lifecycle-hooks.v1",
+    "agent-hooks.revision": "agent-hooks.stop-and-stop-failure.v1",
     "task-fulfillment-hook.revision": HELARC_TASK_FULFILLMENT_HOOK_REVISION,
     "verification-completion-gate.revision": "verification.current-completion-gate.v1",
     "tool-input-validation.revision": "tools.tool-call-attempt-validation.v1",
@@ -390,24 +393,27 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-run-lifecycle-settlement-v1",
+    "source.revision": "helarc-descendant-suspension-progression-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "validated-tool-input-and-continuation-v1",
-    "delegation-contract.revision": "ordinary-child-sibling-dispatch-v1",
-    "delegation-dispatch.revision": "agent-runtime.model-authored-sibling-dispatch.v1",
+    "delegation-contract.revision": "descendant-suspension-progression-v1",
+    "delegation-dispatch.revision": "agent-runtime.descendant-boundary-progression.v1",
     "delegation-tool-inheritance.revision": "agent-runtime.exact-parent-tool-selection.v1",
     "action-registration.revision": "helarc-shell-action-registration-v2",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
     "context-projector.revision": "helarc-context-projector-v1",
-    "run-limits.revision": "helarc-run-lifecycle-settlement-limits-v1",
+    "run-limits.revision": "helarc-descendant-suspension-progression-limits-v1",
     "run-tree-resource-account.revision": "agent-runtime.run-tree-resource-account.v3",
     "run-tree-authority.revision": "agent-runtime.run-tree-authority.v3",
     "run-tree-approval-account.revision": "agent-runtime.run-tree-approval-account.v1",
     "run-tree-settlement.revision": "agent-runtime.run-tree-settlement.v3",
-    "descendant-projection.revision": "host.descendant-dispatch-projection.v1",
+    "descendant-projection.revision": "host.descendant-suspension-projection.v2",
+    "descendant-suspension.revision": "agent-runtime.same-run-descendant-resume.v1",
+    "descendant-result-transfer.revision": "agent-runtime.exactly-once-descendant-transfer.v1",
+    "host-descendant-recovery.revision": "host.trusted-descendant-resume.v1",
     "retry-policy.revision": "helarc-deterministic-retry-policy-v1",
     "cancellation-limits.revision": "helarc-deterministic-cancellation-v1",
     "fixture-manifest.revision": HELARC_EVALUATION_CORPUS_REVISION,

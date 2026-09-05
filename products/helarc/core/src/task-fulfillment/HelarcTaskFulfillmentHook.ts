@@ -1,11 +1,11 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
-  createRunLifecycleHookComposition,
-  type RunLifecycleHookComposition,
-  type StopHookDecision,
-  type StopHookHandler,
-} from "@agent-anything/agent-runtime/hooks";
-import type { StopLifecycleEvent } from "@agent-anything/agent-runtime/lifecycle";
+  createAgentHookComposition,
+  type AgentHookComposition,
+  type AgentStopHandler,
+  type AgentStopHandlerResult,
+} from "@agent-anything/agent-hooks/composition";
+import type { AgentStopEvent } from "@agent-anything/agent-hooks/events";
 import type {
   ModelJsonValue,
   Provider,
@@ -25,6 +25,7 @@ export const HELARC_TASK_FULFILLMENT_HOOK_REVISION =
   "helarc.task-fulfillment-stop-hook.v1";
 
 const hookRef = Object.freeze({
+  owner: "helarc",
   id: "helarc.task-fulfillment.stop",
   revision: HELARC_TASK_FULFILLMENT_HOOK_REVISION,
 });
@@ -82,7 +83,7 @@ const instructions = [
   "Do not infer that a file changed or a command ran from the proposal text alone.",
 ].join("\n");
 
-export class HelarcTaskFulfillmentHook implements StopHookHandler {
+export class HelarcTaskFulfillmentHook implements AgentStopHandler {
   private readonly assessments: HelarcTaskFulfillmentAssessment[] = [];
 
   constructor(
@@ -95,9 +96,12 @@ export class HelarcTaskFulfillmentHook implements StopHookHandler {
   }
 
   async handle(
-    event: StopLifecycleEvent,
+    event: AgentStopEvent,
     interruptionContext: InvocationInterruptionContext,
-  ): Promise<StopHookDecision> {
+  ): Promise<AgentStopHandlerResult> {
+    if (event.candidate.kind === "stop") {
+      return Object.freeze({ disposition: "allow" as const });
+    }
     readHelarcTaskObjective(event);
     const request = buildRequest(this.provider, event);
     const result = await this.provider.send(request, interruptionContext);
@@ -105,13 +109,13 @@ export class HelarcTaskFulfillmentHook implements StopHookHandler {
     const assessment = createAssessment(event, candidate, this.now());
     this.assessments.push(assessment);
     return assessment.status === "fulfilled"
-      ? Object.freeze({ kind: "allow" as const })
+      ? Object.freeze({ disposition: "allow" as const })
       : Object.freeze({
-          kind: "block" as const,
+          disposition: "continue" as const,
           code: assessment.status === "incomplete"
             ? "task_fulfillment_incomplete"
             : "task_fulfillment_uncertain",
-          reason: assessment.feedback!,
+          message: assessment.feedback!,
         });
   }
 }
@@ -121,24 +125,18 @@ export function createHelarcTaskFulfillmentHookComposition(
   now?: () => string,
 ): Readonly<{
   hook: HelarcTaskFulfillmentHook;
-  composition: RunLifecycleHookComposition;
+  composition: AgentHookComposition;
 }> {
   const hook = new HelarcTaskFulfillmentHook(provider, now);
   return Object.freeze({
     hook,
-    composition: createRunLifecycleHookComposition({
-      id: "helarc.lifecycle-hooks",
+    composition: createAgentHookComposition({
+      id: "helarc.agent-hooks",
       revision: HELARC_TASK_FULFILLMENT_HOOK_REVISION,
       registrations: Object.freeze([Object.freeze({
         ref: hookRef,
-        owner: Object.freeze({
-          owner: "helarc",
-          kind: "task_fulfillment",
-          id: hookRef.id,
-          revision: hookRef.revision,
-          run: null,
-        }),
-        event: "Stop" as const,
+        point: "Stop" as const,
+        mode: "blocking" as const,
         runKinds: Object.freeze(["root" as const, "descendant" as const]),
         handler: handlerRef,
         timeoutMs: 120_000,
@@ -146,7 +144,8 @@ export function createHelarcTaskFulfillmentHookComposition(
       })]),
       bindings: Object.freeze([Object.freeze({
         ref: handlerRef,
-        event: "Stop" as const,
+        point: "Stop" as const,
+        mode: "blocking" as const,
         handler: hook,
       })]),
     }),
@@ -160,18 +159,23 @@ interface HelarcFulfillmentCandidate {
   readonly unsupportedClaims: readonly string[];
 }
 
-function buildRequest(provider: Provider, event: StopLifecycleEvent): ProviderRequest {
+function buildRequest(provider: Provider, event: AgentStopEvent): ProviderRequest {
   if (!provider.descriptor.capabilities.structuredGeneration.supported) {
     throw new TypeError("Task Fulfillment requires Provider structured generation.");
   }
   const taskObjective = readHelarcTaskObjective(event);
   const material = Object.freeze({
     originalTask: taskObjective,
-    completionProposal: event.output,
+    completionProposal: event.candidate.kind === "complete" ? event.candidate.output : null,
     settledInteraction: event.interaction.messages,
     unsettledCallCount: event.interaction.unsettledCalls.length,
     settledCallCount: event.interaction.settledCallCount,
-    completionBasis: event.basis,
+    completionBasis: Object.freeze({
+      candidate: event.candidate.ref,
+      plan: event.plan,
+      verification: event.verification,
+      pending: event.pending,
+    }),
   });
   const source = (kind: string, id: string, revision: string | null) => Object.freeze({
     owner: "helarc",
@@ -268,7 +272,7 @@ function buildRequest(provider: Provider, event: StopLifecycleEvent): ProviderRe
     requestId: composition.id,
     purpose: "helarc.task-fulfillment",
     correlation: Object.freeze({
-      controllerRequestId: event.basis.controllerTurn.id,
+      controllerRequestId: event.controllerRequestId,
       branchId: `${event.run.id}:task-fulfillment`,
     }),
     instructions: modelInput.instructions,
@@ -284,8 +288,8 @@ function buildRequest(provider: Provider, event: StopLifecycleEvent): ProviderRe
     metadata: Object.freeze({
       runId: event.run.id,
       taskId: event.task.id,
-      completionProposalId: event.basis.completionProposal.id,
-      completionProposalRevision: event.basis.completionProposal.revision,
+      completionCandidateId: event.candidate.ref.id,
+      completionCandidateRevision: event.candidate.ref.revision,
       hookRevision: hookRef.revision,
     }),
   });
@@ -333,7 +337,7 @@ function parseCandidate(value: ModelJsonValue): HelarcFulfillmentCandidate {
 }
 
 function createAssessment(
-  event: StopLifecycleEvent,
+  event: AgentStopEvent,
   candidate: HelarcFulfillmentCandidate,
   assessedAt: string,
 ): HelarcTaskFulfillmentAssessment {
@@ -369,9 +373,9 @@ function createAssessment(
     hookRevision: hookRef.revision,
     event: event.ref,
     run: event.run,
-    turn: event.basis.controllerTurn,
+    controllerRequestId: event.controllerRequestId,
     task: Object.freeze({ id: event.task.id, kind: event.task.kind }),
-    proposal: event.basis.completionProposal,
+    candidate: event.candidate.ref,
     status: candidate.status,
     rationale: candidate.rationale,
     findings: Object.freeze(findings),
@@ -392,7 +396,7 @@ function buildFeedback(
   return feedback.length <= 4_096 ? feedback : `${feedback.slice(0, 4_093)}...`;
 }
 
-function readHelarcTaskObjective(event: StopLifecycleEvent): string {
+function readHelarcTaskObjective(event: AgentStopEvent): string {
   if (event.task.input === null ||
       typeof event.task.input !== "object" ||
       typeof (event.task.input as { prompt?: unknown }).prompt !== "string" ||

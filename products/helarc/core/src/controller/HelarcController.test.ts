@@ -175,7 +175,7 @@ describe("Helarc native Tool controller", () => {
     expect(request.interaction.callables.some(({ name }) => name === "Read")).toBe(false);
     expect(request.metadata).toMatchObject({
       runId: "run-1",
-      promptArchitectureVersion: "helarc-prompt-v6",
+      promptArchitectureVersion: "helarc-prompt-v7",
       toolExposureVersion: "trusted-tool-exposure-v1",
       exposedToolCount: FILE_TOOLS.length,
       interactionMessageCount: 0,
@@ -372,8 +372,8 @@ describe("Helarc native Tool controller", () => {
     if (userMessage?.role !== "user") throw new TypeError("Expected one user message.");
     expect(userMessage.content.map(({ text }) => text)).toEqual(expect.arrayContaining([
       expect.stringMatching(/^Task:\n/),
-      expect.stringMatching(/^Current lifecycle Hook state:\n/),
       "Pending interactions:\n[]",
+      "Descendant targets:\n{\"active\":[],\"continuations\":[]}",
     ]));
   });
 
@@ -722,16 +722,6 @@ function createControllerInput(
       maxStepLength: 500,
       maxExplanationLength: 2_000,
     },
-    lifecycleHooks: {
-      stopEventSequence: 0,
-      stopFailureEventSequence: 0,
-      feedbackEpoch: 0,
-      consecutiveBlockingRounds: 0,
-      latestEventId: null,
-      latestInvocations: [],
-      latestFeedback: null,
-      limitations: [],
-    },
     verification: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
     permission: {
       profile: {
@@ -769,6 +759,7 @@ function createControllerInput(
       approval: { canRequest: true, reviewer: "user", pendingCount: 0 },
     },
     pending: [],
+    descendants: { active: [], continuations: [] },
     workspace: {
       primary: {
         id: "workspace-1",

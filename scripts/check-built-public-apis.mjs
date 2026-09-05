@@ -84,11 +84,11 @@ const packageExportKeys = {
   "harness/model-interaction": [".", "./context", "./continuation", "./input", "./transport"],
   "tooling/test-support": [
     ".",
+    "./agent-hook-evaluation",
     "./context-continuity-evaluation",
     "./current-turn-tool-exposure-evaluation",
     "./delegation-transfer-evaluation",
     "./evaluation-targets/helarc",
-    "./run-lifecycle-hook-evaluation",
   ],
   "harness/safety/action-execution": [
     "./coordination",
@@ -101,15 +101,14 @@ const packageExportKeys = {
   "harness/agent-core/runtime": [
     "./controller",
     "./delegation",
-    "./hooks",
     "./instructions",
-    "./lifecycle",
     "./plan",
     "./retry",
     "./run",
     "./runner",
     "./transcript",
   ],
+  "harness/agent-hooks": [".", "./composition", "./events", "./execution"],
   "harness/host": [
     "./authority",
     "./composition",
@@ -513,6 +512,8 @@ const expectedLowerValueExports = {
     "HELARC_CURRENT_TURN_TOOL_EXPOSURE_BASELINE_ACCEPTANCE",
     "HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE",
     "HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE",
+    "HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE",
+    "HELARC_DESCENDANT_SUSPENSION_PROGRESSION_BASELINE_ACCEPTANCE",
     "HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE",
     "HELARC_EVALUATION_CORPUS_REVISION",
     "HELARC_EVALUATION_TARGET_ADAPTER_REVISION",
@@ -604,8 +605,8 @@ const expectedLowerValueExports = {
     "observeContextContinuityFixtures",
     "runContextContinuityEvaluationCandidate",
   ],
-  "@agent-anything/test-support/run-lifecycle-hook-evaluation": [
-    "runRunLifecycleHookDeterministicEvaluation",
+  "@agent-anything/test-support/agent-hook-evaluation": [
+    "runAgentHookDeterministicEvaluation",
   ],
   "@agent-anything/model-interaction/input": [
     "ModelInputCompositionError",
@@ -720,6 +721,7 @@ const expectedValueExports = {
     "createDelegationResult",
     "createDelegationResultExpectation",
     "createDescendantContinuationTargetProjection",
+    "createDescendantProgress",
     "deriveDelegationAuthority",
     "deriveDelegationLimits",
     "materializeDelegationRequest",
@@ -733,6 +735,7 @@ const expectedValueExports = {
     "snapshotDelegationRequest",
     "snapshotDelegationResult",
     "snapshotDelegationResultExpectation",
+    "snapshotDelegationResumeRoute",
     "snapshotDelegationSteeringRoute",
     "snapshotDescendantMessageRequest",
   ],
@@ -742,21 +745,16 @@ const expectedValueExports = {
     "assertValidPlanLimits",
     "projectPlan",
   ],
-  "@agent-anything/agent-runtime/hooks": [
-    "advanceRunLifecycleHookFeedbackEpoch",
-    "createEmptyRunLifecycleHookComposition",
-    "createInitialRunLifecycleHookState",
-    "createRunLifecycleHookComposition",
-    "invokeStopLifecycleHooks",
-    "matchingRunLifecycleHooks",
-    "mergeStopHookInvocations",
-    "observeStopFailureLifecycleHooks",
-    "projectRunLifecycleHooks",
-  ],
-  "@agent-anything/agent-runtime/lifecycle": [
-    "snapshotRunLifecycleEventRef",
-    "snapshotStopFailureLifecycleEvent",
-    "snapshotStopLifecycleEvent",
+  "@agent-anything/agent-hooks": [
+    "AgentHookController",
+    "AgentHookExecutionStore",
+    "createAgentHookComposition",
+    "createAgentStopEvent",
+    "createAgentStopFailureEvent",
+    "createEmptyAgentHookComposition",
+    "dispatchAgentStopFailureHooks",
+    "dispatchAgentStopHooks",
+    "matchingAgentHooks",
   ],
   "@agent-anything/agent-runtime/transcript": [
     "RunTranscriptRecorder",
@@ -793,6 +791,7 @@ const expectedValueExports = {
     "sameRunSuspensionRef",
     "snapshotResolvedRunPermissionConfig",
     "snapshotRunCauseSourceRef",
+    "snapshotRunResumeRequestInput",
     "snapshotRunSettlement",
     "snapshotRunSettlementCauseRecord",
     "snapshotRunSteeringInput",
@@ -881,7 +880,6 @@ const expectedValueExports = {
     "createHostRunProjection",
     "createHostRunProjectionStore",
     "createHostTerminalRunProjection",
-    "projectHostRunLifecycleHooks",
     "projectRuntimeEventForHost",
     "reduceHostRunProjection",
     "snapshotHostCancellation",
@@ -1448,7 +1446,12 @@ if (process.argv.includes("--helarc-domain-only")) {
 
 if (process.argv.includes("--helarc-only")) {
   checkBuiltSurfaces(
-    expectedValueExports,
+    selectExpectedExports(expectedValueExports, ["@agent-anything/agent-hooks"]),
+    [],
+    join(repoRoot, "harness/agent-hooks"),
+  );
+  checkBuiltSurfaces(
+    excludeExpectedExports(expectedValueExports, ["@agent-anything/agent-hooks"]),
     removedOrPrivateSpecifiers,
     join(repoRoot, "products/helarc/desktop"),
   );
@@ -1514,7 +1517,12 @@ checkBuiltSurfaces(
   join(repoRoot, "harness/verification"),
 );
 checkBuiltSurfaces(
-  expectedValueExports,
+  selectExpectedExports(expectedValueExports, ["@agent-anything/agent-hooks"]),
+  [],
+  join(repoRoot, "harness/agent-hooks"),
+);
+checkBuiltSurfaces(
+  excludeExpectedExports(expectedValueExports, ["@agent-anything/agent-hooks"]),
   removedOrPrivateSpecifiers,
   join(repoRoot, "products/helarc/desktop"),
 );
@@ -1583,6 +1591,13 @@ function selectExpectedExports(expected, prefixes) {
   return Object.fromEntries(
     Object.entries(expected).filter(([specifier]) =>
       prefixes.some((prefix) => specifier.startsWith(prefix))),
+  );
+}
+
+function excludeExpectedExports(expected, prefixes) {
+  return Object.fromEntries(
+    Object.entries(expected).filter(([specifier]) =>
+      prefixes.every((prefix) => !specifier.startsWith(prefix))),
   );
 }
 

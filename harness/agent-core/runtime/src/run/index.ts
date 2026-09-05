@@ -93,7 +93,10 @@ export type {
   RunSuspensionCode,
   RunSuspensionRef,
 } from "./RunSuspension.js";
-export { sameRunSuspensionRef } from "./RunSuspension.js";
+export {
+  sameRunSuspensionRef,
+  snapshotRunResumeRequestInput,
+} from "./RunSuspension.js";
 export type { RunCounters, RunState, RunVerificationState } from "./RunState.js";
 export type {
   RunSteeringApplication,

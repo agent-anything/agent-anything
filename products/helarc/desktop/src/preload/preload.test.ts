@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 interface ExposedHelarcApi {
   saveProviderConfig(input: Record<string, unknown>): Promise<unknown>;
+  resumeDescendant(input: Record<string, unknown>): Promise<unknown>;
 }
 
 describe("Helarc preload bridge", () => {
@@ -69,6 +70,53 @@ describe("Helarc preload bridge", () => {
         qualificationPolicy: "allow_experimental",
         apiKeyUpdate: "clear",
         apiKey: "",
+      },
+    });
+  });
+
+  it("forwards exact descendant identity and suspension revision", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let exposedApi: ExposedHelarcApi | undefined;
+    const invoke = vi.fn(async () => ({ status: "handled" }));
+
+    runInNewContext(source, {
+      require: () => ({
+        contextBridge: {
+          exposeInMainWorld: (_key: string, value: ExposedHelarcApi) => {
+            exposedApi = value;
+          },
+        },
+        ipcRenderer: { invoke, on: vi.fn(), removeListener: vi.fn() },
+      }),
+    });
+
+    await exposedApi?.resumeDescendant({
+      commandId: "resume-1",
+      runId: "run-root",
+      request: { id: "request-1", revision: "request-1-v1" },
+      relation: { id: "relation-1" },
+      child: { id: "run-child" },
+      expectedRunRevision: 5,
+      suspension: { id: "suspension-1", revision: "suspension-1-v1" },
+      reason: "Resume from desktop.",
+    });
+
+    expect(invoke).toHaveBeenCalledWith("helarc:resume-descendant", {
+      version: 1,
+      commandId: "resume-1",
+      runId: "run-root",
+      kind: "descendant.resume",
+      payload: {
+        request: { id: "request-1", revision: "request-1-v1" },
+        relation: { id: "relation-1" },
+        child: { id: "run-child" },
+        expectedRunRevision: 5,
+        suspension: {
+          run: { id: "run-child" },
+          id: "suspension-1",
+          revision: "suspension-1-v1",
+        },
+        reason: "Resume from desktop.",
       },
     });
   });

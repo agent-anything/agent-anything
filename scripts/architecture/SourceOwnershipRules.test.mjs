@@ -34,9 +34,9 @@ test("accepts current owner-directed source forms", () => {
     {
       sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
       text: [
-        "const merged = await invokeStopLifecycleHooks(event, handlers);",
-        'if (merged.kind === "block") { return this.continueAfterFeedback(merged); }',
-        'this.record({ kind: "completion_acceptance" });',
+        'if (decision.decision.kind === "continue_with_feedback") { return; }',
+        "managed.markInitialDelivered();",
+        'this.record({ kind: "descendant_result_transfer" });',
       ].join("\n"),
     },
   ];
@@ -303,7 +303,7 @@ test("rejects physical execution and semantic processor dependencies in Verifica
   );
 });
 
-test("requires Runner Stop lifecycle before success settlement", () => {
+test("requires current Runner continuation and descendant progression semantics", () => {
   const violations = evaluateSourceOwnershipRules({
     sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
     text: 'return this.settle({ status: "succeeded" });',
@@ -311,7 +311,24 @@ test("requires Runner Stop lifecycle before success settlement", () => {
 
   assert.deepEqual(
     violations.map(({ rule }) => rule),
-    ["runner_stop_lifecycle_required"],
+    ["runner_progression_contract_required"],
+  );
+});
+
+test("rejects optional Agent Hook ownership in Agent Core Runtime", () => {
+  const violations = evaluateSourceOwnershipRules({
+    sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
+    text: [
+      'import type { AgentHookExecution } from "@agent-anything/agent-hooks/execution";',
+      'if (decision.decision.kind === "continue_with_feedback") { return; }',
+      "managed.markInitialDelivered();",
+      'this.record({ kind: "descendant_result_transfer" });',
+    ].join("\n"),
+  });
+
+  assert.deepEqual(
+    violations.map(({ rule }) => rule),
+    ["runtime_agent_hook_ownership"],
   );
 });
 

@@ -1,0 +1,45 @@
+{
+  "name": "@agent-anything/agent-hooks",
+  "version": "0.0.0",
+  "description": "Optional Agent execution Stop and StopFailure Hook composition for Agent Harness.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./composition": {
+      "types": "./src/composition/index.ts",
+      "import": "./dist/composition/index.js"
+    },
+    "./events": {
+      "types": "./src/events/index.ts",
+      "import": "./dist/events/index.js"
+    },
+    "./execution": {
+      "types": "./src/execution/index.ts",
+      "import": "./dist/execution/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "agent-hooks"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/agent-runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

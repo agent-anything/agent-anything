@@ -10,7 +10,6 @@ import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunItem } from "./RunItem.js";
 import type { VerificationCurrentSnapshotRef } from "@agent-anything/verification/assessment";
 import type { CompletionGateInvocationRef } from "@agent-anything/verification/completion";
-import type { RunLifecycleHookState } from "../hooks/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 import type { RunSettlement, RunSettlementCauseRecord } from "./RunSettlement.js";
 import type { RunSuspension } from "./RunSuspension.js";
@@ -47,7 +46,6 @@ interface RunStateBase<TOutput> {
   readonly pending: readonly PendingRunSubject[];
   readonly permission: RunPermissionState;
   readonly verification: RunVerificationState;
-  readonly lifecycleHooks: RunLifecycleHookState;
   readonly evidenceRefs: readonly EvidenceRef[];
   readonly artifactRefs: readonly ArtifactRef[];
   readonly settlementCauses: readonly RunSettlementCauseRecord[];

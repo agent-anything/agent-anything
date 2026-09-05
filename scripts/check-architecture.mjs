@@ -53,6 +53,14 @@ for (const discovered of discoveredPackages) {
 
 const focusedPublicSubpaths = new Map([
   [
+    "@agent-anything/agent-hooks",
+    new Set([
+      "@agent-anything/agent-hooks/composition",
+      "@agent-anything/agent-hooks/events",
+      "@agent-anything/agent-hooks/execution",
+    ]),
+  ],
+  [
     "@agent-anything/test-support",
     new Set([
       "@agent-anything/test-support/context-continuity-evaluation",
@@ -1063,9 +1071,7 @@ function checkExecutionSourceTopology() {
         "context-contribution",
         "controller",
         "delegation",
-        "hooks",
         "instructions",
-        "lifecycle",
         "plan",
         "retry",
         "run",
@@ -1077,6 +1083,15 @@ function checkExecutionSourceTopology() {
         "src/runner/RunActionRouter.ts",
         "src/runner/RunApprovalLifecycle.ts",
         "src/runner/RuntimeActionRecord.ts",
+      ],
+    },
+    {
+      packagePath: "harness/agent-hooks",
+      allowedSourceEntries: [
+        "composition",
+        "events",
+        "execution",
+        "index.ts",
       ],
     },
     {

@@ -7,7 +7,6 @@ import {
   type RunState,
 } from "../run/index.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
-import { createInitialRunLifecycleHookState } from "../hooks/index.js";
 import {
   assertAgentInstructionBindingMatches,
   snapshotAgentInstructionBindingRef,
@@ -69,7 +68,6 @@ export function createInitialRunState<TOutput>(input: {
       gate: null,
       feedbackRounds: 0,
     }),
-    lifecycleHooks: createInitialRunLifecycleHookState(),
     context,
     plan: null,
     items: Object.freeze([]),

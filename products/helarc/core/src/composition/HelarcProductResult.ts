@@ -641,6 +641,8 @@ function runActionStatus(
     case "model_call_rejected": return "rejected";
     case "interaction": return observation.payload.status;
     case "descendant_run": return observation.payload.status;
+    case "descendant_progress": return "succeeded";
+    case "descendant_result_transfer": return observation.payload.status;
     case "plan_update": return observation.payload.result.status;
     case "handoff": return observation.payload.status;
   }
@@ -730,12 +732,6 @@ function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>)
       return `Controller iteration ${payload.iteration ?? ""} started`.trim();
     case "controller.finished": return `Controller ${payload.status ?? "finished"}`;
     case "run.item.appended": return `Run item appended: ${payload.itemKind ?? "unknown"}`;
-    case "run.lifecycle.emitted":
-      return `Lifecycle ${payload.eventName ?? "event"} emitted`;
-    case "run.lifecycle.hook.completed":
-      return `Lifecycle Hook ${payload.status ?? "completed"}`;
-    case "run.lifecycle.hook.feedback":
-      return `Lifecycle Hook feedback round ${payload.round ?? "recorded"}`;
     case "run.descendant.reserved": return "Descendant Run reserved";
     case "run.descendant.started": return "Descendant Run started";
     case "run.descendant.rejected": return "Descendant Run rejected";
@@ -795,17 +791,6 @@ function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>
   }
   if (name === "context.projection.completed") {
     return typeof payload.manifestId === "string" ? payload.manifestId : null;
-  }
-  if (name === "run.lifecycle.emitted") {
-    return typeof payload.eventId === "string" ? payload.eventId : null;
-  }
-  if (name === "run.lifecycle.hook.completed") {
-    return typeof payload.code === "string"
-      ? payload.code
-      : typeof payload.hookId === "string" ? payload.hookId : null;
-  }
-  if (name === "run.lifecycle.hook.feedback") {
-    return typeof payload.eventId === "string" ? payload.eventId : null;
   }
   if (name === "approval.requested" || name === "approval.resolved") {
     return typeof payload.requestId === "string" ? payload.requestId : null;

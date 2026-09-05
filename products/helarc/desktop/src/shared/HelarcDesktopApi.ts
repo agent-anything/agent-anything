@@ -393,6 +393,16 @@ export interface HelarcActiveDelegationSnapshot {
   readonly relationKind: "delegation" | "continuation";
   readonly childRunRevision: number;
   readonly childStatus: HelarcRunTreeNodeStatusSnapshot;
+  readonly suspension: null | {
+    readonly id: string;
+    readonly revision: string;
+    readonly code: string;
+    readonly reason: string;
+    readonly runRevision: number;
+    readonly suspendedAt: string;
+  };
+  readonly admittedControls: readonly ("steer" | "resume" | "cancel")[];
+  readonly resultTransfer: "pending";
   readonly steerable: true;
 }
 
@@ -497,32 +507,6 @@ export interface HelarcModelUseSnapshot {
   };
 }
 
-export interface HelarcRunLifecycleHookSnapshot {
-  readonly stopEventSequence: number;
-  readonly stopFailureEventSequence: number;
-  readonly feedbackEpoch: number;
-  readonly consecutiveBlockingRounds: number;
-  readonly latestEventId: string | null;
-  readonly latestInvocations: readonly {
-    readonly hookId: string;
-    readonly hookRevision: string;
-    readonly eventId: string;
-    readonly status: "allow" | "block" | "non_blocking_error";
-    readonly code: string | null;
-    readonly durationMs: number;
-    readonly stale: boolean;
-  }[];
-  readonly latestFeedback: {
-    readonly eventId: string;
-    readonly epoch: number;
-    readonly round: number;
-    readonly codes: readonly string[];
-    readonly message: string;
-    readonly omittedReasonCount: number;
-  } | null;
-  readonly limitations: readonly string[];
-}
-
 export interface HelarcInstructionBindingSnapshot {
   readonly ref: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly agent: Readonly<{ readonly id: string; readonly revision: string }>;
@@ -585,7 +569,6 @@ export interface HelarcRunSnapshot {
     readonly runTree: HelarcRunTreeSnapshot;
     readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
     readonly continuationTargets: readonly HelarcDescendantContinuationTargetSnapshot[];
-    readonly lifecycleHooks: HelarcRunLifecycleHookSnapshot;
     readonly verification: HelarcHostVerificationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
@@ -724,6 +707,20 @@ export interface HelarcSteerRunInput {
   readonly instruction: string;
 }
 
+export interface HelarcResumeDescendantInput {
+  readonly commandId: string;
+  readonly runId: string;
+  readonly request: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly relation: Readonly<{ readonly id: string }>;
+  readonly child: Readonly<{ readonly id: string }>;
+  readonly expectedRunRevision: number;
+  readonly suspension: Readonly<{
+    readonly id: string;
+    readonly revision: string;
+  }>;
+  readonly reason: string;
+}
+
 export interface HelarcGetRunStatusInput {
   readonly queryId: string;
   readonly runId: string;
@@ -818,7 +815,7 @@ export type HelarcRunCancellationReceipt =
     };
 
 interface HelarcHostCommandReceiptBase<
-  TKind extends "run.cancel" | "run.steer" | "interaction.submit",
+  TKind extends "run.cancel" | "run.steer" | "descendant.resume" | "interaction.submit",
 > {
   readonly version: 1;
   readonly commandId: string;
@@ -892,11 +889,49 @@ export interface HelarcRunSteeringCommandReceipt
       };
 }
 
+export interface HelarcDescendantResumeCommandReceipt
+  extends HelarcHostCommandReceiptBase<"descendant.resume"> {
+  readonly status: "handled";
+  readonly result:
+    | {
+        readonly status: "routed";
+        readonly relation: Readonly<{ readonly id: string }>;
+        readonly child: Readonly<{ readonly id: string }>;
+        readonly resume:
+          | {
+              readonly status: "accepted";
+              readonly currentRunRevision: number;
+            }
+          | {
+              readonly status: "rejected";
+              readonly code:
+                | "resume_invalid"
+                | "run_not_suspended"
+                | "run_revision_stale"
+                | "suspension_stale"
+                | "run_cancelling"
+                | "run_settled";
+              readonly requestId: string;
+              readonly currentRunRevision: number;
+            };
+      }
+    | {
+        readonly status: "rejected";
+        readonly code:
+          | "delegation_route_invalid"
+          | "delegation_relation_unknown"
+          | "delegation_route_mismatch"
+          | "delegation_child_settled";
+        readonly relation: Readonly<{ readonly id: string }> | null;
+        readonly child: Readonly<{ readonly id: string }> | null;
+      };
+}
+
 export interface HelarcHostCommandRejectedReceipt {
   readonly version: 1;
   readonly commandId: string;
   readonly runId: string;
-  readonly kind: "run.cancel" | "run.steer" | "interaction.submit" | null;
+  readonly kind: "run.cancel" | "run.steer" | "descendant.resume" | "interaction.submit" | null;
   readonly status: "rejected";
   readonly code: HelarcHostCommandRejectionCode;
 }
@@ -914,6 +949,7 @@ export type HelarcHostCommandRejectionCode =
 export type HelarcHostCommandReceipt =
   | HelarcRunCancellationCommandReceipt
   | HelarcRunSteeringCommandReceipt
+  | HelarcDescendantResumeCommandReceipt
   | HelarcInteractionSubmissionCommandReceipt
   | HelarcHostCommandRejectedReceipt;
 
@@ -965,14 +1001,13 @@ export interface HelarcHostRunStatusSnapshot {
   readonly runTree: HelarcRunTreeSnapshot;
   readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
   readonly continuationTargets: readonly HelarcDescendantContinuationTargetSnapshot[];
-  readonly lifecycleHooks: HelarcRunLifecycleHookSnapshot;
   readonly verification: HelarcHostVerificationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
   readonly terminal: HelarcRunSnapshot["host"]["terminal"];
 }
 
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 10;
+  readonly bridgeVersion: 11;
   readonly productId: "helarc";
   chooseWorkspace(
     input: HelarcChooseWorkspaceInput,
@@ -989,6 +1024,7 @@ export interface HelarcDesktopApi {
   ): Promise<HelarcProductCommandReceipt<"run.start">>;
   cancelRun(input: HelarcCancelRunInput): Promise<HelarcHostCommandResponse>;
   steerRun(input: HelarcSteerRunInput): Promise<HelarcHostCommandResponse>;
+  resumeDescendant(input: HelarcResumeDescendantInput): Promise<HelarcHostCommandResponse>;
   submitInteraction(input: HelarcSubmitInteractionInput): Promise<HelarcHostCommandResponse>;
   getRunStatus(input: HelarcGetRunStatusInput): Promise<HelarcRunStatusResponse>;
   openThread(

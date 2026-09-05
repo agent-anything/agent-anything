@@ -10,7 +10,14 @@ import type {
   HostRunCancellationReceipt,
   HostRunSteeringReceipt,
 } from "../run/HostRunManager.js";
-import type { RunSteeringAttribution } from "@agent-anything/agent-runtime/run";
+import type { DelegationRequestRef } from "@agent-anything/agent-core/delegation";
+import type { RunRef } from "@agent-anything/agent-core/run";
+import type { DescendantRunRelationRef } from "@agent-anything/agent-core/run-tree";
+import type { DelegationResumeReceipt } from "@agent-anything/agent-runtime/delegation";
+import type {
+  RunSteeringAttribution,
+  RunSuspensionRef,
+} from "@agent-anything/agent-runtime/run";
 import type { HostRunProjection } from "../projection/HostRunProjection.js";
 
 export const HOST_COMMAND_VERSION = 1 as const;
@@ -18,7 +25,11 @@ export const HOST_COMMAND_REASON_MAX_LENGTH = 500;
 export const HOST_COMMAND_RECEIPT_LIMIT = 4_096;
 export const HOST_INTERACTION_PAYLOAD_MAX_BYTES = 262_144;
 
-export type HostCommandKind = "run.cancel" | "run.steer" | "interaction.submit";
+export type HostCommandKind =
+  | "run.cancel"
+  | "run.steer"
+  | "descendant.resume"
+  | "interaction.submit";
 
 export interface HostCommandEnvelope<TKind extends HostCommandKind, TPayload> {
   readonly version: typeof HOST_COMMAND_VERSION;
@@ -43,6 +54,15 @@ export interface HostRunSteeringCommandPayload {
   readonly instruction: string;
 }
 
+export interface HostDescendantResumeCommandPayload {
+  readonly request: DelegationRequestRef;
+  readonly relation: DescendantRunRelationRef;
+  readonly child: RunRef;
+  readonly expectedRunRevision: number;
+  readonly suspension: RunSuspensionRef;
+  readonly reason: string;
+}
+
 export type HostRunCancellationCommand = HostCommandEnvelope<
   "run.cancel",
   HostRunCancellationCommandPayload
@@ -58,9 +78,15 @@ export type HostRunSteeringCommand = HostCommandEnvelope<
   HostRunSteeringCommandPayload
 >;
 
+export type HostDescendantResumeCommand = HostCommandEnvelope<
+  "descendant.resume",
+  HostDescendantResumeCommandPayload
+>;
+
 export type HostCommand =
   | HostRunCancellationCommand
   | HostRunSteeringCommand
+  | HostDescendantResumeCommand
   | HostInteractionSubmissionCommand;
 
 export type HostCommandRejectionCode =
@@ -101,6 +127,13 @@ export interface HostRunSteeringCommandReceipt
   readonly projection: HostRunProjection;
 }
 
+export interface HostDescendantResumeCommandReceipt
+  extends HostCommandReceiptBase<"descendant.resume"> {
+  readonly status: "handled";
+  readonly result: DelegationResumeReceipt;
+  readonly projection: HostRunProjection;
+}
+
 export interface HostCommandRejectedReceipt {
   readonly version: typeof HOST_COMMAND_VERSION;
   readonly commandId: string;
@@ -114,6 +147,7 @@ export interface HostCommandRejectedReceipt {
 export type HostCommandReceipt =
   | HostRunCancellationCommandReceipt
   | HostRunSteeringCommandReceipt
+  | HostDescendantResumeCommandReceipt
   | HostInteractionSubmissionCommandReceipt
   | HostCommandRejectedReceipt;
 
@@ -208,6 +242,15 @@ export function snapshotHostCommand(candidate: unknown): HostCommand {
       payload: snapshotSteeringPayload(candidate.payload),
     });
   }
+  if (candidate.kind === "descendant.resume") {
+    return Object.freeze({
+      version: HOST_COMMAND_VERSION,
+      commandId,
+      runId,
+      kind: "descendant.resume" as const,
+      payload: snapshotDescendantResumePayload(candidate.payload),
+    });
+  }
   return Object.freeze({
     version: HOST_COMMAND_VERSION,
     commandId,
@@ -258,6 +301,28 @@ function dispatchValidatedCommand(
           expectedRunRevision: command.payload.expectedRunRevision,
           instruction: command.payload.instruction,
           attribution: input.steeringAttribution,
+        }),
+        projection: activeRun.getProjection(),
+      });
+    }
+    if (command.kind === "descendant.resume") {
+      return Object.freeze({
+        version: HOST_COMMAND_VERSION,
+        commandId: command.commandId,
+        runId: command.runId,
+        kind: command.kind,
+        status: "handled",
+        result: activeRun.resumeDescendant({
+          request: command.payload.request,
+          relation: command.payload.relation,
+          child: command.payload.child,
+          resume: {
+            id: command.commandId,
+            expectedRunRevision: command.payload.expectedRunRevision,
+            suspension: command.payload.suspension,
+            origin: "host",
+            reason: command.payload.reason,
+          },
         }),
         projection: activeRun.getProjection(),
       });
@@ -332,6 +397,77 @@ function snapshotSteeringPayload(candidate: unknown): HostRunSteeringCommandPayl
   });
 }
 
+function snapshotDescendantResumePayload(
+  candidate: unknown,
+): HostDescendantResumeCommandPayload {
+  assertRecord(candidate, "Host descendant resume payload");
+  assertExactKeys(candidate, [
+    "request",
+    "relation",
+    "child",
+    "expectedRunRevision",
+    "suspension",
+    "reason",
+  ], "Host descendant resume payload");
+  assertRecord(candidate.request, "Host descendant resume request");
+  assertExactKeys(candidate.request, ["id", "revision"], "Host descendant resume request");
+  assertRecord(candidate.relation, "Host descendant resume relation");
+  assertExactKeys(candidate.relation, ["id"], "Host descendant resume relation");
+  assertRecord(candidate.child, "Host descendant resume child");
+  assertExactKeys(candidate.child, ["id"], "Host descendant resume child");
+  assertRecord(candidate.suspension, "Host descendant resume suspension");
+  assertExactKeys(candidate.suspension, ["run", "id", "revision"], "Host descendant resume suspension");
+  assertRecord(candidate.suspension.run, "Host descendant resume suspension run");
+  assertExactKeys(candidate.suspension.run, ["id"], "Host descendant resume suspension run");
+  if (!Number.isSafeInteger(candidate.expectedRunRevision) || (candidate.expectedRunRevision as number) < 0) {
+    throw new HostCommandValidationError(
+      "host_command_invalid",
+      "Host descendant resume expectedRunRevision must be a non-negative integer.",
+    );
+  }
+  const childId = identity(candidate.child.id, "Host descendant resume child id");
+  const suspensionRunId = identity(
+    candidate.suspension.run.id,
+    "Host descendant resume suspension run id",
+  );
+  if (childId !== suspensionRunId) {
+    throw new HostCommandValidationError(
+      "host_command_invalid",
+      "Host descendant resume suspension must identify the routed Child.",
+    );
+  }
+  if (
+    typeof candidate.reason !== "string" ||
+    candidate.reason.trim().length === 0 ||
+    candidate.reason.trim().length > HOST_COMMAND_REASON_MAX_LENGTH
+  ) {
+    throw new HostCommandValidationError(
+      "host_command_invalid",
+      "Host descendant resume reason is invalid.",
+    );
+  }
+  return Object.freeze({
+    request: Object.freeze({
+      id: identity(candidate.request.id, "Host descendant resume request id"),
+      revision: identity(candidate.request.revision, "Host descendant resume request revision"),
+    }),
+    relation: Object.freeze({
+      id: identity(candidate.relation.id, "Host descendant resume relation id"),
+    }),
+    child: Object.freeze({ id: childId }),
+    expectedRunRevision: candidate.expectedRunRevision as number,
+    suspension: Object.freeze({
+      run: Object.freeze({ id: suspensionRunId }),
+      id: identity(candidate.suspension.id, "Host descendant resume suspension id"),
+      revision: identity(
+        candidate.suspension.revision,
+        "Host descendant resume suspension revision",
+      ),
+    }),
+    reason: candidate.reason.trim(),
+  });
+}
+
 function rejectedReceipt(
   candidate: unknown,
   code: HostCommandRejectionCode,
@@ -400,7 +536,10 @@ function assertHostCommandKind(value: unknown, field: string): asserts value is 
 }
 
 function isHostCommandKind(value: unknown): value is HostCommandKind {
-  return value === "run.cancel" || value === "run.steer" || value === "interaction.submit";
+  return value === "run.cancel" ||
+    value === "run.steer" ||
+    value === "descendant.resume" ||
+    value === "interaction.submit";
 }
 
 function nullableReason(value: unknown, field: string): string | null {

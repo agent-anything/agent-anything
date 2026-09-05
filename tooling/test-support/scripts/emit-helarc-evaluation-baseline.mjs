@@ -1,7 +1,6 @@
 import {
-  HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
+  HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE,
   HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
-  HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
@@ -10,19 +9,19 @@ import {
   runContextContinuityEvaluationCandidate,
 } from "../dist/context-continuity-evaluation/index.js";
 import {
-  runRunLifecycleHookDeterministicEvaluation,
-} from "../dist/run-lifecycle-hook-evaluation/index.js";
+  runAgentHookDeterministicEvaluation,
+} from "../dist/agent-hook-evaluation/index.js";
 
 const systemCandidate = await runHelarcEvaluationBaselineCandidate();
 const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
-const runLifecycleHooks = runRunLifecycleHookDeterministicEvaluation();
+const agentHooks = await runAgentHookDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
-  HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
+  HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
+  HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE,
   systemCandidate,
 );
 
@@ -30,18 +29,18 @@ process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
   kind: "context_continuity_and_helarc_evaluation_candidate",
   predecessor: {
-    reportRef: HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.acceptanceRef,
-  },
-  acceptedSuccessor: {
     reportRef: HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.reportRef,
     acceptanceRef: HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.acceptanceRef,
+  },
+  acceptedSuccessor: {
+    reportRef: HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),
   acceptedSuccessorComparison: projectPredecessorComparison(acceptedComparison),
   contextContinuity: projectContextContinuityCandidate(contextContinuity),
-  runLifecycleHooks,
+  agentHooks,
   limitations: [
     "The deterministic candidate does not claim general model intelligence.",
     "Context-specific metrics have no fabricated predecessor samples.",

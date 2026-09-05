@@ -23,7 +23,7 @@ export interface ActiveDescendantTargetProjection {
   readonly relationKind: "delegation" | "continuation";
   readonly agent: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly runRevision: number;
-  readonly status: "initializing" | "running" | "waiting" | "cancelling";
+  readonly status: "initializing" | "running" | "waiting" | "suspended" | "cancelling";
 }
 
 export interface DescendantTargetsProjection {

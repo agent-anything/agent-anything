@@ -240,12 +240,6 @@ function snapshotLimits(input: RunConfig["limits"]): RunConfig["limits"] {
         "RunLimits.completionGate.maxFeedbackRounds",
       ),
     }),
-    stopHooks: Object.freeze({
-      maxConsecutiveBlockingRounds: nonNegativeInteger(
-        input.stopHooks.maxConsecutiveBlockingRounds,
-        "RunLimits.stopHooks.maxConsecutiveBlockingRounds",
-      ),
-    }),
   });
   assertValidPlanLimits(limits.plan);
   return limits;

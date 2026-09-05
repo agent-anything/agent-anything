@@ -5,10 +5,6 @@ import {
   createRunResult,
   type RunSettlementCauseRecord,
 } from "../run/index.js";
-import {
-  createInitialRunLifecycleHookState,
-  projectRunLifecycleHooks,
-} from "../hooks/index.js";
 import { ActiveRunHandle, type RunExecutionUpdate } from "./RunHandle.js";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 
@@ -85,61 +81,6 @@ describe("ActiveRunHandle", () => {
     expect(delivered).toHaveBeenCalledTimes(2);
   });
 
-  it("copies and freezes the authoritative lifecycle Hook projection", () => {
-    const result = succeededResult();
-    const handle = new ActiveRunHandle(
-      "run-1",
-      cancellation(),
-      result,
-      runTree(0),
-      () => undefined,
-    );
-    const limitations = ["hook_result_truncated"];
-    const codes = ["task_incomplete"];
-
-    handle.publish({
-      runRevision: 2,
-      status: "running",
-      lastRunItemSequence: 4,
-      instructionBinding: null,
-      plan: null,
-      suspension: null,
-      lifecycleHooks: {
-        stopEventSequence: 2,
-        stopFailureEventSequence: 0,
-        feedbackEpoch: 1,
-        consecutiveBlockingRounds: 1,
-        latestEventId: "stop-event-2",
-        latestInvocations: [],
-        latestFeedback: {
-          eventId: "stop-event-2",
-          epoch: 1,
-          round: 1,
-          codes,
-          message: "Continue the Run and complete the Task.",
-          omittedReasonCount: 0,
-        },
-        limitations,
-      },
-      retry: null,
-      verification: null,
-      pendingInteractions: [],
-      activeDelegations: [],
-      continuationTargets: [],
-      result: null,
-    });
-
-    limitations[0] = "changed-after-publish";
-    codes[0] = "changed-after-publish";
-    const lifecycleHooks = handle.getSnapshot().lifecycleHooks;
-    expect(lifecycleHooks.limitations).toEqual(["hook_result_truncated"]);
-    expect(lifecycleHooks.latestFeedback?.codes).toEqual(["task_incomplete"]);
-    expect(Object.isFrozen(lifecycleHooks)).toBe(true);
-    expect(Object.isFrozen(lifecycleHooks.limitations)).toBe(true);
-    expect(Object.isFrozen(lifecycleHooks.latestFeedback)).toBe(true);
-    expect(Object.isFrozen(lifecycleHooks.latestFeedback?.codes)).toBe(true);
-  });
-
   it("settles an execution rejection through the emergency result exactly once", async () => {
     const emergencyResult = failedResult();
     const onSettled = vi.fn();
@@ -161,7 +102,7 @@ describe("ActiveRunHandle", () => {
     expect(onSettled).toHaveBeenCalledWith(emergencyResult);
   });
 
-  it("delegates descendant steering only through its bound Runner route", () => {
+  it("delegates descendant steering and resume only through their bound Runner routes", () => {
     const result = succeededResult();
     const handle = new ActiveRunHandle(
       "run-1",
@@ -199,6 +140,40 @@ describe("ActiveRunHandle", () => {
       code: "delegation_child_settled",
     });
     expect(routeImpl).toHaveBeenCalledWith(route);
+
+    const resumeRoute = {
+      request: route.request,
+      relation: route.relation,
+      child: route.child,
+      resume: {
+        id: "resume-1",
+        expectedRunRevision: 3,
+        suspension: {
+          run: route.child,
+          id: "suspension-1",
+          revision: "suspension-1-v1",
+        },
+        origin: "host" as const,
+        reason: "Continue the suspended Child.",
+      },
+    };
+    expect(handle.resumeDescendant(resumeRoute)).toMatchObject({
+      status: "rejected",
+      code: "delegation_route_invalid",
+    });
+    const resumeImpl = vi.fn(() => Object.freeze({
+      status: "rejected" as const,
+      code: "delegation_child_settled" as const,
+      relation: resumeRoute.relation,
+      child: resumeRoute.child,
+    }));
+    handle.bindDescendantResume(resumeImpl);
+
+    expect(handle.resumeDescendant(resumeRoute)).toMatchObject({
+      status: "rejected",
+      code: "delegation_child_settled",
+    });
+    expect(resumeImpl).toHaveBeenCalledWith(resumeRoute);
   });
 });
 
@@ -212,7 +187,6 @@ function terminalUpdate(
     instructionBinding: null,
     plan: null,
     suspension: null,
-    lifecycleHooks: projectRunLifecycleHooks(createInitialRunLifecycleHookState()),
     retry: null,
     verification: null,
       pendingInteractions: [],

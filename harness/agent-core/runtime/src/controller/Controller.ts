@@ -28,7 +28,6 @@ import type {
   ProviderUsage,
 } from "@agent-anything/model-interaction";
 import type { PlanLimits } from "../plan/index.js";
-import type { RunLifecycleHookProjection } from "../hooks/index.js";
 import type { DescendantTargetsProjection } from "../delegation/index.js";
 
 interface ControllerModelItemBase {
@@ -146,7 +145,6 @@ export interface ControllerInput<TOutput = unknown> {
   readonly interaction: ModelInteractionProjection;
   readonly plan: PlanProjection | null;
   readonly planLimits: PlanLimits;
-  readonly lifecycleHooks: RunLifecycleHookProjection;
   readonly verification: ControllerVerificationProjection;
   readonly permission: PermissionContextProjection;
   readonly pending: readonly PendingRunSubjectProjection[];
@@ -181,6 +179,17 @@ export interface ControllerRetryContext {
   readonly events: RetryEventSink;
 }
 
+export interface ControllerFeedback {
+  readonly source: Readonly<{
+    readonly owner: string;
+    readonly kind: string;
+    readonly id: string;
+    readonly revision: string;
+  }>;
+  readonly code: string;
+  readonly message: string;
+}
+
 export type ControllerDecision<TOutput = unknown> =
   | {
       readonly kind: "propose_completion";
@@ -195,6 +204,11 @@ export type ControllerDecision<TOutput = unknown> =
   | {
       readonly kind: "propose_stop";
       readonly reason: string;
+      readonly modelItems: readonly ControllerModelItem[];
+    }
+  | {
+      readonly kind: "continue_with_feedback";
+      readonly feedback: ControllerFeedback;
       readonly modelItems: readonly ControllerModelItem[];
     };
 

@@ -351,6 +351,74 @@ describe("Helarc IPC", () => {
       .not.toContain(PRIVATE_RESULT);
   });
 
+  it("routes an exact descendant resume command without exposing the Host projection", async () => {
+    const snapshot = mainSnapshot("suspended");
+    const command = {
+      version: 1,
+      commandId: "host-descendant-resume-1",
+      runId: "run-1",
+      kind: "descendant.resume",
+      payload: {
+        request: { id: "request-1", revision: "request-1-v1" },
+        relation: { id: "relation-1" },
+        child: { id: "run-child" },
+        expectedRunRevision: 5,
+        suspension: {
+          run: { id: "run-child" },
+          id: "suspension-1",
+          revision: "suspension-1-v1",
+        },
+        reason: "Resume from desktop.",
+      },
+    };
+    const dispatchHostCommand = vi.fn(() => ({
+      version: 1 as const,
+      commandId: command.commandId,
+      runId: command.runId,
+      kind: "descendant.resume" as const,
+      status: "handled" as const,
+      result: {
+        status: "routed" as const,
+        relation: command.payload.relation,
+        child: command.payload.child,
+        resume: {
+          status: "accepted" as const,
+          request: {
+            id: command.commandId,
+            expectedRunRevision: 5,
+            suspension: command.payload.suspension,
+            origin: "host" as const,
+            reason: command.payload.reason,
+            run: command.payload.child,
+            requestedAt: "2026-08-03T00:00:00.000Z",
+          },
+          currentRunRevision: 6,
+        },
+      },
+      projection: { privateProjection: PRIVATE_RESULT },
+    }));
+    const controller = controllerDouble(snapshot, { dispatchHostCommand });
+    registerHelarcIpc({ window: windowDouble(), controller });
+
+    const response = await requiredHandler(HELARC_IPC_CHANNELS.resumeDescendant)(
+      {},
+      command,
+    );
+
+    expect(dispatchHostCommand).toHaveBeenCalledWith(command, "descendant.resume");
+    expect(response).toMatchObject({
+      receipt: {
+        kind: "descendant.resume",
+        result: {
+          status: "routed",
+          resume: { status: "accepted", currentRunRevision: 6 },
+        },
+      },
+      snapshot: { status: "suspended" },
+    });
+    expect(JSON.stringify(response)).not.toContain(PRIVATE_RESULT);
+  });
+
   it("rejects malformed Thread commands instead of coercing them into navigation", async () => {
     const openThread = vi.fn();
     const controller = controllerDouble(mainSnapshot(), { openThread });

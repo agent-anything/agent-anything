@@ -114,62 +114,6 @@ describe("HostRunProjectionReducer", () => {
     expect(projection).toMatchObject({ status: "running", pendingInteractions: [] });
   });
 
-  it("copies bounded lifecycle Hook state only from RunHandle snapshots and rejects regression", () => {
-    const source = lifecycleHookSnapshot(2);
-    let projection = apply(initialProjection(), runOperationUpdate(1, {
-      sequence: 1,
-      lifecycleHooks: source,
-    }));
-
-    expect(projection.lifecycleHooks).toEqual({
-      stopEventSequence: 2,
-      stopFailureEventSequence: 0,
-      feedbackEpoch: 1,
-      consecutiveBlockingRounds: 1,
-      latestEventId: "run-1:lifecycle:Stop:2",
-      latestInvocations: [{
-        hookId: "helarc.task-fulfillment",
-        hookRevision: "1",
-        eventId: "run-1:lifecycle:Stop:2",
-        status: "block",
-        code: "task_incomplete",
-        durationMs: 4,
-        stale: false,
-      }],
-      latestFeedback: {
-        eventId: "run-1:lifecycle:Stop:2",
-        epoch: 1,
-        round: 1,
-        codes: ["task_incomplete"],
-        message: "The requested work is incomplete.",
-        omittedReasonCount: 0,
-      },
-      limitations: ["task_fulfillment_hook_non_blocking_error"],
-    });
-    expect(Object.isFrozen(projection.lifecycleHooks)).toBe(true);
-    expect(Object.isFrozen(projection.lifecycleHooks.limitations)).toBe(true);
-    expect(Object.isFrozen(projection.lifecycleHooks.latestInvocations[0])).toBe(true);
-
-    projection = apply(projection, runtimeUpdate(2, "run.lifecycle.hook.completed", {
-      eventId: "run-1:lifecycle:Stop:99",
-      hookId: "other-hook",
-      hookRevision: "1",
-      status: "allow",
-      code: null,
-      durationMs: 1,
-      stale: false,
-    }));
-    expect(projection.lifecycleHooks.stopEventSequence).toBe(2);
-
-    expect(reduceHostRunProjection(projection, runOperationUpdate(3, {
-      sequence: 2,
-      lifecycleHooks: initialLifecycleHooks(),
-    }))).toMatchObject({
-      status: "rejected",
-      code: "run_lifecycle_hook_sequence_regression",
-    });
-  });
-
   it("projects only the bounded Host Verification view from a RunHandle snapshot", () => {
     const verification = Object.freeze({
       snapshot: Object.freeze({ runId: "run-1", revision: 7 }),
@@ -462,7 +406,6 @@ function runOperationUpdate(
       instructionBinding: null,
       plan: null,
       suspension: null,
-      lifecycleHooks: initialLifecycleHooks(),
       retry: null,
       verification: null,
       pendingInteractions: [],
@@ -473,57 +416,6 @@ function runOperationUpdate(
       ...overrides,
     },
   };
-}
-
-function initialLifecycleHooks(): RunOperationSnapshot["lifecycleHooks"] {
-  return Object.freeze({
-    stopEventSequence: 0,
-    stopFailureEventSequence: 0,
-    feedbackEpoch: 0,
-    consecutiveBlockingRounds: 0,
-    latestEventId: null,
-    latestInvocations: Object.freeze([]),
-    latestFeedback: null,
-    limitations: Object.freeze([]),
-  });
-}
-
-function lifecycleHookSnapshot(
-  stopEventSequence: number,
-): RunOperationSnapshot["lifecycleHooks"] {
-  const eventId = `run-1:lifecycle:Stop:${stopEventSequence}`;
-  return Object.freeze({
-    stopEventSequence,
-    stopFailureEventSequence: 0,
-    feedbackEpoch: 1,
-    consecutiveBlockingRounds: 1,
-    latestEventId: eventId,
-    latestInvocations: Object.freeze([Object.freeze({
-      hook: Object.freeze({ id: "helarc.task-fulfillment", revision: "1" }),
-      eventId,
-      startedAt: NOW,
-      completedAt: NOW,
-      durationMs: 4,
-      outcome: Object.freeze({
-        status: "decided" as const,
-        decision: Object.freeze({
-          kind: "block" as const,
-          code: "task_incomplete",
-          reason: "The requested work is incomplete.",
-        }),
-      }),
-      stale: false,
-    })]),
-    latestFeedback: Object.freeze({
-      eventId,
-      epoch: 1,
-      round: 1,
-      codes: Object.freeze(["task_incomplete"]),
-      message: "The requested work is incomplete.",
-      omittedReasonCount: 0,
-    }),
-    limitations: Object.freeze(["task_fulfillment_hook_non_blocking_error"]),
-  });
 }
 
 function rootTree(revision = 0): RunOperationSnapshot["runTree"] {

@@ -1,7 +1,8 @@
-import type { ControllerTurnRef } from "@agent-anything/agent-core/control";
 import type { RunRef } from "@agent-anything/agent-core/run";
-import type { RunLifecycleEventRef } from "@agent-anything/agent-runtime/lifecycle";
-import type { CompletionProposalRef } from "@agent-anything/verification/completion";
+import type {
+  AgentDecisionCandidateRef,
+  AgentHookEventRef,
+} from "@agent-anything/agent-hooks/events";
 
 export type HelarcTaskFulfillmentStatus = "fulfilled" | "incomplete" | "uncertain";
 
@@ -21,11 +22,11 @@ export interface HelarcTaskFulfillmentAssessment {
   readonly id: string;
   readonly revision: string;
   readonly hookRevision: string;
-  readonly event: RunLifecycleEventRef;
+  readonly event: AgentHookEventRef;
   readonly run: RunRef;
-  readonly turn: ControllerTurnRef;
+  readonly controllerRequestId: string;
   readonly task: Readonly<{ readonly id: string; readonly kind: string }>;
-  readonly proposal: CompletionProposalRef;
+  readonly candidate: AgentDecisionCandidateRef;
   readonly status: HelarcTaskFulfillmentStatus;
   readonly rationale: string;
   readonly findings: readonly HelarcTaskFulfillmentFinding[];

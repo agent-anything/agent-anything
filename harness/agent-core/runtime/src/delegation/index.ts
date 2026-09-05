@@ -94,6 +94,16 @@ export type {
   DelegationSteeringReceipt,
   DelegationSteeringRejectionCode,
   DelegationSteeringRoute,
+  DelegationResumeReceipt,
+  DelegationResumeRoute,
 } from "./DelegationControl.js";
-export { snapshotDelegationSteeringRoute } from "./DelegationControl.js";
+export {
+  snapshotDelegationResumeRoute,
+  snapshotDelegationSteeringRoute,
+} from "./DelegationControl.js";
 export type { DelegationToolSelectionDerivation } from "./DelegationRunConfiguration.js";
+export type {
+  DescendantAdmittedControl,
+  DescendantProgress,
+} from "./DescendantProgress.js";
+export { createDescendantProgress } from "./DescendantProgress.js";

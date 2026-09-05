@@ -2,6 +2,7 @@ export type {
   Controller,
   ControllerCallContext,
   ControllerDecision,
+  ControllerFeedback,
   ControllerInput,
   ControllerVerificationProjection,
   ControllerPreProjectionInput,

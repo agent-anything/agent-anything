@@ -29,31 +29,6 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       }) as RuntimeEventPayloadMap[TName];
     case "run.item.appended":
       return freeze({ itemId: token(payload.itemId, "run.item.appended.itemId"), itemKind: oneOf(payload.itemKind, runItemKinds, "run.item.appended.itemKind"), itemSequence: positive(payload.itemSequence, "run.item.appended.itemSequence") }) as RuntimeEventPayloadMap[TName];
-    case "run.lifecycle.emitted":
-      return freeze({
-        eventId: token(payload.eventId, "run.lifecycle.emitted.eventId"),
-        eventName: oneOf(payload.eventName, ["Stop", "StopFailure"] as const, "run.lifecycle.emitted.eventName"),
-        sequence: positive(payload.sequence, "run.lifecycle.emitted.sequence"),
-        eventRevision: token(payload.eventRevision, "run.lifecycle.emitted.eventRevision"),
-      }) as RuntimeEventPayloadMap[TName];
-    case "run.lifecycle.hook.completed":
-      return freeze({
-        eventId: token(payload.eventId, "run.lifecycle.hook.completed.eventId"),
-        hookId: token(payload.hookId, "run.lifecycle.hook.completed.hookId"),
-        hookRevision: token(payload.hookRevision, "run.lifecycle.hook.completed.hookRevision"),
-        status: oneOf(payload.status, ["allow", "block", "non_blocking_error"] as const, "run.lifecycle.hook.completed.status"),
-        code: nullableToken(payload.code, "run.lifecycle.hook.completed.code"),
-        durationMs: nonNegativeInteger(payload.durationMs, "run.lifecycle.hook.completed.durationMs"),
-        stale: boolean(payload.stale, "run.lifecycle.hook.completed.stale"),
-      }) as RuntimeEventPayloadMap[TName];
-    case "run.lifecycle.hook.feedback":
-      return freeze({
-        eventId: token(payload.eventId, "run.lifecycle.hook.feedback.eventId"),
-        epoch: nonNegativeInteger(payload.epoch, "run.lifecycle.hook.feedback.epoch"),
-        round: positive(payload.round, "run.lifecycle.hook.feedback.round"),
-        codeCount: nonNegativeInteger(payload.codeCount, "run.lifecycle.hook.feedback.codeCount"),
-        omittedReasonCount: nonNegativeInteger(payload.omittedReasonCount, "run.lifecycle.hook.feedback.omittedReasonCount"),
-      }) as RuntimeEventPayloadMap[TName];
     case "run.descendant.reserved":
     case "run.descendant.started":
       return descendant(name, payload) as unknown as RuntimeEventPayloadMap[TName];
@@ -132,7 +107,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         iteration: positive(payload.iteration, "controller.finished.iteration"),
         status: oneOf(payload.status, ["decided", "failed", "interrupted"] as const, "controller.finished.status"),
         code: nullableToken(payload.code, "controller.finished.code"),
-        decisionKind: payload.decisionKind === null ? null : oneOf(payload.decisionKind, ["advance", "propose_completion", "propose_stop"] as const, "controller.finished.decisionKind"),
+        decisionKind: payload.decisionKind === null ? null : oneOf(payload.decisionKind, ["advance", "continue_with_feedback", "propose_completion", "propose_stop"] as const, "controller.finished.decisionKind"),
       }) as RuntimeEventPayloadMap[TName];
     case "tool.input.rejected":
       return freeze({
@@ -220,7 +195,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
   }
 }
 
-const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "lifecycle_event", "lifecycle_hook_invocation", "lifecycle_hook_feedback", "completion_acceptance", "suspension_transition", "settlement_cause", "terminal_transition"];
+const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "controller_feedback", "completion_acceptance", "suspension_transition", "settlement_cause", "terminal_transition"];
 const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];

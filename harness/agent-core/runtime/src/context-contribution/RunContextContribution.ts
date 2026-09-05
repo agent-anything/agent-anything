@@ -4,7 +4,7 @@ import type { ContextContribution, ContextInstructionRole } from "@agent-anythin
 import { measureContextPayload } from "@agent-anything/context/contribution";
 import type { ContextAdmissionProfile } from "@agent-anything/context/active-context";
 import type { PlanProjection } from "../plan/index.js";
-import type { StopHookFeedbackRecord } from "../hooks/index.js";
+import type { ControllerFeedback } from "../controller/index.js";
 import type { RunObservation, RunState } from "../run/index.js";
 import type {
   DelegationContextMaterial,
@@ -132,39 +132,37 @@ export function createSteeringContextContribution(input: { readonly id: string; 
   });
 }
 
-export function createLifecycleHookFeedbackContextContribution(input: {
+export function createControllerFeedbackContextContribution(input: {
   readonly id: string;
   readonly revision: string;
   readonly runId: string;
-  readonly feedback: StopHookFeedbackRecord;
+  readonly feedback: ControllerFeedback;
   readonly createdAt: string;
 }): ContextContribution {
   return createRunContextContribution({
     id: input.id,
     revision: input.revision,
     runId: input.runId,
-    owner: "agent-runtime",
-    sourceKind: "lifecycle_hook_feedback",
-    sourceId: input.feedback.eventId,
+    owner: input.feedback.source.owner,
+    sourceKind: "controller_feedback",
+    sourceId: input.feedback.source.id,
     sourceRevision: input.revision,
     observedAt: input.createdAt,
     payload: toContextJsonValue({
-      kind: "lifecycle_hook_feedback",
-      eventId: input.feedback.eventId,
-      epoch: input.feedback.epoch,
-      round: input.feedback.round,
-      codes: input.feedback.codes,
+      kind: "controller_feedback",
+      source: input.feedback.source,
+      code: input.feedback.code,
       message: input.feedback.message,
     }),
     payloadKind: "structured",
     retention: "current",
-    replacementKey: "lifecycle_hook_feedback",
+    replacementKey: "controller_feedback",
     instructionRole: "data",
     necessity: "mandatory",
     precedence: 92,
     audiences: Object.freeze(["model"]),
-    provenanceKind: "lifecycle_hook_event",
-    provenanceId: input.feedback.eventId,
+    provenanceKind: "controller_feedback",
+    provenanceId: input.feedback.source.id,
     provenanceRevision: input.revision,
   });
 }
@@ -288,10 +286,10 @@ export function createSteeringContextAdmissionProfile(): ContextAdmissionProfile
   });
 }
 
-export function createLifecycleHookFeedbackContextAdmissionProfile(): ContextAdmissionProfile {
+export function createControllerFeedbackContextAdmissionProfile(owner: string): ContextAdmissionProfile {
   return admissionProfile({
-    owner: "agent-runtime",
-    sourceKinds: ["lifecycle_hook_feedback"],
+    owner,
+    sourceKinds: ["controller_feedback"],
     audiences: ["model"],
     retention: ["current"],
     instructionRoles: ["data"],

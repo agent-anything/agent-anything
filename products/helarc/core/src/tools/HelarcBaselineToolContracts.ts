@@ -306,9 +306,9 @@ const ASK_USER_QUESTION = contract({
   },
 });
 
-const DELEGATION_RESULT_OUTPUT = objectSchema(["agent_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
+const DELEGATION_TERMINAL_OUTPUT = objectSchema(["agent_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
   agent_id: { anyOf: [{ type: "string", minLength: 1, maxLength: 1_024 }, { type: "null" }] },
-  status: { enum: ["succeeded", "failed", "cancelled"] },
+  status: { enum: ["succeeded", "partial", "failed", "cancelled"] },
   summary: { type: "string", maxLength: 64_000 },
   artifact_refs: {
     type: "array",
@@ -322,6 +322,26 @@ const DELEGATION_RESULT_OUTPUT = objectSchema(["agent_id", "status", "summary", 
   },
   failure_code: { anyOf: [{ type: "string" }, { type: "null" }] },
 });
+
+const DESCENDANT_PROGRESS_OUTPUT = objectSchema(
+  ["agent_id", "status", "child_run_revision", "summary", "admitted_controls"],
+  {
+    agent_id: { type: "string", minLength: 1, maxLength: 1_024 },
+    status: { enum: ["running", "suspended"] },
+    child_run_revision: { type: "integer", minimum: 0 },
+    summary: { type: "string", maxLength: 4_096 },
+    admitted_controls: {
+      type: "array",
+      items: { enum: ["steer", "resume", "cancel"] },
+    },
+    steering_status: { type: "string" },
+    resume_status: { type: "string" },
+  },
+);
+
+const DELEGATION_RESULT_OUTPUT = Object.freeze({
+  anyOf: Object.freeze([DELEGATION_TERMINAL_OUTPUT, DESCENDANT_PROGRESS_OUTPUT]),
+}) satisfies ToolJsonObject;
 
 const AGENT = contract({
   name: "Agent",

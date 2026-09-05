@@ -56,10 +56,21 @@ describe("Helarc baseline Tool Contracts", () => {
       },
     });
     expect(findHelarcBaselineToolContract("Agent").outputSchema).toMatchObject({
-      required: expect.arrayContaining(["agent_id", "status", "summary"]),
-      properties: {
-        agent_id: { anyOf: expect.any(Array) },
-      },
+      anyOf: [
+        {
+          required: expect.arrayContaining(["agent_id", "status", "summary"]),
+          properties: { agent_id: { anyOf: expect.any(Array) } },
+        },
+        {
+          required: expect.arrayContaining([
+            "agent_id",
+            "status",
+            "child_run_revision",
+            "admitted_controls",
+          ]),
+          properties: { status: { enum: ["running", "suspended"] } },
+        },
+      ],
     });
     expect(findHelarcBaselineToolContract("Agent").inputSchema)
       .not.toHaveProperty("properties.dependency_result");

@@ -629,7 +629,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   const runner = new Runner({
     controller: product.controller,
     contextProjection: createHelarcContextProjectionConfiguration(),
-    lifecycleHooks: product.lifecycleHooks,
     operations: {
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
@@ -743,7 +742,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
           maxExplanationLength: 1_000,
         },
         completionGate: { maxFeedbackRounds: 2 },
-        stopHooks: { maxConsecutiveBlockingRounds: 2 },
       },
       runTreeLimits: options.runTreeLimits ?? {
         maxTotalDescendantRuns: 0,

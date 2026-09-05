@@ -61,7 +61,6 @@ import type {
   DelegationRequest,
   DelegationResult,
 } from "../delegation/index.js";
-import type { RunLifecycleHookComposition } from "../hooks/index.js";
 import type { RunTranscriptPort } from "../transcript/index.js";
 
 export type RunnerIdentityKind =
@@ -103,8 +102,7 @@ export type RunnerIdentityKind =
   | "run_settlement_cause"
   | "run_failure_fact"
   | "run_completion_acceptance"
-  | "run_lifecycle_event"
-  | "run_lifecycle_hook_invocation";
+  | "controller_feedback";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -209,6 +207,12 @@ export interface DelegationResultProjectionPort {
   }): DescendantOperationOutcome;
 }
 
+export interface DelegationProgressProjectionPort {
+  project(input: {
+    readonly progress: import("../delegation/index.js").DescendantProgress;
+  }): DescendantOperationOutcome;
+}
+
 export interface DelegationNarrativeProjectionPort {
   project(input: {
     readonly request: DelegationRequest;
@@ -220,6 +224,7 @@ export interface RunnerDelegationComposition {
   readonly preparation: DelegationPreparationPort;
   readonly continuation: DelegationContinuationPreparationPort;
   readonly narrativeProjection: DelegationNarrativeProjectionPort;
+  readonly progressProjection: DelegationProgressProjectionPort;
   readonly resultProjection: DelegationResultProjectionPort;
 }
 
@@ -329,7 +334,6 @@ export interface RunnerDependencies {
   readonly controller: import("../controller/index.js").Controller<unknown>;
   readonly contextProjection: RunnerContextProjection;
   readonly operations: RunnerOperationComposition;
-  readonly lifecycleHooks?: RunLifecycleHookComposition;
   readonly verification: RunnerVerificationComposition;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly agents?: AgentResolverPort;
@@ -354,6 +358,4 @@ export interface RunInvocationOptions {
 export type ResolvedRunnerDependencies = Required<Pick<
   RunnerDependencies,
   "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"
->> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "lifecycleHooks" | "now" | "createRunId" | "createId" | "retryExecutor"> & {
-  readonly lifecycleHooks: RunLifecycleHookComposition;
-};
+>> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor">;

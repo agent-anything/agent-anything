@@ -13,13 +13,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "instructionBindingRevision",
   ],
   "run.item.appended": ["itemId", "itemKind", "itemSequence"],
-  "run.lifecycle.emitted": ["eventId", "eventName", "sequence", "eventRevision"],
-  "run.lifecycle.hook.completed": [
-    "eventId", "hookId", "hookRevision", "status", "code", "durationMs", "stale",
-  ],
-  "run.lifecycle.hook.feedback": [
-    "eventId", "epoch", "round", "codeCount", "omittedReasonCount",
-  ],
   "run.descendant.reserved": descendantFields(),
   "run.descendant.started": descendantFields(),
   "run.descendant.rejected": [

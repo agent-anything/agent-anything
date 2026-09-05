@@ -2,7 +2,6 @@ export { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 export {
   createHostRunProjection,
   createHostTerminalRunProjection,
-  projectHostRunLifecycleHooks,
   snapshotHostCancellation,
   type CreateHostRunProjectionInput,
   type CreateHostRunProjectionStoreInput,
@@ -17,7 +16,6 @@ export {
   type HostInteractionSubmissionProjectionUpdate,
   type HostPendingInteractionProjection,
   type HostPlanProjection,
-  type HostRunLifecycleHookProjection,
   type HostRetryEventName,
   type HostRetryEventProjection,
   type HostRetryOwner,

@@ -189,6 +189,47 @@ export function projectHelarcHostCommandReceipt(
     };
   }
 
+  if (receipt.kind === "descendant.resume") {
+    if (receipt.result.status === "rejected") {
+      return {
+        version: receipt.version,
+        commandId: receipt.commandId,
+        runId: receipt.runId,
+        kind: receipt.kind,
+        status: receipt.status,
+        result: {
+          status: receipt.result.status,
+          code: receipt.result.code,
+          relation: receipt.result.relation,
+          child: receipt.result.child,
+        },
+      };
+    }
+    return {
+      version: receipt.version,
+      commandId: receipt.commandId,
+      runId: receipt.runId,
+      kind: receipt.kind,
+      status: receipt.status,
+      result: {
+        status: receipt.result.status,
+        relation: receipt.result.relation,
+        child: receipt.result.child,
+        resume: receipt.result.resume.status === "accepted"
+          ? {
+              status: receipt.result.resume.status,
+              currentRunRevision: receipt.result.resume.currentRunRevision,
+            }
+          : {
+              status: receipt.result.resume.status,
+              code: receipt.result.resume.code,
+              requestId: receipt.result.resume.requestId,
+              currentRunRevision: receipt.result.resume.currentRunRevision,
+            },
+      },
+    };
+  }
+
   if (
     receipt.result.status === "accepted" ||
     receipt.result.status === "already_requested"
@@ -260,7 +301,6 @@ export function projectHelarcRunStatusQueryReceipt(
       runTree: projectRunTree(receipt.projection.runTree),
       activeDelegations: projectActiveDelegations(receipt.projection.activeDelegations),
       continuationTargets: projectContinuationTargets(receipt.projection.continuationTargets),
-      lifecycleHooks: projectRunLifecycleHooks(receipt.projection.lifecycleHooks),
       verification: projectHostVerification(receipt.projection.verification),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
       terminal: receipt.projection.terminal === null
@@ -337,7 +377,6 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       runTree: projectRunTree(run.host.runTree),
       activeDelegations: projectActiveDelegations(run.host.activeDelegations),
       continuationTargets: projectContinuationTargets(run.host.continuationTargets),
-      lifecycleHooks: projectRunLifecycleHooks(run.host.lifecycleHooks),
       verification: projectHostVerification(run.host.verification),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
@@ -451,23 +490,6 @@ function projectInstructionBinding(
   };
 }
 
-function projectRunLifecycleHooks(
-  hooks: NonNullable<MainSnapshot["run"]>["host"]["lifecycleHooks"],
-): HelarcRunSnapshot["host"]["lifecycleHooks"] {
-  return {
-    stopEventSequence: hooks.stopEventSequence,
-    stopFailureEventSequence: hooks.stopFailureEventSequence,
-    feedbackEpoch: hooks.feedbackEpoch,
-    consecutiveBlockingRounds: hooks.consecutiveBlockingRounds,
-    latestEventId: hooks.latestEventId,
-    latestInvocations: hooks.latestInvocations.map((invocation) => ({ ...invocation })),
-    latestFeedback: hooks.latestFeedback === null
-      ? null
-      : { ...hooks.latestFeedback, codes: [...hooks.latestFeedback.codes] },
-    limitations: [...hooks.limitations],
-  };
-}
-
 function projectRunTree(
   tree: NonNullable<MainSnapshot["run"]>["host"]["runTree"],
 ): HelarcRunSnapshot["host"]["runTree"] {
@@ -514,6 +536,18 @@ function projectActiveDelegations(
     relationKind: delegation.relationKind,
     childRunRevision: delegation.childRunRevision,
     childStatus: delegation.childStatus,
+    suspension: delegation.suspension === null
+      ? null
+      : {
+          id: delegation.suspension.ref.id,
+          revision: delegation.suspension.ref.revision,
+          code: delegation.suspension.code,
+          reason: delegation.suspension.reason,
+          runRevision: delegation.suspension.runRevision,
+          suspendedAt: delegation.suspension.suspendedAt,
+        },
+    admittedControls: [...delegation.admittedControls],
+    resultTransfer: delegation.resultTransfer,
     steerable: true,
   }));
 }

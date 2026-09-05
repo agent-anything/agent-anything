@@ -227,16 +227,26 @@ export function evaluateSourceOwnershipRules({
     }
 
     if (
+      path.startsWith("harness/agent-core/runtime/src/") &&
+      /\b(?:AgentHook|RunLifecycleHook|invokeStopLifecycleHooks)\b|@agent-anything\/agent-hooks/.test(text)
+    ) {
+      reject(
+        "runtime_agent_hook_ownership",
+        "Agent Core Runtime must remain independent of optional Agent Hook composition.",
+      );
+    }
+
+    if (
       path === "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
       (
-        !/const\s+merged\s*=\s*await\s+invokeStopLifecycleHooks\s*\(/.test(text) ||
-        !/if\s*\(merged\.kind\s*===\s*["']block["']\)/.test(text) ||
-        !/kind:\s*["']completion_acceptance["']/.test(text)
+        !/decision\.decision\.kind\s*===\s*["']continue_with_feedback["']/.test(text) ||
+        !/markInitialDelivered\s*\(\)/.test(text) ||
+        !/kind:\s*["']descendant_result_transfer["']/.test(text)
       )
     ) {
       reject(
-        "runner_stop_lifecycle_required",
-        "RunExecution must emit Stop, execute lifecycle Hooks, honor blocking feedback, and record completion acceptance before success settlement.",
+        "runner_progression_contract_required",
+        "RunExecution must preserve current continuation and descendant progression semantics.",
       );
     }
 

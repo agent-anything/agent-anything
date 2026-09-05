@@ -1,5 +1,5 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import type { StopLifecycleEvent } from "@agent-anything/agent-runtime/lifecycle";
+import type { AgentStopEvent } from "@agent-anything/agent-hooks/events";
 import type {
   ModelInputComposition,
   ModelJsonValue,
@@ -27,7 +27,7 @@ describe("HelarcTaskFulfillmentHook", () => {
     });
     const hook = new HelarcTaskFulfillmentHook(provider, () => NOW);
 
-    await expect(hook.handle(createEvent(), context())).resolves.toEqual({ kind: "allow" });
+    await expect(hook.handle(createEvent(), context())).resolves.toEqual({ disposition: "allow" });
     expect(hook.getAssessments()).toMatchObject([
       { status: "fulfilled", feedback: null, findings: [] },
     ]);
@@ -58,12 +58,12 @@ describe("HelarcTaskFulfillmentHook", () => {
     const decision = await hook.handle(createEvent(), context());
 
     expect(decision).toMatchObject({
-      kind: "block",
+      disposition: "continue",
       code: "task_fulfillment_incomplete",
     });
-    if (decision.kind === "block") {
-      expect(decision.reason).toContain("does not yet fulfill the original task");
-      expect(decision.reason).toContain("No settled command result");
+    if (decision.disposition === "continue") {
+      expect(decision.message).toContain("does not yet fulfill the original task");
+      expect(decision.message).toContain("No settled command result");
     }
     expect(hook.getAssessments()).toMatchObject([{
       status: "incomplete",
@@ -175,16 +175,19 @@ class StructuredProvider implements Provider {
   }
 }
 
-function createEvent(): StopLifecycleEvent<{ readonly summary: string }> {
+function createEvent(): AgentStopEvent<{ readonly summary: string }> {
+  const run = Object.freeze({ id: "run-1" });
   return Object.freeze({
     ref: Object.freeze({
-      run: Object.freeze({ id: "run-1" }),
+      run,
       id: "run-1:stop:1",
       sequence: 1,
       revision: "1",
     }),
-    name: "Stop" as const,
-    run: Object.freeze({ id: "run-1" }),
+    point: "Stop" as const,
+    run,
+    runKind: "root" as const,
+    agent: Object.freeze({ id: "helarc", revision: "1" }),
     task: Object.freeze({
       id: "task-1",
       kind: HELARC_TASK_KIND,
@@ -192,23 +195,13 @@ function createEvent(): StopLifecycleEvent<{ readonly summary: string }> {
       createdAt: NOW,
       metadata: Object.freeze({}),
     }),
-    basis: Object.freeze({
-      runRevision: 10,
-      steeringEpoch: 0,
-      controllerTurn: Object.freeze({
-        run: Object.freeze({ id: "run-1" }),
-        id: "turn-1",
-        sequence: 1,
-      }),
-      completionProposal: Object.freeze({ id: "proposal-1", revision: "1" }),
-      activeAgent: Object.freeze({ id: "helarc", revision: "1" }),
-      instructionBinding: Object.freeze({ id: "instruction-binding-1", revision: "1" }),
-      verificationSnapshot: Object.freeze({ runId: "run-1", revision: 2 }),
-      completionGate: Object.freeze({ id: "completion-gate-1", revision: "1" }),
-      planRevision: null,
-      pendingRevision: "none",
+    controllerRequestId: "controller-request-1",
+    iteration: 1,
+    candidate: Object.freeze({
+      ref: Object.freeze({ id: "proposal-1", revision: "1" }),
+      kind: "complete" as const,
+      output: Object.freeze({ summary: "Here is how to create the application." }),
     }),
-    output: Object.freeze({ summary: "Here is how to create the application." }),
     interaction: Object.freeze({
       id: "interaction-1",
       revision: "1",
@@ -216,6 +209,12 @@ function createEvent(): StopLifecycleEvent<{ readonly summary: string }> {
       unsettledCalls: Object.freeze([]),
       settledCallCount: 0,
     }),
+    plan: null,
+    verification: Object.freeze({
+      snapshot: Object.freeze({ runId: "run-1", revision: 2 }),
+      gate: Object.freeze({ id: "completion-gate-1", revision: "1" }),
+    }),
+    pending: Object.freeze([]),
     emittedAt: NOW,
   });
 }

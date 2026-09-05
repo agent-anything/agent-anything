@@ -230,6 +230,23 @@ export function createHelarcDescendantAgentContribution(
           return partial === undefined ? null : partial.slice(0, 16_000);
         },
       }),
+      progressProjection: Object.freeze({
+        project(
+          { progress }: Parameters<RunnerDelegationComposition["progressProjection"]["project"]>[0],
+        ) {
+          return Object.freeze({
+            status: "succeeded" as const,
+            output: Object.freeze({
+              agent_id: progress.childRun.id,
+              status: "suspended",
+              child_run_revision: progress.childRunRevision,
+              summary: progress.suspension.reason,
+              admitted_controls: progress.admittedControls,
+            }),
+            failure: null,
+          });
+        },
+      }),
       resultProjection: Object.freeze({
         project: projectDescendantResult,
       }),

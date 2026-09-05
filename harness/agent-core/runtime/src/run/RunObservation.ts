@@ -3,6 +3,7 @@ import type { OperationFailure, OperationResult } from "@agent-anything/operatio
 import type { ToolCallAttempt } from "@agent-anything/tools/invocation";
 import type { FailedToolResult, ToolResult } from "@agent-anything/tools/result";
 import type { PlanUpdateOutcome } from "../plan/PlanObservation.js";
+import type { DelegationResult, DescendantProgress } from "../delegation/index.js";
 
 export interface RunObservationLowerRef {
   readonly owner: string;
@@ -25,7 +26,9 @@ export type RunObservationPayload =
     }
   | { readonly kind: "model_call_rejected"; readonly code: string; readonly message: string }
   | { readonly kind: "interaction"; readonly owner: string; readonly status: "resolved" | "expired" | "cancelled" | "invalidated" | "failed"; readonly contentDigest: string | null; readonly value: unknown; readonly toolResult: ToolResult | null }
-  | { readonly kind: "descendant_run"; readonly childRunId: string | null; readonly status: "succeeded" | "partial" | "failed" | "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect"; readonly output: unknown; readonly failure: OperationFailure | null; readonly toolResult: ToolResult };
+  | { readonly kind: "descendant_run"; readonly childRunId: string | null; readonly status: "succeeded" | "partial" | "failed" | "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect"; readonly output: unknown; readonly failure: OperationFailure | null; readonly toolResult: ToolResult }
+  | { readonly kind: "descendant_progress"; readonly progress: DescendantProgress; readonly output: unknown; readonly toolResult: ToolResult | null }
+  | { readonly kind: "descendant_result_transfer"; readonly childRunId: string; readonly result: DelegationResult | null; readonly status: "succeeded" | "partial" | "failed" | "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect"; readonly output: unknown; readonly failure: OperationFailure | null };
 
 export interface RunObservation {
   readonly id: string;

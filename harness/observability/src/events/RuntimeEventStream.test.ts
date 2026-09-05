@@ -4,7 +4,6 @@ import { RUNTIME_EVENT_SCHEMA_VERSION } from "./RuntimeEvent.js";
 import type {
   ContextProjectionCompletedRuntimeEventPayload,
   ControllerFinishedRuntimeEventPayload,
-  RunLifecycleHookCompletedRuntimeEventPayload,
 } from "./RuntimeEventPayload.js";
 import { RuntimeEventStream } from "./RuntimeEventStream.js";
 
@@ -118,23 +117,6 @@ describe("RuntimeEventStream", () => {
     });
   });
 
-  it("publishes the bounded lifecycle Hook invocation Run Item kind", () => {
-    const events: RuntimeEvent[] = [];
-    const stream = createStream([{ publish: (event) => events.push(event) }]);
-
-    stream.emit("run.item.appended", {
-      itemId: "run-1:run-item:1",
-      itemKind: "lifecycle_hook_invocation",
-      itemSequence: 1,
-    });
-
-    expect(events[0]?.payload).toEqual({
-      itemId: "run-1:run-item:1",
-      itemKind: "lifecycle_hook_invocation",
-      itemSequence: 1,
-    });
-  });
-
   it("publishes only bounded Controller Tool exposure lineage and counts", () => {
     const events: RuntimeEvent[] = [];
     const stream = createStream([{ publish: (event) => events.push(event) }]);
@@ -170,34 +152,6 @@ describe("RuntimeEventStream", () => {
       omissionReasons: ["resource_exhausted"],
     });
     expect(events[0]?.payload).not.toHaveProperty("omittedDescriptors");
-  });
-
-  it("allowlists bounded lifecycle Hook completion fields without private output", () => {
-    const events: RuntimeEvent[] = [];
-    const stream = createStream([{ publish: (event) => events.push(event) }]);
-
-    stream.emit("run.lifecycle.hook.completed", {
-      eventId: "run-1:lifecycle:Stop:2",
-      hookId: "helarc.task-fulfillment",
-      hookRevision: "1",
-      status: "block",
-      code: "task_incomplete",
-      durationMs: 12,
-      stale: false,
-      rawOutput: { private: true },
-    } as RunLifecycleHookCompletedRuntimeEventPayload);
-
-    expect(events[0]?.payload).toEqual({
-      eventId: "run-1:lifecycle:Stop:2",
-      hookId: "helarc.task-fulfillment",
-      hookRevision: "1",
-      status: "block",
-      code: "task_incomplete",
-      durationMs: 12,
-      stale: false,
-    });
-    expect(Object.isFrozen(events[0]?.payload)).toBe(true);
-    expect(events[0]?.payload).not.toHaveProperty("rawOutput");
   });
 
   it("snapshots a payload-free Context transition trace record", () => {

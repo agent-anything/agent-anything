@@ -10,6 +10,7 @@ packages:
   - "harness/evaluation"
   - "harness/verification"
   - "harness/agent-core/runtime"
+  - "harness/agent-hooks"
   - "harness/tools"
   - "harness/host"
   - "harness/safety/*"

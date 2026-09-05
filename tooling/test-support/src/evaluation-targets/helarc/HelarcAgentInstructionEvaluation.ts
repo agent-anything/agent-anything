@@ -461,7 +461,7 @@ function trialMetrics(
       item.payload.kind === "state_transition" && item.payload.transition === "plan"
     ).length,
     correctionEvents: material.retryCount + items.filter((item) =>
-      item.payload.kind === "lifecycle_hook_feedback"
+      item.payload.kind === "controller_feedback"
     ).length,
     delegationCalls: actionNames.filter((name) => name === "Agent").length,
     verificationObserved: verificationObserved,

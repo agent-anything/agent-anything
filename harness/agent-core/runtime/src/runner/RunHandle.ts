@@ -17,15 +17,12 @@ import type {
 } from "../run/index.js";
 import type { RunSuspension } from "../run/index.js";
 import type { PlanProjection } from "../plan/index.js";
-import {
-  createInitialRunLifecycleHookState,
-  projectRunLifecycleHooks,
-  type RunLifecycleHookProjection,
-} from "../hooks/index.js";
 import type { RetryEvent } from "../retry/index.js";
 import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 import type {
+  DelegationResumeReceipt,
+  DelegationResumeRoute,
   DelegationSteeringReceipt,
   DelegationSteeringRoute,
 } from "../delegation/index.js";
@@ -54,6 +51,9 @@ export interface ActiveDelegationProjection {
   readonly child: Readonly<{ readonly id: string }>;
   readonly childRunRevision: number;
   readonly childStatus: RunLifecycleStatus;
+  readonly suspension: RunSuspension | null;
+  readonly admittedControls: readonly ("steer" | "resume" | "cancel")[];
+  readonly resultTransfer: "pending";
   readonly steerable: true;
 }
 
@@ -66,7 +66,6 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
   readonly suspension: RunSuspension | null;
-  readonly lifecycleHooks: RunLifecycleHookProjection;
   readonly retry: RunRetryProjection | null;
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -88,6 +87,7 @@ export interface RunHandle<TOutput = unknown> {
   resume(input: RunResumeRequestInput): RunResumeReceipt;
   steer(input: RunSteeringInput): RunSteeringSubmissionReceipt;
   steerDescendant(input: DelegationSteeringRoute): DelegationSteeringReceipt;
+  resumeDescendant(input: DelegationResumeRoute): DelegationResumeReceipt;
   submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome;
   wait(): Promise<RunResult<TOutput>>;
   getResult(): RunResult<TOutput> | null;
@@ -100,7 +100,6 @@ export interface RunExecutionUpdate<TOutput> {
   readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
   readonly suspension: RunSuspension | null;
-  readonly lifecycleHooks: RunLifecycleHookProjection;
   readonly retry: RunRetryProjection | null;
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -122,6 +121,8 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private resumeImpl: ((input: RunResumeRequestInput) => RunResumeReceipt) | null = null;
   private steerDescendantImpl:
     ((input: DelegationSteeringRoute) => DelegationSteeringReceipt) | null = null;
+  private resumeDescendantImpl:
+    ((input: DelegationResumeRoute) => DelegationResumeReceipt) | null = null;
 
   constructor(
     runId: string,
@@ -140,7 +141,6 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       instructionBinding: null,
       plan: null,
       suspension: null,
-      lifecycleHooks: projectRunLifecycleHooks(createInitialRunLifecycleHookState()),
       retry: null,
       verification: null,
       pendingInteractions: Object.freeze([]),
@@ -182,7 +182,6 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       instructionBinding: update.instructionBinding,
       plan: update.plan,
       suspension: update.suspension,
-      lifecycleHooks: update.lifecycleHooks,
       retry: update.retry,
       verification: update.verification,
       pendingInteractions: update.pendingInteractions,
@@ -308,6 +307,27 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     return this.steerDescendantImpl(input);
   }
 
+  bindDescendantResume(
+    resume: (input: DelegationResumeRoute) => DelegationResumeReceipt,
+  ): void {
+    if (this.resumeDescendantImpl !== null) {
+      throw new TypeError("Descendant resume is already bound.");
+    }
+    this.resumeDescendantImpl = resume;
+  }
+
+  resumeDescendant(input: DelegationResumeRoute): DelegationResumeReceipt {
+    if (this.resumeDescendantImpl === null) {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "delegation_route_invalid" as const,
+        relation: null,
+        child: null,
+      });
+    }
+    return this.resumeDescendantImpl(input);
+  }
+
   bindInteractionSubmission(
     submit: (input: InteractionSubmissionInput) => InteractionSubmissionOutcome,
   ): void {
@@ -348,7 +368,6 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         instructionBinding: this.snapshot.instructionBinding,
         plan: this.snapshot.plan,
         suspension: null,
-        lifecycleHooks: this.snapshot.lifecycleHooks,
         retry: this.snapshot.retry,
         verification: this.snapshot.verification,
         pendingInteractions: Object.freeze([]),
@@ -413,19 +432,6 @@ function freezeSnapshot<TOutput>(
               : Object.freeze({ ...snapshot.suspension.source.run }),
           }),
         }),
-    lifecycleHooks: Object.freeze({
-      ...snapshot.lifecycleHooks,
-      latestInvocations: Object.freeze(snapshot.lifecycleHooks.latestInvocations.map(
-        (invocation) => Object.freeze({ ...invocation }),
-      )),
-      latestFeedback: snapshot.lifecycleHooks.latestFeedback === null
-        ? null
-        : Object.freeze({
-            ...snapshot.lifecycleHooks.latestFeedback,
-            codes: Object.freeze([...snapshot.lifecycleHooks.latestFeedback.codes]),
-          }),
-      limitations: Object.freeze([...snapshot.lifecycleHooks.limitations]),
-    }),
     retry: snapshot.retry === null
       ? null
       : Object.freeze({
@@ -440,6 +446,22 @@ function freezeSnapshot<TOutput>(
         relation: Object.freeze({ ...delegation.relation }),
         relationKind: delegation.relationKind,
         child: Object.freeze({ ...delegation.child }),
+        suspension: delegation.suspension === null
+          ? null
+          : Object.freeze({
+              ...delegation.suspension,
+              ref: Object.freeze({
+                ...delegation.suspension.ref,
+                run: Object.freeze({ ...delegation.suspension.ref.run }),
+              }),
+              source: Object.freeze({
+                ...delegation.suspension.source,
+                run: delegation.suspension.source.run === null
+                  ? null
+                  : Object.freeze({ ...delegation.suspension.source.run }),
+              }),
+            }),
+        admittedControls: Object.freeze([...delegation.admittedControls]),
       })
     )),
     continuationTargets: Object.freeze(snapshot.continuationTargets.map((target) =>

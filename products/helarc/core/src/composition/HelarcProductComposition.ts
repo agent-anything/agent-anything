@@ -3,7 +3,10 @@ import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/age
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
-import type { RunLifecycleHookComposition } from "@agent-anything/agent-runtime/hooks";
+import {
+  AgentHookController,
+  type AgentHookExecutionStore,
+} from "@agent-anything/agent-hooks/execution";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { Agent } from "@agent-anything/agent-core/agent";
@@ -116,7 +119,7 @@ export interface HelarcProductComposition {
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
   readonly verification: HelarcVerificationComposition;
-  readonly lifecycleHooks: RunLifecycleHookComposition;
+  readonly agentHooks: AgentHookExecutionStore;
   readonly taskFulfillment: HelarcTaskFulfillmentHook;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
@@ -231,7 +234,7 @@ export async function createHelarcProductComposition(
       },
     }),
   });
-  const providerController = new HelarcTracingController(
+  const tracedController = new HelarcTracingController(
     new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
       buildRequest: (controllerInput, context) =>
@@ -255,6 +258,13 @@ export async function createHelarcProductComposition(
     }),
     controllerTraceByOperationId,
   );
+  const providerController = new AgentHookController<HelarcAgentOutput>({
+    controller: tracedController,
+    composition: taskFulfillment.composition,
+    rootRunId: input.runId,
+    maxConsecutiveContinuations: 2,
+    now,
+  });
   const runMetadata = Object.freeze({
     product: "helarc",
     instructionTarget: input.instructionTarget,
@@ -283,7 +293,7 @@ export async function createHelarcProductComposition(
     interactions,
     delegation: descendant.delegation,
     verification,
-    lifecycleHooks: taskFulfillment.composition,
+    agentHooks: providerController.store,
     taskFulfillment: taskFulfillment.hook,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {

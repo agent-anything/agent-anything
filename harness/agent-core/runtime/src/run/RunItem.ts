@@ -25,11 +25,7 @@ import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolBindingUnavailableReason } from "@agent-anything/tools/selection";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 import type { ModelCallRef, ModelToolResult } from "@agent-anything/model-interaction";
-import type { RunLifecycleEvent } from "../lifecycle/index.js";
-import type {
-  StopHookFeedbackRecord,
-  StopHookInvocationRecord,
-} from "../hooks/index.js";
+import type { ControllerFeedback } from "../controller/index.js";
 
 export interface ControllerToolExposureRecord {
   readonly proofId: string;
@@ -68,7 +64,7 @@ export type RunItemPayload<TOutput = unknown> =
       readonly kind: "controller_turn";
       readonly turn: ControllerTurnRef;
       readonly status: "decided" | "failed" | "interrupted";
-      readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
+      readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | "propose_stop" | null;
       readonly instructionBinding: AgentInstructionBindingRef;
       readonly toolExposure: ControllerToolExposureRecord;
       readonly modelItems: readonly ControllerModelItem[];
@@ -108,13 +104,11 @@ export type RunItemPayload<TOutput = unknown> =
       readonly kind: "verification_feedback";
       readonly verification: VerificationRunnerProjection;
     }
-  | { readonly kind: "lifecycle_event"; readonly event: RunLifecycleEvent<TOutput> }
-  | { readonly kind: "lifecycle_hook_invocation"; readonly invocation: StopHookInvocationRecord }
-  | { readonly kind: "lifecycle_hook_feedback"; readonly feedback: StopHookFeedbackRecord }
+  | { readonly kind: "controller_feedback"; readonly feedback: ControllerFeedback }
   | {
       readonly kind: "completion_acceptance";
       readonly source: RunCauseSourceRef;
-      readonly eventId: string;
+      readonly candidateId: string;
       readonly candidateRevision: string;
       readonly acceptedAt: string;
     }

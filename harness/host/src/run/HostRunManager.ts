@@ -21,6 +21,10 @@ import type {
   Runner,
 } from "@agent-anything/agent-runtime/runner";
 import type {
+  DelegationResumeReceipt,
+  DelegationResumeRoute,
+} from "@agent-anything/agent-runtime/delegation";
+import type {
   RunSteeringAttribution,
   RunSteeringSubmissionReceipt,
 } from "@agent-anything/agent-runtime/run";
@@ -83,6 +87,7 @@ export interface HostActiveRun<TOutput = unknown> {
   subscribe(listener: HostRunProjectionListener): () => void;
   submitInteraction(input: HostInteractionSubmission): InteractionSubmissionOutcome;
   steer(input: HostRunSteeringInput): HostRunSteeringReceipt;
+  resumeDescendant(input: DelegationResumeRoute): DelegationResumeReceipt;
   cancel(input: HostRunCancellationInput): HostRunCancellationReceipt;
   getStatus(): HostRunStatusProjection;
   wait(): Promise<HostRunResult<TOutput>>;
@@ -324,6 +329,17 @@ function startHostRun<TOutput>(
           currentRunRevision: projection.runRevision,
         });
       }
+    },
+    resumeDescendant(candidate: DelegationResumeRoute): DelegationResumeReceipt {
+      if (invocationState !== "active") {
+        return Object.freeze({
+          status: "rejected" as const,
+          code: "delegation_child_settled" as const,
+          relation: candidate?.relation ?? null,
+          child: candidate?.child ?? null,
+        });
+      }
+      return handle.resumeDescendant(candidate);
     },
     cancel(cancellationInput: HostRunCancellationInput): HostRunCancellationReceipt {
       const currentCancellation = store.getProjection().cancellation;

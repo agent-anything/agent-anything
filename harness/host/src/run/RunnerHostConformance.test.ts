@@ -249,9 +249,6 @@ function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/age
       completionGate: {
         maxFeedbackRounds: 2,
       },
-      stopHooks: {
-        maxConsecutiveBlockingRounds: 2,
-      },
     },
     runTreeLimits: {
       maxTotalDescendantRuns: 1,

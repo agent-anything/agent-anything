@@ -19,6 +19,7 @@ export const HELARC_IPC_CHANNELS = {
   getRunStatus: "helarc:get-run-status",
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
+  resumeDescendant: "helarc:resume-descendant",
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
@@ -223,6 +224,20 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       const receipt = input.controller.dispatchHostCommand(
         command,
         "run.steer",
+      );
+      return {
+        receipt: projectHelarcHostCommandReceipt(receipt),
+        snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()),
+      };
+    },
+  );
+
+  ipcMain.handle(
+    HELARC_IPC_CHANNELS.resumeDescendant,
+    (_event, command: unknown) => {
+      const receipt = input.controller.dispatchHostCommand(
+        command,
+        "descendant.resume",
       );
       return {
         receipt: projectHelarcHostCommandReceipt(receipt),

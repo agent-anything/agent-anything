@@ -7,9 +7,7 @@ export type RuntimeRunItemKind =
   | "pending_transition"
   | "cancellation_transition"
   | "verification_feedback"
-  | "lifecycle_event"
-  | "lifecycle_hook_invocation"
-  | "lifecycle_hook_feedback"
+  | "controller_feedback"
   | "completion_acceptance"
   | "suspension_transition"
   | "settlement_cause"
@@ -31,30 +29,6 @@ export interface RunItemAppendedRuntimeEventPayload {
   readonly itemSequence: number;
 }
 
-export interface RunLifecycleEventEmittedRuntimeEventPayload {
-  readonly eventId: string;
-  readonly eventName: "Stop" | "StopFailure";
-  readonly sequence: number;
-  readonly eventRevision: string;
-}
-
-export interface RunLifecycleHookCompletedRuntimeEventPayload {
-  readonly eventId: string;
-  readonly hookId: string;
-  readonly hookRevision: string;
-  readonly status: "allow" | "block" | "non_blocking_error";
-  readonly code: string | null;
-  readonly durationMs: number;
-  readonly stale: boolean;
-}
-
-export interface RunLifecycleHookFeedbackRuntimeEventPayload {
-  readonly eventId: string;
-  readonly epoch: number;
-  readonly round: number;
-  readonly codeCount: number;
-  readonly omittedReasonCount: number;
-}
 
 export type RuntimeDescendantRequestedDispatchForm =
   | "single"
@@ -222,7 +196,7 @@ export interface ControllerFinishedRuntimeEventPayload {
   readonly iteration: number;
   readonly status: "decided" | "failed" | "interrupted";
   readonly code: string | null;
-  readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
+  readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | "propose_stop" | null;
 }
 
 export interface ToolInputRejectedRuntimeEventPayload {
@@ -316,9 +290,6 @@ export interface VerificationGateEvaluatedRuntimeEventPayload {
 export interface RuntimeEventPayloadMap {
   readonly "run.started": RunStartedRuntimeEventPayload;
   readonly "run.item.appended": RunItemAppendedRuntimeEventPayload;
-  readonly "run.lifecycle.emitted": RunLifecycleEventEmittedRuntimeEventPayload;
-  readonly "run.lifecycle.hook.completed": RunLifecycleHookCompletedRuntimeEventPayload;
-  readonly "run.lifecycle.hook.feedback": RunLifecycleHookFeedbackRuntimeEventPayload;
   readonly "run.descendant.reserved": RunDescendantReservedRuntimeEventPayload;
   readonly "run.descendant.started": RunDescendantStartedRuntimeEventPayload;
   readonly "run.descendant.rejected": RunDescendantRejectedRuntimeEventPayload;

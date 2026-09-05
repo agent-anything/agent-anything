@@ -72,8 +72,8 @@ import {
   runDelegationTransferDeterministicEvaluation,
 } from "../../../delegation-transfer-evaluation/DelegationTransferEvaluation.js";
 import {
-  runRunLifecycleHookDeterministicEvaluation,
-} from "../../../run-lifecycle-hook-evaluation/RunLifecycleHookEvaluation.js";
+  runAgentHookDeterministicEvaluation,
+} from "../../../agent-hook-evaluation/AgentHookEvaluation.js";
 import {
   HELARC_EVALUATION_TIME,
   createHelarcEvaluationCorpus,
@@ -765,7 +765,7 @@ function defaultCaseRunners(): Readonly<Record<
 async function runCurrentTurnAuthorityProbe(): Promise<HelarcOperationalConformanceFacts> {
   const report = await runCurrentTurnToolExposureDeterministicEvaluation();
   const passed = report.workflowOnlyToolExcluded && report.permissionIndependent &&
-    report.lifecycleHookIndependent && report.recoveryPreservedSelection &&
+    report.agentHookIndependent && report.recoveryPreservedSelection &&
     report.recoveryChangedContent && report.systemTarget.safetyGate === "passed" &&
     report.systemTarget.traceIssueCount === 0;
   return facts("current_turn_authority", passed, {
@@ -782,16 +782,17 @@ async function runCurrentTurnAuthorityProbe(): Promise<HelarcOperationalConforma
 }
 
 async function runBoundedRepetitionProbe(): Promise<HelarcOperationalConformanceFacts> {
-  const report = runRunLifecycleHookDeterministicEvaluation();
-  const passed = report.blockingPrecedence &&
+  const report = await runAgentHookDeterministicEvaluation();
+  const passed = report.continuationPrecedence &&
     report.deterministicRegistrationOrder &&
-    report.nonBlockingErrorPreserved &&
-    report.matchingHookLimit === 32;
+    report.backgroundNonAuthority &&
+    report.backgroundFailureRecorded &&
+    report.matchingHookCount === 32;
   return facts("bounded_repetition", passed, {
     terminal: { status: "succeeded", code: null },
     actionsAndOperations: {
-      lifecycleHookActivityItems: report.exactActivityKinds.length,
-      matchingHookLimit: report.matchingHookLimit,
+      agentHookActivityKinds: report.exactActivityKinds.length,
+      matchingHookCount: report.matchingHookCount,
       maximumMergedFeedbackCharacters: report.maximumMergedFeedbackCharacters,
     },
     gates: { unbounded_progress: passed, invalid_settlement: passed },
