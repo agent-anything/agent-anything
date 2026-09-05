@@ -7,6 +7,11 @@ import type {
   ContextProjectionEstimationInput,
 } from "@agent-anything/context/projection";
 import type { ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
+import { createHash } from "node:crypto";
+import {
+  HELARC_DEFAULT_PROTOCOL_INSTRUCTIONS,
+  type HelarcInstructionSectionSetting,
+} from "../instructions/HelarcProtocolInstructions.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import {
   buildHelarcVerificationText,
@@ -56,17 +61,20 @@ export interface HelarcPromptAssemblyResult {
 
 export function buildHelarcBasePromptAssembly(
   input: ControllerPreProjectionInput,
+  protocolInstructions: readonly HelarcInstructionSectionSetting[] = HELARC_DEFAULT_PROTOCOL_INSTRUCTIONS,
 ): HelarcPromptAssemblyResult {
-  return assemble(input, HELARC_CONTEXT_SECTION_HEADER, null);
+  return assemble(input, HELARC_CONTEXT_SECTION_HEADER, null, protocolInstructions);
 }
 
 export function buildHelarcPromptAssembly(input: {
   readonly controllerInput: ControllerInput;
+  readonly protocolInstructions?: readonly HelarcInstructionSectionSetting[];
 }): HelarcPromptAssemblyResult {
   return assemble(
     input.controllerInput,
     renderHelarcContextProjection(input.controllerInput.context),
     input.controllerInput.context,
+    input.protocolInstructions ?? HELARC_DEFAULT_PROTOCOL_INSTRUCTIONS,
   );
 }
 
@@ -84,11 +92,12 @@ function assemble(
   input: ControllerPreProjectionInput | ControllerInput,
   contextContent: string,
   context: ContextProjection | null,
+  protocolInstructions: readonly HelarcInstructionSectionSetting[],
 ): HelarcPromptAssemblyResult {
   const exposedToolNames = Object.freeze(input.toolExposure.catalog.tools.map((tool) => tool.name));
   const promptSections = Object.freeze([
     ...buildAgentInstructionSections(input),
-    ...buildSystemPromptSections(input.toolExposure),
+    ...buildSystemPromptSections(protocolInstructions),
     promptSection("task", "user", `Task:\n${readHelarcTaskPrompt(input)}`),
     promptSection("run_input_items", "user", `Run input items:\n${JSON.stringify(input.inputItems)}`),
   ]);
@@ -123,36 +132,21 @@ function assemble(
 }
 
 function buildSystemPromptSections(
-  _toolExposure: ControllerInput["toolExposure"],
+  entries: readonly HelarcInstructionSectionSetting[],
 ): readonly HelarcPromptSection[] {
-  return Object.freeze([
-    promptSection(
-      "native_tool_protocol",
-      "instruction",
-      [
-        "Use only callable definitions supplied with the current model request.",
-        "Use update_plan when an explicit plan helps the work; simple tasks may proceed without a plan.",
-        "Use stop as the only call when the task cannot be completed safely or required information is unavailable.",
-        "Return a normal assistant response with no calls only when the task is complete.",
-        "Assistant text accompanying calls describes progress and does not complete the Run.",
-      ].join("\n"),
-    ),
-    promptSection(
-      "permission_safety",
-      "instruction",
-      "Use only the active Tool catalog. Permission, approval, policy, and sandbox decisions are enforced by the host from the exact requested action.",
-    ),
-    promptSection(
-      "stop_protocol",
-      "instruction",
-      "Use the stop callable with one bounded reason; refusal may also stop without a callable.",
-    ),
-    promptSection(
-      "safe_output_boundary",
-      "instruction",
-      "Never include workspace root paths, credentials, approval decisions, original content hashes, or patch ids.",
-    ),
-  ]);
+  return Object.freeze(entries
+    .filter(({ enabled, content }) => enabled && content.trim().length > 0)
+    .map(({ id, content }) => {
+      const revision = `sha256:${createHash("sha256").update(content, "utf8").digest("hex")}`;
+      return Object.freeze({
+        id,
+        source: Object.freeze({ owner: "helarc", kind: "product_protocol", id: `helarc.protocol-instructions.${id}`, revision }),
+        kind: "product_protocol" as const,
+        role: "instruction" as const,
+        necessity: "mandatory" as const,
+        content,
+      });
+    }));
 }
 
 function interactionHistorySections(

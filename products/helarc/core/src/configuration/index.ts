@@ -1,3 +1,9 @@
+export {
+  createDefaultHelarcInstructionSettings,
+  snapshotHelarcInstructionSettings,
+  type HelarcInstructionSettings,
+} from "../instructions/HelarcInstructionSettings.js";
+export type { HelarcInstructionSectionSetting } from "../instructions/HelarcProtocolInstructions.js";
 export type {
   CreateHelarcProviderProfileInput,
   CreateHelarcProviderProfileResult,

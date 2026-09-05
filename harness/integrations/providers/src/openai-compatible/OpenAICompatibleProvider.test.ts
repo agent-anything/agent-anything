@@ -19,6 +19,18 @@ import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 describe("OpenAICompatibleProvider", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("omits the system message for empty instructions while retaining native Tools", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const provider = new OpenAICompatibleProvider(config(), async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return okResponse({ id: "reply", choices: [{ index: 0, message: { role: "assistant", content: "Done." }, finish_reason: "stop" }] });
+    });
+    const result = await provider.send(createNativeProviderRequest(provider, { instructions: { content: [] } }), context());
+    expect(result.kind).toBe("succeeded");
+    expect((bodies[0]?.messages as Array<{ role: string }>).every(({ role }) => role !== "system")).toBe(true);
+    expect(bodies[0]?.tools).toHaveLength(2);
+  });
+
   it("sends an OpenAI-compatible chat completions request", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
     const provider = new OpenAICompatibleProvider({

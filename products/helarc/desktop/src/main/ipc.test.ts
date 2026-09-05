@@ -1,5 +1,7 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDefaultHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 import {
   HELARC_PRODUCT_COMMAND_VERSION,
 } from "../shared/HelarcDesktopCommand.js";
@@ -33,6 +35,45 @@ describe("Helarc IPC", () => {
     electron.handlers.clear();
     electron.handle.mockClear();
     electron.showOpenDialog.mockReset();
+  });
+
+  it("validates instruction saves, commits storage before activation, and replays one receipt", async () => {
+    const settings = createDefaultHelarcInstructionSettings();
+    const view = { settings, defaults: settings };
+    const gate = deferred<void>();
+    const save = vi.fn(async () => { await gate.promise; return settings; });
+    const configureInstructions = vi.fn(() => view);
+    const controller = controllerDouble(mainSnapshot(), {
+      getInstructionSettings: () => view, configureInstructions,
+    });
+    registerHelarcIpc({ window: windowDouble(), controller,
+      instructionSettingsStore: { save } as unknown as FileHelarcInstructionSettingsStore });
+    expect(requiredHandler(HELARC_IPC_CHANNELS.getInstructionSettings)({})).toEqual(view);
+    const handler = requiredHandler(HELARC_IPC_CHANNELS.saveInstructionSettings);
+    const command = { version: 1, commandId: "instruction-save-1", kind: "instructions.save", payload: { settings } };
+    await expect(handler({}, { ...command, payload: { settings: { ...settings, agent: [] } } })).resolves.toMatchObject({ status: "rejected" });
+    expect(save).not.toHaveBeenCalled();
+    const first = handler({}, command);
+    const replay = handler({}, command);
+    await Promise.resolve();
+    expect(configureInstructions).not.toHaveBeenCalled();
+    gate.resolve();
+    const result = await first;
+    expect(await replay).toBe(result);
+    expect(result).toMatchObject({ status: "handled", result: view });
+    expect(save).toHaveBeenCalledOnce();
+    expect(configureInstructions).toHaveBeenCalledOnce();
+  });
+
+  it("does not activate instruction settings after failed storage", async () => {
+    const configureInstructions = vi.fn();
+    registerHelarcIpc({ window: windowDouble(), controller: controllerDouble(mainSnapshot(), { configureInstructions }),
+      instructionSettingsStore: { save: async () => { throw new Error("disk failure"); } } as unknown as FileHelarcInstructionSettingsStore });
+    await expect(requiredHandler(HELARC_IPC_CHANNELS.saveInstructionSettings)({}, {
+      version: 1, commandId: "instructions-save-failed", kind: "instructions.save",
+      payload: { settings: createDefaultHelarcInstructionSettings() },
+    })).resolves.toMatchObject({ status: "rejected", code: "helarc_product_command_failed" });
+    expect(configureInstructions).not.toHaveBeenCalled();
   });
 
   it("revalidates Product envelopes and replays an exact asynchronous start once", async () => {

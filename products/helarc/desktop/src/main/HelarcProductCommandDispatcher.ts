@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { snapshotHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import {
   HELARC_PRODUCT_COMMAND_RECEIPT_LIMIT,
   HELARC_PRODUCT_COMMAND_VERSION,
@@ -113,6 +114,13 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
   assertProductCommandKind(candidate.kind, "Helarc Product command kind");
 
   switch (candidate.kind) {
+    case "instructions.save": {
+      assertRecord(candidate.payload, "Instructions save payload");
+      assertExactKeys(candidate.payload, ["settings"], "Instructions save payload");
+      return envelope(commandId, candidate.kind, {
+        settings: snapshotHelarcInstructionSettings(candidate.payload.settings),
+      });
+    }
     case "workspace.choose":
       return envelope(commandId, candidate.kind, snapshotEmptyPayload(candidate.payload));
     case "workspace.select":
@@ -150,6 +158,8 @@ function invokeHandler(
 ): Promise<HelarcProductCommandResultMap[HelarcProductCommandKind]>
   | HelarcProductCommandResultMap[HelarcProductCommandKind] {
   switch (command.kind) {
+    case "instructions.save":
+      return handlers[command.kind](command.payload);
     case "workspace.choose":
       return handlers[command.kind](command.payload);
     case "workspace.select":
@@ -369,6 +379,7 @@ const PRODUCT_COMMAND_KINDS = [
   "workspace.choose",
   "workspace.select",
   "provider.save",
+  "instructions.save",
   "run.start",
   "thread.open",
 ] as const satisfies readonly HelarcProductCommandKind[];

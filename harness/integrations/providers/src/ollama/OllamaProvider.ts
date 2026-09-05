@@ -393,7 +393,7 @@ function encodeOllamaRequest(
   return JSON.stringify({
     model: config.model,
     prompt: [
-      `system: ${renderInstructions(instructions)}`,
+      ...(instructions.content.length > 0 ? [`system: ${renderInstructions(instructions)}`] : []),
       ...messages.map((message) => `${message.role}: ${renderGenerationText(message)}`),
     ].join("\n\n"),
     stream: false,
@@ -416,7 +416,7 @@ function encodeOllamaChatMessages(
   instructions: ModelInstructions,
   messages: readonly ModelMessage[],
 ): readonly unknown[] {
-  const encoded: unknown[] = [{
+  const encoded: unknown[] = instructions.content.length === 0 ? [] : [{
     role: "system",
     content: renderInstructions(instructions),
   }];

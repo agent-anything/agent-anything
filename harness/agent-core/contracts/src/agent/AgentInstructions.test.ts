@@ -6,6 +6,17 @@ import {
 } from "./AgentInstructions.js";
 
 describe("AgentInstructions", () => {
+  it("represents no instructions without a placeholder and retains verifiable identity", () => {
+    const instructions = createAgentInstructions({
+      id: "empty.instructions",
+      release: { id: "empty.release", revision: "1" },
+      model: { providerId: "test-provider", modelId: "model-1" },
+      resolverRevision: "1",
+      blocks: [],
+    });
+    expect(instructions.blocks).toEqual([]);
+    expect(snapshotAgentInstructions(instructions)).toEqual(instructions);
+  });
   it("creates one deeply immutable canonical snapshot", () => {
     const instructions = exampleInstructions();
 

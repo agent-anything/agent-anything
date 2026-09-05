@@ -4,6 +4,11 @@ import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
 import {
+  createDefaultHelarcInstructionSettings,
+  snapshotHelarcInstructionSettings,
+  type HelarcInstructionSettings,
+} from "../instructions/index.js";
+import {
   AgentHookController,
   type AgentHookExecutionStore,
 } from "@agent-anything/agent-hooks/execution";
@@ -101,6 +106,7 @@ export interface CreateHelarcProductCompositionInput {
   readonly providerProfile: HelarcProviderProfile;
   readonly qualificationCatalog?: HelarcModelQualificationCatalog;
   readonly instructionTarget: HelarcMainInstructionTarget;
+  readonly instructionSettings?: HelarcInstructionSettings;
   readonly codeSource: CodeSourcePort;
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution;
@@ -138,6 +144,8 @@ export interface HelarcProductComposition {
 export async function createHelarcProductComposition(
   input: CreateHelarcProductCompositionInput,
 ): Promise<HelarcProductComposition> {
+  const instructionSettings = input.instructionSettings === undefined
+    ? undefined : snapshotHelarcInstructionSettings(input.instructionSettings);
   const now = input.now ?? (() => new Date().toISOString());
   const admittedAt = now();
   const providerId = input.provider.descriptor.id;
@@ -146,11 +154,12 @@ export async function createHelarcProductComposition(
     throw new TypeError("Helarc Provider descriptor and Model Input Accounting identities differ.");
   }
   const agent = createHelarcAgent({
+    instructionSettings,
     target: input.instructionTarget,
     providerId,
     modelId,
   });
-  const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId });
+  const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId, instructionSettings });
   const clarification = createHelarcClarificationContribution(admittedAt);
   const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt);
   const verification = await createHelarcVerificationComposition({
@@ -161,7 +170,11 @@ export async function createHelarcProductComposition(
     admittedAt,
     now,
   });
-  const taskFulfillment = createHelarcTaskFulfillmentHookComposition(input.provider, now);
+  const taskFulfillment = createHelarcTaskFulfillmentHookComposition(
+    input.provider,
+    (instructionSettings ?? createDefaultHelarcInstructionSettings()).stop,
+    now,
+  );
   const actions = createHelarcActionComposition({
     admittedAt,
     file: input.fileActions,
@@ -169,6 +182,7 @@ export async function createHelarcProductComposition(
     semanticTools: Object.freeze([clarification.tool, ...descendant.tools]),
   });
   const controllerProtocol = createHelarcBaselineControllerProtocolComposition({
+    instructionSettings,
     providerId,
     modelId,
     toolSelectionRevision: actions.toolSelection.revision,

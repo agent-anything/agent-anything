@@ -14,6 +14,7 @@ import { FileHelarcThreadStore } from "./thread/index.js";
 import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
+import { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
@@ -38,6 +39,7 @@ async function createWindow(): Promise<void> {
     join(currentDir, "../preload/preload.cjs"),
   ));
   const userDataPath = app.getPath("userData");
+  const instructionSettingsStore = new FileHelarcInstructionSettingsStore(join(userDataPath, "instruction-settings.json"));
   const providerCredentialStore = createElectronProviderCredentialStore(userDataPath);
   const providerProfileStore = new FileHelarcProviderProfileStore(
     join(userDataPath, "provider-profile.json"),
@@ -64,6 +66,7 @@ async function createWindow(): Promise<void> {
     contextManifestStore.listManifests(),
   ]);
   const controller = new HelarcMainController({
+    instructionSettings: await instructionSettingsStore.load(),
     provider: providerConfig.ok ? createHelarcProvider(providerConfig.config) : null,
     providerConfigError: providerConfig.ok ? null : providerConfig.error,
     providerProfile: providerConfig.ok ? providerConfig.profile : null,
@@ -75,6 +78,7 @@ async function createWindow(): Promise<void> {
     runTranscriptPort: runTranscriptStore,
   });
   registerHelarcIpc({
+    instructionSettingsStore,
     window,
     controller,
     workspaceProfileStore,

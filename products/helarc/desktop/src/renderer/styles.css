@@ -69,6 +69,59 @@ form {
   border-bottom: 1px solid #17232b;
 }
 
+.app-shell[hidden] {
+  display: none;
+}
+
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.settings-entry {
+  width: 34px;
+  padding: 0;
+}
+
+.settings-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  background: #ffffff;
+}
+
+.settings-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 28px;
+  border-bottom: 1px solid #d8ddda;
+}
+
+.settings-close {
+  width: 34px;
+  padding: 0;
+}
+
+.settings-page-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 28px 32px;
+}
+
+.settings-page-body .settings-content {
+  max-width: 960px;
+  margin-inline: auto;
+  overflow: visible;
+}
+
+.settings-page .settings-panel {
+  max-width: 640px;
+  padding-block: 20px;
+}
+
 .brand-block,
 .brand-block > div,
 .workspace-identity,
@@ -981,6 +1034,34 @@ h2 {
 .settings-panel {
   align-content: start;
 }
+
+.settings-content { min-width: 0; overflow: auto; }
+.settings-tabs { display: flex; gap: 16px; padding: 8px 0; border-bottom: 1px solid #d7deda; }
+.settings-tabs button { padding: 6px 0; background: none; border: 0; border-bottom: 2px solid transparent; color: #59666f; }
+.settings-tabs button[aria-selected="true"] { color: #185c49; border-bottom-color: #287760; }
+.instruction-settings { display: grid; gap: 20px; padding: 12px 0; min-width: 0; }
+.instruction-settings section { min-width: 0; }
+.instruction-toolbar, .instruction-group-heading, .instruction-section-heading, .instruction-section-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.instruction-toolbar > span { margin-right: auto; color: #59666f; font-size: 12px; }
+.instruction-toolbar { position: sticky; top: 0; z-index: 1; padding: 10px 0; background: #ffffff; border-bottom: 1px solid #d7deda; }
+.instruction-group-heading { justify-content: space-between; margin-bottom: 8px; }
+.instruction-group-heading h3 { font-size: 13px; margin: 0; }
+.instruction-group-heading select { max-width: 100%; }
+.instruction-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.instruction-toggle input { width: 15px; height: 15px; flex-shrink: 0; accent-color: #287760; }
+.instruction-toggle input[role="switch"] { appearance: none; width: 32px; height: 18px; margin: 0; border: 1px solid #78858d; border-radius: 10px; background: #78858d; position: relative; cursor: pointer; }
+.instruction-toggle input[role="switch"]::before { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #ffffff; }
+.instruction-toggle input[role="switch"]:checked { border-color: #287760; background: #287760; }
+.instruction-toggle input[role="switch"]:checked::before { transform: translateX(14px); }
+.instruction-section { border-bottom: 1px solid #d7deda; padding: 12px 0; }
+.instruction-section-heading { justify-content: space-between; margin-bottom: 8px; }
+.instruction-section-heading h4 { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.instruction-section-controls .instruction-toggle span { min-width: 54px; }
+.instruction-preview-target { margin-top: 14px; }
+.instruction-preview-target h4 { margin: 0 0 8px; font-size: 12px; }
+.instruction-settings textarea { display: block; width: 100%; min-width: 0; resize: vertical; padding: 10px; border: 1px solid #cbd2ce; border-radius: 4px; color: #26343e; background: #f8faf8; font: 12px/1.5 monospace; }
+.instruction-settings textarea[readonly] { background: #f2f5f3; }
+.instruction-settings .primary-button { display: inline-flex; align-items: center; gap: 6px; }
 
 .settings-panel label,
 .settings-status,

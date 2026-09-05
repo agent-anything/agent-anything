@@ -1005,11 +1005,13 @@ const expectedValueExports = {
     "resolveHelarcModelQualificationApplicability",
   ],
   "@agent-anything/helarc/configuration": [
+    "createDefaultHelarcInstructionSettings",
     "createHelarcProviderProfile",
     "createHelarcWorkspaceProfile",
     "resolveHelarcPermissionPreset",
     "selectHelarcProviderProfile",
     "selectHelarcWorkspaceProfile",
+    "snapshotHelarcInstructionSettings",
   ],
   "@agent-anything/helarc/work-context": [
     "applyHelarcRunProjectionCommit",

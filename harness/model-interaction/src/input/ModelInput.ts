@@ -284,8 +284,8 @@ function snapshotSourceList(
   input: readonly ModelInputSourceRef[],
   path: string,
 ): readonly ModelInputSourceRef[] {
-  if (!Array.isArray(input) || input.length === 0) {
-    throw new TypeError(`${path} must be a non-empty array.`);
+  if (!Array.isArray(input)) {
+    throw new TypeError(`${path} must be an array.`);
   }
   return Object.freeze(input.map((source, index) => snapshotSource(source, `${path}[${index}]`)));
 }

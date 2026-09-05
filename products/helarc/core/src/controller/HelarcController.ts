@@ -66,7 +66,10 @@ export function buildHelarcProviderRequest(
   );
   const toolGuidanceBinding = protocol.bindRun(input.runId);
   const interaction = createNativeToolTurnInteraction(callableCatalog.definitions);
-  const promptAssembly = buildHelarcPromptAssembly({ controllerInput: input });
+  const promptAssembly = buildHelarcPromptAssembly({
+    controllerInput: input,
+    protocolInstructions: protocol.protocolInstructions,
+  });
   const composition = composeModelInput({
     id: `${input.runId}:model-input:${input.iteration}:${context.attemptNumber}`,
     providerId: context.target.providerId,

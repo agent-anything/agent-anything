@@ -758,6 +758,7 @@ export interface HelarcChooseWorkspaceInput {
 }
 
 export interface HelarcProductCommandResultMap {
+  readonly "instructions.save": import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot;
   readonly "workspace.choose": HelarcMainSnapshot;
   readonly "workspace.select": HelarcMainSnapshot;
   readonly "provider.save": HelarcMainSnapshot;
@@ -1007,6 +1008,11 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
+  getInstructionSettings(): Promise<import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot>;
+  saveInstructionSettings(input: {
+    readonly commandId: string;
+    readonly settings: import("./HelarcInstructionSettings.js").HelarcInstructionSettings;
+  }): Promise<HelarcProductCommandReceipt<"instructions.save">>;
   readonly bridgeVersion: 11;
   readonly productId: "helarc";
   chooseWorkspace(

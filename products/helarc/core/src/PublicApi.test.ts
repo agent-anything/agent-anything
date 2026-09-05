@@ -23,11 +23,13 @@ describe("Helarc public API", () => {
       "createHelarcDelegatedWorkerAgent",
     ]);
     expect(Object.keys(configurationApi).sort()).toEqual([
+      "createDefaultHelarcInstructionSettings",
       "createHelarcProviderProfile",
       "createHelarcWorkspaceProfile",
       "resolveHelarcPermissionPreset",
       "selectHelarcProviderProfile",
       "selectHelarcWorkspaceProfile",
+      "snapshotHelarcInstructionSettings",
     ]);
     expect(Object.keys(workContextApi).sort()).toEqual([
       "applyHelarcRunProjectionCommit",

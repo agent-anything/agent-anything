@@ -12,8 +12,11 @@ import type {
   FileHelarcProviderProfileStore,
 } from "./provider/HelarcProviderProfileStore.js";
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
+import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 
 export const HELARC_IPC_CHANNELS = {
+  getInstructionSettings: "helarc:get-instruction-settings",
+  saveInstructionSettings: "helarc:save-instruction-settings",
   cancelRun: "helarc:cancel-run",
   chooseWorkspace: "helarc:choose-workspace",
   getRunStatus: "helarc:get-run-status",
@@ -29,6 +32,7 @@ export const HELARC_IPC_CHANNELS = {
 } as const;
 
 export interface RegisterHelarcIpcInput {
+  instructionSettingsStore?: FileHelarcInstructionSettingsStore | null;
   window: BrowserWindow;
   controller: HelarcMainController;
   providerCredentialStore?: ProviderCredentialStore | null;
@@ -49,6 +53,11 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   const productCommands = createHelarcProductCommandDispatcher({
     handlers: {
+      "instructions.save": async ({ settings }) => {
+        if (!input.instructionSettingsStore) throw new Error("Instruction settings storage is unavailable.");
+        const saved = await input.instructionSettingsStore.save(settings);
+        return input.controller.configureInstructions(saved);
+      },
       "workspace.choose": async () => {
         const result = await dialog.showOpenDialog(input.window, {
           properties: ["openDirectory"],
@@ -183,6 +192,10 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   ipcMain.handle(HELARC_IPC_CHANNELS.getSnapshot, () => {
     return projectHelarcDesktopSnapshot(input.controller.getSnapshot());
   });
+
+  ipcMain.handle(HELARC_IPC_CHANNELS.getInstructionSettings, () => input.controller.getInstructionSettings());
+  ipcMain.handle(HELARC_IPC_CHANNELS.saveInstructionSettings, (_event, command: unknown) =>
+    productCommands.dispatch(command, "instructions.save"));
 
   ipcMain.handle(HELARC_IPC_CHANNELS.chooseWorkspace, (_event, command: unknown) => {
     return productCommands.dispatch(command, "workspace.choose");

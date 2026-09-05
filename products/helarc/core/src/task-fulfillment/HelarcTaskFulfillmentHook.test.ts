@@ -13,6 +13,7 @@ import type {
 import { createUnknownModelInputMeasurement } from "@agent-anything/model-interaction";
 import { describe, expect, it } from "vitest";
 import { HELARC_TASK_KIND } from "../task/index.js";
+import { createDefaultHelarcInstructionSettings } from "../instructions/HelarcInstructionSettings.js";
 import { HelarcTaskFulfillmentHook } from "./HelarcTaskFulfillmentHook.js";
 
 const NOW = "2026-08-28T00:00:00.000Z";
@@ -25,7 +26,7 @@ describe("HelarcTaskFulfillmentHook", () => {
       missingOutcomes: [],
       unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, () => NOW);
+    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
 
     await expect(hook.handle(createEvent(), context())).resolves.toEqual({ disposition: "allow" });
     expect(hook.getAssessments()).toMatchObject([
@@ -53,7 +54,7 @@ describe("HelarcTaskFulfillmentHook", () => {
       missingOutcomes: ["No settled command result shows that the program ran."],
       unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, () => NOW);
+    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
 
     const decision = await hook.handle(createEvent(), context());
 
@@ -78,12 +79,57 @@ describe("HelarcTaskFulfillmentHook", () => {
       missingOutcomes: ["The requested process was not executed."],
       unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, () => NOW);
+    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
 
     await expect(hook.handle(createEvent(), context())).rejects.toThrow(
       "A fulfilled Task response cannot carry unresolved outcomes or claims.",
     );
     expect(hook.getAssessments()).toEqual([]);
+  });
+
+  it.each(["root", "descendant"] as const)("uses the snapshotted custom Stop text for a %s request", async (runKind) => {
+    const provider = new StructuredProvider({
+      status: "fulfilled", rationale: "Accepted.", missingOutcomes: [], unsupportedClaims: [],
+    });
+    const sections = [{ id: "stop_instructions", enabled: true, content: "  Check the requested outcome.\nUse the supplied results.  " }];
+    const expected = sections[0]!.content;
+    const hook = new HelarcTaskFulfillmentHook(provider, sections, () => NOW);
+    sections[0]!.content = "Changed after composition.";
+    sections[0]!.enabled = false;
+    await hook.handle({ ...createEvent(), runKind }, context());
+    const request = provider.requests[0]!;
+    expect(request.instructions.content).toEqual([{ kind: "text", text: expected }]);
+    expect(JSON.stringify(request)).not.toContain("Evaluate whether the proposed completion");
+    expect(request.composition.lineage.instructionContent?.revision).toMatch(/^sha256:/);
+    expect(request.metadata.stopInstructionsRevision).toBe(request.composition.lineage.instructionContent?.revision);
+
+    const changed = new HelarcTaskFulfillmentHook(provider, [{ ...sections[0]!, enabled: true }], () => NOW);
+    await changed.handle({ ...createEvent(), runKind }, context());
+    expect(provider.requests[1]!.composition.lineage.instructionContent?.revision)
+      .not.toBe(request.composition.lineage.instructionContent?.revision);
+  });
+
+  it.each([
+    { enabled: false, content: "Retained disabled Stop text." },
+    { enabled: true, content: " \n " },
+  ])("omits unused Stop text without disabling model invocation or result handling: %j", async (setting) => {
+    const provider = new StructuredProvider({
+      status: "incomplete", rationale: "More work is needed.", missingOutcomes: ["Requested result is missing."], unsupportedClaims: [],
+    });
+    const hook = new HelarcTaskFulfillmentHook(provider, [{ id: "stop_instructions", ...setting }], () => NOW);
+    await expect(hook.handle(createEvent(), context())).resolves.toMatchObject({
+      disposition: "continue", code: "task_fulfillment_incomplete",
+    });
+    expect(provider.requests).toHaveLength(1);
+    const request = provider.requests[0]!;
+    expect(request.instructions.content).toEqual([]);
+    expect(request.composition.lineage.instructionBlocks).toEqual([]);
+    expect(request.composition.sections.some(({ role }) => role === "instruction")).toBe(false);
+    expect(request.interaction).toMatchObject({ kind: "structured_generation" });
+    expect(JSON.stringify(request)).not.toContain("Retained disabled Stop text.");
+    expect(JSON.stringify(request)).not.toContain("Evaluate whether the proposed completion");
+    expect(JSON.stringify(request.messages)).toContain("Create a console application and run it once.");
+    expect(hook.getAssessments()).toHaveLength(1);
   });
 });
 

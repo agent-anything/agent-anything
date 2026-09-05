@@ -73,6 +73,13 @@ const delegatedScope = source(
   `You are operating as a delegated Helarc worker on one bounded objective. Pursue only the authoritative delegated objective and selected Context supplied to this Run. Do not infer or reconstruct a root objective, parent conversation, or sibling work that was not explicitly selected for you. Stay within the narrower authority provided to this Run, and return concise findings with relevant evidence, artifacts, verification, effects, uncertainty, and blockers. Your own success does not establish that any parent or root task is complete.`,
 );
 
+export const HELARC_DEFAULT_AGENT_INSTRUCTIONS = Object.freeze(
+  productionSources.map(({ section: id, content }) => Object.freeze({ id, enabled: true, content })),
+);
+export const HELARC_DEFAULT_DELEGATED_INSTRUCTIONS = Object.freeze([
+  Object.freeze({ id: delegatedScope.section, enabled: true, content: delegatedScope.content }),
+]);
+
 const minimalRelease = createHelarcInstructionRelease({
   id: "helarc.instructions.release.minimal",
   target: "minimal",

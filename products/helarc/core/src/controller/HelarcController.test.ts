@@ -28,6 +28,8 @@ import { createToolContractIdentity } from "@agent-anything/tools/identity";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
 import { buildHelarcPromptAssembly } from "../prompt/index.js";
+import { createDefaultHelarcInstructionSettings } from "../instructions/index.js";
+import { createHelarcAgent } from "../agent/HelarcAgent.js";
 import {
   buildHelarcProviderRequest as buildProviderRequest,
   createHelarcControllerProtocolComposition,
@@ -357,6 +359,43 @@ describe("Helarc native Tool controller", () => {
     expect(verification?.content).toContain("verification_feedback");
     expect(assembly.sections.find(({ id }) => id === "helarc:model-input:current_verification")?.source)
       .toMatchObject({ owner: "context", id: "projection-1", revision: "1" });
+  });
+
+  it("omits disabled system text without changing callable definitions, messages, or response parsing", () => {
+    const defaults = createDefaultHelarcInstructionSettings();
+    const settings = {
+      ...defaults,
+      agent: defaults.agent.map((section) => ({ ...section, enabled: false })),
+      delegated: defaults.delegated.map((section) => ({ ...section, enabled: false })),
+      protocol: defaults.protocol.map((section) => ({ ...section, enabled: false })),
+    };
+    const original = createControllerInput();
+    const agent = createHelarcAgent({
+      target: "production", providerId: "fake-provider", modelId: "helarc-controller-test-model", instructionSettings: settings,
+    });
+    const input = { ...original, agent, instructionBinding: createAgentInstructionBinding({
+      run: { id: original.runId }, agent, effectiveFromRunRevision: 0, supersedes: null,
+    }) };
+    const baseline = createTestControllerProtocol(input);
+    const protocol = createHelarcControllerProtocolComposition({
+      toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance, instructionSettings: settings,
+    });
+    const request = buildProviderRequest(input, requestBuildContext(), protocol, createTestQualification(input, protocol));
+    const baselineRequest = buildHelarcProviderRequest(input, requestBuildContext());
+    expect(request.instructions.content).toEqual([]);
+    expect(request.messages).toEqual(baselineRequest.messages);
+    expect(request.interaction).toEqual(baselineRequest.interaction);
+    expect(request.composition?.sections.some(({ role }) => role === "instruction")).toBe(false);
+    const customProtocol = createHelarcControllerProtocolComposition({
+      toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance,
+      instructionSettings: { ...settings, protocol: settings.protocol.map((section, index) => ({
+        ...section, enabled: index === 0, content: "Exact custom protocol text.",
+      })) },
+    });
+    const customRequest = buildProviderRequest(input, requestBuildContext(), customProtocol, createTestQualification(input, customProtocol));
+    expect(customRequest.instructions.content).toEqual([{ kind: "text", text: "Exact custom protocol text." }]);
+    expect(customRequest.interaction).toEqual(request.interaction);
+    expect(customProtocol.revision).not.toBe(protocol.revision);
   });
 
   it("projects the initial Task and Run state as one logical user message", () => {

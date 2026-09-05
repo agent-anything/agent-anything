@@ -193,8 +193,8 @@ function snapshotContentDigest(
 function snapshotBlocks(
   input: readonly AgentInstructionBlock[],
 ): readonly AgentInstructionBlock[] {
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_BLOCK_COUNT) {
-    throw new TypeError(`AgentInstructions.blocks must contain 1 to ${MAX_BLOCK_COUNT} blocks.`);
+  if (!Array.isArray(input) || input.length > MAX_BLOCK_COUNT) {
+    throw new TypeError(`AgentInstructions.blocks must contain 0 to ${MAX_BLOCK_COUNT} blocks.`);
   }
   const ids = new Set<string>();
   return Object.freeze(input.map((block, index) => {

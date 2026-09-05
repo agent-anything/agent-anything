@@ -16,10 +16,9 @@ export function snapshotModelInstructions(input: ModelInstructions): ModelInstru
   strictRecord(input, "ModelInstructions", ["content"]);
   if (
     !Array.isArray(input.content) ||
-    input.content.length === 0 ||
     input.content.length > MAX_INSTRUCTION_BLOCK_COUNT
   ) {
-    throw new TypeError("ModelInstructions.content must be a bounded non-empty array.");
+    throw new TypeError("ModelInstructions.content must be a bounded array.");
   }
   return Object.freeze({
     content: Object.freeze(input.content.map((block, index) =>

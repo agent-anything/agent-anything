@@ -7,16 +7,20 @@ import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import {
   HELARC_INSTRUCTION_CATALOG,
   resolveHelarcAgentInstructions,
+  resolveConfiguredHelarcAgentInstructions,
+  type HelarcInstructionSettings,
   type HelarcMainInstructionTarget,
 } from "../instructions/index.js";
 
 export interface CreateHelarcAgentInput {
+  readonly instructionSettings?: HelarcInstructionSettings;
   readonly target: HelarcMainInstructionTarget;
   readonly providerId: string;
   readonly modelId: string;
 }
 
 export interface CreateHelarcDelegatedWorkerAgentInput {
+  readonly instructionSettings?: HelarcInstructionSettings;
   readonly providerId: string;
   readonly modelId: string;
 }
@@ -28,7 +32,13 @@ export function createHelarcAgent(
     "helarc-code-agent",
     "Helarc",
     input.target,
-    resolveHelarcAgentInstructions({
+    input.instructionSettings ? resolveConfiguredHelarcAgentInstructions({
+      settings: input.instructionSettings,
+      target: input.target,
+      agentId: "helarc-code-agent",
+      providerId: input.providerId,
+      modelId: input.modelId,
+    }) : resolveHelarcAgentInstructions({
       catalog: HELARC_INSTRUCTION_CATALOG,
       target: input.target,
       agentId: "helarc-code-agent",
@@ -45,7 +55,13 @@ export function createHelarcDelegatedWorkerAgent(
     "helarc-delegated-worker",
     "Helarc Delegated Worker",
     "delegated-worker",
-    resolveHelarcAgentInstructions({
+    input.instructionSettings ? resolveConfiguredHelarcAgentInstructions({
+      settings: input.instructionSettings,
+      target: "delegated-worker",
+      agentId: "helarc-delegated-worker",
+      providerId: input.providerId,
+      modelId: input.modelId,
+    }) : resolveHelarcAgentInstructions({
       catalog: HELARC_INSTRUCTION_CATALOG,
       target: "delegated-worker",
       agentId: "helarc-delegated-worker",

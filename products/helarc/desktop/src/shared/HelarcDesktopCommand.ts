@@ -1,3 +1,5 @@
+import type { HelarcInstructionSettings } from "./HelarcInstructionSettings.js";
+
 export const HELARC_PRODUCT_COMMAND_VERSION = 1 as const;
 export const HELARC_PRODUCT_COMMAND_RECEIPT_LIMIT = 4_096;
 
@@ -5,6 +7,7 @@ export type HelarcProductCommandKind =
   | "workspace.choose"
   | "workspace.select"
   | "provider.save"
+  | "instructions.save"
   | "run.start"
   | "thread.open";
 
@@ -16,6 +19,7 @@ export type HelarcProductRunStartTarget =
     };
 
 export interface HelarcProductCommandPayloadMap {
+  readonly "instructions.save": { readonly settings: HelarcInstructionSettings };
   readonly "workspace.choose": Record<string, never>;
   readonly "workspace.select": {
     readonly profileId: string;

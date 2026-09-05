@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
   createAgentHookComposition,
@@ -14,6 +15,7 @@ import type {
 } from "@agent-anything/model-interaction";
 import { assessModelContext } from "@agent-anything/model-interaction";
 import { modelInputFromComposition, composeModelInput } from "@agent-anything/model-interaction/input";
+import type { HelarcInstructionSectionSetting } from "../instructions/HelarcProtocolInstructions.js";
 import {
   snapshotHelarcTaskFulfillmentAssessment,
   type HelarcTaskFulfillmentAssessment,
@@ -69,27 +71,19 @@ const interaction = Object.freeze({
   }),
 });
 
-const instructions = [
-  "Evaluate whether the proposed completion and settled trajectory fulfill the original task objective.",
-  "Judge the original objective, not a reduced or substituted objective.",
-  "An explanation of how to perform requested work is not fulfillment when the task requested actual action.",
-  "Use only settled trajectory material as evidence that actions occurred.",
-  "Only successful or explicitly usable partial semantic outcomes are positive fulfillment evidence.",
-  "A failed, denied, cancelled, timed-out, invalid, unavailable, or unknown-effect result is not evidence that its requested outcome succeeded.",
-  "A later attributable successful result may recover an earlier failure; the earlier failure itself must never be reported as success.",
-  "Return fulfilled only when every material requested outcome is covered.",
-  "Return incomplete when outcomes are missing or the proposal answers a different objective.",
-  "Return uncertain when the available material cannot support either conclusion.",
-  "Do not infer that a file changed or a command ran from the proposal text alone.",
-].join("\n");
-
 export class HelarcTaskFulfillmentHook implements AgentStopHandler {
   private readonly assessments: HelarcTaskFulfillmentAssessment[] = [];
+  private readonly instructions: string;
 
   constructor(
     private readonly provider: Provider,
+    stopInstructions: readonly HelarcInstructionSectionSetting[],
     private readonly now: () => string = () => new Date().toISOString(),
-  ) {}
+  ) {
+    this.instructions = stopInstructions
+      .filter(({ enabled, content }) => enabled && content.trim().length > 0)
+      .map(({ content }) => content).join("\n\n");
+  }
 
   getAssessments(): readonly HelarcTaskFulfillmentAssessment[] {
     return Object.freeze([...this.assessments]);
@@ -103,7 +97,7 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
       return Object.freeze({ disposition: "allow" as const });
     }
     readHelarcTaskObjective(event);
-    const request = buildRequest(this.provider, event);
+    const request = buildRequest(this.provider, event, this.instructions);
     const result = await this.provider.send(request, interruptionContext);
     const candidate = parseProviderResult(result);
     const assessment = createAssessment(event, candidate, this.now());
@@ -122,12 +116,13 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
 
 export function createHelarcTaskFulfillmentHookComposition(
   provider: Provider,
+  stopInstructions: readonly HelarcInstructionSectionSetting[],
   now?: () => string,
 ): Readonly<{
   hook: HelarcTaskFulfillmentHook;
   composition: AgentHookComposition;
 }> {
-  const hook = new HelarcTaskFulfillmentHook(provider, now);
+  const hook = new HelarcTaskFulfillmentHook(provider, stopInstructions, now);
   return Object.freeze({
     hook,
     composition: createAgentHookComposition({
@@ -159,7 +154,7 @@ interface HelarcFulfillmentCandidate {
   readonly unsupportedClaims: readonly string[];
 }
 
-function buildRequest(provider: Provider, event: AgentStopEvent): ProviderRequest {
+function buildRequest(provider: Provider, event: AgentStopEvent, instructions: string): ProviderRequest {
   if (!provider.descriptor.capabilities.structuredGeneration.supported) {
     throw new TypeError("Task Fulfillment requires Provider structured generation.");
   }
@@ -183,15 +178,17 @@ function buildRequest(provider: Provider, event: AgentStopEvent): ProviderReques
     id,
     revision,
   });
+  const instructionRevision = `sha256:${createHash("sha256").update(instructions, "utf8").digest("hex")}`;
+  const instructionSource = source("stop_instructions", "helarc.stop-instructions", instructionRevision);
   const sections = Object.freeze([
-    Object.freeze({
+    ...(instructions.length === 0 ? [] : [Object.freeze({
       id: `${event.ref.id}:instructions`,
-      source: source("task_fulfillment_instructions", hookRef.id, hookRef.revision),
+      source: instructionSource,
       kind: "agent_instruction",
       role: "instruction" as const,
       necessity: "mandatory" as const,
       content: Object.freeze({ kind: "text" as const, text: instructions }),
-    }),
+    })]),
     Object.freeze({
       id: `${event.ref.id}:material`,
       source: source("task_fulfillment_material", event.task.id, event.ref.revision),
@@ -217,19 +214,17 @@ function buildRequest(provider: Provider, event: AgentStopEvent): ProviderReques
     interaction,
     sections,
     lineage: Object.freeze({
-      instructionBinding: source("task_fulfillment_binding", hookRef.id, hookRef.revision),
+      instructionBinding: source("task_fulfillment_binding", hookRef.id, instructionRevision),
       agent: source("product_hook", hookRef.id, hookRef.revision),
-      instructions: source("task_fulfillment_instructions", hookRef.id, hookRef.revision),
-      instructionRelease: source("task_fulfillment_release", hookRef.id, hookRef.revision),
+      instructions: instructionSource,
+      instructionRelease: source("task_fulfillment_release", hookRef.id, instructionRevision),
       instructionResolver: source("task_fulfillment_resolver", hookRef.id, hookRef.revision),
-      instructionContent: source("task_fulfillment_content", hookRef.id, hookRef.revision),
+      instructionContent: instructionSource,
       instructionModel: Object.freeze({
         providerId: provider.modelContext.target.providerId,
         model: provider.modelContext.target.model,
       }),
-      instructionBlocks: Object.freeze([
-        source("task_fulfillment_instructions", hookRef.id, hookRef.revision),
-      ]),
+      instructionBlocks: Object.freeze(instructions.length === 0 ? [] : [instructionSource]),
       activeContext: null,
       contextProjection: null,
       projectionManifest: null,
@@ -291,6 +286,7 @@ function buildRequest(provider: Provider, event: AgentStopEvent): ProviderReques
       completionCandidateId: event.candidate.ref.id,
       completionCandidateRevision: event.candidate.ref.revision,
       hookRevision: hookRef.revision,
+      stopInstructionsRevision: instructionRevision,
     }),
   });
 }

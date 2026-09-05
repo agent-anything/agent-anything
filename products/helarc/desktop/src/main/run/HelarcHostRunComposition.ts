@@ -1,4 +1,5 @@
 import type { RunInputItem } from "@agent-anything/agent-core/input";
+import { snapshotHelarcInstructionSettings, type HelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import type { IdentityRef } from "@agent-anything/agent-core/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type {
@@ -124,6 +125,7 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan" | "complet
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly instructionSettings?: HelarcInstructionSettings;
   readonly sessionId: string;
   readonly productRunId: string;
   readonly task: AgentTask<HelarcTaskInput>;
@@ -183,6 +185,8 @@ export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
 export async function prepareHelarcHostRun(
   input: PrepareHelarcHostRunInput,
 ): Promise<PreparedHelarcHostRun> {
+  const instructionSettings = input.instructionSettings === undefined
+    ? undefined : snapshotHelarcInstructionSettings(input.instructionSettings);
   const runContext = await resolveHostRunContext({
     sessionId: input.sessionId,
     runId: input.productRunId,
@@ -254,6 +258,7 @@ export async function prepareHelarcHostRun(
     providerProfile: input.providerProfile,
     qualificationCatalog: input.qualificationCatalog,
     instructionTarget: "production",
+    instructionSettings,
     modelContinuationStore: input.modelContinuationStore,
     codeSource: createLocalCodeSourcePort(now),
     fileActions,

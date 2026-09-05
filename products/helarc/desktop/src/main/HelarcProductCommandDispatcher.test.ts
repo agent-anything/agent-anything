@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDefaultHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import {
   HELARC_PRODUCT_COMMAND_VERSION,
   type HelarcProductCommandEnvelope,
@@ -181,6 +182,7 @@ function createHandlers(
     "workspace.choose": vi.fn(() => snapshot()),
     "workspace.select": vi.fn(() => snapshot()),
     "provider.save": vi.fn(() => snapshot()),
+    "instructions.save": vi.fn(({ settings }) => ({ settings, defaults: createDefaultHelarcInstructionSettings() })),
     "run.start": vi.fn(() => ({
       ok: true as const,
       taskId: "task-1",

@@ -11,6 +11,7 @@ import {
   RunTerminalPanel,
   RunTimelinePanel,
   SettingsPanel,
+  SettingsPage,
   ThreadPanel,
 } from "./App.js";
 
@@ -44,6 +45,18 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain(
       '<option value="allow_experimental" selected="">Allow experimental</option>',
     );
+  });
+
+  it("renders Settings as a standalone page with a close action", () => {
+    const html = renderToStaticMarkup(
+      <SettingsPage snapshot={unconfiguredSnapshot()} onSaved={() => undefined} onClose={() => undefined} />,
+    );
+
+    expect(html).toContain('aria-label="Close settings"');
+    expect(html).toContain('aria-label="Provider settings"');
+    expect(html).toContain('role="tab"');
+    expect(html).not.toContain('class="workbench"');
+    expect(html).not.toContain('class="task-composer"');
   });
 
   it("renders offered approval decision actions", () => {

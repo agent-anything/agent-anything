@@ -22,6 +22,19 @@ import { OllamaProvider } from "./OllamaProvider.js";
 describe("OllamaProvider", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("omits the system message for empty instructions while retaining native Tools", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const provider = new OllamaProvider(config(), async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return okResponse({ message: { role: "assistant", content: "Done." }, done: true, done_reason: "stop" });
+    });
+    const result = await provider.send(createNativeProviderRequest(provider, { instructions: { content: [] } }), context());
+    expect(result.kind).toBe("succeeded");
+    expect((bodies[0]?.messages as Array<{ role: string }>).every(({ role }) => role !== "system")).toBe(true);
+    expect(bodies[0]?.tools).toHaveLength(2);
+    expect(JSON.stringify(bodies[0])).not.toContain("system:");
+  });
+
   it("sends an Ollama native generate request", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
     const provider = new OllamaProvider(config(), async (url, init) => {

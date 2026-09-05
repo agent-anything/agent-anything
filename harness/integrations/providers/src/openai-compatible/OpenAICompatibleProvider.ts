@@ -375,7 +375,7 @@ function encodeOpenAIRequest(
     messages: interaction.kind === "native_tool_turn"
       ? encodeOpenAINativeMessages(instructions, messages)
       : [
-          { role: "system", content: renderInstructions(instructions) },
+          ...(instructions.content.length > 0 ? [{ role: "system", content: renderInstructions(instructions) }] : []),
           ...messages.map((message) => ({
           role: message.role,
           content: renderGenerationText(message),
@@ -404,7 +404,7 @@ function encodeOpenAINativeMessages(
   instructions: ModelInstructions,
   messages: readonly ModelMessage[],
 ): readonly unknown[] {
-  const encoded: unknown[] = [{
+  const encoded: unknown[] = instructions.content.length === 0 ? [] : [{
     role: "system",
     content: renderInstructions(instructions),
   }];

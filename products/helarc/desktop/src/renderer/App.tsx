@@ -12,8 +12,10 @@ import {
   Play,
   Settings,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import * as React from "react";
+import { InstructionSettingsPanel } from "./InstructionSettingsPanel.js";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
@@ -53,7 +55,7 @@ type PendingInteractionView = ActiveRunProjection["host"]["pendingInteractions"]
 type PendingApprovalView = Extract<PendingInteractionView, { family: "approval" }>;
 type PendingClarificationView = Extract<PendingInteractionView, { family: "clarification" }>;
 
-type SidePanelMode = "review" | "threads" | "settings";
+type SidePanelMode = "review" | "threads";
 
 export function App() {
   const [snapshot, setSnapshot] = useState<HelarcMainSnapshot>(initialSnapshot);
@@ -63,6 +65,7 @@ export function App() {
   const [startResult, setStartResult] = useState<HelarcStartRunResult | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>("review");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [interactionSubmissionError, setInteractionSubmissionError] = useState<string | null>(null);
   const [runControlError, setRunControlError] = useState<string | null>(null);
   const pendingApproval = getPendingApproval(snapshot.run);
@@ -382,7 +385,8 @@ export function App() {
     !isBusy;
 
   return (
-    <div className="app-shell">
+    <>
+    <div className="app-shell" hidden={settingsOpen}>
       <header className="app-header">
         <div className="brand-block">
           <span className="brand-mark" aria-hidden="true">H</span>
@@ -391,6 +395,7 @@ export function App() {
             <span>Developer workbench</span>
           </div>
         </div>
+        <div className="app-header-actions">
         <nav className="app-nav" aria-label="Workbench navigation">
           <button
             className={activePanelMode === "review" ? "nav-button active" : "nav-button"}
@@ -410,16 +415,17 @@ export function App() {
             <History size={16} aria-hidden="true" />
             Threads
           </button>
+        </nav>
           <button
-            className={activePanelMode === "settings" ? "nav-button active" : "nav-button"}
+            className="nav-button settings-entry"
             type="button"
-            onClick={() => setSidePanelMode("settings")}
+            onClick={() => setSettingsOpen(true)}
             title="Settings"
+            aria-label="Open settings"
           >
             <Settings size={16} aria-hidden="true" />
-            Settings
           </button>
-        </nav>
+        </div>
       </header>
 
       <section className="workspace-bar" aria-label="Workspace">
@@ -491,9 +497,7 @@ export function App() {
             </div>
             {activePanelMode === "threads"
               ? <History size={19} aria-hidden="true" />
-              : activePanelMode === "settings"
-                ? <Settings size={19} aria-hidden="true" />
-                : <ShieldCheck size={19} aria-hidden="true" />}
+              : <ShieldCheck size={19} aria-hidden="true" />}
           </div>
           <div className={activePanelMode !== "review" || pendingApproval || pendingClarification || snapshot.run?.display.terminal || snapshot.error
             ? "review-content"
@@ -506,8 +510,6 @@ export function App() {
                 selectedThreadId={selectedThreadId}
                 onSelectThread={(threadId) => void openThread(threadId)}
               />
-            ) : activePanelMode === "settings" ? (
-              <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />
             ) : pendingClarification ? (
               <ClarificationPromptPanel
                 clarification={pendingClarification}
@@ -577,6 +579,10 @@ export function App() {
         {startResult?.ok ? <p className="composer-message">Run started</p> : null}
       </form>
     </div>
+    {settingsOpen ? (
+      <SettingsPage snapshot={snapshot} onSaved={setSnapshot} onClose={() => setSettingsOpen(false)} />
+    ) : null}
+    </>
   );
 }
 
@@ -904,7 +910,49 @@ function ThreadSummaryView({ thread }: { thread: HelarcMainSnapshot["threadSumma
   );
 }
 
+export function SettingsPage({
+  snapshot,
+  onSaved,
+  onClose,
+}: {
+  snapshot: HelarcMainSnapshot;
+  onSaved: (snapshot: HelarcMainSnapshot) => void;
+  onClose: () => void;
+}) {
+  return <div className="settings-page">
+    <header className="settings-page-header">
+      <h1 id="settings-title">Settings</h1>
+      <button className="secondary-button settings-close" type="button" onClick={onClose}
+        title="Close settings" aria-label="Close settings" autoFocus>
+        <X size={18} aria-hidden="true" />
+      </button>
+    </header>
+    <main className="settings-page-body" aria-labelledby="settings-title">
+      <SettingsPanel snapshot={snapshot} onSaved={onSaved} />
+    </main>
+  </div>;
+}
+
 export function SettingsPanel({
+  snapshot,
+  onSaved,
+}: {
+  snapshot: HelarcMainSnapshot;
+  onSaved: (snapshot: HelarcMainSnapshot) => void;
+}) {
+  const [tab, setTab] = useState<"provider" | "instructions">("provider");
+  const [instructionsOpened, setInstructionsOpened] = useState(false);
+  return <div className="settings-content">
+    <div className="settings-tabs" role="tablist" aria-label="Settings">
+      <button type="button" role="tab" aria-selected={tab === "provider"} onClick={() => setTab("provider")}>Provider</button>
+      <button type="button" role="tab" aria-selected={tab === "instructions"} onClick={() => { setInstructionsOpened(true); setTab("instructions"); }}>Instructions</button>
+    </div>
+    <div hidden={tab !== "provider"}><ProviderSettingsPanel snapshot={snapshot} onSaved={onSaved} /></div>
+    <div hidden={tab !== "instructions"}>{instructionsOpened && <InstructionSettingsPanel api={getHelarcApi()} />}</div>
+  </div>;
+}
+
+function ProviderSettingsPanel({
   snapshot,
   onSaved,
 }: {
@@ -1145,20 +1193,12 @@ function sidePanelEyebrow(mode: SidePanelMode): string {
     return "Work context";
   }
 
-  if (mode === "settings") {
-    return "Desktop state";
-  }
-
   return "Pending action";
 }
 
 function sidePanelTitle(mode: SidePanelMode): string {
   if (mode === "threads") {
     return "Threads";
-  }
-
-  if (mode === "settings") {
-    return "Settings";
   }
 
   return "Review";

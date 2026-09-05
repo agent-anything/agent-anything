@@ -29,6 +29,7 @@ import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import { createHelarcProviderProfile } from "@agent-anything/helarc/configuration";
+import { createDefaultHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import {
   prepareHelarcHostRun,
   type PrepareHelarcHostRunInput,
@@ -146,6 +147,40 @@ function executeReadOnlyTestHostRun(
 }
 
 describe("Helarc Host Run composition", () => {
+  it("binds instruction settings before asynchronous preparation and allows a Run with no system instructions", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-instructions-"));
+    const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);
+    const defaults = createDefaultHelarcInstructionSettings();
+    const settings = {
+      agent: defaults.agent.map((entry) => ({ ...entry, enabled: false })),
+      delegated: defaults.delegated.map((entry) => ({ ...entry, enabled: false })),
+      protocol: defaults.protocol.map((entry) => ({ ...entry, enabled: false })),
+      stop: defaults.stop.map((entry) => ({ ...entry, enabled: false })),
+    };
+    const preparing = prepareTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings: settings });
+    settings.agent[0]!.enabled = true;
+    settings.protocol[0]!.enabled = true;
+    settings.stop[0]!.enabled = true;
+    const prepared = await preparing;
+    const result = await prepared.start().result;
+    expect(result.runResult.status).toBe("succeeded");
+    expect(provider.requests[0]?.instructions.content).toEqual([]);
+    expect(provider.requests[0]?.interaction).toMatchObject({ kind: "native_tool_turn" });
+    expect(provider.stopRequests).toHaveLength(1);
+    expect(provider.stopRequests[0]?.instructions.content).toEqual([]);
+  });
+  it("passes custom Stop text through Host and Product composition without adding it to the main loop", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-stop-instructions-"));
+    const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);
+    const defaults = createDefaultHelarcInstructionSettings();
+    const instructionSettings = { ...defaults, stop: [{ ...defaults.stop[0]!, content: "Check only the supplied completion evidence." }] };
+    await executeTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings });
+    expect(provider.stopRequests).toHaveLength(1);
+    expect(provider.stopRequests[0]?.instructions.content).toEqual([
+      { kind: "text", text: "Check only the supplied completion evidence." },
+    ]);
+    expect(JSON.stringify(provider.requests[0]?.instructions)).not.toContain("Check only the supplied completion evidence.");
+  });
   it("prepares without invoking Runner and permits exactly one start", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-prepared-run-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Prepared." }]);
@@ -1042,6 +1077,7 @@ function unavailableAutomaticReviewer() {
 }
 
 class ScriptedProvider implements Provider {
+  readonly stopRequests: ProviderRequest[] = [];
   private readonly context = createFakeProviderContext(
     "scripted-helarc-provider",
     "host-run-test-model",
@@ -1088,6 +1124,7 @@ class ScriptedProvider implements Provider {
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
     if (request.purpose === "helarc.task-fulfillment") {
+      this.stopRequests.push(request);
       return scriptedTaskFulfillmentResult(request, this.descriptor.id);
     }
     this.requests.push(request);

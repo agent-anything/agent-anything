@@ -1,4 +1,9 @@
 import {
+  createDefaultHelarcInstructionSettings,
+  snapshotHelarcInstructionSettings,
+  type HelarcInstructionSettings,
+} from "@agent-anything/helarc/configuration";
+import {
   createHostCommandDispatcher,
   createHostRunStatusQueryHandler,
   type HostCommandDispatcher,
@@ -280,6 +285,7 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  instructionSettings?: HelarcInstructionSettings;
   provider?: Provider | null;
   providerConfigError?: (HelarcMainError & { missingKeys?: string[] }) | null;
   providerProfile?: HelarcProviderProfile | null;
@@ -331,6 +337,7 @@ export class HelarcMainController {
   private readonly qualificationCatalog: HelarcModelQualificationCatalog | undefined;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
+  private instructionSettings: HelarcInstructionSettings;
   private inactiveStatus: "idle" | "workspace_selected" = "idle";
   private nextTaskNumber = 1;
   private activeRunSlot: DesktopActiveRunSlot = { kind: "empty" };
@@ -370,6 +377,9 @@ export class HelarcMainController {
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput = {}) {
+    this.instructionSettings = snapshotHelarcInstructionSettings(
+      input.instructionSettings ?? createDefaultHelarcInstructionSettings(),
+    );
     this.providerInstance = input.provider ?? null;
     this.workspaceProfiles = input.workspaceProfiles ?? [];
     this.threadSummaries = (input.threadSummaries ?? []).map(createThreadSummarySnapshot);
@@ -426,6 +436,15 @@ export class HelarcMainController {
       run: this.runProjection,
       error: this.lastError,
     };
+  }
+
+  getInstructionSettings() {
+    return Object.freeze({ settings: this.instructionSettings, defaults: createDefaultHelarcInstructionSettings() });
+  }
+
+  configureInstructions(settings: HelarcInstructionSettings) {
+    this.instructionSettings = snapshotHelarcInstructionSettings(settings);
+    return this.getInstructionSettings();
   }
 
   subscribeSnapshot(subscriber: (snapshot: HelarcMainSnapshot) => void): () => void {
@@ -509,6 +528,7 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
     const providerInstance = this.providerInstance;
+    const instructionSettings = this.instructionSettings;
 
     if (!this.selectedWorkspace) {
       const error = this.setError("workspace_not_selected", "Choose a workspace before starting a task.");
@@ -585,6 +605,7 @@ export class HelarcMainController {
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
       const preparedHostRun = await prepareHelarcHostRun({
+        instructionSettings,
         task: preparedStart.prepared.task,
         workspaceResolver: createHelarcDesktopWorkspaceResolver(threadWorkspace),
         workspaceSelection: {
