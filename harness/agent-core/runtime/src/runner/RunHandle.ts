@@ -397,7 +397,7 @@ function rejectedSteering(
 
 function terminalStatus<TOutput>(
   result: RunResult<TOutput>,
-): Extract<RunLifecycleStatus, "succeeded" | "failed" | "cancelled"> {
+): Extract<RunLifecycleStatus, "succeeded" | "stopped" | "failed" | "cancelled"> {
   return result.status;
 }
 

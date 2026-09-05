@@ -28,6 +28,7 @@ export interface HelarcTaskFulfillmentAssessment {
   readonly task: Readonly<{ readonly id: string; readonly kind: string }>;
   readonly candidate: AgentDecisionCandidateRef;
   readonly status: HelarcTaskFulfillmentStatus;
+  readonly disposition: "allow" | "continue";
   readonly rationale: string;
   readonly findings: readonly HelarcTaskFulfillmentFinding[];
   readonly feedback: string | null;
@@ -46,8 +47,11 @@ export function snapshotHelarcTaskFulfillmentAssessment(
   if (input.status === "fulfilled" && (input.findings.length > 0 || input.feedback !== null)) {
     throw new TypeError("A fulfilled Helarc Task assessment cannot carry unresolved findings or feedback.");
   }
-  if (input.status !== "fulfilled" && input.feedback === null) {
-    throw new TypeError("A non-fulfilled Helarc Task assessment requires feedback.");
+  if (input.disposition !== "allow" && input.disposition !== "continue") {
+    throw new TypeError("Helarc Stop disposition is unsupported.");
+  }
+  if ((input.disposition === "continue") !== (input.feedback !== null)) {
+    throw new TypeError("Only a continuation disposition requires feedback.");
   }
   return deepFreeze({
     ...input,

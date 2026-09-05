@@ -124,6 +124,15 @@ export {
   verifyHelarcRunLifecycleSettlementOperationalAcceptedBaseline,
 } from "./baseline/HelarcRunLifecycleSettlementOperationalBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
+export {
+  HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE,
+  HELARC_NORMAL_STOP_SETTLEMENT_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcNormalStopSettlementBaseline.js";
+export {
+  HELARC_NORMAL_STOP_OPERATIONAL_ACCEPTED_BASELINE,
+  HELARC_NORMAL_STOP_OPERATIONAL_BASELINE_ACCEPTANCE,
+  verifyHelarcNormalStopOperationalAcceptedBaseline,
+} from "./baseline/HelarcNormalStopOperationalBaseline.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {
   HelarcEvaluationDisposition,

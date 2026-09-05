@@ -964,8 +964,8 @@ function targetObservation(
 ): EvaluationTargetObservation {
   const status = material.product.status === "completed"
     ? "succeeded"
-    : material.product.status === "cancelled"
-      ? "cancelled"
+    : material.product.status === "cancelled" || material.product.status === "stopped"
+      ? material.product.status
       : "failed";
   const artifactRefs = material.runResult.artifactRefs.map((artifactRef, index) => ({
     id: `${trial.ref.id}.artifact.${index + 1}.${sha256(artifactRef).slice(0, 12)}`,

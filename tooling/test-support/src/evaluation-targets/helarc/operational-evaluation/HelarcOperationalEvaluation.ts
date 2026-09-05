@@ -30,7 +30,7 @@ import {
 import { createHelarcProductEffectivenessSuite } from "../HelarcProductEffectivenessSuite.js";
 
 export const HELARC_OPERATIONAL_EVALUATION_REVISION =
-  "helarc-operational-evaluation-v3";
+  "helarc-operational-evaluation-v4";
 export const HELARC_OPERATIONAL_EVALUATION_TIME = "2026-08-26T00:00:00.000Z";
 export const HELARC_OPERATIONAL_STOCHASTIC_REPETITIONS = 3;
 

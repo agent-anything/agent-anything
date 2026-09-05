@@ -73,6 +73,7 @@ export type HelarcRunDisplayStatus =
   | "waiting_for_approval"
   | "cancelling"
   | "completed"
+  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -227,7 +228,7 @@ export function deriveHelarcRunDisplayProjection(
 ): HelarcRunDisplayProjection {
   assertProjectionPair(host, product);
 
-  if (host.status === "failed" || host.status === "cancelled") {
+  if (host.status === "failed" || host.status === "cancelled" || host.status === "stopped") {
     return display(host.status, true, "host");
   }
   if (host.status === "completed") {
@@ -356,7 +357,7 @@ function snapshotContinuationProjection(
 function snapshotProductResult(result: HelarcProductResult): HelarcProductResult {
   if (
     result === null || typeof result !== "object" ||
-    (result.status !== "completed" && result.status !== "rejected" &&
+    (result.status !== "completed" && result.status !== "stopped" && result.status !== "rejected" &&
       result.status !== "failed" && result.status !== "cancelled") ||
     result.output === null || typeof result.output !== "object"
   ) {

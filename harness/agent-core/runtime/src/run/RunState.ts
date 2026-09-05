@@ -102,6 +102,16 @@ type FailedRunState<TOutput> = RunStateBase<TOutput> & {
   readonly completedAt: string;
 };
 
+type StoppedRunState<TOutput> = RunStateBase<TOutput> & {
+  readonly status: "stopped";
+  readonly finalOutput: null;
+  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "stopped" }>;
+  readonly settlementCause: Extract<RunSettlementCauseRecord, { readonly kind: "stop" }>;
+  readonly suspension: null;
+  readonly cancellationRequest: null;
+  readonly completedAt: string;
+};
+
 type CancelledRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "cancelled";
   readonly finalOutput: null;
@@ -117,5 +127,6 @@ export type RunState<TOutput = unknown> =
   | SuspendedRunState<TOutput>
   | CancellingRunState<TOutput>
   | SucceededRunState<TOutput>
+  | StoppedRunState<TOutput>
   | FailedRunState<TOutput>
   | CancelledRunState<TOutput>;

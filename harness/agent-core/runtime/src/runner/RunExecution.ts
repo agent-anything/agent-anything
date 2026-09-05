@@ -1,4 +1,5 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
+import { deriveRunStatusAfterPendingChange } from "./RunPendingStatus.js";
 import { snapshotAgent, toAgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ControllerTurnRef, InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { AgentTask } from "@agent-anything/agent-core/task";
@@ -151,7 +152,6 @@ import {
   createRunResult,
   createRunFailureCause,
   createRunObservation,
-  deriveActiveRunStatus,
   runSettlementCauseCode,
   sameRunSuspensionRef,
   toRunCancellationSummary,
@@ -349,6 +349,11 @@ export type RuntimeDescendantRunAdmitter = (
 
 type TerminalCandidate<TOutput> =
   | {
+      readonly status: "stopped";
+      readonly reason: string;
+      readonly source: RunCauseSourceRef;
+    }
+  | {
       readonly status: "succeeded";
       readonly output: TOutput;
       readonly source?: RunCauseSourceRef;
@@ -515,6 +520,7 @@ export class RunExecution<TOutput> {
   private readonly instructionRevisionByAgentRevision = new Map<string, string>();
   private terminalResult: RunResult<TOutput> | null = null;
   private settlementPromise: Promise<RunResult<TOutput>> | null = null;
+  private settling = false;
   private suspendedWaiter: {
     readonly suspension: RunSuspension;
     readonly resolve: () => void;
@@ -721,9 +727,10 @@ export class RunExecution<TOutput> {
     if (current.status === "cancelling") {
       return rejectedResume("run_cancelling", candidate.id, current.revision);
     }
-    if (current.status === "succeeded" || current.status === "failed" || current.status === "cancelled") {
+    if (current.status === "succeeded" || current.status === "stopped" || current.status === "failed" || current.status === "cancelled") {
       return rejectedResume("run_settled", candidate.id, current.revision);
     }
+    if (this.settling) return rejectedResume("run_settling", candidate.id, current.revision);
     if (current.status !== "suspended" || this.suspendedWaiter === null) {
       return rejectedResume("run_not_suspended", candidate.id, current.revision);
     }
@@ -879,6 +886,7 @@ export class RunExecution<TOutput> {
         state.status === "cancelling" ? "run_cancelling" : "run_settled",
       );
     }
+    if (this.settling) return this.rejectSteering(candidate.commandId, "run_settling");
     if (candidate.expectedRunRevision !== state.revision) {
       return this.rejectSteering(candidate.commandId, "steering_revision_stale");
     }
@@ -1196,12 +1204,12 @@ export class RunExecution<TOutput> {
         }
         if (decision.decision.kind === "propose_stop") {
           this.settleTerminalControllerCall(decision.decision, decision.turn);
-          await this.suspendRun(
-            "controller_stop_requested",
-            controllerTurnSource(decision.turn),
-            decision.decision.reason,
-          );
-          continue;
+          if (this.hasUnsettledDescendantObligations()) continue;
+          return await this.settle({
+            status: "stopped",
+            reason: decision.decision.reason.trim(),
+            source: controllerTurnSource(decision.turn),
+          });
         }
 
         const basis: CandidateBasis<TOutput> = {
@@ -1433,22 +1441,7 @@ export class RunExecution<TOutput> {
     if (runState.status !== "running" && runState.status !== "waiting") {
       return { kind: "continue" };
     }
-    const activeRequiredDescendants = runState.pending.filter(
-      (pending) => pending.kind === "descendant_run" && pending.required,
-    );
-    if (activeRequiredDescendants.length > 0) {
-      this.commitControllerFeedback(Object.freeze({
-        source: Object.freeze({
-          owner: "agent-runtime",
-          kind: "active_descendant_completion_obligation",
-          id: this.runId,
-          revision: String(runState.revision),
-        }),
-        code: "active_descendant_result_pending",
-        message: "The Run cannot complete while required descendant work remains active. Continue other work, steer or resume the exact active Child, or cancel it before stopping.",
-      }));
-      return { kind: "continue" };
-    }
+    if (this.hasUnsettledDescendantObligations()) return { kind: "continue" };
     const current = await execution.readCurrentSnapshot();
     const gateSteeringEpoch = this.steeringEpoch;
     const outputDigest = await createCanonicalSha256Digest(
@@ -1639,6 +1632,22 @@ export class RunExecution<TOutput> {
         ),
       }),
     );
+  }
+
+  private hasUnsettledDescendantObligations(): boolean {
+    const state = this.writer.getSnapshot();
+    if (!state.pending.some((pending) => pending.kind === "descendant_run")) return false;
+    this.commitControllerFeedback(Object.freeze({
+      source: Object.freeze({
+        owner: "agent-runtime",
+        kind: "active_descendant_completion_obligation",
+        id: this.runId,
+        revision: String(state.revision),
+      }),
+      code: "active_descendant_result_pending",
+      message: "The Run cannot end while descendant work remains unsettled. Continue other work, steer or resume the exact active Child, or cancel it before stopping.",
+    }));
+    return true;
   }
 
   private acceptRunCompletion(
@@ -5862,7 +5871,8 @@ export class RunExecution<TOutput> {
   private async settle(candidate: TerminalCandidate<TOutput>): Promise<RunResult<TOutput>> {
     if (this.terminalResult !== null) return this.terminalResult;
     if (this.settlementPromise !== null) return this.settlementPromise;
-    this.settlementPromise = this.performSettlement(candidate);
+    this.settling = true;
+    this.settlementPromise = Promise.resolve().then(() => this.performSettlement(candidate));
     return this.settlementPromise;
   }
 
@@ -5924,7 +5934,7 @@ export class RunExecution<TOutput> {
         ),
       ];
       if (failures.length > 0) {
-        terminal = terminal.status === "succeeded"
+        terminal = terminal.status === "succeeded" || terminal.status === "stopped"
           ? {
               status: "failed",
               failure: failures[0]!,
@@ -5941,7 +5951,7 @@ export class RunExecution<TOutput> {
 
     if (this.resourceFailure !== null) {
       const resource = this.resourceFailureCandidate(this.resourceFailure);
-      terminal = terminal.status === "succeeded"
+      terminal = terminal.status === "succeeded" || terminal.status === "stopped"
         ? resource
         : this.appendTerminalFailures(
             terminal,
@@ -5962,7 +5972,7 @@ export class RunExecution<TOutput> {
     });
     if (resultResource.status !== "recorded") {
       const resource = this.resourceFailureCandidate(resultResource);
-      terminal = terminal.status === "succeeded"
+      terminal = terminal.status === "succeeded" || terminal.status === "stopped"
         ? resource
         : this.appendTerminalFailures(
             terminal,
@@ -5974,6 +5984,10 @@ export class RunExecution<TOutput> {
 
     const completedAt = this.now();
     const cancellationRequest = this.config.cancellation.context.request;
+    if (cancellationRequest !== null && (terminal.status === "succeeded" || terminal.status === "stopped")) {
+      terminal = { status: "cancelled" };
+    }
+    this.config.cancellation.close();
     const cause = this.createSettlementCause(terminal, cancellationRequest, completedAt);
     const settlement: RunSettlement<TOutput> = terminal.status === "succeeded"
       ? Object.freeze({
@@ -5982,9 +5996,9 @@ export class RunExecution<TOutput> {
           cause: cause.ref,
           output: terminal.output,
         })
-      : terminal.status === "failed"
+      : terminal.status === "failed" || terminal.status === "stopped"
         ? Object.freeze({
-            status: "failed" as const,
+            status: terminal.status,
             completedAt,
             cause: cause.ref,
           })
@@ -6048,11 +6062,11 @@ export class RunExecution<TOutput> {
       id: this.id("run_settlement_cause"),
       revision: String(state.revision + 1),
     });
-    const underlyingCandidates = terminal.status === "succeeded"
+    const underlyingCandidates = terminal.status === "succeeded" || terminal.status === "stopped"
       ? Object.freeze([])
       : terminal.underlying ?? Object.freeze([]);
     const underlying = Object.freeze([...underlyingCandidates].slice(0, 8));
-    const omittedUnderlyingCount = terminal.status === "succeeded"
+    const omittedUnderlyingCount = terminal.status === "succeeded" || terminal.status === "stopped"
       ? 0
       : (terminal.omittedUnderlyingCount ?? 0) +
         Math.max(0, underlyingCandidates.length - 8);
@@ -6062,6 +6076,18 @@ export class RunExecution<TOutput> {
         kind: "completion" as const,
         code: "completion_accepted" as const,
         source: terminal.source ?? this.runSource("completion_acceptance", "run_completion_acceptance"),
+        underlying,
+        omittedUnderlyingCount,
+        recordedAt,
+      });
+    }
+    if (terminal.status === "stopped") {
+      return Object.freeze({
+        ref,
+        kind: "stop" as const,
+        code: "stop_accepted" as const,
+        reason: terminal.reason,
+        source: terminal.source,
         underlying,
         omittedUnderlyingCount,
         recordedAt,
@@ -6103,7 +6129,7 @@ export class RunExecution<TOutput> {
     relation: RunCausalLink["relation"],
   ): TerminalCandidate<TOutput> {
     if (failures.length === 0) return terminal;
-    if (terminal.status === "succeeded") {
+    if (terminal.status === "succeeded" || terminal.status === "stopped") {
       return Object.freeze({
         status: "failed" as const,
         failure: failures[0]!,
@@ -6213,8 +6239,8 @@ export class RunExecution<TOutput> {
   private async closeVerification(closedAt: string): Promise<void> {
     if (this.verificationExecution === null || this.verificationClosed) return;
     this.verificationClosed = true;
-    const current = await this.verificationExecution.readCurrentSnapshot();
     try {
+      const current = await this.verificationExecution.readCurrentSnapshot();
       await this.verificationExecution.closeCurrentState({
         expectedRevision: current.ref.revision,
         closedAt,
@@ -6616,12 +6642,13 @@ export class RunExecution<TOutput> {
         : []),
     };
     if (result.status === "succeeded") this.emit("run.completed", { ...payload, status: "succeeded", code: null });
+    else if (result.status === "stopped") this.emit("run.stopped", { ...payload, status: "stopped", code });
     else if (result.status === "cancelled") this.emit("run.cancelled", { ...payload, status: "cancelled", code });
     else this.emit("run.failed", { ...payload, status: "failed", code });
   }
 
   private async recordLifecycle(
-    phase: "started" | "succeeded" | "failed" | "cancelled",
+    phase: "started" | "succeeded" | "stopped" | "failed" | "cancelled",
     skipKinds = new Set<import("../run/index.js").RunFailureKind>(),
     context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
   ): Promise<RunFailureCause[]> {
@@ -6711,7 +6738,7 @@ function terminalStatePatch<TOutput>(
     pending: Object.freeze([]),
   });
   return Object.freeze({
-    status: "failed",
+    status: terminal.status,
     finalOutput: null,
     settlement,
     settlementCause: cause,
@@ -7249,8 +7276,7 @@ function deriveActiveStatus(
   status: RunState["status"],
   pending: readonly PendingRunSubject[],
 ): RunState["status"] {
-  if (status === "suspended" || !isActiveStatus(status)) return status;
-  return deriveActiveRunStatus({ pending, progressableBranchIds: Object.freeze([]) });
+  return deriveRunStatusAfterPendingChange(status, pending);
 }
 
 function projectObservationSettlement(observation: RunObservation): {
@@ -7432,7 +7458,8 @@ function measureTerminalResultBytes<TOutput>(
     status: terminal.status,
     code: terminal.status === "succeeded" ? null : terminal.status === "cancelled"
       ? "runtime_cancelled"
-      : terminal.failure.failure.code,
+      : terminal.status === "stopped" ? "stop_accepted" : terminal.failure.failure.code,
+    stopReason: terminal.status === "stopped" ? terminal.reason : null,
     finalOutput: terminal.status === "succeeded" ? terminal.output : null,
     evidenceRefs,
     artifactRefs,

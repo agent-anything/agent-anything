@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE, HELARC_NORMAL_STOP_SETTLEMENT_BASELINE_ACCEPTANCE } from "./baseline/HelarcNormalStopSettlementBaseline.js";
 import { HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE } from "./baseline/HelarcDeterministicSystemBaseline.js";
 import {
   HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -94,7 +95,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the Descendant suspension-progression successor", async () => {
+  it("preserves accepted history and proves the normal-stop settlement successor", async () => {
     const baselines = [
       HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
       HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -122,11 +123,11 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     const historyBefore = baselines.map((baseline) => JSON.stringify(baseline));
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
+      HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE,
+      HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE,
       candidate,
     );
 
@@ -146,16 +147,18 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
     expect(baselines.map((baseline) => JSON.stringify(baseline))).toEqual(historyBefore);
     expect(candidate.report.ref)
-      .toEqual(HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.ref)
-      .toEqual(HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
+    expect(HELARC_NORMAL_STOP_SETTLEMENT_BASELINE_ACCEPTANCE.predecessorReportRef)
+      .toEqual(HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.reportRef);
     expect(HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef);
     expect(HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE.predecessorReportRef)

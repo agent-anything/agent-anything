@@ -48,6 +48,7 @@ export interface RunCancellationReceipt {
 
 export interface RunCancellationController {
   readonly context: CancellationContext;
+  close(): void;
   requestCancellation(input: RunCancellationRequestInput): RunCancellationReceipt;
 }
 
@@ -123,6 +124,7 @@ export function createRunCancellationController(
 
   const abortController = new AbortController();
   let request: RunCancellationRequest | null = null;
+  let closed = false;
   const context: CancellationContext = Object.freeze({
     runId: input.runId,
     signal: abortController.signal,
@@ -133,11 +135,12 @@ export function createRunCancellationController(
 
   return Object.freeze({
     context,
+    close() { closed = true; },
     requestCancellation(requestInput: RunCancellationRequestInput) {
       if (request !== null) {
         return Object.freeze({
           accepted: false,
-          status: "already_requested" as const,
+          status: closed ? "run_settled" as const : "already_requested" as const,
           request,
         });
       }
@@ -150,7 +153,7 @@ export function createRunCancellationController(
       assertNonEmpty(requestId, "cancellation request id");
       assertDateTime(requestedAt, "cancellation requestedAt");
 
-      request = Object.freeze({
+      const candidate = Object.freeze({
         id: requestId,
         runId: input.runId,
         origin: requestInput.origin,
@@ -160,6 +163,9 @@ export function createRunCancellationController(
         parentRunId: normalizeOptionalText(requestInput.parentRunId),
         requestedAt,
       });
+
+      if (closed) return Object.freeze({ accepted: false, status: "run_settled" as const, request: candidate });
+      request = candidate;
 
       abortController.abort(request);
       return Object.freeze({

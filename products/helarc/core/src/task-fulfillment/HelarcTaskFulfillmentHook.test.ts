@@ -19,9 +19,20 @@ import { HelarcTaskFulfillmentHook } from "./HelarcTaskFulfillmentHook.js";
 const NOW = "2026-08-28T00:00:00.000Z";
 
 describe("HelarcTaskFulfillmentHook", () => {
+  it.each(["incomplete", "uncertain"] as const)("allows an honest %s outcome without forcing another turn", async (status) => {
+    const provider = new StructuredProvider({
+      status, disposition: "allow", rationale: "The limitation is disclosed; no useful action remains.",
+      missingOutcomes: ["Unavailable external service."], unsupportedClaims: [],
+    });
+    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
+    await expect(hook.handle(createEvent(), context())).resolves.toEqual({ disposition: "allow" });
+    expect(hook.getAssessments()).toMatchObject([{ status, disposition: "allow", feedback: null }]);
+    expect(provider.requests).toHaveLength(1);
+  });
+
   it("allows a proposed completion fulfilled by the settled trajectory", async () => {
     const provider = new StructuredProvider({
-      status: "fulfilled",
+      status: "fulfilled", disposition: "allow",
       rationale: "The settled trajectory contains every requested outcome.",
       missingOutcomes: [],
       unsupportedClaims: [],
@@ -30,7 +41,7 @@ describe("HelarcTaskFulfillmentHook", () => {
 
     await expect(hook.handle(createEvent(), context())).resolves.toEqual({ disposition: "allow" });
     expect(hook.getAssessments()).toMatchObject([
-      { status: "fulfilled", feedback: null, findings: [] },
+      { status: "fulfilled", disposition: "allow", feedback: null, findings: [] },
     ]);
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]).toMatchObject({
@@ -49,7 +60,7 @@ describe("HelarcTaskFulfillmentHook", () => {
 
   it("turns missing outcomes into bounded Stop Hook feedback", async () => {
     const provider = new StructuredProvider({
-      status: "incomplete",
+      status: "incomplete", disposition: "continue",
       rationale: "The response explains the work but does not show execution.",
       missingOutcomes: ["No settled command result shows that the program ran."],
       unsupportedClaims: [],
@@ -67,14 +78,14 @@ describe("HelarcTaskFulfillmentHook", () => {
       expect(decision.message).toContain("No settled command result");
     }
     expect(hook.getAssessments()).toMatchObject([{
-      status: "incomplete",
+      status: "incomplete", disposition: "continue",
       findings: [{ kind: "missing_outcome", code: "task_outcome_missing" }],
     }]);
   });
 
   it("surfaces contradictory Provider output as a non-decision Hook error", async () => {
     const provider = new StructuredProvider({
-      status: "fulfilled",
+      status: "fulfilled", disposition: "allow",
       rationale: "The Task is complete.",
       missingOutcomes: ["The requested process was not executed."],
       unsupportedClaims: [],
@@ -89,7 +100,7 @@ describe("HelarcTaskFulfillmentHook", () => {
 
   it.each(["root", "descendant"] as const)("uses the snapshotted custom Stop text for a %s request", async (runKind) => {
     const provider = new StructuredProvider({
-      status: "fulfilled", rationale: "Accepted.", missingOutcomes: [], unsupportedClaims: [],
+      status: "fulfilled", disposition: "allow", rationale: "Accepted.", missingOutcomes: [], unsupportedClaims: [],
     });
     const sections = [{ id: "stop_instructions", enabled: true, content: "  Check the requested outcome.\nUse the supplied results.  " }];
     const expected = sections[0]!.content;
@@ -114,7 +125,7 @@ describe("HelarcTaskFulfillmentHook", () => {
     { enabled: true, content: " \n " },
   ])("omits unused Stop text without disabling model invocation or result handling: %j", async (setting) => {
     const provider = new StructuredProvider({
-      status: "incomplete", rationale: "More work is needed.", missingOutcomes: ["Requested result is missing."], unsupportedClaims: [],
+      status: "incomplete", disposition: "continue", rationale: "More work is needed.", missingOutcomes: ["Requested result is missing."], unsupportedClaims: [],
     });
     const hook = new HelarcTaskFulfillmentHook(provider, [{ id: "stop_instructions", ...setting }], () => NOW);
     await expect(hook.handle(createEvent(), context())).resolves.toMatchObject({

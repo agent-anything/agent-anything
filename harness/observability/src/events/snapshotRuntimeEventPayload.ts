@@ -80,6 +80,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       }) as RuntimeEventPayloadMap[TName];
     case "context.projection.completed":
       return contextProjectionCompleted(payload) as unknown as RuntimeEventPayloadMap[TName];
+    case "run.stopped":
     case "run.completed":
     case "run.failed":
     case "run.cancelled":
@@ -196,7 +197,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
 }
 
 const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "controller_feedback", "completion_acceptance", "suspension_transition", "settlement_cause", "terminal_transition"];
-const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "failed", "cancelled"];
+const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "stopped", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];

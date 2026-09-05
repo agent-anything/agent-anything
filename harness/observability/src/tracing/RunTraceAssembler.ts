@@ -27,7 +27,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
   private readonly lineage: RunLineage;
   private nextSpanSequence = 1;
   private lastEventSequence = 0;
-  private terminalEvent: RuntimeEvent<"run.completed" | "run.failed" | "run.cancelled"> | null = null;
+  private terminalEvent: RuntimeEvent<"run.completed" | "run.stopped" | "run.failed" | "run.cancelled"> | null = null;
   private completed = false;
 
   constructor(private readonly input: CreateRunTraceAssemblerInput) {
@@ -256,6 +256,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           coverageRatio: null,
         });
         break;
+      case "run.stopped":
       case "run.completed":
       case "run.failed":
       case "run.cancelled":

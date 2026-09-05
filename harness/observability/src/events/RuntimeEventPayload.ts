@@ -13,7 +13,7 @@ export type RuntimeRunItemKind =
   | "settlement_cause"
   | "terminal_transition";
 
-export type RuntimeTerminalStatus = "succeeded" | "failed" | "cancelled";
+export type RuntimeTerminalStatus = "succeeded" | "stopped" | "failed" | "cancelled";
 
 export interface RunStartedRuntimeEventPayload {
   readonly status: "running";
@@ -168,6 +168,7 @@ interface TerminalRuntimeEventPayload<TStatus extends RuntimeTerminalStatus> {
 }
 
 export type RunCompletedRuntimeEventPayload = TerminalRuntimeEventPayload<"succeeded">;
+export type RunStoppedRuntimeEventPayload = TerminalRuntimeEventPayload<"stopped">;
 export type RunFailedRuntimeEventPayload = TerminalRuntimeEventPayload<"failed">;
 export type RunCancelledRuntimeEventPayload = TerminalRuntimeEventPayload<"cancelled">;
 
@@ -297,6 +298,7 @@ export interface RuntimeEventPayloadMap {
   readonly "context.transition.committed": ContextTransitionCommittedRuntimeEventPayload;
   readonly "context.projection.completed": ContextProjectionCompletedRuntimeEventPayload;
   readonly "run.completed": RunCompletedRuntimeEventPayload;
+  readonly "run.stopped": RunStoppedRuntimeEventPayload;
   readonly "run.failed": RunFailedRuntimeEventPayload;
   readonly "run.cancelled": RunCancelledRuntimeEventPayload;
   readonly "controller.started": ControllerStartedRuntimeEventPayload;

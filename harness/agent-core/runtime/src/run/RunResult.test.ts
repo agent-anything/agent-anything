@@ -17,10 +17,20 @@ const TEST_INSTRUCTION_BINDING = Object.freeze({
 });
 
 describe("RunResult", () => {
-  it("constructs the three structurally distinct terminal settlements", () => {
+  it("constructs the four structurally distinct terminal settlements", () => {
     const completion = completionCause();
     const failure = failureCause();
     const cancellation = cancellationCause();
+    const stop = stopCause();
+
+    expect(createRunResult(input(
+      { status: "stopped", completedAt, cause: stop.ref },
+      stop,
+    ))).toMatchObject({
+      status: "stopped",
+      finalOutput: null,
+      cause: { kind: "stop", code: "stop_accepted", reason: "No useful continuation remains." },
+    });
 
     expect(createRunResult(input(
       { status: "succeeded", completedAt, cause: completion.ref, output: { answer: "done" } },
@@ -69,6 +79,23 @@ describe("RunResult", () => {
       { status: "succeeded", completedAt, cause: failure.ref, output: "invalid" },
       failure,
     ))).toThrow("status disagrees with its cause record");
+    const stop = stopCause();
+    expect(() => createRunResult(input(
+      { status: "failed", completedAt, cause: stop.ref },
+      stop,
+    ))).toThrow("status disagrees with its cause record");
+  });
+
+  it("requires a nonempty stop reason and rejects output on a stopped settlement", () => {
+    const stop = stopCause();
+    expect(() => createRunResult(input(
+      { status: "stopped", completedAt, cause: stop.ref },
+      { ...stop, reason: " " },
+    ))).toThrow();
+    expect(() => createRunResult(input(
+      { status: "stopped", completedAt, cause: stop.ref, output: "not success" } as never,
+      stop,
+    ))).toThrow();
   });
 
   it("rejects a direct cause missing from the bounded cause record set", () => {
@@ -153,6 +180,19 @@ function completionCause(): Extract<RunSettlementCauseRecord, { kind: "completio
     kind: "completion",
     code: "completion_accepted",
     source: source("run_completion_acceptance"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: completedAt,
+  };
+}
+
+function stopCause(): Extract<RunSettlementCauseRecord, { kind: "stop" }> {
+  return {
+    ref: causeRef(),
+    kind: "stop",
+    code: "stop_accepted",
+    reason: "No useful continuation remains.",
+    source: source("controller_turn"),
     underlying: [],
     omittedUnderlyingCount: 0,
     recordedAt: completedAt,

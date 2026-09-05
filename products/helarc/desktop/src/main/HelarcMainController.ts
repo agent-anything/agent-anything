@@ -127,6 +127,7 @@ export type HelarcMainSnapshotStatus =
   | "cancelling"
   | "waiting_for_approval"
   | "completed"
+  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -1322,7 +1323,7 @@ function createTerminalArtifacts(
     }
   }
 
-  if (product.status !== "completed" && safeOutput.safeErrors.length > 0) {
+  if (product.status !== "completed" && product.status !== "stopped" && safeOutput.safeErrors.length > 0) {
     const artifact = createArtifact({
       id: `${run.id}-artifact-error-report`,
       threadId: record.thread.id,

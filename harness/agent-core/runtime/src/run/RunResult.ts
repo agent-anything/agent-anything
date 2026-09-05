@@ -44,6 +44,13 @@ export type FailedRunResult<TOutput = never> = RunResultBase<TOutput> & {
   readonly cause: Extract<RunSettlementCauseRecord, { readonly kind: "failure" }>;
 };
 
+export type StoppedRunResult<TOutput = never> = RunResultBase<TOutput> & {
+  readonly status: "stopped";
+  readonly finalOutput: null;
+  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "stopped" }>;
+  readonly cause: Extract<RunSettlementCauseRecord, { readonly kind: "stop" }>;
+};
+
 export type CancelledRunResult<TOutput = never> = RunResultBase<TOutput> & {
   readonly status: "cancelled";
   readonly finalOutput: null;
@@ -53,6 +60,7 @@ export type CancelledRunResult<TOutput = never> = RunResultBase<TOutput> & {
 
 export type RunResult<TOutput = unknown> =
   | SucceededRunResult<TOutput>
+  | StoppedRunResult<TOutput>
   | FailedRunResult<TOutput>
   | CancelledRunResult<TOutput>;
 
@@ -83,6 +91,9 @@ export function createRunResult<TOutput>(input: CreateRunResultInput<TOutput>): 
   }
   if (settlement.status === "failed" && cause.kind === "failure") {
     return deepFreeze({ ...common, status: "failed" as const, finalOutput: null, settlement, cause, settlementCauses });
+  }
+  if (settlement.status === "stopped" && cause.kind === "stop") {
+    return deepFreeze({ ...common, status: "stopped" as const, finalOutput: null, settlement, cause, settlementCauses });
   }
   if (settlement.status === "cancelled" && cause.kind === "cancellation") {
     return deepFreeze({ ...common, status: "cancelled" as const, finalOutput: null, settlement, cause, settlementCauses });

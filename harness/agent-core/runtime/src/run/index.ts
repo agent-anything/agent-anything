@@ -68,6 +68,7 @@ export type {
   FailedRunResult,
   RunResult,
   SucceededRunResult,
+  StoppedRunResult,
 } from "./RunResult.js";
 export { createRunResult } from "./RunResult.js";
 export type {

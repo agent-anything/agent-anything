@@ -365,6 +365,7 @@ function activeStatus(
     case "suspended": return "suspended";
     case "cancelling": return "cancelling";
     case "succeeded":
+    case "stopped":
     case "failed":
     case "cancelled":
       return current;
@@ -416,7 +417,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
 }
 
 function isTerminal(status: HostRunProjection["status"]): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return status === "completed" || status === "stopped" || status === "failed" || status === "cancelled";
 }
 
 function isDateTime(value: unknown): value is string {

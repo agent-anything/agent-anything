@@ -24,7 +24,7 @@ import {
 } from "./HelarcTaskFulfillment.js";
 
 export const HELARC_TASK_FULFILLMENT_HOOK_REVISION =
-  "helarc.task-fulfillment-stop-hook.v1";
+  "helarc.task-fulfillment-stop-hook.v2";
 
 const hookRef = Object.freeze({
   owner: "helarc",
@@ -43,14 +43,19 @@ const interaction = Object.freeze({
     kind: "json_schema" as const,
     name: "helarc_task_fulfillment",
     schemaId: "helarc.task-fulfillment-assessment",
-    schemaRevision: "1",
+    schemaRevision: "2",
     schema: Object.freeze({
       type: "object",
       additionalProperties: false,
       required: Object.freeze([
-        "status", "rationale", "missingOutcomes", "unsupportedClaims",
+        "status", "disposition", "rationale", "missingOutcomes", "unsupportedClaims",
       ]),
       properties: Object.freeze({
+        disposition: Object.freeze({
+          type: "string",
+          enum: Object.freeze(["allow", "continue"]),
+          description: "Allow this processing to end, or request useful actionable continuation. Incomplete or uncertain fulfillment alone does not require continuation.",
+        }),
         status: Object.freeze({
           type: "string",
           enum: Object.freeze(["fulfilled", "incomplete", "uncertain"]),
@@ -102,7 +107,7 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
     const candidate = parseProviderResult(result);
     const assessment = createAssessment(event, candidate, this.now());
     this.assessments.push(assessment);
-    return assessment.status === "fulfilled"
+    return assessment.disposition === "allow"
       ? Object.freeze({ disposition: "allow" as const })
       : Object.freeze({
           disposition: "continue" as const,
@@ -149,6 +154,7 @@ export function createHelarcTaskFulfillmentHookComposition(
 
 interface HelarcFulfillmentCandidate {
   readonly status: HelarcTaskFulfillmentStatus;
+  readonly disposition: "allow" | "continue";
   readonly rationale: string;
   readonly missingOutcomes: readonly string[];
   readonly unsupportedClaims: readonly string[];
@@ -311,7 +317,7 @@ function parseCandidate(value: ModelJsonValue): HelarcFulfillmentCandidate {
     throw new TypeError("Task Fulfillment response must be an object.");
   }
   const record = value as { readonly [key: string]: ModelJsonValue };
-  const expected = ["status", "rationale", "missingOutcomes", "unsupportedClaims"];
+  const expected = ["status", "disposition", "rationale", "missingOutcomes", "unsupportedClaims"];
   if (Object.keys(record).some((key) => !expected.includes(key)) ||
       expected.some((key) => !Object.hasOwn(record, key))) {
     throw new TypeError("Task Fulfillment response shape is invalid.");
@@ -320,12 +326,19 @@ function parseCandidate(value: ModelJsonValue): HelarcFulfillmentCandidate {
     throw new TypeError("Task Fulfillment status is invalid.");
   }
   const missingOutcomes = boundedTextArray(record.missingOutcomes, "missingOutcomes");
+  if (record.disposition !== "allow" && record.disposition !== "continue") {
+    throw new TypeError("Task Fulfillment Stop disposition is invalid.");
+  }
+  if (record.status === "fulfilled" && record.disposition !== "allow") {
+    throw new TypeError("Fulfilled work cannot require fulfillment continuation.");
+  }
   const unsupportedClaims = boundedTextArray(record.unsupportedClaims, "unsupportedClaims");
   if (record.status === "fulfilled" && (missingOutcomes.length > 0 || unsupportedClaims.length > 0)) {
     throw new TypeError("A fulfilled Task response cannot carry unresolved outcomes or claims.");
   }
   return Object.freeze({
     status: record.status,
+    disposition: record.disposition,
     rationale: boundedText(record.rationale, "rationale"),
     missingOutcomes,
     unsupportedClaims,
@@ -373,9 +386,10 @@ function createAssessment(
     task: Object.freeze({ id: event.task.id, kind: event.task.kind }),
     candidate: event.candidate.ref,
     status: candidate.status,
+    disposition: candidate.disposition,
     rationale: candidate.rationale,
     findings: Object.freeze(findings),
-    feedback: candidate.status === "fulfilled" ? null : buildFeedback(candidate, findings),
+    feedback: candidate.disposition === "allow" ? null : buildFeedback(candidate, findings),
     assessedAt,
   });
 }
@@ -388,7 +402,7 @@ function buildFeedback(
     ? "The proposed completion does not yet fulfill the original task."
     : "Task fulfillment is uncertain from the settled trajectory.";
   const details = findings.map((finding) => finding.message).join(" ");
-  const feedback = `${prefix} ${details} Continue from the original task objective and use settled actions or clarification as needed.`.trim();
+  const feedback = `${prefix} ${candidate.rationale} ${details}`.trim();
   return feedback.length <= 4_096 ? feedback : `${feedback.slice(0, 4_093)}...`;
 }
 

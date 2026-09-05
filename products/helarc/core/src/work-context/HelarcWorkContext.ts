@@ -67,6 +67,7 @@ export interface HelarcMessageCorrelation {
 export type HelarcPersistedRunStatus =
   | "inactive"
   | "completed"
+  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -1119,6 +1120,7 @@ function isHostRunProjection(value: unknown): value is HostRunProjection {
     (projection.sequence ?? -1) >= 0 &&
     projection.terminal === null &&
     projection.status !== "completed" &&
+    projection.status !== "stopped" &&
     projection.status !== "failed" &&
     projection.status !== "cancelled";
 }
@@ -1142,7 +1144,7 @@ function isCompatibleProductTerminal(
 ): boolean {
   if (product === null) return true;
   if (
-    product.status !== "completed" && product.status !== "rejected" &&
+    product.status !== "completed" && product.status !== "stopped" && product.status !== "rejected" &&
     product.status !== "failed" &&
     product.status !== "cancelled"
   ) {
@@ -1209,6 +1211,9 @@ function isHostTerminalProjection(value: HostTerminalRunProjection): boolean {
     return value.code === "completion_accepted" && value.failure === null &&
       value.cancellation === null;
   }
+  if (value.status === "stopped") {
+    return value.code === "stop_accepted" && value.failure === null && value.cancellation === null;
+  }
   if (value.status === "cancelled") {
     return value.code === "runtime_cancelled" && value.failure === null &&
       value.cancellation !== null;
@@ -1254,7 +1259,7 @@ function isCancellationSummary(value: unknown): boolean {
 }
 
 function isRuntimeResultStatus(value: unknown): boolean {
-  return value === "succeeded" || value === "blocked" || value === "failed" ||
+  return value === "succeeded" || value === "stopped" || value === "blocked" || value === "failed" ||
     value === "cancelled";
 }
 
@@ -1273,7 +1278,7 @@ function isEnforcementSummary(value: unknown): boolean {
 function isHostTerminalStatus(
   value: unknown,
 ): value is HostTerminalRunProjection["status"] {
-  return value === "completed" || value === "blocked" || value === "failed" || value === "cancelled";
+  return value === "completed" || value === "stopped" || value === "blocked" || value === "failed" || value === "cancelled";
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

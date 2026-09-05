@@ -829,10 +829,7 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForPendingApproval(controller);
-    const suspended = waitForSnapshot(
-      controller,
-      (snapshot) => snapshot.status === "suspended",
-    );
+    const stopped = waitForProductResult(controller, "stopped");
     const result = await controller.startRun({
       taskText: "Run command",
       target: { kind: "new_thread" },
@@ -931,15 +928,16 @@ describe("HelarcMainController", () => {
       },
     });
 
-    const suspendedSnapshot = await suspended;
-    expect(suspendedSnapshot).toMatchObject({
-      status: "suspended",
+    const stoppedSnapshot = await stopped;
+    expect(stoppedSnapshot).toMatchObject({
+      status: "stopped",
       run: {
-        display: { status: "suspended", statusSource: "host" },
-        host: { status: "suspended", terminal: null },
+        display: { status: "stopped", statusSource: "host" },
+        host: { status: "stopped", terminal: { status: "stopped", code: "stop_accepted", failure: null } },
       },
     });
-    expect(JSON.stringify(suspendedSnapshot.activeThread)).not.toContain("pendingApproval");
+    expect(JSON.stringify(stoppedSnapshot.activeThread)).not.toContain("pendingApproval");
+    expect(stoppedSnapshot.activeThread?.artifacts.some((artifact) => artifact.kind === "error-report")).toBe(false);
     expect(dispatchApprovalCommand(controller, {
       ...decline,
       submissionId: "desktop-late-1",
@@ -948,7 +946,7 @@ describe("HelarcMainController", () => {
       kind: "interaction.submit",
       result: {
         status: "rejected",
-        code: "interaction_not_pending",
+        code: "run_settled",
       },
     });
     await expect(access(markerPath)).rejects.toThrow();

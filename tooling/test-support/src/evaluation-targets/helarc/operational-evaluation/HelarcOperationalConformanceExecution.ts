@@ -95,12 +95,12 @@ import {
 } from "./HelarcOperationalEvaluation.js";
 
 export const HELARC_OPERATIONAL_CONFORMANCE_REVISION =
-  "helarc-operational-conformance-v3";
+  "helarc-operational-conformance-v4";
 
 export interface HelarcOperationalConformanceFacts {
   readonly caseId: HelarcOperationalConformanceCaseId;
   readonly targetOutcome: {
-    readonly status: "succeeded" | "failed" | "cancelled";
+    readonly status: "succeeded" | "stopped" | "failed" | "cancelled";
     readonly owner: string;
     readonly code: string | null;
     readonly summary: string;

@@ -24,6 +24,16 @@ export interface RunCausalLink {
 export type RunSettlementCauseRecord =
   | {
       readonly ref: RunSettlementCauseRef;
+      readonly kind: "stop";
+      readonly code: "stop_accepted";
+      readonly reason: string;
+      readonly source: RunCauseSourceRef;
+      readonly underlying: readonly RunCausalLink[];
+      readonly omittedUnderlyingCount: number;
+      readonly recordedAt: string;
+    }
+  | {
+      readonly ref: RunSettlementCauseRef;
       readonly kind: "completion";
       readonly code: "completion_accepted";
       readonly source: RunCauseSourceRef;
@@ -52,6 +62,11 @@ export type RunSettlementCauseRecord =
     };
 
 export type RunSettlement<TOutput = unknown> =
+  | {
+      readonly status: "stopped";
+      readonly completedAt: string;
+      readonly cause: RunSettlementCauseRef;
+    }
   | {
       readonly status: "succeeded";
       readonly completedAt: string;
@@ -101,6 +116,11 @@ export function snapshotRunSettlementCauseRecord(
     throw new TypeError("cause.omittedUnderlyingCount must be a non-negative safe integer.");
   }
   dateTime(input.recordedAt, "cause.recordedAt");
+  if (input.kind === "stop") {
+    if (input.code !== "stop_accepted") throw new TypeError("Stop settlement cause code is invalid.");
+    token(input.reason, "cause.reason");
+    return deepFreeze({ ...input, ref, source, underlying });
+  }
   if (input.kind === "completion") {
     if (input.code !== "completion_accepted") {
       throw new TypeError("Completion settlement cause code is invalid.");
@@ -136,6 +156,9 @@ export function snapshotRunSettlement<TOutput>(
   }
   if (input.status !== causeKindStatus(cause.kind)) {
     throw new TypeError("Run settlement status disagrees with its cause record.");
+  }
+  if (input.status !== "succeeded" && Object.hasOwn(input, "output")) {
+    throw new TypeError("Only a succeeded Run settlement can carry final output.");
   }
   return deepFreeze({ ...input, cause: causeRef });
 }
@@ -194,7 +217,7 @@ function snapshotCausalLinks(
 }
 
 function causeKindStatus(kind: RunSettlementCauseRecord["kind"]): RunSettlement["status"] {
-  return kind === "completion" ? "succeeded" : kind === "failure" ? "failed" : "cancelled";
+  return kind === "completion" ? "succeeded" : kind === "stop" ? "stopped" : kind === "failure" ? "failed" : "cancelled";
 }
 
 function sameCauseRef(left: RunSettlementCauseRef, right: RunSettlementCauseRef): boolean {

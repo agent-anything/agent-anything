@@ -1094,7 +1094,7 @@ describe("Runner semantic integration", () => {
     }
   });
 
-  it("discards a Controller response when its owner exposure basis becomes stale", async () => {
+  it.each(["advance", "propose_stop"] as const)("discards a stale %s Controller response", async (decisionKind) => {
     const operation = operationRef("read-file");
     let ownerRevision = 1;
     const entered = deferred<void>();
@@ -1124,6 +1124,11 @@ describe("Runner semantic integration", () => {
       async (input) => {
         entered.resolve();
         await release.promise;
+        if (decisionKind === "propose_stop") return {
+          kind: "propose_stop",
+          reason: "Stale stopping basis",
+          modelItems: modelTextItems("stale-model-item", "Stop now"),
+        };
         return advance([toolCandidate(
           "codeAgent.readFile",
           { path: "README.md" },
@@ -1320,8 +1325,11 @@ describe("Runner semantic integration", () => {
     }));
   });
 
-  it("routes an exposed Agent Tool directly to one bounded descendant Run", async () => {
+  it.each(["succeeded", "stopped"] as const)("transfers one bounded %s descendant Run without inventing a failure", async (childStatus) => {
+    const childSummary = childStatus === "succeeded" ? "Child complete" : "No further progress is possible";
     const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const delegation = createTestDelegation(childAgent);
+    const childResults: RunResult[] = [];
     let operations!: OperationFixture;
     let tools!: RunConfig["tools"];
     const controller = new ScriptedController([
@@ -1332,23 +1340,33 @@ describe("Runner semantic integration", () => {
       )], "model_tool_1"),
       (input) => {
         expect(input.agent).toMatchObject({ id: childAgent.id, revision: childAgent.revision });
-        return complete("Child complete", "model_child_complete");
+        return childStatus === "succeeded"
+          ? complete(childSummary, "model_child_complete")
+          : { kind: "propose_stop", reason: childSummary, modelItems: modelTextItems("model_child_stop", childSummary) };
       },
       (input) => {
         expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
           kind: "descendant_run",
           status: "succeeded",
-          output: { summary: "Child complete" },
+          output: { summary: childSummary },
           toolResult: {
             status: "succeeded",
-            output: { summary: "Child complete" },
+            output: { summary: childSummary },
           },
         });
         return complete("Parent complete", "model_parent_complete");
       },
     ]);
     operations = createOperationFixture([], [], {
-      delegation: createTestDelegation(childAgent),
+      delegation: {
+        ...delegation,
+        narrativeProjection: {
+          project(input) {
+            childResults.push(input.childResult);
+            return delegation.narrativeProjection.project(input);
+          },
+        },
+      },
     });
     tools = createSemanticToolSelection(
       operations,
@@ -1366,12 +1384,13 @@ describe("Runner semantic integration", () => {
       createRunConfig(operations, { tools }),
     );
 
+    expect(childResults[0]?.status, JSON.stringify(childResults[0]?.cause)).toBe(childStatus);
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(observations(result)).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({
         kind: "descendant_run",
         status: "succeeded",
-        output: expect.objectContaining({ summary: "Child complete" }),
+        output: expect.objectContaining({ summary: childSummary }),
       }),
     }));
     expect(observations(result).some(({ payload }) => payload.kind === "operation"))
@@ -1383,7 +1402,7 @@ describe("Runner semantic integration", () => {
     ]);
   });
 
-  it("returns suspended Child progress, resumes the same Run, and transfers its terminal result once", async () => {
+  it.each([false, true])("recovers a suspended Child without abandoning it for Parent Stop (stop=%s)", async (tryParentStop) => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     const childMayComplete = deferred<void>();
     const childSettled = deferred<void>();
@@ -1403,8 +1422,8 @@ describe("Runner semantic integration", () => {
           childTurn += 1;
           if (childTurn === 1) {
             return Object.freeze({
-              kind: "propose_stop" as const,
-              reason: "The Child needs Parent direction.",
+              kind: "propose_completion" as const,
+              output: { summary: "The Child needs Parent direction." },
               modelItems: modelTextItems(
                 "model_child_stop",
                 "The Child needs Parent direction.",
@@ -1430,7 +1449,13 @@ describe("Runner semantic integration", () => {
             input.toolExposure.controllerRequestId,
           )], "model_agent_1");
         }
-        if (rootTurn === 2) {
+        if (rootTurn === 2 && tryParentStop) return {
+          kind: "propose_stop",
+          reason: "Parent proposes stopping before Child settlement",
+          modelItems: modelTextItems("model_parent_stop", "Stop now"),
+        };
+        const progressionTurn = rootTurn - (tryParentStop ? 1 : 0);
+        if (progressionTurn === 2) {
           const active = input.descendants.active[0];
           expect(active).toMatchObject({
             target: { kind: "active", id: "run_002" },
@@ -1441,7 +1466,7 @@ describe("Runner semantic integration", () => {
             kind: "descendant_progress",
             progress: {
               childRun: { id: "run_002" },
-              suspension: { code: "controller_stop_requested" },
+              suspension: { code: "completion_gate_feedback_exhausted" },
             },
             output: { agent_id: "run_002", status: "suspended" },
             toolResult: { status: "succeeded" },
@@ -1455,7 +1480,7 @@ describe("Runner semantic integration", () => {
             input.toolExposure.controllerRequestId,
           )], "model_send_message_1");
         }
-        if (rootTurn === 3) {
+        if (progressionTurn === 3) {
           childMayComplete.resolve();
           await childSettled.promise;
           return complete("Parent attempted completion before transfer", "model_parent_stale");
@@ -1492,6 +1517,7 @@ describe("Runner semantic integration", () => {
     ]);
 
     const handle = createRunner(controller, operations, {
+      verification: createSuspensionVerification(1),
       runtimeEventPublisher: {
         publish(event) {
           events.push(event);
@@ -1503,7 +1529,7 @@ describe("Runner semantic integration", () => {
     }).start(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations, { tools }),
+      createRunConfig(operations, { tools, limits: { completionGate: { maxFeedbackRounds: 0 } } }),
     );
     const result = await handle.wait();
 
@@ -1511,6 +1537,7 @@ describe("Runner semantic integration", () => {
     expect(controllerCalls.map(({ runId }) => runId)).toEqual([
       "run_001",
       "run_002",
+      ...(tryParentStop ? ["run_001"] : []),
       "run_001",
       "run_002",
       "run_001",
@@ -1555,8 +1582,8 @@ describe("Runner semantic integration", () => {
           childTurn += 1;
           if (childTurn <= 2) {
             return Object.freeze({
-              kind: "propose_stop" as const,
-              reason: `Child suspension ${childTurn}.`,
+              kind: "propose_completion" as const,
+              output: { summary: `Child suspension ${childTurn}.` },
               modelItems: modelTextItems(
                 `model_child_stop_${childTurn}`,
                 `Child suspension ${childTurn}.`,
@@ -1593,10 +1620,10 @@ describe("Runner semantic integration", () => {
         revision: "descendant-binding-1",
       },
     }]);
-    const handle = createRunner(controller, operations).start(
+    const handle = createRunner(controller, operations, { verification: createSuspensionVerification(2) }).start(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations, { tools }),
+      createRunConfig(operations, { tools, limits: { completionGate: { maxFeedbackRounds: 0 } } }),
     );
     handle.subscribe((snapshot) => {
       const active = snapshot.activeDelegations[0];
@@ -1652,136 +1679,6 @@ describe("Runner semantic integration", () => {
     });
   });
 
-  it.each([1, 2])("preserves Root suspension while %i Child results settle until explicit resume", async (childCount) => {
-    const childAgent = createAgent("agent_child", "1", "Child Agent");
-    const childTurns = new Map<string, number>();
-    let rootTurn = 0;
-    const controller: Controller<TestOutput> = {
-      resourceMetering: Object.freeze({
-        modelInputTokens: "not_applicable" as const,
-        modelOutputTokens: "not_applicable" as const,
-        costUnits: "not_applicable" as const,
-      }),
-      async next(input) {
-        if (input.runId !== "run_001") {
-          const turn = (childTurns.get(input.runId) ?? 0) + 1;
-          childTurns.set(input.runId, turn);
-          return turn === 1
-            ? Object.freeze({
-                kind: "propose_stop" as const,
-                reason: "Child awaits explicit resume.",
-                modelItems: modelTextItems(`${input.runId}_stop`, "Child awaits explicit resume."),
-              })
-            : complete("Child completed", `${input.runId}_complete`);
-        }
-        rootTurn += 1;
-        if (rootTurn <= childCount) {
-          return advance([toolCandidate(
-            "Agent",
-            { prompt: `Inspect subject ${rootTurn}.` },
-            input.toolExposure.controllerRequestId,
-          )], `model_agent_${rootTurn}`);
-        }
-        if (rootTurn === childCount + 1) {
-          return Object.freeze({
-            kind: "propose_stop" as const,
-            reason: "Root awaits explicit resume independently of Child results.",
-            modelItems: modelTextItems("model_root_stop", "Root awaits explicit resume."),
-          });
-        }
-        expect(input.descendants.active).toEqual([]);
-        expect(projectedObservations(input.context).filter(({ payload }) =>
-          payload.kind === "descendant_result_transfer" && payload.status === "succeeded"
-        )).toHaveLength(childCount);
-        return complete("Root consumed Child results after explicit resume", "model_root_complete");
-      },
-    };
-    const delegation = createTestDelegation(childAgent);
-    const operations = createOperationFixture([], [], {
-      delegation: {
-        ...delegation,
-        preparation: {
-          ...delegation.preparation,
-          async prepare(input) {
-            const prepared = await delegation.preparation.prepare(input);
-            return {
-              ...prepared,
-              preparation: {
-                ...prepared.preparation,
-                contextPlan: createDelegationContextPlan({
-                  entries: prepared.preparation.contextPlan.entries,
-                  maxContextBytes: 262_144,
-                }),
-                allocationRequest: createDelegationLimits({
-                  maxDurationMs: prepared.preparation.allocationRequest.maxDurationMs,
-                  maxControllerTurns: 8,
-                  maxActions: 16,
-                  maxContextBytes: 262_144,
-                  maxResultBytes: 65_536,
-                  maxModelInputTokens: 4_096,
-                  maxModelOutputTokens: 4_096,
-                  maxCostUnits: 1_000,
-                }),
-              },
-            };
-          },
-        },
-      },
-    });
-    const tools = createSemanticToolSelection(operations, "Agent", {
-      kind: "descendant_agent",
-      agent: { id: childAgent.id, revision: childAgent.revision },
-      revision: "descendant-binding-1",
-    });
-    const handle = createRunner(controller, operations).start(
-      createAgent(), createRunInput(), createRunConfig(operations, { tools }),
-    );
-    try {
-      await waitUntil(() => handle.getSnapshot().status === "suspended");
-      const suspended = handle.getSnapshot();
-      expect(suspended.activeDelegations).toHaveLength(childCount);
-      const suspension = suspended.suspension!;
-      for (const [index, child] of suspended.activeDelegations.entries()) {
-        const active = handle.getSnapshot().activeDelegations.find(({ child: ref }) => ref.id === child.child.id)!;
-        expect(handle.resumeDescendant(hostResumeRoute(active, `resume-child-${index}`)))
-          .toMatchObject({ status: "routed", resume: { status: "accepted" } });
-        await waitUntil(() => !handle.getSnapshot().activeDelegations.some(({ child: ref }) => ref.id === child.child.id));
-        const current = handle.getSnapshot();
-        expect(current.status).toBe("suspended");
-        expect(current.suspension).toEqual(suspension);
-        expect(current.runRevision).toBeGreaterThan(suspended.runRevision);
-        expect(current.activeDelegations).toHaveLength(childCount - index - 1);
-        expect(current.result).toBeNull();
-        expect(rootTurn).toBe(childCount + 1);
-      }
-      const resume = {
-        id: "resume-root",
-        expectedRunRevision: handle.getSnapshot().runRevision,
-        suspension: suspension.ref,
-        origin: "host" as const,
-        reason: "Resume Root after consuming Child transfers.",
-      };
-      expect(handle.resume({ ...resume, id: "stale-resume-root", expectedRunRevision: suspended.runRevision }))
-        .toMatchObject({ status: "rejected", code: "run_revision_stale" });
-      expect(handle.resume(resume)).toMatchObject({ status: "accepted" });
-      expect(handle.getSnapshot()).toMatchObject({ status: "running", suspension: null });
-      expect(handle.resume({ ...resume, id: "duplicate-resume-root" }))
-        .toMatchObject({ status: "rejected", code: "run_not_suspended" });
-      const result = await handle.wait();
-      expect(result.status).toBe("succeeded");
-      expect(rootTurn).toBe(childCount + 2);
-      expect(result.items.flatMap(({ payload }) =>
-        payload.kind === "suspension_transition" ? [payload.transition] : []
-      )).toEqual(["suspended", "resumed"]);
-      expect(observations(result).filter(({ payload }) => payload.kind === "descendant_result_transfer"))
-        .toHaveLength(childCount);
-    } finally {
-      if (handle.getResult() === null) {
-        handle.cancel({ origin: "user", reasonCode: "user_requested" });
-        await handle.wait();
-      }
-    }
-  });
 
   it("launches contiguous Agent calls as concurrent siblings and commits Parent outcomes in candidate order", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
@@ -3598,29 +3495,75 @@ describe("Runner semantic integration", () => {
     )).toBe(false);
   });
 
-  it("maps an explicit Controller stop to a resumable suspended Run", async () => {
+  it.each([false, true])("settles an explicit stop without completion eligibility (mandatory=%s)", async (mandatory) => {
     const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
     const controller = new ScriptedController([{
       kind: "propose_stop",
-      reason: "No safe path remains.",
-      modelItems: modelTextItems("model_stop_1", "No safe path remains."),
+      reason: "No useful continuation remains.",
+      modelItems: modelTextItems("model_stop_1", "No useful continuation remains."),
     }]);
-
-    const handle = createRunner(controller, operations).start(
-      createAgent(),
-      createRunInput(),
-      createRunConfig(operations),
-    );
-
-    await waitUntil(() => handle.getSnapshot().status === "suspended");
-    expect(handle.getSnapshot()).toMatchObject({
-      status: "suspended",
-      result: null,
-      suspension: { code: "controller_stop_requested" },
+    const handle = createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => { events.push(event); } },
+    }).start(createAgent(), createRunInput(), createRunConfig(operations, mandatory
+      ? { verification: createMandatoryVerificationConfig("block") }
+      : {}));
+    const result = await handle.wait();
+    expect(result).toMatchObject({
+      status: "stopped", finalOutput: null,
+      cause: { kind: "stop", code: "stop_accepted", reason: "No useful continuation remains." },
     });
-    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
-      .toBe("accepted");
-    expect((await handle.wait()).status).toBe("cancelled");
+    expect(handle.getSnapshot()).toMatchObject({ status: "stopped", suspension: null });
+    expect(handle.getSnapshot().runTree.settlement.complete).toBe(true);
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter(({ payload }) => payload.kind === "terminal_transition")).toHaveLength(1);
+    expect(result.items.filter(({ payload }) => payload.kind === "suspension_transition")).toHaveLength(0);
+    expect(events.filter(({ name }) => name === "verification.gate.evaluated")).toHaveLength(0);
+    expect(events.filter(({ name }) => name === "run.stopped")).toHaveLength(1);
+    expect(events.filter(({ name }) => name === "run.failed")).toHaveLength(0);
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status).toBe("run_settled");
+    expect(handle.getResult()).toBe(result);
+  });
+
+  it.each(["succeeded", "stopped"] as const)("accepts cancellation during %s finalization without returning to Controller", async (status) => {
+    const operations = createOperationFixture([]);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const controller = new ScriptedController([status === "succeeded" ? complete("Done") : {
+      kind: "propose_stop", reason: "No useful work remains.",
+      modelItems: modelTextItems("model_stop", "No useful work remains."),
+    }]);
+    const handle = createRunner(controller, operations, {
+      resourceFinalizers: [{ async finalize() { entered.resolve(); await release.promise; return null; } }],
+    }).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await entered.promise;
+    expect(handle.steer({
+      commandId: "late-steering",
+      expectedRunRevision: handle.getSnapshot().runRevision,
+      instruction: "Reopen progression",
+      attribution: { origin: "user", actorId: null },
+      submittedAt: NOW,
+    })).toMatchObject({ status: "rejected", code: "run_settling" });
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status).toBe("accepted");
+    release.resolve();
+    const result = await handle.wait();
+    expect(result.status).toBe("cancelled");
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter(({ payload }) => payload.kind === "terminal_transition")).toHaveLength(1);
+  });
+
+  it("settles finalization failure after an accepted stop without another Controller turn", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([{
+      kind: "propose_stop", reason: "No useful work remains.",
+      modelItems: modelTextItems("model_stop", "No useful work remains."),
+    }]);
+    const result = await createRunner(controller, operations, {
+      resourceFinalizers: [{ async finalize() { throw new Error("Cleanup failed"); } }],
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result).toMatchObject({ status: "failed", cause: { failure: { failure: { code: "runtime_resource_finalization_failed" } } } });
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter(({ payload }) => payload.kind === "terminal_transition")).toHaveLength(1);
   });
 
   it("rejects invalid config and incomplete Action composition before creating a Run", () => {
@@ -4036,6 +3979,7 @@ function createTestDelegation(
     }),
     narrativeProjection: Object.freeze({
       project({ childResult }) {
+        if (childResult.status === "stopped") return childResult.cause.reason;
         const finalOutput = childResult.finalOutput;
         if (
           finalOutput !== null &&
@@ -4067,7 +4011,7 @@ function createTestDelegation(
           summary: result.narrative?.text ?? "",
           ...(continuation === null ? {} : { agent_id: continuation.id }),
         });
-        return result.terminal.status === "succeeded"
+        return result.terminal.status === "succeeded" || result.terminal.status === "stopped"
           ? Object.freeze({
               status: "succeeded" as const,
               output,
@@ -4580,6 +4524,23 @@ function createTestVerificationComposition(): RunnerDependencies["verification"]
     settledOperationResults: null,
     checkResults: null,
   });
+}
+
+function createSuspensionVerification(turns: number): RunnerDependencies["verification"] {
+  return {
+    ...createTestVerificationComposition(),
+    completionGate: {
+      async evaluate(input) {
+        if (input.run.id !== "run_002" || input.turn.sequence > turns) return eligibleGateDecision(input);
+        return {
+          invocation: input.invocation, verificationSnapshot: input.verificationSnapshot,
+          status: "blocked_unassessed", disposition: "continue",
+          reasons: [{ owner: "verification", code: "test_direction_required", message: "Await updated direction.", requirement: null }],
+          failure: null, decidedAt: NOW,
+        };
+      },
+    },
+  };
 }
 
 function createTestVerificationConfig(): RunConfig["verification"] {

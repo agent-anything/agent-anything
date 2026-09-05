@@ -25,6 +25,7 @@ export type RunSteeringRejectionCode =
   | "steering_revision_stale"
   | "steering_queue_full"
   | "run_cancelling"
+  | "run_settling"
   | "run_settled";
 
 export type RunSteeringSubmissionReceipt =

@@ -65,6 +65,7 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
   ],
   "run.completed": terminalFields(),
+  "run.stopped": terminalFields(),
   "run.failed": terminalFields(),
   "run.cancelled": terminalFields(),
   "controller.started": ["turnId", "iteration"],

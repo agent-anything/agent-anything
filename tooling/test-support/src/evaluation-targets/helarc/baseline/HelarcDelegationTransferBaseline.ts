@@ -15,7 +15,7 @@ export interface HistoricalDelegationTransferMetrics {
   readonly modelTurnCount: number;
   readonly latencyMs: number;
   readonly humanAttentionEvents: number;
-  readonly terminalOutcome: "succeeded" | "failed" | "cancelled";
+  readonly terminalOutcome: "succeeded" | "stopped" | "failed" | "cancelled";
 }
 
 export interface HistoricalDelegationTransferInvariantSummary {

@@ -66,22 +66,6 @@ async function executeTestHostRun(input: RunHelarcTestInput) {
   return composition.result;
 }
 
-async function executeSuspendedThenCancelledTestHostRun(input: RunHelarcTestInput) {
-  const prepared = await prepareTestHostRun(input);
-  const composition = prepared.start();
-  await waitUntil(() => composition.activeRun.getStatus().status === "suspended");
-  const suspended = composition.activeRun.getStatus();
-  const cancellation = composition.activeRun.cancel({
-    origin: "user",
-    reasonCode: "user_requested",
-  });
-  return Object.freeze({
-    suspended,
-    cancellation,
-    result: await composition.result,
-  });
-}
-
 async function prepareTestHostRun(input: RunHelarcTestInput) {
   const productRunId = input.productRunId ?? input.sessionId ?? input.task.id;
   const permissionPreset = input.permissionPreset ?? "ask_for_approval";
@@ -583,18 +567,15 @@ describe("Helarc Host Run composition", () => {
         reason: "Permission was denied.",
       },
     ]);
-    const execution = await executeSuspendedThenCancelledTestHostRun({
+    const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       enableShell: true,
       permissionPreset: "approve_for_me",
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
-    const { result } = execution;
 
-    expect(execution.suspended.status).toBe("suspended");
-    expect(execution.cancellation.status).toBe("accepted");
-    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("cancelled");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("stopped");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -620,18 +601,15 @@ describe("Helarc Host Run composition", () => {
       },
     ]);
 
-    const execution = await executeSuspendedThenCancelledTestHostRun({
+    const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       enableShell: true,
       permissionPreset: "approve_for_me",
       automaticApprovalReviewer: unavailableAutomaticReviewer(),
     });
-    const { result } = execution;
 
-    expect(execution.suspended.status).toBe("suspended");
-    expect(execution.cancellation.status).toBe("accepted");
-    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("cancelled");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("stopped");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -915,16 +893,14 @@ describe("Helarc Host Run composition", () => {
       { kind: "stop", reason: "The requested file change was declined." },
     ]);
 
-    const execution = await executeSuspendedThenCancelledTestHostRun({
+    const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       permissionPreset: "approve_for_me",
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
-    const { result } = execution;
 
-    expect(execution.suspended.status).toBe("suspended");
-    expect(result.product.status).toBe("cancelled");
+    expect(result.product.status).toBe("stopped");
     expect(result.product.output.enforcement.status).toBe("denied");
     await expect(access(targetPath)).rejects.toThrow();
   });
@@ -946,15 +922,13 @@ describe("Helarc Host Run composition", () => {
       { kind: "stop", reason: "The exact edit was ambiguous." },
     ]);
 
-    const execution = await executeSuspendedThenCancelledTestHostRun({
+    const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       permissionPreset: "full_access",
     });
-    const { result } = execution;
 
-    expect(execution.suspended.status).toBe("suspended");
-    expect(result.product.status).toBe("cancelled");
+    expect(result.product.status).toBe("stopped");
     expect(result.product.output.safeErrors).toContainEqual(expect.objectContaining({
       code: "file_edit_ambiguous",
     }));
@@ -978,7 +952,7 @@ describe("Helarc Host Run composition", () => {
       { kind: "stop", reason: "The prepared baseline became stale." },
     ]);
 
-    const execution = await executeSuspendedThenCancelledTestHostRun({
+    const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       permissionPreset: "approve_for_me",
@@ -986,10 +960,8 @@ describe("Helarc Host Run composition", () => {
         await writeFile(targetPath, "changed externally\n");
       }),
     });
-    const { result } = execution;
 
-    expect(execution.suspended.status).toBe("suspended");
-    expect(result.product.status).toBe("cancelled");
+    expect(result.product.status).toBe("stopped");
     expect(result.product.output.safeErrors).toContainEqual(expect.objectContaining({
       code: "file_target_changed",
     }));
@@ -1231,7 +1203,7 @@ function scriptedTaskFulfillmentResult(
     response: snapshotProviderResponse({
       kind: "structured_generation",
       output: Object.freeze({
-        status: "fulfilled",
+        status: "fulfilled", disposition: "allow",
         rationale: "The scripted Host Run fixture accepts the settled trajectory.",
         missingOutcomes: Object.freeze([]),
         unsupportedClaims: Object.freeze([]),

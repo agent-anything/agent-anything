@@ -4,7 +4,7 @@ import { createHelarcDelegatedWorkerAgent } from "./HelarcAgent.js";
 import { createHelarcDescendantAgentContribution } from "./HelarcDescendantAgent.js";
 
 describe("Helarc descendant Agent contribution", () => {
-  it("projects one bounded result with an opaque continuation identity", () => {
+  it.each(["succeeded", "stopped"] as const)("projects a %s Child result without inventing a Tool failure", (status) => {
     const agent = createHelarcDelegatedWorkerAgent({
       providerId: "test-provider",
       modelId: "test-model",
@@ -18,7 +18,7 @@ describe("Helarc descendant Agent contribution", () => {
       result: {
         ref: { id: "delegation-result-1", revision: "result-revision-1" },
         correlation: { child: { run: { id: "child-run-1" } } },
-        terminal: { status: "succeeded", code: null },
+        terminal: { status, code: status === "stopped" ? "stop_accepted" : "completion_accepted" },
         narrative: { text: "Child result." },
         artifacts: { refs: [] },
         verification: { status: "satisfied" },
@@ -33,10 +33,13 @@ describe("Helarc descendant Agent contribution", () => {
     expect(outcome).toMatchObject({
       status: "succeeded",
       output: {
+        status,
+        failure_code: null,
         agent_id: "agent-continuation-1",
         summary: "Child result.",
       },
     });
+    expect(outcome.failure).toBeNull();
     expect(outcome.output).not.toHaveProperty("result_ref");
     expect(outcome.output).not.toHaveProperty("child_run_id");
   });

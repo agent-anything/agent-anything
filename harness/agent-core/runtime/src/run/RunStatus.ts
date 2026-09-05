@@ -5,6 +5,6 @@ export type ActiveRunStatus =
   | "suspended"
   | "cancelling";
 
-export type TerminalRunStatus = "succeeded" | "failed" | "cancelled";
+export type TerminalRunStatus = "succeeded" | "stopped" | "failed" | "cancelled";
 export type RunStatus = ActiveRunStatus | TerminalRunStatus;
 export type RunResultStatus = TerminalRunStatus;

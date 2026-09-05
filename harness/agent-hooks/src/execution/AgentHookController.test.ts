@@ -46,6 +46,20 @@ class FakeController implements Controller<TestOutput> {
 }
 
 describe("AgentHookController", () => {
+  it("preserves a stop after one actionable continuation and a later allow", async () => {
+    let calls = 0;
+    const decision: ControllerDecision<TestOutput> = { kind: "propose_stop", reason: "No useful work remains.", modelItems: [] };
+    const controller = new AgentHookController({
+      controller: new FakeController(() => decision),
+      composition: stopComposition([handler("stop", () => ++calls === 1
+        ? { disposition: "continue", code: "one_more_check", message: "Check the last settled result." }
+        : { disposition: "allow" })]),
+      rootRunId: "run-1", now: () => NOW,
+    });
+    await expect(controller.next(controllerInput(), callContext())).resolves.toMatchObject({ kind: "continue_with_feedback" });
+    await expect(controller.next(controllerInput(2), callContext())).resolves.toBe(decision);
+    expect(calls).toBe(2);
+  });
   it("isolates projection listener failures from Agent execution", () => {
     const store = new AgentHookExecutionStore();
 

@@ -42,9 +42,9 @@ import {
 
 export const HELARC_EVALUATION_TIME = "2026-09-05T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-descendant-suspension-progression-corpus-v1";
+  "helarc-normal-stop-settlement-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-descendant-suspension-progression-target-v1";
+  "helarc-normal-stop-settlement-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -83,8 +83,8 @@ export interface HelarcEvaluationScript {
 export interface HelarcEvaluationExpectedClaim {
   readonly ref: EvaluationRecordRef;
   readonly caseRef: EvaluationRecordRef;
-  readonly productStatus: "completed" | "failed" | "cancelled";
-  readonly runStatus: "succeeded" | "failed" | "cancelled";
+  readonly productStatus: "completed" | "stopped" | "failed" | "cancelled";
+  readonly runStatus: "succeeded" | "stopped" | "failed" | "cancelled";
   readonly agentSummary: string | null;
   readonly workspaceFiles: readonly HelarcEvaluationFixtureFile[];
   readonly requiredActionNames: readonly string[];
@@ -358,7 +358,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v19-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v20-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -369,7 +369,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-descendant-suspension-progression-v1",
+    "product.revision": "helarc-product-normal-stop-settlement-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -379,8 +379,8 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "controller-control-set.revision": "helarc.controller-controls.v1",
     "model-interaction.protocol.revision": "provider-native-tool-interaction.v1",
     "run-interaction-records.revision": "model-turn-and-settlement.v1",
-    "run-lifecycle.revision": "agent-runtime.run-lifecycle.v3",
-    "run-settlement.revision": "agent-runtime.run-terminal-settlement.v1",
+    "run-lifecycle.revision": "agent-runtime.run-lifecycle.v4",
+    "run-settlement.revision": "agent-runtime.run-terminal-settlement.v2",
     "agent-hooks.revision": "agent-hooks.stop-and-stop-failure.v1",
     "task-fulfillment-hook.revision": HELARC_TASK_FULFILLMENT_HOOK_REVISION,
     "verification-completion-gate.revision": "verification.current-completion-gate.v1",
@@ -393,7 +393,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-descendant-suspension-progression-v1",
+    "source.revision": "helarc-normal-stop-settlement-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "validated-tool-input-and-continuation-v1",
@@ -582,9 +582,9 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         },
         { kind: "stop", reason: "The requested command was denied." },
       ],
-      productStatus: "cancelled",
-      runStatus: "cancelled",
-      agentSummary: null,
+      productStatus: "stopped",
+      runStatus: "stopped",
+      agentSummary: "The requested command was denied.",
       expectedAddedFiles: {},
       requiredActionNames: [process.platform === "win32" ? "PowerShell" : "Bash"],
       retryCount: 0,

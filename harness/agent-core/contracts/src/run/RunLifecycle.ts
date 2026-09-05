@@ -5,5 +5,6 @@ export type RunLifecycleStatus =
   | "suspended"
   | "cancelling"
   | "succeeded"
+  | "stopped"
   | "failed"
   | "cancelled";

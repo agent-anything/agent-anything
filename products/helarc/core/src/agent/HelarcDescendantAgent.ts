@@ -219,6 +219,7 @@ export function createHelarcDescendantAgentContribution(
               ? input.childResult.finalOutput.summary
               : null;
           }
+          if (input.childResult.cause.kind === "stop") return input.childResult.cause.reason;
           const partial = [...input.childResult.items]
             .reverse()
             .flatMap(({ payload }) => payload.kind === "controller_turn"
@@ -288,7 +289,7 @@ function projectDescendantResult(
     verification_status: result.verification.status,
     effect_status: result.effects.status,
     uncertainty: result.uncertainty,
-    failure_code: result.terminal.code,
+    failure_code: result.terminal.status === "failed" ? result.terminal.code : null,
   });
   const requiredMissing = result.expectationCoverage.some(
     ({ required, disposition }) => required && disposition !== "present",
@@ -296,6 +297,9 @@ function projectDescendantResult(
   const uncertain = result.effects.status === "partial" ||
     result.effects.status === "unknown" ||
     result.limitDisposition.status === "exhausted";
+  if (result.terminal.status === "stopped") {
+    return Object.freeze({ status: "succeeded" as const, output, failure: null });
+  }
   if (result.terminal.status === "succeeded" && !requiredMissing && !uncertain) {
     return Object.freeze({
       status: "succeeded" as const,

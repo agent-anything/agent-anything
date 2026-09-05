@@ -120,7 +120,7 @@ function createTaskFulfillmentResult(
     response: snapshotProviderResponse({
       kind: "structured_generation",
       output: Object.freeze({
-        status: "fulfilled",
+        status: "fulfilled", disposition: "allow",
         rationale: "The scripted product fixture accepts the settled completion trajectory.",
         missingOutcomes: Object.freeze([]),
         unsupportedClaims: Object.freeze([]),

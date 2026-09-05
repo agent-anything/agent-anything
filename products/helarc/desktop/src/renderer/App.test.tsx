@@ -231,8 +231,8 @@ describe("Helarc workbench shell", () => {
             suspension: {
               id: "suspension-1",
               revision: "suspension-1-v1",
-              code: "controller_stop_requested",
-              reason: "Waiting for direction.",
+              code: "completion_gate_feedback_exhausted",
+              reason: "Completion evidence is still unavailable.",
               runRevision: 6,
               suspendedAt: "2026-07-05T01:00:01.000Z",
             },
@@ -256,7 +256,7 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Created by action-1");
     expect(html).toContain("Concurrent request 1 of 2");
     expect(html).toContain("Concurrent request 2 of 2");
-    expect(html).toContain("Suspended at revision 6: Waiting for direction.");
+    expect(html).toContain("Suspended at revision 6: Completion evidence is still unavailable.");
     expect(html).toContain("steer / resume / cancel; result transfer pending");
     expect(html).toContain("Resume descendant run");
     expect(html).toContain("cancelling");
@@ -408,6 +408,7 @@ describe("Helarc workbench shell", () => {
 
   it.each([
     ["completed", "Run completed", "succeeded"],
+    ["stopped", "Run stopped", "stopped"],
     ["failed", "Run failed", "failed"],
     ["cancelled", "Run cancelled", "cancelled"],
   ] as const)("renders terminal %s output", (status, title, runtimeStatus) => {
@@ -511,8 +512,8 @@ function unconfiguredSnapshot(): HelarcMainSnapshot {
 }
 
 function runProjection(input: {
-  status?: "running" | "completed" | "failed" | "cancelled";
-  runtimeStatus?: "succeeded" | "failed" | "cancelled";
+  status?: "running" | "completed" | "stopped" | "failed" | "cancelled";
+  runtimeStatus?: "succeeded" | "stopped" | "failed" | "cancelled";
   activity?: ReturnType<typeof event>[];
   runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
   activeDelegations?: NonNullable<HelarcMainSnapshot["run"]>["host"]["activeDelegations"];

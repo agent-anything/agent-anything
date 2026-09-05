@@ -35,6 +35,7 @@ export type {
   VerificationCheckStartedRuntimeEventPayload,
   VerificationGateEvaluatedRuntimeEventPayload,
   RuntimeTerminalStatus,
+  RunStoppedRuntimeEventPayload,
 } from "./RuntimeEventPayload.js";
 export { RuntimeEventStream, type CreateRuntimeEventStreamInput, type RuntimeEventIdentityFactory, type RuntimeEventIdentityInput } from "./RuntimeEventStream.js";
 export { snapshotRuntimeEventPayload } from "./snapshotRuntimeEventPayload.js";

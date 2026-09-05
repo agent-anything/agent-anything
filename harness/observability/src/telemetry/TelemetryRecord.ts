@@ -5,6 +5,7 @@ export const TELEMETRY_RECORD_SCHEMA_VERSION = 1 as const;
 export type TelemetryRecordName =
   | "runner.run.started"
   | "runner.run.succeeded"
+  | "runner.run.stopped"
   | "runner.run.failed"
   | "runner.run.cancelled"
   | "runner.approval.resolved"
@@ -14,6 +15,7 @@ export type TelemetryRecordName =
 export type TelemetryRunStatus =
   | "started"
   | "succeeded"
+  | "stopped"
   | "failed"
   | "cancelled";
 
@@ -109,6 +111,11 @@ interface TelemetryRecordContractMap {
     readonly durationMs: number;
     readonly counters: RunLifecycleTelemetryCounters;
     readonly dimensions: RunLifecycleTelemetryDimensions<"failed">;
+  };
+  readonly "runner.run.stopped": {
+    readonly durationMs: number;
+    readonly counters: RunLifecycleTelemetryCounters;
+    readonly dimensions: RunLifecycleTelemetryDimensions<"stopped">;
   };
   readonly "runner.run.cancelled": {
     readonly durationMs: number;

@@ -93,6 +93,43 @@ describe("Helarc work context domain", () => {
     });
   });
 
+  it("round-trips a stopped Run without a Failure or a resume requirement", () => {
+    const original = record();
+    const binding = { id: "binding-1", revision: `sha256:${"0".repeat(64)}` };
+    original.runs[0] = {
+      ...original.runs[0]!,
+      harnessRunId: "harness-run-1",
+      terminal: {
+        host: {
+          runId: "harness-run-1",
+          taskId: "task-1",
+          status: "stopped",
+          code: "stop_accepted",
+          completedAt: NOW,
+          durationMs: 0,
+          itemCount: 3,
+          evidenceCount: 0,
+          artifactCount: 0,
+          startingInstructionBinding: binding,
+          finalInstructionBinding: binding,
+          source: { owner: "agent-runtime", kind: "controller_turn", id: "turn-1", revision: "1", runId: "harness-run-1" },
+          causalLinks: [],
+          omittedCausalLinkCount: 0,
+          failure: null,
+          cancellation: null,
+        },
+        product: null,
+      },
+    };
+    const normalized = normalizeHelarcThreadRecord(JSON.parse(JSON.stringify(original)));
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) throw new Error(normalized.error.message);
+    expect(deriveHelarcPersistedRunStatus(normalized.record.runs[0]!)).toBe("stopped");
+    expect(normalized.record.runs[0]!.terminal!.host).toMatchObject({
+      status: "stopped", code: "stop_accepted", failure: null, cancellation: null,
+    });
+  });
+
   it("rejects the removed aggregate collection without migration", () => {
     const removedCollection = ["conver", "sations"].join("");
     const oldShape = {

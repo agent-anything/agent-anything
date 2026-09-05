@@ -34,7 +34,7 @@ export interface DelegationTransferMetrics {
   readonly modelTurnCount: number;
   readonly latencyMs: number;
   readonly humanInteractionEvents: number;
-  readonly terminalOutcome: "succeeded" | "blocked" | "failed" | "cancelled";
+  readonly terminalOutcome: "succeeded" | "stopped" | "blocked" | "failed" | "cancelled";
 }
 
 export interface DelegationTransferInvariantSummary {

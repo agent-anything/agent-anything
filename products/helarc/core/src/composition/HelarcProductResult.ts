@@ -22,6 +22,7 @@ import type {
 
 export type HelarcProductStatus =
   | "completed"
+  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -216,7 +217,7 @@ export function projectHelarcProductResult(
         primaryId: workspace.primary.id,
         additionalIds: Object.freeze(workspace.additional.map(({ id }) => id)),
       }),
-      agentSummary: agentOutput?.summary ?? null,
+      agentSummary: agentOutput?.summary ?? (runResult.cause.kind === "stop" ? runResult.cause.reason : null),
       runtimeStatus: runResult.status,
       enforcement: Object.freeze(createEnforcementSummary(runResult, selectedEnforcement)),
       safeErrors: Object.freeze(safeErrors.map((error) => Object.freeze({ ...error }))),
@@ -617,7 +618,7 @@ function collectIncompleteWork(
   composites: readonly HelarcCompositeWorkSummary[],
 ): readonly string[] {
   const values: string[] = [];
-  if (runResult.status !== "succeeded") values.push(`Run ended with status '${runResult.status}'.`);
+  if (runResult.status === "failed" || runResult.status === "cancelled") values.push(`Run ended with status '${runResult.status}'.`);
   if (effects.some(({ status }) => status === "partial" || status === "unknown_effect")) {
     values.push("One or more Operation effects remain partial or unresolved.");
   }
@@ -726,6 +727,7 @@ function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>)
   switch (name) {
     case "run.started": return "Run started";
     case "run.completed": return "Run completed";
+    case "run.stopped": return "Run stopped";
     case "run.failed": return "Run failed";
     case "run.cancelled": return "Run cancelled";
     case "controller.started":

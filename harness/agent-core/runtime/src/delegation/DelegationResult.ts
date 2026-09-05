@@ -610,7 +610,7 @@ function snapshotTerminal(
     "failureKind",
     "cancellationOrigin",
   ]);
-  if (!["succeeded", "failed", "cancelled"].includes(input.status)) {
+  if (!["succeeded", "stopped", "failed", "cancelled"].includes(input.status)) {
     throw new TypeError("Delegation terminal status is unsupported.");
   }
   const cause = Object.freeze({
@@ -627,6 +627,9 @@ function snapshotTerminal(
     : token(input.cancellationOrigin, "terminal.cancellationOrigin");
   if (input.status === "succeeded" && code !== "completion_accepted") {
     throw new TypeError("Succeeded delegation must preserve completion_accepted.");
+  }
+  if (input.status === "stopped" && code !== "stop_accepted") {
+    throw new TypeError("Stopped delegation must preserve stop_accepted.");
   }
   if ((input.status === "failed") !== (failureKind !== null)) {
     throw new TypeError("Delegation terminal failure attribution is inconsistent.");
@@ -795,7 +798,7 @@ function coverageFor(
         ? "not_applicable" as const
       : unavailable
         ? "unavailable" as const
-        : terminal.status === "succeeded"
+        : terminal.status === "succeeded" || terminal.status === "stopped"
           ? "absent" as const
           : "failed" as const,
     itemCount,

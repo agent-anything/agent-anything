@@ -1,9 +1,7 @@
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type { RunCauseSourceRef } from "./RunSettlement.js";
 
-export type RunSuspensionCode =
-  | "controller_stop_requested"
-  | "completion_gate_feedback_exhausted";
+export type RunSuspensionCode = "completion_gate_feedback_exhausted";
 
 export interface RunSuspensionRef {
   readonly run: RunRef;
@@ -39,6 +37,7 @@ export type RunResumeRejectionCode =
   | "run_revision_stale"
   | "suspension_stale"
   | "run_cancelling"
+  | "run_settling"
   | "run_settled";
 
 export type RunResumeReceipt =

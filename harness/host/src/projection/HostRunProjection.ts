@@ -35,6 +35,7 @@ export type HostRunProjectionStatus =
   | "suspended"
   | "cancelling"
   | "completed"
+  | "stopped"
   | "failed"
   | "cancelled";
 
@@ -113,7 +114,7 @@ export interface HostRunTreeNodeProjection {
   readonly terminal: Readonly<{
     readonly causeId: string;
     readonly causeRevision: string;
-    readonly causeKind: "completion" | "failure" | "cancellation";
+    readonly causeKind: "completion" | "stop" | "failure" | "cancellation";
     readonly code: string;
     readonly sourceOwner: string;
     readonly sourceKind: string;
@@ -238,7 +239,7 @@ export interface HostTerminalFailureProjection {
 export interface HostTerminalRunProjection {
   readonly runId: string;
   readonly taskId: string;
-  readonly status: "completed" | "failed" | "cancelled";
+  readonly status: "completed" | "stopped" | "failed" | "cancelled";
   readonly code: string;
   readonly completedAt: string;
   readonly durationMs: number | null;

@@ -18,7 +18,7 @@ import {
 } from "./RunnerRecordingGate.js";
 
 export interface RecordRunnerLifecycleInput {
-  readonly phase: "started" | "succeeded" | "failed" | "cancelled";
+  readonly phase: "started" | "succeeded" | "stopped" | "failed" | "cancelled";
   readonly runId: string;
   readonly taskId: string;
   readonly agentId: string;
@@ -173,6 +173,14 @@ function createRunnerLifecycleAuditRecord(input: RecordRunnerLifecycleInput) {
         outcome: "succeeded",
         payload: { ...payload, status: "succeeded" },
       });
+    case "stopped":
+      return createAuditRecord({
+        ...base,
+        eventName: "run.stopped",
+        action: "runner.stopped",
+        outcome: "succeeded",
+        payload: { ...payload, status: "stopped" },
+      });
     case "failed":
       return createAuditRecord({
         ...base,
@@ -225,6 +233,12 @@ function createRunnerLifecycleTelemetryRecord(
         ...base,
         eventName: "runner.run.failed",
         dimensions: { status: "failed", agentId: input.agentId },
+      });
+    case "stopped":
+      return createTelemetryRecord({
+        ...base,
+        eventName: "runner.run.stopped",
+        dimensions: { status: "stopped", agentId: input.agentId },
       });
     case "cancelled":
       return createTelemetryRecord({

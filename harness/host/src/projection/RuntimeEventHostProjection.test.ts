@@ -6,6 +6,33 @@ import { describe, expect, it } from "vitest";
 import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 
 describe("Host RuntimeEvent projection", () => {
+  it("projects stopped as a terminal lifecycle fact without exposing the stop reason", () => {
+    const event = {
+      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+      id: "event-stop",
+      runId: "run-1",
+      taskId: "task-1",
+      lineage: { kind: "root", root: { id: "run-1" }, depth: 0 },
+      sequence: 3,
+      name: "run.stopped",
+      occurredAt: "2026-09-05T00:00:00.000Z",
+      payload: {
+        status: "stopped",
+        causeId: "cause-1",
+        causeRevision: "3",
+        code: "stop_accepted",
+        errorCodes: [],
+        output: null,
+        reason: "Unrestricted model text",
+      },
+    } as unknown as RuntimeEvent;
+    expect(projectRuntimeEventForHost(event).payload).toMatchObject({
+      status: "stopped",
+      code: "stop_accepted",
+    });
+    expect(projectRuntimeEventForHost(event).payload).not.toHaveProperty("reason");
+  });
+
   it("keeps reusable Controller fields and excludes Product trace vocabulary", () => {
     const event = Object.freeze({
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,

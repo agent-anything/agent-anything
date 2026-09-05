@@ -1452,6 +1452,7 @@ function artifactKindLabel(kind: NonNullable<HelarcMainSnapshot["activeThread"]>
 
 function terminalTitle(snapshot: HelarcMainSnapshot): string {
   const terminalStatus = snapshot.run?.host.terminal?.status;
+  if (terminalStatus === "stopped") return "Run stopped";
   if (terminalStatus === "cancelled") {
     return "Run cancelled";
   }

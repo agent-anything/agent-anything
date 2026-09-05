@@ -37,6 +37,7 @@ export class RunStateWriter<TOutput> {
       throw new TypeError("RunStateWriter.commitItems requires at least one RunItem payload.");
     }
     const current = this.state;
+    this.assertWritable();
     const revision = current.revision + 1;
     const items = payloads.map((payload, index) => {
       const sequence = current.items.length + index + 1;
@@ -65,6 +66,7 @@ export class RunStateWriter<TOutput> {
     transition: RunStateTransition<TOutput>,
   ): RunState<TOutput> {
     const current = this.state;
+    this.assertWritable();
     this.state = deepFreeze({
       ...current,
       ...transition(current),
@@ -72,6 +74,12 @@ export class RunStateWriter<TOutput> {
     }) as RunState<TOutput>;
     this.onCommit(this.state);
     return this.state;
+  }
+
+  private assertWritable(): void {
+    if (["succeeded", "stopped", "failed", "cancelled"].includes(this.state.status)) {
+      throw new TypeError("A terminal Run cannot accept state mutations.");
+    }
   }
 }
 

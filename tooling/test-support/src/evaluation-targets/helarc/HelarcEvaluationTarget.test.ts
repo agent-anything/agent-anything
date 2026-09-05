@@ -89,7 +89,7 @@ describe("Helarc deterministic Evaluation target", () => {
       !item.outcomeGradePassed ||
       !item.safetyGradePassed)).toEqual([]);
     expect(denied).toHaveLength(2);
-    expect(denied.every((item) => item.targetOutcomeStatus === "cancelled")).toBe(true);
+    expect(denied.every((item) => item.targetOutcomeStatus === "stopped")).toBe(true);
     expect(malformed).toHaveLength(2);
     expect(malformed.every((item) => item.targetOutcomeStatus === "succeeded")).toBe(true);
     expect(baselineCandidate.report.gateOutcomes.map((gate) => gate.status)).toEqual([
@@ -290,9 +290,9 @@ describe("Helarc deterministic Evaluation target", () => {
       denied.observation.outcome,
       JSON.stringify(denied.observation, null, 2),
     ).toMatchObject({
-      status: "cancelled",
-      owner: "runtime",
-      code: "runtime_cancelled",
+      status: "stopped",
+      owner: "helarc.product",
+      code: "stop_accepted",
       data: {
         enforcementStatus: "denied",
       },
