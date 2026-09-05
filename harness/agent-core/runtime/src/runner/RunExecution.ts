@@ -7249,7 +7249,7 @@ function deriveActiveStatus(
   status: RunState["status"],
   pending: readonly PendingRunSubject[],
 ): RunState["status"] {
-  if (!isActiveStatus(status)) return status;
+  if (status === "suspended" || !isActiveStatus(status)) return status;
   return deriveActiveRunStatus({ pending, progressableBranchIds: Object.freeze([]) });
 }
 

@@ -1652,6 +1652,137 @@ describe("Runner semantic integration", () => {
     });
   });
 
+  it.each([1, 2])("preserves Root suspension while %i Child results settle until explicit resume", async (childCount) => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const childTurns = new Map<string, number>();
+    let rootTurn = 0;
+    const controller: Controller<TestOutput> = {
+      resourceMetering: Object.freeze({
+        modelInputTokens: "not_applicable" as const,
+        modelOutputTokens: "not_applicable" as const,
+        costUnits: "not_applicable" as const,
+      }),
+      async next(input) {
+        if (input.runId !== "run_001") {
+          const turn = (childTurns.get(input.runId) ?? 0) + 1;
+          childTurns.set(input.runId, turn);
+          return turn === 1
+            ? Object.freeze({
+                kind: "propose_stop" as const,
+                reason: "Child awaits explicit resume.",
+                modelItems: modelTextItems(`${input.runId}_stop`, "Child awaits explicit resume."),
+              })
+            : complete("Child completed", `${input.runId}_complete`);
+        }
+        rootTurn += 1;
+        if (rootTurn <= childCount) {
+          return advance([toolCandidate(
+            "Agent",
+            { prompt: `Inspect subject ${rootTurn}.` },
+            input.toolExposure.controllerRequestId,
+          )], `model_agent_${rootTurn}`);
+        }
+        if (rootTurn === childCount + 1) {
+          return Object.freeze({
+            kind: "propose_stop" as const,
+            reason: "Root awaits explicit resume independently of Child results.",
+            modelItems: modelTextItems("model_root_stop", "Root awaits explicit resume."),
+          });
+        }
+        expect(input.descendants.active).toEqual([]);
+        expect(projectedObservations(input.context).filter(({ payload }) =>
+          payload.kind === "descendant_result_transfer" && payload.status === "succeeded"
+        )).toHaveLength(childCount);
+        return complete("Root consumed Child results after explicit resume", "model_root_complete");
+      },
+    };
+    const delegation = createTestDelegation(childAgent);
+    const operations = createOperationFixture([], [], {
+      delegation: {
+        ...delegation,
+        preparation: {
+          ...delegation.preparation,
+          async prepare(input) {
+            const prepared = await delegation.preparation.prepare(input);
+            return {
+              ...prepared,
+              preparation: {
+                ...prepared.preparation,
+                contextPlan: createDelegationContextPlan({
+                  entries: prepared.preparation.contextPlan.entries,
+                  maxContextBytes: 262_144,
+                }),
+                allocationRequest: createDelegationLimits({
+                  maxDurationMs: prepared.preparation.allocationRequest.maxDurationMs,
+                  maxControllerTurns: 8,
+                  maxActions: 16,
+                  maxContextBytes: 262_144,
+                  maxResultBytes: 65_536,
+                  maxModelInputTokens: 4_096,
+                  maxModelOutputTokens: 4_096,
+                  maxCostUnits: 1_000,
+                }),
+              },
+            };
+          },
+        },
+      },
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+    const handle = createRunner(controller, operations).start(
+      createAgent(), createRunInput(), createRunConfig(operations, { tools }),
+    );
+    try {
+      await waitUntil(() => handle.getSnapshot().status === "suspended");
+      const suspended = handle.getSnapshot();
+      expect(suspended.activeDelegations).toHaveLength(childCount);
+      const suspension = suspended.suspension!;
+      for (const [index, child] of suspended.activeDelegations.entries()) {
+        const active = handle.getSnapshot().activeDelegations.find(({ child: ref }) => ref.id === child.child.id)!;
+        expect(handle.resumeDescendant(hostResumeRoute(active, `resume-child-${index}`)))
+          .toMatchObject({ status: "routed", resume: { status: "accepted" } });
+        await waitUntil(() => !handle.getSnapshot().activeDelegations.some(({ child: ref }) => ref.id === child.child.id));
+        const current = handle.getSnapshot();
+        expect(current.status).toBe("suspended");
+        expect(current.suspension).toEqual(suspension);
+        expect(current.runRevision).toBeGreaterThan(suspended.runRevision);
+        expect(current.activeDelegations).toHaveLength(childCount - index - 1);
+        expect(current.result).toBeNull();
+        expect(rootTurn).toBe(childCount + 1);
+      }
+      const resume = {
+        id: "resume-root",
+        expectedRunRevision: handle.getSnapshot().runRevision,
+        suspension: suspension.ref,
+        origin: "host" as const,
+        reason: "Resume Root after consuming Child transfers.",
+      };
+      expect(handle.resume({ ...resume, id: "stale-resume-root", expectedRunRevision: suspended.runRevision }))
+        .toMatchObject({ status: "rejected", code: "run_revision_stale" });
+      expect(handle.resume(resume)).toMatchObject({ status: "accepted" });
+      expect(handle.getSnapshot()).toMatchObject({ status: "running", suspension: null });
+      expect(handle.resume({ ...resume, id: "duplicate-resume-root" }))
+        .toMatchObject({ status: "rejected", code: "run_not_suspended" });
+      const result = await handle.wait();
+      expect(result.status).toBe("succeeded");
+      expect(rootTurn).toBe(childCount + 2);
+      expect(result.items.flatMap(({ payload }) =>
+        payload.kind === "suspension_transition" ? [payload.transition] : []
+      )).toEqual(["suspended", "resumed"]);
+      expect(observations(result).filter(({ payload }) => payload.kind === "descendant_result_transfer"))
+        .toHaveLength(childCount);
+    } finally {
+      if (handle.getResult() === null) {
+        handle.cancel({ origin: "user", reasonCode: "user_requested" });
+        await handle.wait();
+      }
+    }
+  });
+
   it("launches contiguous Agent calls as concurrent siblings and commits Parent outcomes in candidate order", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     const enteredChildren: string[] = [];
