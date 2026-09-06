@@ -120,27 +120,24 @@ describe("HelarcTaskFulfillmentHook", () => {
       .not.toBe(request.composition.lineage.instructionContent?.revision);
   });
 
-  it.each([
-    { enabled: false, content: "Retained disabled Stop text." },
-    { enabled: true, content: " \n " },
-  ])("omits unused Stop text without disabling model invocation or result handling: %j", async (setting) => {
-    const provider = new StructuredProvider({
-      status: "incomplete", disposition: "continue", rationale: "More work is needed.", missingOutcomes: ["Requested result is missing."], unsupportedClaims: [],
+  describe.each(["root", "descendant"] as const)("%s Stop handling", (runKind) => {
+    it.each([
+      { name: "no sections", sections: [] },
+      { name: "disabled text", sections: [{ id: "stop_instructions", enabled: false, content: "Retained disabled Stop text." }] },
+      { name: "empty text", sections: [{ id: "stop_instructions", enabled: true, content: "" }] },
+      { name: "whitespace-only text", sections: [{ id: "stop_instructions", enabled: true, content: " \t\r\n " }] },
+    ])("allows without a model request or assessment for $name", async ({ sections }) => {
+      const provider = new StructuredProvider({
+        status: "incomplete", disposition: "continue", rationale: "More work is needed.", missingOutcomes: ["Requested result is missing."], unsupportedClaims: [],
+      });
+      const hook = new HelarcTaskFulfillmentHook(provider, sections, () => NOW);
+
+      await expect(hook.handle({ ...createEvent(), runKind }, context())).resolves.toEqual({
+        disposition: "allow",
+      });
+      expect(provider.requests).toHaveLength(0);
+      expect(hook.getAssessments()).toEqual([]);
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, [{ id: "stop_instructions", ...setting }], () => NOW);
-    await expect(hook.handle(createEvent(), context())).resolves.toMatchObject({
-      disposition: "continue", code: "task_fulfillment_incomplete",
-    });
-    expect(provider.requests).toHaveLength(1);
-    const request = provider.requests[0]!;
-    expect(request.instructions.content).toEqual([]);
-    expect(request.composition.lineage.instructionBlocks).toEqual([]);
-    expect(request.composition.sections.some(({ role }) => role === "instruction")).toBe(false);
-    expect(request.interaction).toMatchObject({ kind: "structured_generation" });
-    expect(JSON.stringify(request)).not.toContain("Retained disabled Stop text.");
-    expect(JSON.stringify(request)).not.toContain("Evaluate whether the proposed completion");
-    expect(JSON.stringify(request.messages)).toContain("Create a console application and run it once.");
-    expect(hook.getAssessments()).toHaveLength(1);
   });
 });
 

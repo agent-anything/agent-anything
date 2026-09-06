@@ -150,8 +150,7 @@ describe("Helarc Host Run composition", () => {
     expect(result.runResult.status).toBe("succeeded");
     expect(provider.requests[0]?.instructions.content).toEqual([]);
     expect(provider.requests[0]?.interaction).toMatchObject({ kind: "native_tool_turn" });
-    expect(provider.stopRequests).toHaveLength(1);
-    expect(provider.stopRequests[0]?.instructions.content).toEqual([]);
+    expect(provider.stopRequests).toHaveLength(0);
   });
   it("passes custom Stop text through Host and Product composition without adding it to the main loop", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-stop-instructions-"));
@@ -415,6 +414,107 @@ describe("Helarc Host Run composition", () => {
     }));
     expect(operationResults(result)).toEqual([]);
     expect(provider.requests).toHaveLength(3);
+  });
+
+  it("preserves whitespace-bearing Agent prompts through nested delegation", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-delegation-text-"));
+    const childPrompt = "\r\n Inspect and delegate the detail.\n  ";
+    const nestedPrompt = "\tInspect this example:\n    return 1;\r\n";
+    const provider = new ScriptedProvider([
+      { kind: "tool_call", toolName: "Agent", input: { prompt: childPrompt, description: " Inspection\n" } },
+      { kind: "tool_call", toolName: "Agent", input: { prompt: nestedPrompt } },
+      { kind: "completion", summary: "Nested inspection complete." },
+      { kind: "completion", summary: "Child inspection complete." },
+      { kind: "completion", summary: "Parent received the child result." },
+    ]);
+    const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
+    expect(result.runResult.status).toBe("succeeded");
+    expect(provider.requests).toHaveLength(5);
+    expect(findTextBlock(provider.requests[1]!, "Task:")).toBe(`Task:\n${childPrompt}`);
+    expect(findTextBlock(provider.requests[2]!, "Task:")).toBe(`Task:\n${nestedPrompt}`);
+    expect(operationResults(result)).toEqual([]);
+  });
+
+  it("accepts a whitespace-bearing SendMessage prompt for a settled Child", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-continuation-text-"));
+    const message = "\r\n  Explain the second finding.\n\t";
+    const provider = new ScriptedProvider([
+      { kind: "tool_call", toolName: "Agent", input: { prompt: "Inspect and report." } },
+      { kind: "completion", summary: "Child findings." },
+      (request: ProviderRequest) => {
+        const marker = "Descendant targets:";
+        const targets = JSON.parse(findTextBlock(request, marker)!.slice(marker.length));
+        return {
+          kind: "tool_call",
+          toolName: "SendMessage",
+          input: { agent_id: targets.continuations[0].ref.id, prompt: message },
+        };
+      },
+      { kind: "completion", summary: "Second finding explained." },
+      { kind: "completion", summary: "Parent received the explanation." },
+    ]);
+    const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
+    expect(result.runResult.status).toBe("succeeded");
+    expect(provider.requests).toHaveLength(5);
+    expect(provider.requests[3]?.messages).toContainEqual(expect.objectContaining({
+      role: "user",
+      content: expect.arrayContaining([expect.objectContaining({ kind: "text", text: message })]),
+    }));
+    expect(operationResults(result)).toEqual([]);
+  });
+
+  it.each([true, false])("delivers a stopped Child's separate report and reason to the Parent (report: %s)", async (hasReport) => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-stopped-child-"));
+    const report = "SDK inspection findings.\n\nBuild and run commands.";
+    const stopReason = "No further work is available.";
+    const provider = new ScriptedProvider([
+      { kind: "tool_call", toolName: "Agent", input: { prompt: "Inspect and report." } },
+      {
+        kind: "plan_update",
+        plan: [{ step: "Inspect and report", status: "completed" }],
+        assistantTexts: hasReport ? ["SDK inspection findings.", "Build and run commands."] : [],
+      },
+      { kind: "stop", reason: stopReason },
+      { kind: "completion", summary: "Parent received the stopped Child." },
+    ]);
+    const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
+    expect(result.runResult.status).toBe("succeeded");
+    const expectedOutput = {
+      status: "stopped",
+      summary: hasReport ? report : "",
+      stop_reason: stopReason,
+      failure_code: null,
+    };
+    expect(result.runResult.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "observation",
+        observation: expect.objectContaining({
+          payload: expect.objectContaining({
+            kind: "descendant_run",
+            status: "succeeded",
+            toolResult: expect.objectContaining({
+              status: "succeeded",
+              output: expect.objectContaining(expectedOutput),
+            }),
+          }),
+        }),
+      }),
+    }));
+    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests[3]?.messages).toContainEqual(expect.objectContaining({
+      role: "tool",
+      content: expect.arrayContaining([expect.objectContaining({
+        kind: "model_tool_result",
+        result: expect.objectContaining({
+          settlement: "succeeded",
+          content: expect.objectContaining({
+            kind: "descendant_run",
+            output: expect.objectContaining(expectedOutput),
+          }),
+        }),
+      })]),
+    }));
+    expect(operationResults(result)).toEqual([]);
   });
 
   it("projects Provider request retry history through Runner activity", async () => {
@@ -1239,22 +1339,25 @@ function scriptedNativeProviderResult(
     requestId: request.requestId,
     responseId,
   });
+  const assistantText = Array.isArray(scripted.assistantTexts)
+    ? scripted.assistantTexts.map((text) => ({ kind: "text" as const, text: String(text) }))
+    : [];
   const content = scripted.kind === "completion"
     ? [{ kind: "text" as const, text: String(scripted.summary) }]
-    : [Object.freeze({
+    : [...assistantText, Object.freeze({
         kind: "model_tool_call" as const,
         call: snapshotModelToolCall({
           modelCallRef: createModelCallRef({
             providerRequestId: request.requestId,
             controllerRequestId: request.correlation.controllerRequestId,
             turnId,
-            contentBlockOrdinal: 0,
+            contentBlockOrdinal: assistantText.length,
             branchId: request.correlation.branchId,
           }),
           providerCallRef: { providerId, id: `${responseId}:call:0` },
           name: scriptedCallableName(request, scripted),
           input: scriptedCallInput(scripted),
-          ordinal: 0,
+          ordinal: assistantText.length,
         }),
       })];
 

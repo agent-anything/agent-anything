@@ -131,6 +131,7 @@ export interface DelegationTerminalSummary {
   readonly code: string;
   readonly failureKind: string | null;
   readonly cancellationOrigin: string | null;
+  readonly stopReason: string | null;
 }
 
 export interface DelegationNarrative {
@@ -597,6 +598,7 @@ function terminalSummary(result: RunResult): DelegationTerminalSummary {
     cancellationOrigin: result.cause.kind === "cancellation"
       ? result.cause.cancellation.origin
       : null,
+    stopReason: result.cause.kind === "stop" ? result.cause.reason : null,
   });
 }
 
@@ -609,6 +611,7 @@ function snapshotTerminal(
     "code",
     "failureKind",
     "cancellationOrigin",
+    "stopReason",
   ]);
   if (!["succeeded", "stopped", "failed", "cancelled"].includes(input.status)) {
     throw new TypeError("Delegation terminal status is unsupported.");
@@ -625,6 +628,16 @@ function snapshotTerminal(
   const cancellationOrigin = input.cancellationOrigin === null
     ? null
     : token(input.cancellationOrigin, "terminal.cancellationOrigin");
+  const stopReason = input.stopReason;
+  if (stopReason !== null && (
+    typeof stopReason !== "string" || stopReason.trim().length === 0 ||
+    stopReason !== stopReason.trim()
+  )) {
+    throw new TypeError("Delegation terminal stop reason must preserve non-empty canonical text.");
+  }
+  if ((input.status === "stopped") !== (stopReason !== null)) {
+    throw new TypeError("Delegation terminal stop reason is inconsistent.");
+  }
   if (input.status === "succeeded" && code !== "completion_accepted") {
     throw new TypeError("Succeeded delegation must preserve completion_accepted.");
   }
@@ -646,6 +659,7 @@ function snapshotTerminal(
     code,
     failureKind,
     cancellationOrigin,
+    stopReason,
   });
 }
 

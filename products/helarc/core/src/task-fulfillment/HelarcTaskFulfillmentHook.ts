@@ -24,7 +24,7 @@ import {
 } from "./HelarcTaskFulfillment.js";
 
 export const HELARC_TASK_FULFILLMENT_HOOK_REVISION =
-  "helarc.task-fulfillment-stop-hook.v2";
+  "helarc.task-fulfillment-stop-hook.v3";
 
 const hookRef = Object.freeze({
   owner: "helarc",
@@ -98,7 +98,7 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
     event: AgentStopEvent,
     interruptionContext: InvocationInterruptionContext,
   ): Promise<AgentStopHandlerResult> {
-    if (event.candidate.kind === "stop") {
+    if (this.instructions.length === 0 || event.candidate.kind === "stop") {
       return Object.freeze({ disposition: "allow" as const });
     }
     readHelarcTaskObjective(event);

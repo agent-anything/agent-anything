@@ -227,6 +227,7 @@ describe("delegation result", () => {
       code: "completion_accepted",
       failureKind: null,
       cancellationOrigin: null,
+      stopReason: null,
     });
     expect(result.narrative?.trust).toBe("attributed_model_output");
     expect(result.evidence.refs).toEqual(["evidence-1"]);
@@ -267,12 +268,53 @@ describe("delegation result", () => {
 
     expect(result.terminal.status).toBe("failed");
     expect(result.terminal.failureKind).toBe("runtime");
+    expect(result.terminal.stopReason).toBeNull();
     expect(result.narrative?.text).toContain("useful");
     expect(result.uncertainty).toContain("effects_unknown");
     expect(result.uncertainty).toContain("verification_unavailable");
     expect(result.expectationCoverage.find(({ form }) => form === "evidence")?.disposition)
       .toBe("failed");
   });
+
+  it.each(["Useful child findings.", null])(
+    "preserves accepted stop reason separately from narrative %j",
+    (narrative) => {
+      const accepted = request();
+      const childResult = stoppedChildResult("run-child");
+      const result = createDelegationResult({
+        resultId: "result-stopped",
+        request: accepted,
+        correlation: childCorrelation(accepted),
+        childResult,
+        narrative,
+        verification: noVerification(),
+        effects: noEffects(),
+        usage: usage(),
+        limitDisposition: withinLimits(),
+        createdAt: "2026-08-25T00:02:01.000Z",
+      });
+      expect(childResult.finalOutput).toBeNull();
+      expect(result.terminal).toMatchObject({
+        status: "stopped",
+        code: "stop_accepted",
+        stopReason: "No further work.",
+        failureKind: null,
+        cancellationOrigin: null,
+      });
+      expect(result.narrative?.text ?? null).toBe(narrative);
+      expect(result.expectationCoverage.find(({ form }) => form === "narrative")?.disposition)
+        .toBe(narrative === null ? "absent" : "present");
+      expect(snapshotDelegationResult(JSON.parse(JSON.stringify(result)))).toEqual(result);
+      expect(() => snapshotDelegationResult({
+        ...result,
+        terminal: { ...result.terminal, stopReason: null },
+      })).toThrow(/stop reason is inconsistent/);
+      expect(() => snapshotDelegationResult({
+        ...result,
+        terminal: { ...result.terminal, stopReason: "Tampered reason." },
+      })).toThrow();
+    },
+  );
 
   it("rejects a result for another child and a forged immutable revision", () => {
     const accepted = request();
@@ -622,6 +664,29 @@ function failedChildResult(runId: string) {
     ...childResultIdentity(runId),
     settlement: {
       status: "failed",
+      completedAt: "2026-08-25T00:02:00.000Z",
+      cause: cause.ref,
+    },
+    cause,
+    settlementCauses: [cause],
+  });
+}
+
+function stoppedChildResult(runId: string) {
+  const cause: Extract<RunSettlementCauseRecord, { kind: "stop" }> = {
+    ref: causeRef(runId),
+    kind: "stop",
+    code: "stop_accepted",
+    reason: "No further work.",
+    source: causeSource(runId, "run_stop_acceptance"),
+    underlying: [],
+    omittedUnderlyingCount: 0,
+    recordedAt: "2026-08-25T00:02:00.000Z",
+  };
+  return createRunResult({
+    ...childResultIdentity(runId),
+    settlement: {
+      status: "stopped",
       completedAt: "2026-08-25T00:02:00.000Z",
       cause: cause.ref,
     },

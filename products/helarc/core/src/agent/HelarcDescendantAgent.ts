@@ -24,11 +24,11 @@ export function createHelarcDescendantAgentContribution(
   const sendMessageContract = findHelarcBaselineToolContract("SendMessage");
   return Object.freeze({
     tools: Object.freeze([Object.freeze({
-      admissionId: "helarc.agent.v1",
+      admissionId: "helarc.agent.v2",
       descriptor: Object.freeze({
         ref: Object.freeze({
           tool: Object.freeze({ namespace: "helarc", name: "agent" }),
-          revision: "1",
+          revision: "2",
         }),
         name: contract.name,
         description: contract.description,
@@ -37,7 +37,7 @@ export function createHelarcDescendantAgentContribution(
         schemaRevisions: Object.freeze({
           dialect: "json-schema-2020-12",
           input: "1",
-          output: "1",
+          output: "2",
           translation: "native-1",
         }),
         annotations: contract.annotations,
@@ -58,11 +58,11 @@ export function createHelarcDescendantAgentContribution(
       allowedOrigins: Object.freeze(["model" as const]),
       admittedAt,
     }), Object.freeze({
-      admissionId: "helarc.send-message.v1",
+      admissionId: "helarc.send-message.v2",
       descriptor: Object.freeze({
         ref: Object.freeze({
           tool: Object.freeze({ namespace: "helarc", name: "send-message" }),
-          revision: "1",
+          revision: "2",
         }),
         name: sendMessageContract.name,
         description: sendMessageContract.description,
@@ -71,7 +71,7 @@ export function createHelarcDescendantAgentContribution(
         schemaRevisions: Object.freeze({
           dialect: "json-schema-2020-12",
           input: "1",
-          output: "1",
+          output: "2",
           translation: "native-1",
         }),
         annotations: sendMessageContract.annotations,
@@ -219,16 +219,22 @@ export function createHelarcDescendantAgentContribution(
               ? input.childResult.finalOutput.summary
               : null;
           }
-          if (input.childResult.cause.kind === "stop") return input.childResult.cause.reason;
-          const partial = [...input.childResult.items]
-            .reverse()
-            .flatMap(({ payload }) => payload.kind === "controller_turn"
-              ? payload.modelItems.flatMap((item) =>
-                  item.kind === "assistant_text" ? [item.text] : []
-                )
-              : [])
-            .find((text) => text.trim().length > 0)?.trim();
-          return partial === undefined ? null : partial.slice(0, 16_000);
+          for (const { payload } of [...input.childResult.items].reverse()) {
+            if (payload.kind !== "controller_turn") continue;
+            const blocks = payload.modelItems.flatMap((item) =>
+              item.kind === "assistant_text" && item.text.trim().length > 0
+                ? [item.text]
+                : []
+            );
+            if (blocks.length === 0) continue;
+            const narrative = blocks.join("\n\n");
+            const limit = 16_000;
+            const marker = "\n[Child report truncated.]";
+            return narrative.length <= limit
+              ? narrative
+              : narrative.slice(0, limit - marker.length) + marker;
+          }
+          return null;
         },
       }),
       progressProjection: Object.freeze({
@@ -285,6 +291,7 @@ function projectDescendantResult(
     agent_id: input.continuation?.id ?? null,
     status: result.terminal.status,
     summary: result.narrative?.text ?? "",
+    stop_reason: result.terminal.stopReason,
     artifact_refs: artifacts,
     verification_status: result.verification.status,
     effect_status: result.effects.status,
@@ -358,7 +365,10 @@ function isHelarcOutput(candidate: unknown): candidate is HelarcAgentOutput {
 }
 
 function boundedText(candidate: unknown, maxLength: number, field: string): string {
-  if (typeof candidate !== "string" || candidate.length < 1 || candidate.length > maxLength || candidate !== candidate.trim()) {
+  if (
+    typeof candidate !== "string" || candidate.trim().length === 0 ||
+    candidate.length > maxLength
+  ) {
     throw new TypeError(`Agent Tool ${field} must be bounded non-empty text.`);
   }
   return candidate;

@@ -67,7 +67,7 @@ export interface HelarcBaselineToolContract {
 }
 
 export const HELARC_BASELINE_TOOL_CONTRACT_REVISION =
-  "helarc.baseline-tool-contracts.v2";
+  "helarc.baseline-tool-contracts.v3";
 
 const POSITIVE_INTEGER = Object.freeze({
   type: "integer",
@@ -306,10 +306,11 @@ const ASK_USER_QUESTION = contract({
   },
 });
 
-const DELEGATION_TERMINAL_OUTPUT = objectSchema(["agent_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
+const DELEGATION_TERMINAL_OUTPUT = objectSchema(["agent_id", "status", "summary", "stop_reason", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
   agent_id: { anyOf: [{ type: "string", minLength: 1, maxLength: 1_024 }, { type: "null" }] },
-  status: { enum: ["succeeded", "partial", "failed", "cancelled"] },
+  status: { enum: ["succeeded", "stopped", "failed", "cancelled"] },
   summary: { type: "string", maxLength: 64_000 },
+  stop_reason: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
   artifact_refs: {
     type: "array",
     items: { type: "string", minLength: 1, maxLength: 1_024 },

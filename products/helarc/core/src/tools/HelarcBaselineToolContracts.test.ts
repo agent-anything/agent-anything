@@ -58,8 +58,12 @@ describe("Helarc baseline Tool Contracts", () => {
     expect(findHelarcBaselineToolContract("Agent").outputSchema).toMatchObject({
       anyOf: [
         {
-          required: expect.arrayContaining(["agent_id", "status", "summary"]),
-          properties: { agent_id: { anyOf: expect.any(Array) } },
+          required: expect.arrayContaining(["agent_id", "status", "summary", "stop_reason"]),
+          properties: {
+            agent_id: { anyOf: expect.any(Array) },
+            status: { enum: ["succeeded", "stopped", "failed", "cancelled"] },
+            stop_reason: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
+          },
         },
         {
           required: expect.arrayContaining([
