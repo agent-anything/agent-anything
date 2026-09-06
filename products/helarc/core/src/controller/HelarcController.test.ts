@@ -210,6 +210,8 @@ describe("Helarc native Tool controller", () => {
     });
     const prompt = requestText(request);
     expect(prompt).toContain("Use only callable definitions supplied with the current model request.");
+    expect(prompt).toContain("When multiple calls do not require results from one another, issue them together in the same response.");
+    expect(prompt).toContain("When a call requires another call's result, wait for that result and issue the dependent call in a later response.");
     expect(prompt).toContain("Task:\nUpdate docs");
     expect(prompt).not.toContain("Return only JSON");
     expect(prompt).not.toContain("D:/projects/agent-anything");

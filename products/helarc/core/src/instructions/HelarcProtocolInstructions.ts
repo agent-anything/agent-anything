@@ -7,6 +7,8 @@ export interface HelarcInstructionSectionSetting {
 export const HELARC_DEFAULT_PROTOCOL_INSTRUCTIONS: readonly HelarcInstructionSectionSetting[] = Object.freeze([
   section("native_tool_protocol", [
     "Use only callable definitions supplied with the current model request.",
+    "When multiple calls do not require results from one another, issue them together in the same response.",
+    "When a call requires another call's result, wait for that result and issue the dependent call in a later response.",
     "Use update_plan when an explicit plan helps the work; simple tasks may proceed without a plan.",
     "Use stop as the only call when the task cannot be completed safely or required information is unavailable.",
     "Return a normal assistant response with no calls only when the task is complete.",
