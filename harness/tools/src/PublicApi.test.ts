@@ -32,7 +32,7 @@ const SELECTION_VALUES = [
   "snapshotToolExposureProof",
   "snapshotToolSelectionRevision",
 ];
-const INVOCATION_VALUES = ["materializeToolCall", "validateExactToolCall"];
+const INVOCATION_VALUES = ["admitToolCall", "materializeToolCall", "validateExactToolCall"];
 const RESULT_VALUES = ["adaptToolSemanticResult"];
 
 describe("Tools public API", () => {

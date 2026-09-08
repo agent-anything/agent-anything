@@ -1160,7 +1160,7 @@ describe("Runner semantic integration", () => {
     expect(JSON.stringify(result.items)).not.toContain("stale-model-item");
   });
 
-  it("invalidates later candidates after an earlier candidate changes owner availability basis", async () => {
+  it.each([false, true])("revalidates only selected availability after owner revision changes (revoked=%s)", async (revoked) => {
     const operation = operationRef("read-file");
     let ownerRevision = 1;
     const handler = internalHandler("handler.read-file", "code-workspace", { content: "hello" });
@@ -1194,8 +1194,8 @@ describe("Runner semantic integration", () => {
             id: "workspace",
             revision: String(ownerRevision),
           })]),
-          disposition: "available" as const,
-          reason: null,
+          disposition: revoked && ownerRevision > 1 ? "unavailable" as const : "available" as const,
+          reason: revoked && ownerRevision > 1 ? "binding_inactive" as const : null,
         }),
       })],
     });
@@ -1205,7 +1205,7 @@ describe("Runner semantic integration", () => {
           toolCandidate("codeAgent.readFile", { path: "one.txt" }, input.toolExposure.controllerRequestId),
           toolCandidate("codeAgent.readFile", { path: "two.txt" }, input.toolExposure.controllerRequestId),
         ], ["model_tool_1", "model_tool_2"]),
-      complete("Only the first candidate executed"),
+      complete("Call outcomes collected"),
     ]);
 
     const result = await createRunner(controller, operations).run(
@@ -1215,13 +1215,56 @@ describe("Runner semantic integration", () => {
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
-    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(handler.execute).toHaveBeenCalledTimes(revoked ? 1 : 2);
     expect(result.items.flatMap(({ payload }) =>
       payload.kind === "model_call_settlement" ? [payload.result] : []
     )).toMatchObject([
       { modelCallRef: { id: "model_tool_1" }, settlement: "succeeded" },
-      { modelCallRef: { id: "model_tool_2" }, settlement: "invalidated" },
+      { modelCallRef: { id: "model_tool_2" }, settlement: revoked ? "invalid" : "succeeded" },
     ]);
+  });
+
+  it.each([false, true])("schedules trusted overlap without changing source result order (concurrent=%s)", async (concurrent) => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("handler.read-file", "code-workspace", {});
+    let active = 0;
+    let peak = 0;
+    let release!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { release = resolve; });
+    handler.execute.mockImplementation(async (context) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      if (active === 2) release();
+      if (concurrent) await bothStarted;
+      else await Promise.resolve();
+      active -= 1;
+      return createOperationResult({
+        ref: { invocation: context.binding.invocation, id: `${context.binding.invocation.id}:result` },
+        binding: context.binding.binding, semanticOwner: "code-workspace",
+        status: "succeeded", output: {}, failure: null,
+        startedAt: NOW, finishedAt: NOW, lowerRefs: [], metadata: {},
+      });
+    });
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", { requestOrigins: ["tool_request"], handlerId: handler.id }),
+    ], [handler], { availability: [{
+      binding: { operation, revision: "binding-1" },
+      scheduling: concurrent ? { group: "independent-test-reads", maxParallel: 2 } : undefined,
+      assess: () => ({ basisRefs: [{ owner: "test", kind: "path", id: "read", revision: "1" }],
+        disposition: "available", reason: null }),
+    }] });
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const controller = new ScriptedController([
+      (input) => advance([
+        toolCandidate("codeAgent.readFile", {}, input.toolExposure.controllerRequestId),
+        toolCandidate("codeAgent.readFile", {}, input.toolExposure.controllerRequestId),
+      ], ["model_tool_1", "model_tool_2"]), complete("Done"),
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations, { tools }));
+    expect(result.status).toBe("succeeded");
+    expect(peak).toBe(concurrent ? 2 : 1);
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(({ payload }) => payload.kind === "model_call_settlement")).toHaveLength(2);
   });
 
   it("attributes availability participant failure without requesting the Controller", async () => {
@@ -1259,6 +1302,26 @@ describe("Runner semantic integration", () => {
       },
     });
     expect(controller.calls).toHaveLength(0);
+  });
+
+  it("continues an independent serial call after an ordinary execution failure", async () => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("reader", "code-workspace", {});
+    handler.execute.mockRejectedValueOnce(new Error("first operation failed"));
+    const operations = createOperationFixture([operationSpec(operation, "internal", {
+      requestOrigins: ["tool_request"], handlerId: handler.id,
+    })], [handler]);
+    const tools = createToolSelection(operations, operation, "Read");
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate("Read", {}, input.toolExposure.controllerRequestId),
+        toolCandidate("Read", {}, input.toolExposure.controllerRequestId)], ["first", "second"]),
+      complete("Done"),
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations, { tools }));
+    expect(result.status).toBe("succeeded");
+    expect(handler.execute).toHaveBeenCalledTimes(2);
+    expect(result.items.flatMap(({ payload }) => payload.kind === "model_call_settlement" ? [payload.result.settlement] : []))
+      .toEqual(["failed", "succeeded"]);
   });
 
   it("routes an exposed interaction Tool directly through its Interaction protocol", async () => {
@@ -3024,6 +3087,36 @@ describe("Runner semantic integration", () => {
     expect(handle.getSnapshot().pendingInteractions).toEqual([]);
   });
 
+  it("preserves later work from the same decision after Interaction settlement", async () => {
+    const operations = createOperationFixture([]);
+    const interaction = testInteractionProtocol();
+    const tools = createSemanticToolSelection(operations, "AskUserQuestion", {
+      kind: "interaction", protocol: interaction.ref, blockingScope: "run", revision: "interaction-binding-1",
+    });
+    const controller = new ScriptedController([
+      (input) => advance([
+        toolCandidate("AskUserQuestion", { question: "First?" }, input.toolExposure.controllerRequestId),
+        toolCandidate("AskUserQuestion", { question: "Second?" }, input.toolExposure.controllerRequestId),
+      ], ["ask", "after"]),
+      complete("Done"),
+    ]);
+    const handle = createRunner(controller, operations, { interactions: interaction.registry })
+      .start(createAgent(), createRunInput(), createRunConfig(operations, { tools }));
+    let previous = "";
+    for (let index = 0; index < 2; index += 1) {
+      await waitUntil(() => handle.getSnapshot().pendingInteractions.some((entry) => entry.envelope.request.id !== previous));
+      const pending = handle.getSnapshot().pendingInteractions.find((entry) => entry.envelope.request.id !== previous)!;
+      previous = pending.envelope.request.id;
+      handle.submitInteraction({ request: pending.envelope.request, submissionId: `answer-${index}`,
+        contentDigest: `sha256:answer-${index}`, payload: { accepted: true }, receivedAt: NOW });
+    }
+    const result = await handle.wait();
+    expect(result.status).toBe("succeeded");
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.flatMap(({ payload }) => payload.kind === "model_call_settlement" ? [payload.result.settlement] : []))
+      .toEqual(["succeeded", "succeeded"]);
+  });
+
   it("keeps Interaction cancellation identity separate from its semantic settlement code", async () => {
     const operations = createOperationFixture([]);
     const interaction = testInteractionProtocol();
@@ -3377,7 +3470,7 @@ describe("Runner semantic integration", () => {
     ]);
   });
 
-  it("executes a bounded Composite through trusted child Operation RunActions", async () => {
+  it("executes a result-dependent Composite sequence without another Controller turn", async () => {
     const composite = operationRef("inspect-workspace");
     const child = operationRef("read-metadata");
     const childHandler = internalHandler("handler.read-metadata", "code-workspace", {
@@ -3397,6 +3490,10 @@ describe("Runner semantic integration", () => {
         conditionId: null,
         resourceClaims: [],
         required: true,
+      }, {
+        id: "consume-metadata", operation: child, allowedBindings: ["internal"],
+        dependencies: [{ nodeId: "read-metadata", requirement: "succeeded" }],
+        transformId: "consume-result", conditionId: null, resourceClaims: [], required: true,
       }],
       join: { kind: "all_required_succeeded" },
       reducerId: "collect-results",
@@ -3427,6 +3524,12 @@ describe("Runner semantic integration", () => {
                 transform({ compositeInput }) {
                   return compositeInput;
                 },
+              }, {
+                id: "consume-result",
+                transform({ dependencies }) {
+                  expect(dependencies["read-metadata"]?.result?.output).toEqual({ files: 3 });
+                  return dependencies["read-metadata"]!.result!.output;
+                },
               }],
               conditions: [],
               reducer: {
@@ -3453,11 +3556,12 @@ describe("Runner semantic integration", () => {
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
-    expect(childHandler.execute).toHaveBeenCalledTimes(1);
+    expect(childHandler.execute).toHaveBeenCalledTimes(2);
+    expect(controller.calls).toHaveLength(2);
     expect(result.items.filter(({ payload }) => payload.kind === "run_action"))
-      .toHaveLength(2);
+      .toHaveLength(3);
     expect(observations(result).filter(({ payload }) => payload.kind === "operation"))
-      .toHaveLength(2);
+      .toHaveLength(3);
   });
 
   it("cancels an active Controller boundary and does not commit its late decision", async () => {

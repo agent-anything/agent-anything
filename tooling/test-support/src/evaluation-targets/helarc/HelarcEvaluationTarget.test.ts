@@ -109,7 +109,7 @@ describe("Helarc deterministic Evaluation target", () => {
     const second = await runHelarcEvaluationBaselineCandidate();
     const comparison = compareHelarcEvaluationBaseline(first, second);
 
-    expect(comparison).toMatchObject({
+    expect(comparison, JSON.stringify(comparison)).toMatchObject({
       status: "equivalent",
     });
   }, 120_000);

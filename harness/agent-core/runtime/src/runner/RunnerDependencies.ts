@@ -236,6 +236,11 @@ export interface ToolPathAvailability {
 
 export interface OperationToolAvailabilityParticipant {
   readonly binding: OperationBindingRevisionRef;
+  /** Trusted same-Run overlap permission; absence means exclusive execution. */
+  readonly scheduling?: {
+    readonly group: string;
+    readonly maxParallel: number;
+  };
   assess(input: {
     readonly run: RunRef;
   }): Promise<ToolPathAvailability> | ToolPathAvailability;

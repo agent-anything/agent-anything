@@ -1,10 +1,10 @@
 import {
-  HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE,
-  HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE,
+  HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
 } from "../dist/evaluation-targets/helarc/index.js";
+import { HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE } from "../dist/evaluation-targets/helarc/baseline/HelarcCallAdmissionSchedulingBaseline.js";
 import {
   runContextContinuityEvaluationCandidate,
 } from "../dist/context-continuity-evaluation/index.js";
@@ -17,11 +17,11 @@ const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
 const agentHooks = await runAgentHookDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
-  HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE,
+  HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE,
+  HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE,
   systemCandidate,
 );
 
@@ -29,12 +29,12 @@ process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
   kind: "context_continuity_and_helarc_evaluation_candidate",
   predecessor: {
-    reportRef: HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef,
+    reportRef: HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE.acceptanceRef,
   },
   acceptedSuccessor: {
-    reportRef: HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE.acceptanceRef,
+    reportRef: HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),

@@ -1,4 +1,5 @@
 export type {
+  CompositeDependency,
   CompositeDefinitionRef,
   CompositeDefinitionRevision,
   CompositeJoinPolicy,

@@ -27,7 +27,6 @@ export interface RunToolExposureResolution {
   readonly runRevision: number;
   readonly exposure: CurrentTurnToolExposure;
   readonly proof: ToolExposureProof;
-  readonly ownerBasisRevision: string;
 }
 
 export interface RunToolExposureCoordinatorDependencies {
@@ -57,10 +56,114 @@ export class RunToolExposureCoordinator {
       }
       operations.set(key, Object.freeze({
         binding: snapshotOperationBinding(participant.binding),
+        scheduling: participant.scheduling === undefined ? undefined : snapshotScheduling(participant.scheduling),
         assess: participant.assess.bind(participant),
       }));
     }
     this.operations = operations;
+  }
+
+  scheduling(binding: import("@agent-anything/tools/identity").ToolBindingRef): OperationToolAvailabilityParticipant["scheduling"] {
+    return binding.kind === "operation"
+      ? this.operations.get(operationBindingKey({ operation: binding.operation, revision: binding.revision }))?.scheduling
+      : undefined;
+  }
+
+  async assessCurrent(binding: import("@agent-anything/tools/identity").ToolBindingRef): Promise<ToolPathAvailability> {
+    let path: ToolPathAvailability;
+    switch (binding.kind) {
+      case "operation": {
+        const participant = this.operations.get(operationBindingKey({
+          operation: binding.operation,
+          revision: binding.revision,
+        }));
+        if (participant === undefined) {
+          throw new ToolExposureCoordinationError(
+            "tool_availability_participant_missing",
+            `No availability participant owns Operation binding '${operationBindingKey({ operation: binding.operation, revision: binding.revision })}'.`,
+          );
+        }
+        try {
+          path = await participant.assess({ run: this.dependencies.run });
+        } catch (error) {
+          throw participantFailure("operation", error);
+        }
+        break;
+      }
+      case "interaction": {
+        const current = this.dependencies.interactions.getAvailabilitySnapshot(
+          binding.protocol,
+          this.dependencies.maxPendingInteractions,
+        );
+        path = Object.freeze({
+          basisRefs: Object.freeze([
+            Object.freeze({
+              owner: "interaction",
+              kind: "protocol_registry",
+              id: `${binding.protocol.owner}:${binding.protocol.kind}@${binding.protocol.revision}`,
+              revision: current.registrySnapshotId,
+            }),
+            Object.freeze({
+              owner: "interaction",
+              kind: "run_interaction_capacity",
+              id: this.dependencies.run.id,
+              revision: `${current.revision}:${current.activeCount}:${current.maximumPending}`,
+            }),
+          ]),
+          disposition: !current.protocolAvailable || current.settled
+            ? "unavailable"
+            : current.hasCapacity
+              ? "available"
+              : "unavailable",
+          reason: !current.protocolAvailable || current.settled
+            ? "binding_inactive"
+            : current.hasCapacity
+              ? null
+              : "interaction_capacity_exhausted",
+        });
+        break;
+      }
+      case "descendant_agent": {
+        const tree = descendantTreeAvailability(
+          this.dependencies.getRunTreeSnapshot(),
+          this.dependencies.lineage,
+        );
+        let owner: ToolPathAvailability;
+        if (this.dependencies.delegation === undefined) {
+          owner = unavailablePath(
+            Object.freeze({
+              owner: "agent-runtime",
+              kind: "descendant_composition",
+              id: `${binding.agent.id}@${binding.agent.revision}`,
+              revision: "unconfigured",
+            }),
+            "execution_path_unavailable",
+          );
+        } else {
+          try {
+            owner = snapshotPath(await this.dependencies.delegation.assessAvailability({
+              parentRunId: this.dependencies.run.id,
+              targetAgent: binding.agent,
+            }));
+          } catch (error) {
+            throw participantFailure("descendant_agent", error);
+          }
+        }
+        path = combineDescendantAvailability(owner, tree);
+        break;
+      }
+      case "descendant_message": {
+        try {
+          path = snapshotPath(
+            this.dependencies.getDescendantMessageAvailability(binding.agent),
+          );
+        } catch (error) {
+          throw participantFailure("descendant_message", error);
+        }
+        break;
+      }
+    }
+    return snapshotPath(path);
   }
 
   async resolve(controllerRequestId: string): Promise<RunToolExposureResolution> {
@@ -77,99 +180,7 @@ export class RunToolExposureCoordinator {
     const paths: { readonly toolKey: string; readonly path: ToolPathAvailability }[] = [];
     for (const selected of modelTools) {
       const binding = selected.registration.descriptor.binding;
-      let path: ToolPathAvailability;
-      switch (binding.kind) {
-        case "operation": {
-          const participant = this.operations.get(operationBindingKey({
-            operation: binding.operation,
-            revision: binding.revision,
-          }));
-          if (participant === undefined) {
-            throw new ToolExposureCoordinationError(
-              "tool_availability_participant_missing",
-              `No availability participant owns Operation binding '${operationBindingKey({ operation: binding.operation, revision: binding.revision })}'.`,
-            );
-          }
-          try {
-            path = await participant.assess({ run: this.dependencies.run });
-          } catch (error) {
-            throw participantFailure("operation", error);
-          }
-          break;
-        }
-        case "interaction": {
-          const current = this.dependencies.interactions.getAvailabilitySnapshot(
-            binding.protocol,
-            this.dependencies.maxPendingInteractions,
-          );
-          path = Object.freeze({
-            basisRefs: Object.freeze([
-              Object.freeze({
-                owner: "interaction",
-                kind: "protocol_registry",
-                id: `${binding.protocol.owner}:${binding.protocol.kind}@${binding.protocol.revision}`,
-                revision: current.registrySnapshotId,
-              }),
-              Object.freeze({
-                owner: "interaction",
-                kind: "run_interaction_capacity",
-                id: this.dependencies.run.id,
-                revision: `${current.revision}:${current.activeCount}:${current.maximumPending}`,
-              }),
-            ]),
-            disposition: !current.protocolAvailable || current.settled
-              ? "unavailable"
-              : current.hasCapacity
-                ? "available"
-                : "unavailable",
-            reason: !current.protocolAvailable || current.settled
-              ? "binding_inactive"
-              : current.hasCapacity
-                ? null
-                : "interaction_capacity_exhausted",
-          });
-          break;
-        }
-        case "descendant_agent": {
-          const tree = descendantTreeAvailability(
-            this.dependencies.getRunTreeSnapshot(),
-            this.dependencies.lineage,
-          );
-          let owner: ToolPathAvailability;
-          if (this.dependencies.delegation === undefined) {
-            owner = unavailablePath(
-              Object.freeze({
-                owner: "agent-runtime",
-                kind: "descendant_composition",
-                id: `${binding.agent.id}@${binding.agent.revision}`,
-                revision: "unconfigured",
-              }),
-              "execution_path_unavailable",
-            );
-          } else {
-            try {
-              owner = snapshotPath(await this.dependencies.delegation.assessAvailability({
-                parentRunId: this.dependencies.run.id,
-                targetAgent: binding.agent,
-              }));
-            } catch (error) {
-              throw participantFailure("descendant_agent", error);
-            }
-          }
-          path = combineDescendantAvailability(owner, tree);
-          break;
-        }
-        case "descendant_message": {
-          try {
-            path = snapshotPath(
-              this.dependencies.getDescendantMessageAvailability(binding.agent),
-            );
-          } catch (error) {
-            throw participantFailure("descendant_message", error);
-          }
-          break;
-        }
-      }
+      const path = await this.assessCurrent(binding);
       paths.push(Object.freeze({
         toolKey: toolRevisionKey(selected.registration.descriptor.ref),
         path: snapshotPath(path),
@@ -203,7 +214,6 @@ export class RunToolExposureCoordinator {
       runRevision,
       exposure,
       proof: createToolExposureProof(exposure, controllerRequestId),
-      ownerBasisRevision: ownerBasisRevision(paths),
     });
   }
 }
@@ -331,19 +341,6 @@ function uniqueBasisRefs(input: readonly ToolExposureBasisRef[]): readonly ToolE
   ));
 }
 
-function ownerBasisRevision(
-  paths: readonly { readonly toolKey: string; readonly path: ToolPathAvailability }[],
-): string {
-  return JSON.stringify(paths.map(({ toolKey, path }) => ({
-    toolKey,
-    disposition: path.disposition,
-    reason: path.reason,
-    basisRefs: path.basisRefs.map((ref) =>
-      `${ref.owner}/${ref.kind}/${ref.id}@${ref.revision}`
-    ).sort(),
-  })).sort((left, right) => left.toolKey.localeCompare(right.toolKey)));
-}
-
 function snapshotOperationBinding(
   input: OperationBindingRevisionRef,
 ): OperationBindingRevisionRef {
@@ -375,4 +372,11 @@ function participantFailure(owner: string, error: unknown): ToolExposureCoordina
     "tool_availability_participant_failed",
     `${owner} availability participant failed: ${error instanceof Error ? error.message : "unknown failure"}`,
   );
+}
+
+function snapshotScheduling(input: NonNullable<OperationToolAvailabilityParticipant["scheduling"]>) {
+  if (!Number.isSafeInteger(input.maxParallel) || input.maxParallel < 1) {
+    throw new TypeError("Tool scheduling maxParallel must be a positive integer.");
+  }
+  return Object.freeze({ group: token(input.group), maxParallel: input.maxParallel });
 }

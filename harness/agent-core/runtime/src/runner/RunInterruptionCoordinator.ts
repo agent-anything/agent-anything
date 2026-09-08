@@ -39,7 +39,7 @@ interface ActiveOperation {
 }
 
 export class RunInterruptionCoordinator {
-  private activeOperation: ActiveOperation | null = null;
+  private readonly activeOperations = new Set<ActiveOperation>();
   private cancellationListener: (() => void) | null = null;
 
   constructor(
@@ -66,10 +66,8 @@ export class RunInterruptionCoordinator {
     interruptionDeadlineAt: string | null = null,
     allowInterruptedStart = false,
   ): Promise<TValue> {
-    if (this.activeOperation !== null) {
-      throw new Error(
-        `Cannot start ${kind} while ${this.activeOperation.kind} is still active.`,
-      );
+    if ([...this.activeOperations].some((active) => kind !== "tool" || active.kind !== "tool")) {
+      throw new Error(`Cannot start ${kind} while an exclusive operation is still active.`);
     }
     if (!allowInterruptedStart && this.cancellationRequest() !== null) {
       this.observeCancellation();
@@ -87,7 +85,7 @@ export class RunInterruptionCoordinator {
       interruptionTimer: null,
       settlementTimer: null,
     };
-    this.activeOperation = operationState;
+    this.activeOperations.add(operationState);
     if (allowInterruptedStart && this.cancellationRequest() !== null) {
       this.observeCancellation();
     }
@@ -97,7 +95,7 @@ export class RunInterruptionCoordinator {
         Date.parse(interruptionDeadlineAt) - Date.parse(this.input.now()),
       );
       operationState.interruptionTimer = setTimeout(
-        () => this.startSettlementTimer("operation_deadline"),
+        () => this.startSettlementTimer(operationState, "operation_deadline"),
         delayMs,
       );
     }
@@ -113,14 +111,12 @@ export class RunInterruptionCoordinator {
     try {
       return await Promise.race([operation, settlementTimeout]);
     } finally {
-      if (this.activeOperation === operationState) {
-        this.clearActiveOperation();
-      }
+      this.clearActiveOperation(operationState);
     }
   }
 
   isActive(kind: ActiveRunOperationKind): boolean {
-    return this.activeOperation?.kind === kind;
+    return [...this.activeOperations].some((operation) => operation.kind === kind);
   }
 
   dispose(): void {
@@ -131,7 +127,7 @@ export class RunInterruptionCoordinator {
       );
       this.cancellationListener = null;
     }
-    this.clearActiveOperation();
+    for (const operation of this.activeOperations) this.clearActiveOperation(operation);
   }
 
   private cancellationRequest(): RunCancellationRequest | null {
@@ -144,14 +140,14 @@ export class RunInterruptionCoordinator {
       return;
     }
     this.input.onCancellationObserved(request);
-    this.startSettlementTimer("run_cancellation");
+    for (const operation of this.activeOperations) this.startSettlementTimer(operation, "run_cancellation");
   }
 
   private startSettlementTimer(
+    operation: ActiveOperation,
     cause: "run_cancellation" | "operation_deadline",
   ): void {
-    const operation = this.activeOperation;
-    if (operation === null || operation.settlementTimer !== null) {
+    if (!this.activeOperations.has(operation) || operation.settlementTimer !== null) {
       return;
     }
     const timeoutMs = this.input.operationSettlementTimeoutMs;
@@ -165,15 +161,9 @@ export class RunInterruptionCoordinator {
     }, timeoutMs);
   }
 
-  private clearActiveOperation(): void {
-    if (this.activeOperation?.interruptionTimer !== null &&
-        this.activeOperation?.interruptionTimer !== undefined) {
-      clearTimeout(this.activeOperation.interruptionTimer);
-    }
-    if (this.activeOperation?.settlementTimer !== null &&
-        this.activeOperation?.settlementTimer !== undefined) {
-      clearTimeout(this.activeOperation.settlementTimer);
-    }
-    this.activeOperation = null;
+  private clearActiveOperation(operation: ActiveOperation): void {
+    if (operation.interruptionTimer !== null) clearTimeout(operation.interruptionTimer);
+    if (operation.settlementTimer !== null) clearTimeout(operation.settlementTimer);
+    this.activeOperations.delete(operation);
   }
 }

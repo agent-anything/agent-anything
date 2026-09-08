@@ -404,7 +404,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.child-report-transfer-baseline-result`,
+      id: `${definition.ref.id}.call-admission-scheduling-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -415,7 +415,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.child-report-transfer.report.baseline",
+      id: "helarc.call-admission-scheduling.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -461,7 +461,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.normal-stop-settlement.report.baseline",
+      id: "helarc.child-report-transfer.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -477,13 +477,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.child-report-transfer.baseline-acceptance",
+      id: "helarc.call-admission-scheduling.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "child-report-transfer-v1",
+      revision: "call-admission-scheduling-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -492,14 +492,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Reviewed as the Child report transfer successor: report text and accepted stop reason remain separate, with exact Tool Contract identities; outcome and safety gates remain absolute.",
+      "Reviewed as the call admission and scheduling successor: request provenance is preserved independently of dispatch state; outcome and safety gates remain absolute.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.normal-stop-settlement.baseline-acceptance",
+      id: "helarc.child-report-transfer.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -524,10 +524,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v21-")) {
-    throw new TypeError(`Unknown Child report transfer Target revision '${revision}'.`);
+  if (!revision.startsWith("v22-")) {
+    throw new TypeError(`Unknown Call admission scheduling Target revision '${revision}'.`);
   }
-  return revision.replace(/^v21-/, "v20-");
+  return revision.replace(/^v22-/, "v21-");
 }
 
 function gradeExpectedOutcome(

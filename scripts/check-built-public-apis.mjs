@@ -313,6 +313,7 @@ const expectedLowerValueExports = {
     "snapshotToolSelectionRevision",
   ],
   "@agent-anything/tools/invocation": [
+    "admitToolCall",
     "materializeToolCall",
     "validateExactToolCall",
   ],

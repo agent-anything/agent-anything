@@ -42,9 +42,9 @@ import {
 
 export const HELARC_EVALUATION_TIME = "2026-09-05T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-child-report-transfer-corpus-v1";
+  "helarc-call-admission-scheduling-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-child-report-transfer-target-v1";
+  "helarc-call-admission-scheduling-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -358,7 +358,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v21-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v22-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -369,7 +369,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-child-report-transfer-v1",
+    "product.revision": "helarc-product-call-admission-scheduling-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -384,7 +384,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "agent-hooks.revision": "agent-hooks.stop-and-stop-failure.v1",
     "task-fulfillment-hook.revision": HELARC_TASK_FULFILLMENT_HOOK_REVISION,
     "verification-completion-gate.revision": "verification.current-completion-gate.v1",
-    "tool-input-validation.revision": "tools.tool-call-attempt-validation.v1",
+    "tool-input-validation.revision": "tools.request-admission-and-dispatch-validation.v2",
     "agent-continuation.revision": "agent-runtime.opaque-agent-continuation.v1",
     "model-context-assessment.revision": "model-interaction.provider-context-assessment.v1",
     "provider-transport-accounting.revision": "model-interaction.request-body-transport-accounting.v1",
@@ -393,7 +393,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-child-report-transfer-v1",
+    "source.revision": "helarc-call-admission-scheduling-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "child-report-and-stop-reason-v1",

@@ -121,6 +121,8 @@ import {
 } from "@agent-anything/model-interaction";
 import {
   materializeToolCall,
+  admitToolCall,
+  type ToolCallAdmission,
   type ToolCall,
   type ToolCallAttempt,
 } from "@agent-anything/tools/invocation";
@@ -377,8 +379,7 @@ interface CandidateBasis<TOutput> {
   readonly activeAgent: Agent<TOutput>;
   readonly instructionBinding: AgentInstructionBinding;
   readonly projection: ContextProjection;
-  readonly exposure: ToolExposureProof;
-  readonly exposureOwnerBasisRevision: string;
+  readonly admissions: ReadonlyMap<ProgressionCandidate, ToolCallAdmission>;
 }
 
 interface OperationExecutionOutcome {
@@ -387,7 +388,7 @@ interface OperationExecutionOutcome {
 }
 
 interface CandidateProcessingOutcome<TOutput> {
-  readonly invalidatesRemainder: boolean;
+  readonly dispatchStop: "action_limit" | "handoff" | "steering" | "cancellation" | null;
   readonly terminal: TerminalCandidate<TOutput> | null;
 }
 
@@ -1218,8 +1219,11 @@ export class RunExecution<TOutput> {
           activeAgent: decision.agent,
           instructionBinding: decision.prepared.input.instructionBinding,
           projection: decision.prepared.context,
-          exposure: decision.prepared.input.toolExposure,
-          exposureOwnerBasisRevision: decision.exposureOwnerBasisRevision,
+          admissions: new Map(decision.decision.candidates.flatMap((candidate) => candidate.kind === "tool_request"
+            ? [[candidate, admitToolCall({ candidate: candidate.tool, selection: this.config.tools,
+                exposure: decision.prepared.input.toolExposure, modelCall: candidate.modelCallRef,
+                semanticValidators: this.dependencies.operations.toolInputSemanticValidators })] as const]
+            : [])),
         };
         for (let index = 0; index < decision.decision.candidates.length; index += 1) {
           if (this.config.cancellation.context.request !== null) {
@@ -1232,16 +1236,7 @@ export class RunExecution<TOutput> {
             );
             break;
           }
-          if (this.drainInteractionSettlements() > 0) {
-            this.settleCandidateRange(
-              decision.decision.candidates,
-              index,
-              decision.turn,
-              "invalidated",
-              "run_basis_changed_before_model_call",
-            );
-            break;
-          }
+          this.drainInteractionSettlements();
           if (this.drainSteering("apply") > 0) {
             this.settleCandidateRange(
               decision.decision.candidates,
@@ -1251,19 +1246,6 @@ export class RunExecution<TOutput> {
               "run_steering_invalidated_model_call",
             );
             break;
-          }
-          if (index > 0) {
-            const currentExposure = await this.toolExposure.resolve(decision.turn.id);
-            if (currentExposure.ownerBasisRevision !== basis.exposureOwnerBasisRevision) {
-              this.settleCandidateRange(
-                decision.decision.candidates,
-                index,
-                decision.turn,
-                "invalidated",
-                "tool_exposure_basis_changed",
-              );
-              break;
-            }
           }
           let outcome: CandidateProcessingOutcome<TOutput>;
           try {
@@ -1283,7 +1265,7 @@ export class RunExecution<TOutput> {
                   "runtime_action_limit_reached",
                 );
                 outcome = Object.freeze({
-                  invalidatesRemainder: true,
+                  dispatchStop: "action_limit",
                   terminal: null,
                 });
               } else {
@@ -1294,6 +1276,16 @@ export class RunExecution<TOutput> {
                 );
               }
               index += siblingCount - 1;
+            } else if (this.concurrentToolGroupLength(decision.decision.candidates, index, basis) > 1) {
+              const count = Math.min(remainingActionCapacity,
+                this.concurrentToolGroupLength(decision.decision.candidates, index, basis));
+              if (count > 1) {
+                outcome = await this.processConcurrentToolCandidates(
+                  decision.decision.candidates.slice(index, index + count), index, basis);
+                index += count - 1;
+              } else {
+                outcome = await this.processCandidate(decision.decision.candidates[index]!, index, basis);
+              }
             } else {
               outcome = await this.processCandidate(
                 decision.decision.candidates[index]!,
@@ -1310,7 +1302,7 @@ export class RunExecution<TOutput> {
               cancelled ? "cancelled" : "invalidated",
               cancelled
                 ? "run_cancelled_after_model_call_failure"
-                : "model_call_failure_invalidated_remainder",
+                : "run_execution_failure_before_model_call",
             );
             throw error;
           }
@@ -1334,13 +1326,13 @@ export class RunExecution<TOutput> {
             );
             break;
           }
-          if (outcome.invalidatesRemainder) {
+          if (outcome.dispatchStop !== null) {
             this.settleCandidateRange(
               decision.decision.candidates,
               index + 1,
               decision.turn,
               "invalidated",
-              "earlier_model_call_invalidated_remainder",
+              `run_${outcome.dispatchStop}_before_model_call`,
             );
             break;
           }
@@ -2317,7 +2309,6 @@ export class RunExecution<TOutput> {
     readonly basisRevision: number;
     readonly agent: Agent<TOutput>;
     readonly prepared: PreparedControllerOperation<TOutput>;
-    readonly exposureOwnerBasisRevision: string;
   } | null> {
     this.synchronizeCurrentContext();
     const state = this.writer.getSnapshot();
@@ -2447,7 +2438,6 @@ export class RunExecution<TOutput> {
         basisRevision: state.revision,
         agent: this.activeAgent,
         prepared,
-        exposureOwnerBasisRevision: resolvedExposure.ownerBasisRevision,
       });
     } catch (error) {
       if (this.config.cancellation.context.request !== null) throw error;
@@ -2558,6 +2548,40 @@ export class RunExecution<TOutput> {
       : null;
   }
 
+  private concurrentToolGroupLength(
+    candidates: readonly ProgressionCandidate[], start: number, basis: CandidateBasis<TOutput>,
+  ): number {
+    const first = basis.admissions.get(candidates[start]!);
+    if (first?.status !== "trusted") return 1;
+    const policy = this.toolExposure.scheduling(first.binding);
+    if (policy === undefined) return 1;
+    let count = 1;
+    let maximum = policy.maxParallel;
+    for (let index = start + 1; index < candidates.length && count < maximum; index += 1) {
+      const admission = basis.admissions.get(candidates[index]!);
+      if (admission?.status !== "trusted") break;
+      const next = this.toolExposure.scheduling(admission.binding);
+      if (next === undefined || next.group !== policy.group) break;
+      maximum = Math.min(maximum, next.maxParallel);
+      if (count >= maximum) break;
+      count += 1;
+    }
+    return count;
+  }
+
+  private async processConcurrentToolCandidates(
+    candidates: readonly ProgressionCandidate[], start: number, basis: CandidateBasis<TOutput>,
+  ): Promise<CandidateProcessingOutcome<TOutput>> {
+    // Reserve RunAction identities in source order, then drain every started call.
+    const results = await Promise.allSettled(candidates.map((candidate, index) =>
+      this.processCandidate(candidate, start + index, basis)));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+    const outcomes = results.map((result) => (result as PromiseFulfilledResult<CandidateProcessingOutcome<TOutput>>).value);
+    return outcomes.find((outcome) => outcome.terminal !== null || outcome.dispatchStop !== null)
+      ?? Object.freeze({ dispatchStop: null, terminal: null });
+  }
+
   private descendantSiblingGroupLength(
     candidates: readonly ProgressionCandidate[],
     startIndex: number,
@@ -2609,14 +2633,8 @@ export class RunExecution<TOutput> {
         toolCallId,
       );
       const materialized = materializeToolCall({
-        candidate: candidate.tool,
-        selection: this.config.tools,
-        exposure: basis.exposure,
-        parentRunAction: action.ref,
-        toolCallId,
-        modelCall: candidate.modelCallRef,
-        createdAt: this.now(),
-        semanticValidators: this.dependencies.operations.toolInputSemanticValidators,
+        admission: await this.revalidateToolAdmission(basis.admissions.get(candidate)!),
+        parentRunAction: action.ref, toolCallId, createdAt: this.now(),
       });
       if (materialized.status === "rejected") {
         entries.push(Object.freeze({
@@ -2655,12 +2673,11 @@ export class RunExecution<TOutput> {
       }));
     }
 
-    const invalidatedBeforeLaunch = this.config.cancellation.context.request !== null ||
-      this.drainInteractionSettlements() > 0 ||
-      this.drainSteering("apply") > 0;
-    const invalidatesRemainder = invalidatedBeforeLaunch || entries.some((entry) =>
-      entry.kind === "descendant" && entry.preparation.status === "admitted"
-    );
+    this.drainInteractionSettlements();
+    const steered = this.drainSteering("apply") > 0;
+    const invalidatedBeforeLaunch = this.config.cancellation.context.request !== null || steered;
+    const dispatchStop = this.config.cancellation.context.request !== null
+      ? "cancellation" : steered ? "steering" : null;
     const outcomes = await Promise.allSettled(entries.map(async (
       entry,
     ): Promise<DescendantExecutionOutcome | null> => {
@@ -2720,7 +2737,7 @@ export class RunExecution<TOutput> {
     }
     if (firstFailure !== null) throw firstFailure;
     return Object.freeze({
-      invalidatesRemainder,
+      dispatchStop,
       terminal: null,
     });
   }
@@ -2738,7 +2755,7 @@ export class RunExecution<TOutput> {
         "invalidated",
         "runtime_action_limit_reached",
       );
-      return Object.freeze({ invalidatesRemainder: true, terminal: null });
+      return Object.freeze({ dispatchStop: "action_limit", terminal: null });
     }
     const reservedId = candidate.kind === "operation_request"
       ? this.id("operation_invocation")
@@ -2754,17 +2771,16 @@ export class RunExecution<TOutput> {
       reservedId,
     );
 
-    let invalidatesRemainder = false;
+    let dispatchStop: CandidateProcessingOutcome<TOutput>["dispatchStop"] = null;
     let terminal: TerminalCandidate<TOutput> | null = null;
     try {
       switch (candidate.kind) {
         case "state_transition":
-          invalidatesRemainder = candidate.transition === "plan_update"
-            ? (await this.applyPlanCandidate(action, candidate.input), false)
-            : await this.applyHandoffCandidate(action, candidate.input, basis);
+          if (candidate.transition === "plan_update") await this.applyPlanCandidate(action, candidate.input);
+          else if (await this.applyHandoffCandidate(action, candidate.input, basis)) dispatchStop = "handoff";
           break;
         case "interaction_request":
-          invalidatesRemainder = await this.applyInteractionCandidate(
+          await this.applyInteractionCandidate(
             action,
             candidate,
             reservedId!,
@@ -2775,9 +2791,9 @@ export class RunExecution<TOutput> {
             action,
             candidate,
             reservedId!,
-            basis.exposure,
+            basis.admissions.get(candidate)!,
           );
-          invalidatesRemainder = outcome.invalidatesRemainder;
+          dispatchStop = outcome.dispatchStop;
           terminal = outcome.terminal;
           break;
         }
@@ -2808,14 +2824,14 @@ export class RunExecution<TOutput> {
                 status: "failed",
                 failure: createRunFailureCause("operation", outcome.result.failure),
               };
-              invalidatesRemainder = true;
+              dispatchStop = null;
             }
           }
           break;
         }
       }
       this.commitModelCallSettlement(action, null);
-      return Object.freeze({ invalidatesRemainder, terminal });
+      return Object.freeze({ dispatchStop, terminal });
     } catch (error) {
       this.commitModelCallSettlement(
         action,
@@ -3136,21 +3152,24 @@ export class RunExecution<TOutput> {
     return true;
   }
 
+  private async revalidateToolAdmission(admission: ToolCallAdmission): Promise<ToolCallAdmission> {
+    if (admission.status === "rejected") return admission;
+    const current = await this.toolExposure.assessCurrent(admission.binding);
+    if (current.disposition === "available") return admission;
+    return Object.freeze({ ...admission, status: "rejected" as const,
+      code: "tool_execution_unavailable", message: current.reason ?? "The selected execution path is unavailable.",
+      validation: null });
+  }
+
   private async executeToolCandidate(
     action: RuntimeRunAction,
     candidate: ToolRequestCandidate,
     toolCallId: string,
-    exposure: ToolExposureProof,
+    admission: ToolCallAdmission,
   ): Promise<CandidateProcessingOutcome<TOutput>> {
-      const materialized = materializeToolCall({
-      candidate: candidate.tool,
-      selection: this.config.tools,
-      exposure,
-      parentRunAction: action.ref,
-      toolCallId,
-      modelCall: candidate.modelCallRef,
-      createdAt: this.now(),
-      semanticValidators: this.dependencies.operations.toolInputSemanticValidators,
+    const materialized = materializeToolCall({
+      admission: await this.revalidateToolAdmission(admission),
+      parentRunAction: action.ref, toolCallId, createdAt: this.now(),
     });
     if (materialized.status === "rejected") {
       const toolResult = failedToolAttemptResult(
@@ -3176,7 +3195,7 @@ export class RunExecution<TOutput> {
         omittedIssueCount: materialized.validation?.omittedIssueCount ?? 0,
         modelCallId: materialized.attempt.ref.modelCall?.id ?? null,
       });
-      return Object.freeze({ invalidatesRemainder: false, terminal: null });
+      return Object.freeze({ dispatchStop: null, terminal: null });
     }
     const call = materialized.call;
     switch (call.binding.kind) {
@@ -3204,7 +3223,7 @@ export class RunExecution<TOutput> {
           );
           if (result.status === "unknown_effect") {
             return Object.freeze({
-              invalidatesRemainder: true,
+              dispatchStop: null,
               terminal: {
                 status: "failed" as const,
                 code: "unknown_effect" as const,
@@ -3213,21 +3232,19 @@ export class RunExecution<TOutput> {
             });
           }
         }
-        return Object.freeze({ invalidatesRemainder: false, terminal: null });
+        return Object.freeze({ dispatchStop: null, terminal: null });
       }
       case "interaction":
-        return Object.freeze({
-          invalidatesRemainder: await this.executeToolInteraction(action, call),
-          terminal: null,
-        });
+        await this.executeToolInteraction(action, call);
+        return Object.freeze({ dispatchStop: null, terminal: null });
       case "descendant_agent":
         await this.executeToolDescendant(action, call);
-        return Object.freeze({ invalidatesRemainder: false, terminal: null });
+        return Object.freeze({ dispatchStop: null, terminal: null });
       case "descendant_message":
         await this.executeToolDescendantMessage(action, call);
-        return Object.freeze({ invalidatesRemainder: false, terminal: null });
+        return Object.freeze({ dispatchStop: null, terminal: null });
     }
-    return Object.freeze({ invalidatesRemainder: false, terminal: null });
+    return Object.freeze({ dispatchStop: null, terminal: null });
   }
 
   private async executeToolInteraction(
@@ -3417,6 +3434,7 @@ export class RunExecution<TOutput> {
     readonly invocationId: string;
     readonly parentInvocation: OperationInvocationRef | null;
     readonly basis: unknown;
+    readonly allowedBindings?: readonly ResolvedOperationBinding["kind"][];
   }): Promise<OperationResult | null> {
     const registration = findRegisteredOperation(
       this.dependencies.operations.catalog,
@@ -3479,6 +3497,10 @@ export class RunExecution<TOutput> {
       return result;
     }
     const binding = resolution.binding;
+    if (input.allowedBindings !== undefined && !input.allowedBindings.includes(binding.kind)) {
+      return this.operationFailureResult(registration, invocation, "invalid", "operation-composition",
+        "composite_child_binding_not_allowed", this.now(), this.now());
+    }
     if (!bindingMatchesResolution(registration, context, binding)) {
       const result = this.operationFailureResult(
         registration,
@@ -3709,6 +3731,12 @@ export class RunExecution<TOutput> {
           now: this.dependencies.now,
           children: {
             start: async (child) => {
+              if (this.writer.getSnapshot().counters.runActions >= this.config.limits.maxActions) {
+                return Object.freeze({ runAction: null, result: null, failure: Object.freeze({
+                  code: "runtime_action_limit_reached", message: "Composite child exceeds remaining RunAction capacity.",
+                  retryable: false, metadata: Object.freeze({ nodeId: child.node.id }),
+                }) });
+              }
               const invocationId = this.id("operation_invocation");
               const childAction = this.materializeWorkflowRunAction({
                 operation: child.node.operation,
@@ -3724,11 +3752,19 @@ export class RunExecution<TOutput> {
                 invocationId,
                 parentInvocation: binding.invocation,
                 basis: child,
+                allowedBindings: child.node.allowedBindings,
               });
               if (result === null) {
-                throw new Error("Composite child Operation was rejected before materialization.");
+                const observation = this.findRunActionObservation(childAction.ref);
+                const rejected = observation?.payload.kind === "operation_rejected" ? observation.payload : null;
+                return Object.freeze({ runAction: childAction.ref, result: null,
+                  failure: Object.freeze({ code: rejected?.code ?? "composite_child_rejected",
+                    message: rejected?.message ?? "Composite child was rejected before execution.",
+                    retryable: false, metadata: Object.freeze({ nodeId: child.node.id }) }) });
               }
               this.commitOperationObservation(childAction, { result, toolResult: null });
+              await this.processSettledOperationVerification(childAction, child.node.operation,
+                child.request, "trusted_workflow", result);
               return Object.freeze({ runAction: childAction.ref, result });
             },
           },

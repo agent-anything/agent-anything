@@ -13,6 +13,7 @@ export type CompositeNodeTerminalStatus =
   | "invalid"
   | "unknown_effect"
   | "not_selected"
+  | "dependency_failed"
   | "invalidated"
   | "cancelled_before_start";
 
@@ -22,6 +23,7 @@ export interface CompositeNodeSettlement {
   readonly runAction: RunActionRef | null;
   readonly status: CompositeNodeTerminalStatus;
   readonly result: OperationResult | null;
+  readonly failure: CompositeFailure | null;
 }
 
 export interface CompositeFailure {

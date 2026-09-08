@@ -60,73 +60,82 @@ export type ToolCallMaterialization =
       readonly validation: ToolInputValidationFailure | null;
     };
 
-export function materializeToolCall(input: {
+export interface ToolCallAdmissionInput {
   readonly candidate: ToolCallCandidate;
   readonly selection: ToolSelectionRevision;
   readonly exposure: ToolExposureProof | null;
-  readonly parentRunAction: RunActionRef;
-  readonly toolCallId: string;
   readonly modelCall: ToolCallModelCorrelationRef | null;
-  readonly createdAt: string;
   readonly semanticValidators?: readonly ToolInputSemanticValidator[];
-}): ToolCallMaterialization {
+}
+
+export type ToolCallAdmission = {
+  readonly candidate: ToolCallCandidate;
+  readonly modelCall: ToolCallModelCorrelationRef | null;
+  readonly selectedTool: ToolRevisionRef | null;
+  readonly inputDigest: string;
+} & (
+  | { readonly status: "trusted"; readonly binding: ToolBindingRef; readonly selectionRevision: string; readonly exposureProofId: string | null }
+  | { readonly status: "rejected"; readonly code: string; readonly message: string; readonly validation: ToolInputValidationFailure | null }
+);
+
+export function admitToolCall(input: ToolCallAdmissionInput): ToolCallAdmission {
   const selected = findSelectedTool(input.selection, input.candidate.name, input.candidate.origin);
-  const inputDigest = createToolContractIdentity("agent-anything.tool-call-input.v1", input.candidate.input);
-  if (selected === undefined) {
-    return rejected(
-      createAttempt(input, null, inputDigest),
-      "tool_unavailable",
-      "The requested Tool is not selected for this origin.",
-      null,
-    );
-  }
-  const descriptor = selected.registration.descriptor;
-  const attempt = createAttempt(input, descriptor.ref, inputDigest);
+  const descriptor = selected?.registration.descriptor;
+  const base = {
+    candidate: deepFreeze({ ...input.candidate }),
+    modelCall: input.modelCall,
+    selectedTool: descriptor?.ref ?? null,
+    inputDigest: createToolContractIdentity("agent-anything.tool-call-input.v1", input.candidate.input),
+  };
+  const reject = (code: string, message: string, validation: ToolInputValidationFailure | null = null): ToolCallAdmission =>
+    deepFreeze({ ...base, status: "rejected" as const, code, message, validation });
+  if (descriptor === undefined) return reject("tool_unavailable", "The requested Tool is not selected for this origin.");
   if (input.candidate.revision !== null && input.candidate.revision !== descriptor.ref.revision) {
-    return rejected(attempt, "tool_revision_mismatch", "The requested Tool revision is not selected.", null);
+    return reject("tool_revision_mismatch", "The requested Tool revision is not selected.");
   }
-  if (descriptor.retirement !== null) {
-    return rejected(attempt, "tool_retired", "The requested Tool revision is retired.", null);
-  }
+  if (descriptor.retirement !== null) return reject("tool_retired", "The requested Tool revision is retired.");
   if (input.candidate.origin === "model") {
     if (input.candidate.controllerRequestId !== input.modelCall?.controllerRequestId) {
-      return rejected(attempt, "tool_call_correlation_invalid", "The Tool attempt does not match its Model Call.", null);
+      return reject("tool_call_correlation_invalid", "The Tool attempt does not match its Model Call.");
     }
     if (input.exposure === null || input.exposure.selectionRevision !== input.selection.revision ||
-      input.candidate.controllerRequestId !== input.exposure.controllerRequestId ||
-      !input.exposure.exposedTools.some((ref) => toolRevisionKey(ref) === toolRevisionKey(descriptor.ref))) {
-      return rejected(attempt, "tool_not_exposed", "The requested Tool was not exposed to this Controller request.", null);
+        input.candidate.controllerRequestId !== input.exposure.controllerRequestId ||
+        !input.exposure.exposedTools.some((ref) => toolRevisionKey(ref) === toolRevisionKey(descriptor.ref))) {
+      return reject("tool_not_exposed", "The requested Tool was not exposed to this Controller request.");
     }
   }
-  const validation = validateToolInput({
-    descriptor,
-    value: input.candidate.input,
-    semanticValidators: input.semanticValidators,
+  const validation = validateToolInput({ descriptor, value: input.candidate.input, semanticValidators: input.semanticValidators });
+  if (validation.status === "invalid") return reject(validation.failure.code, validation.message, validation.failure);
+  return deepFreeze({
+    ...base, status: "trusted" as const, binding: descriptor.binding,
+    selectionRevision: input.selection.revision,
+    exposureProofId: input.candidate.origin === "model" ? input.exposure!.id : null,
   });
-  if (validation.status === "invalid") {
-    return rejected(
-      attempt,
-      validation.failure.code,
-      validation.message,
-      validation.failure,
-    );
+}
+
+export function materializeToolCall(input: {
+  readonly admission: ToolCallAdmission;
+  readonly parentRunAction: RunActionRef;
+  readonly toolCallId: string;
+  readonly createdAt: string;
+}): ToolCallMaterialization {
+  const admission = input.admission;
+  const attempt = createAttempt({
+    ...input, candidate: admission.candidate, modelCall: admission.modelCall,
+  }, admission.selectedTool, admission.inputDigest);
+  if (admission.status === "rejected") {
+    return rejected(attempt, admission.code, admission.message, admission.validation);
   }
-  return Object.freeze({
-    status: "trusted" as const,
-    attempt,
-    call: Object.freeze({
-      toolCallId: attempt.ref.id,
-      attempt: attempt.ref,
-      parentRunAction: input.parentRunAction,
-      toolRevision: descriptor.ref,
-      binding: descriptor.binding,
-      selectionRevision: input.selection.revision,
-      exposureProofId: input.candidate.origin === "model" ? input.exposure!.id : null,
-      origin: input.candidate.origin,
-      input: deepFreeze(input.candidate.input),
-      inputDigest,
+  return deepFreeze({
+    status: "trusted" as const, attempt,
+    call: {
+      toolCallId: attempt.ref.id, attempt: attempt.ref,
+      parentRunAction: input.parentRunAction, toolRevision: admission.selectedTool!,
+      binding: admission.binding, selectionRevision: admission.selectionRevision,
+      exposureProofId: admission.exposureProofId, origin: admission.candidate.origin,
+      input: admission.candidate.input, inputDigest: admission.inputDigest,
       createdAt: dateTime(input.createdAt),
-    }),
+    },
   });
 }
 
@@ -138,7 +147,7 @@ export function validateExactToolCall(call: ToolCall, selection: ToolSelectionRe
 }
 
 function createAttempt(
-  input: Parameters<typeof materializeToolCall>[0],
+  input: { readonly candidate: ToolCallCandidate; readonly modelCall: ToolCallModelCorrelationRef | null; readonly toolCallId: string; readonly parentRunAction: RunActionRef; readonly createdAt: string },
   selectedTool: ToolRevisionRef | null,
   inputDigest: string,
 ): ToolCallAttempt {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createOperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
 import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
 import { createToolContractIdentity, type ToolRevisionRef } from "../identity/index.js";
-import { materializeToolCall } from "../invocation/index.js";
+import { admitToolCall } from "../invocation/index.js";
 import { createToolRegistrationSnapshot, type ToolRegistrationInput } from "../registration/index.js";
 import {
   createStaticAvailableToolBindingAssessment,
@@ -247,7 +247,7 @@ describe("current-turn Tool Exposure", () => {
       createdAt: "2026-08-24T00:00:00.000Z",
     };
 
-    expect(materializeToolCall({
+    expect(admitToolCall({
       ...common,
       candidate: {
         name: "codeAgent.createFile",
@@ -257,7 +257,7 @@ describe("current-turn Tool Exposure", () => {
         controllerRequestId: "controller-request-1",
       },
     })).toEqual(expect.objectContaining({ status: "rejected", code: "tool_not_exposed" }));
-    expect(materializeToolCall({
+    expect(admitToolCall({
       ...common,
       candidate: {
         name: "codeAgent.readFile",
@@ -267,7 +267,7 @@ describe("current-turn Tool Exposure", () => {
         controllerRequestId: "controller-request-stale",
       },
     })).toEqual(expect.objectContaining({ status: "rejected", code: "tool_call_correlation_invalid" }));
-    expect(materializeToolCall({
+    expect(admitToolCall({
       ...common,
       candidate: {
         name: "codeAgent.readFile",

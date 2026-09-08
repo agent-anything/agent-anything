@@ -3,11 +3,97 @@ import type { RunActionRef } from "@agent-anything/agent-core/run-action";
 import { createOperationResult, type OperationResult } from "@agent-anything/operation-catalog/result";
 import { describe, expect, it, vi } from "vitest";
 import { snapshotCompositeDefinition, type CompositeDefinitionRevision } from "../definition/index.js";
-import { CompositeExecution, type CompositeConflictResolverPort } from "./CompositeExecution.js";
+import { CompositeExecution, type CompositeConflictResolverPort, type CompositeExecutionDependencies } from "./CompositeExecution.js";
 
 const NOW = "2026-08-13T00:00:00.000Z";
 
 describe("CompositeExecution", () => {
+  it.each(["succeeded", "settled"] as const)("honors explicit %s dependencies with complete failure settlements", async (requirement) => {
+    const seen: unknown[] = [];
+    const graph = definition([node("first"), { ...node("second"), dependencies: [{ nodeId: "first", requirement }] }]);
+    const execution = configuredExecution(graph, {
+      transforms: [{ id: "identity", transform: ({ dependencies }) => { seen.push(dependencies); return {}; } }],
+      children: { start: async ({ node: current }) => child(current.id, 1, current.id === "first" ? "failed" : "succeeded") },
+    });
+    const result = await execution.run({}, activeInterruption());
+    expect(result.children[1]?.status).toBe(requirement === "succeeded" ? "dependency_failed" : "succeeded");
+    if (requirement === "settled") expect(seen[1]).toMatchObject({ first: { status: "failed", result: { status: "failed" } } });
+    else expect(seen).toHaveLength(1);
+  });
+
+  it("passes missing-result handler failures to settlement-only recovery without losing cause", async () => {
+    const graph = definition([{ ...node("first"), transformId: "fail" },
+      { ...node("second"), dependencies: [{ nodeId: "first", requirement: "settled" }] }]);
+    const observe = vi.fn(() => ({}));
+    const result = await configuredExecution(graph, { transforms: [
+      { id: "fail", transform() { throw new Error("transform evidence"); } },
+      { id: "identity", transform: observe },
+    ] }).run({}, activeInterruption());
+    expect(observe.mock.calls[0]?.[0]).toMatchObject({ dependencies: { first: {
+      status: "failed", result: null, failure: { code: "composite_transform_failed", message: "transform evidence" },
+    } } });
+    expect(result.children[1]?.status).toBe("succeeded");
+  });
+
+  it("rejects missing registered handlers before any child dispatch", () => {
+    const start = vi.fn();
+    expect(() => configuredExecution(definition([{ ...node("first"), transformId: "missing" }]), { children: { start } })).toThrow(/unregistered/);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each(["condition", "reducer"] as const)("contains %s failures with exact attribution", async (stage) => {
+    const graph = definition([{ ...node("first"), conditionId: stage === "condition" ? "fail" : null }]);
+    const result = await configuredExecution(graph, {
+      conditions: [{ id: "fail", evaluate() { throw new Error("condition failed"); } }],
+      reducer: { id: "collect", reduce() { if (stage === "reducer") throw new Error("reducer failed"); return {}; } },
+    }).run({}, activeInterruption());
+    expect(result.status).toBe("failed");
+    expect(stage === "condition" ? result.children[0]?.failure?.code : result.failure?.code).toBe(`composite_${stage}_failed`);
+  });
+
+  it("does not turn unsatisfied quorum or required success into aggregate success", async () => {
+    for (const join of [{ kind: "quorum", count: 2 }, { kind: "all_required_succeeded" }] as const) {
+      const graph = { ...definition([node("first"), node("second")]), join };
+      const result = await configuredExecution(graph, { children: {
+        start: async ({ node: current }) => child(current.id, 1, current.id === "first" ? "succeeded" : "failed"),
+      } }).run({}, activeInterruption());
+      expect(result.status).toBe("failed");
+    }
+  });
+
+  it("stops later waves after unknown effects and retains child dispatch exceptions", async () => {
+    const start = vi.fn(async () => { throw new Error("lost settlement"); });
+    const result = await configuredExecution(definition([node("first"), node("second")]), { children: { start } })
+      .run({}, activeInterruption());
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("unknown_effect");
+    expect(result.children[0]?.failure?.message).toBe("lost settlement");
+    expect(result.children[1]?.status).toBe("invalidated");
+  });
+
+  it("drains started branches on early join and never dispatches an invocation twice", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const active = new Promise<void>((resolve) => { started = resolve; });
+    const graph = { ...definition([node("first"), node("second"), node("third")]), join: { kind: "first_success" as const } };
+    const start = vi.fn(async ({ node: current }: Parameters<CompositeExecutionDependencies["children"]["start"]>[0]) => {
+      if (current.id === "second") { started(); await pending; }
+      return child(current.id, 1, "succeeded");
+    });
+    const execution = configuredExecution(graph, { children: { start }, conflicts: {
+      revision: "conflict-1", evaluate: () => ({ revision: "conflict-1", status: "non_conflicting", evidenceRef: "proof" }),
+    } });
+    const run = execution.run({}, activeInterruption());
+    expect(execution.run({}, activeInterruption())).toBe(run);
+    await active;
+    expect(execution.getSnapshot().terminal).toBeNull();
+    release();
+    const result = await run;
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(result.children.map(({ status }) => status)).toEqual(["succeeded", "succeeded", "not_selected"]);
+  });
+
   it("rejects cyclic graphs before an execution can exist", () => {
     expect(() => snapshotCompositeDefinition(definition([
       node("first", ["second"]),
@@ -169,7 +255,7 @@ function node(
     id,
     operation: operation(id),
     allowedBindings: ["internal"],
-    dependencies,
+    dependencies: dependencies.map((nodeId) => ({ nodeId, requirement: "succeeded" as const })),
     transformId: "identity",
     conditionId: null,
     resourceClaims: [{ family: "test", identity: id, access: "observe" }],
@@ -180,7 +266,7 @@ function node(
 function child(
   nodeId: string,
   sequence: number,
-  status: "succeeded" | "unknown_effect",
+  status: "succeeded" | "unknown_effect" | "failed",
 ): { readonly runAction: RunActionRef; readonly result: OperationResult } {
   const runAction: RunActionRef = {
     run: { id: "run-1" },
@@ -223,4 +309,13 @@ function operation(name: string) {
 
 function activeInterruption(): InvocationInterruptionContext {
   return { signal: new AbortController().signal, interruption: null };
+}
+
+function configuredExecution(graph: CompositeDefinitionRevision, overrides: Partial<CompositeExecutionDependencies> = {}) {
+  return new CompositeExecution("composite", snapshotCompositeDefinition(graph), {
+    transforms: [{ id: "identity", transform: ({ compositeInput }) => compositeInput }],
+    conditions: [], reducer: { id: "collect", reduce: ({ children }) => children }, conflicts: null,
+    children: { start: async ({ node: current }) => child(current.id, 1, "succeeded") }, now: () => NOW,
+    ...overrides,
+  });
 }

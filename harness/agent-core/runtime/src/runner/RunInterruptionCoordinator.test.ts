@@ -8,6 +8,27 @@ import {
 const now = "2026-08-04T00:00:00.000Z";
 
 describe("RunInterruptionCoordinator", () => {
+  it("tracks concurrent Tools independently and bounds every unsettled cancellation", async () => {
+    vi.useFakeTimers();
+    const cancellation = createRunCancellationController({ runId: "run-1", now: () => now });
+    const coordinator = new RunInterruptionCoordinator({ cancellation: cancellation.context,
+      operationSettlementTimeoutMs: 25, now: () => now, onCancellationObserved: () => undefined });
+    coordinator.start();
+    const first = deferred<string>();
+    const one = coordinator.execute("tool", () => first.promise);
+    const two = coordinator.execute("tool", () => new Promise<never>(() => undefined));
+    const caught = two.catch((error: unknown) => error);
+    await expect(coordinator.execute("controller", async () => "wrong")).rejects.toThrow(/exclusive/);
+    first.resolve("done");
+    await expect(one).resolves.toBe("done");
+    expect(coordinator.isActive("tool")).toBe(true);
+    cancellation.requestCancellation({ origin: "user", reasonCode: "user_requested" });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(await caught).toBeInstanceOf(OperationSettlementTimeoutError);
+    expect(coordinator.isActive("tool")).toBe(false);
+    coordinator.dispose();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

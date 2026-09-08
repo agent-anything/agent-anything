@@ -596,6 +596,7 @@ function snapshotRunnerOperationComposition(
     }
     return Object.freeze({
       binding: participant.binding,
+      scheduling: participant.scheduling === undefined ? undefined : Object.freeze({ ...participant.scheduling }),
       assess: participant.assess.bind(participant),
     });
   });

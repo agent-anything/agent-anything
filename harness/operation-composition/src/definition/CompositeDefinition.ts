@@ -10,11 +10,16 @@ export interface CompositeNodeDefinition {
   readonly id: string;
   readonly operation: OperationRevisionRef;
   readonly allowedBindings: readonly OperationBindingKind[];
-  readonly dependencies: readonly string[];
+  readonly dependencies: readonly CompositeDependency[];
   readonly transformId: string;
   readonly conditionId: string | null;
   readonly resourceClaims: readonly CompositeResourceClaim[];
   readonly required: boolean;
+}
+
+export interface CompositeDependency {
+  readonly nodeId: string;
+  readonly requirement: "settled" | "succeeded";
 }
 
 export interface CompositeResourceClaim {
@@ -78,12 +83,14 @@ export function snapshotCompositeDefinition(
     return deepFreeze({
       ...node,
       allowedBindings: [...new Set(node.allowedBindings)],
-      dependencies: [...node.dependencies],
+      dependencies: node.dependencies.map((dependency: CompositeDependency) => ({ ...dependency })),
       resourceClaims: node.resourceClaims.map((claim: CompositeResourceClaim) => ({ ...claim })),
     });
   });
   for (const node of nodes) {
-    if (node.dependencies.some((dependency: string) => !ids.has(dependency) || dependency === node.id)) {
+    if (new Set(node.dependencies.map((dependency: CompositeDependency) => dependency.nodeId)).size !== node.dependencies.length ||
+        node.dependencies.some((dependency: CompositeDependency) => !ids.has(dependency.nodeId) || dependency.nodeId === node.id ||
+          (dependency.requirement !== "settled" && dependency.requirement !== "succeeded"))) {
       throw new TypeError(`Composite node '${node.id}' has an invalid dependency.`);
     }
   }
@@ -107,7 +114,7 @@ function assertAcyclic(nodes: readonly CompositeNodeDefinition[]): void {
     if (visiting.has(id)) throw new TypeError("CompositeDefinition graph must be acyclic.");
     if (visited.has(id)) return;
     visiting.add(id);
-    for (const dependency of byId.get(id)!.dependencies) visit(dependency);
+    for (const dependency of byId.get(id)!.dependencies) visit(dependency.nodeId);
     visiting.delete(id);
     visited.add(id);
   };
