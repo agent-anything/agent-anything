@@ -22,14 +22,16 @@ import {
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createFakeProviderContext } from "@agent-anything/test-support";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import { createHelarcProviderProfile } from "@agent-anything/helarc/configuration";
 import { createDefaultHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import { HelarcInspection } from "../inspection/HelarcInspection.js";
+import { InspectionQueryService } from "@agent-anything/inspection/query";
 import {
   prepareHelarcHostRun,
   type PrepareHelarcHostRunInput,
@@ -131,6 +133,50 @@ function executeReadOnlyTestHostRun(
 }
 
 describe("Helarc Host Run composition", () => {
+  it("records the real Tool, Context and lifecycle path without optional instructions or execution interference", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-inspection-run-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    await writeFile(join(workspaceRoot, "input.txt"), "existing work", "utf8");
+    const inspection = await HelarcInspection.create(join(directory, "settings.json"), join(directory, "inspection"));
+    const queries = new InspectionQueryService(join(directory, "inspection"));
+    const defaults = createDefaultHelarcInstructionSettings();
+    const instructionSettings = {
+      agent: defaults.agent.map((entry) => ({ ...entry, enabled: false })),
+      delegated: defaults.delegated.map((entry) => ({ ...entry, enabled: false })),
+      protocol: defaults.protocol.map((entry) => ({ ...entry, enabled: false })),
+      stop: defaults.stop.map((entry) => ({ ...entry, enabled: false })),
+    };
+    const run = async (observed: boolean) => {
+      const provider = new ScriptedProvider([{ kind: "tool_call", toolName: "Glob", input: { pattern: "**/*", path: "." } }, { kind: "completion", summary: "Inspected." }]);
+      const result = await executeReadOnlyTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings, inspection: observed ? inspection : undefined, now: () => "2026-06-28T00:00:00.000Z" });
+      return { result, provider };
+    };
+    try {
+      await inspection.save({ enabled: true, definition: true, agent: true, provider: true, execution: true });
+      const baseline = await run(false); const recorded = await run(true);
+      expect(recorded.result.runResult.status).toBe(baseline.result.runResult.status);
+      expect(recorded.result.activity.map((event) => event.kind)).toEqual(baseline.result.activity.map((event) => event.kind));
+      expect(recorded.provider.requests.length).toBe(baseline.provider.requests.length);
+      expect(recorded.provider.requests[0]?.instructions.content).toEqual([]);
+      expect(recorded.provider.stopRequests).toHaveLength(0);
+      expect(await readFile(join(workspaceRoot, "input.txt"), "utf8")).toBe("existing work");
+      await inspection.recorder!.flush();
+      expect(inspection.snapshot().health).toMatchObject({ available: true, rejected: 0, dropped: 0 });
+      const scope = (await queries.query({ kind: "get_snapshot", sourceId: inspection.recorder!.source.sourceId, datasetId: inspection.recorder!.manifest.datasetId })).selection!;
+      const definitions = (await queries.query({ ...scope, kind: "list_definitions", limit: 500 })).records;
+      expect(definitions.some((record) => record.payload.kind === "definition" && record.payload.definitionKind === "tool")).toBe(true);
+      const runs = (await queries.query({ ...scope, kind: "list_runs" })).records;
+      expect(runs[0]?.payload).toMatchObject({ status: "succeeded" });
+      expect((await queries.query({ ...scope, kind: "get_lifecycle", subject: runs[0]!.subject })).records.some((record) => record.payload.kind === "transition" && record.payload.to === "succeeded")).toBe(true);
+      const flow = (await queries.query({ ...scope, kind: "get_data_flow" })).graph!;
+      expect(flow.links.some((link) => link.targetLocation?.stage === "projected" && link.targetLocation.jsonPointer?.startsWith("/blocks/"))).toBe(true);
+      expect((await queries.query({ ...scope, kind: "get_scheduling", subject: runs[0]!.subject })).records.length).toBeGreaterThan(0);
+    } finally {
+      await queries.close(); await inspection.close();
+      if (!relative(tmpdir(), directory).startsWith("helarc-inspection-run-")) throw new Error("Invalid test cleanup target");
+      await rm(directory, { recursive: true });
+    }
+  });
   it("binds instruction settings before asynchronous preparation and allows a Run with no system instructions", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-instructions-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);

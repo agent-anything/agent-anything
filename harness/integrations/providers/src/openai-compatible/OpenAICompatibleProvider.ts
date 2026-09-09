@@ -1,4 +1,6 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { ProviderExchangeObservation } from "../http/ProviderExchangeObservation.js";
+import type { ProviderObserver } from "@agent-anything/model-interaction/transport";
 import {
   createModelCallRef,
   createUnknownModelInputMeasurement,
@@ -78,6 +80,7 @@ export class OpenAICompatibleProvider implements Provider {
   constructor(
     config: OpenAICompatibleProviderConfig,
     private readonly fetchImpl: FetchLike = globalThis.fetch as FetchLike,
+    private readonly observer?: ProviderObserver,
   ) {
     this.config = snapshotConfig(config);
     this.requestBodyTransportLimit = Object.freeze({
@@ -155,8 +158,19 @@ export class OpenAICompatibleProvider implements Provider {
     request: ProviderRequest,
     context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    const exchange = new ProviderExchangeObservation(this.observer, PROVIDER_ID, this.config.model, request);
+    try { const result = await this.sendAttempt(request, context, exchange); exchange.settled(result); return result; }
+    catch (error) { exchange.threw(); throw error; }
+  }
+
+  private async sendAttempt(
+    request: ProviderRequest,
+    context: InvocationInterruptionContext,
+    exchange: ProviderExchangeObservation,
+  ): Promise<ProviderCallResult> {
     try {
       request = snapshotProviderRequest(request);
+      exchange.validated(request);
     } catch (error) {
       return failed(
         "invalid_request",
@@ -210,12 +224,14 @@ export class OpenAICompatibleProvider implements Provider {
           { metadata: { causeName: error instanceof Error ? error.name : null } },
         );
       }
+      exchange.dispatched(endpoint, encoded.body);
       const response = await this.fetchImpl(endpoint, {
         method: "POST",
         headers: this.headers(),
         body: encoded.body,
         signal: attempt.signal,
       });
+      exchange.received(response.status);
       const interruptedAfterResponse = providerResultFromInterruption(attempt.cause);
       if (interruptedAfterResponse !== null) return interruptedAfterResponse;
 
@@ -225,6 +241,7 @@ export class OpenAICompatibleProvider implements Provider {
           response,
           this.config.apiKey,
         );
+        exchange.consumed(diagnostic, "error_diagnostic");
         const interruptedAfterFailureBody = providerResultFromInterruption(attempt.cause);
         if (interruptedAfterFailureBody !== null) return interruptedAfterFailureBody;
         const contextWindowExceeded = isOpenAICompatibleContextWindowExceeded(diagnostic);
@@ -261,6 +278,7 @@ export class OpenAICompatibleProvider implements Provider {
       let body: unknown;
       try {
         body = await response.json();
+        exchange.consumed(body, "parsed_json");
       } catch {
         return providerResultFromInterruption(attempt.cause) ?? failed(
           "response",

@@ -1,4 +1,5 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
+import { publishRunObservation } from "./RunObserver.js";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
@@ -443,6 +444,12 @@ export class Runner {
         }
       },
     );
+    if (this.dependencies.runObserver) {
+      handle.subscribe((snapshot) => publishRunObservation(this.dependencies.runObserver, {
+        snapshot, agent: Object.freeze({ id: agent.id, revision: agent.revision }),
+        task: Object.freeze({ id: input.task.id }), lineage, startedAt,
+      }));
+    }
     const execution = new RunExecution<TOutput>(
       runId,
       this.dependencies,

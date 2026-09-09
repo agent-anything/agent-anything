@@ -314,6 +314,17 @@ export function modelInputFromSections(
   readonly instructions: ModelInstructions;
   readonly messages: readonly ModelMessage[];
 } {
+  return projectModelInput(sections);
+}
+
+export interface ModelInputSectionLocation { readonly sectionId: string; readonly jsonPointers: readonly string[] }
+export function modelInputSectionLocations(sections: readonly ModelInputSection[]): readonly ModelInputSectionLocation[] {
+  const locations: ModelInputSectionLocation[] = [];
+  projectModelInput(sections, locations);
+  return Object.freeze(locations);
+}
+
+function projectModelInput(sections: readonly ModelInputSection[], locations?: ModelInputSectionLocation[]): { readonly instructions: ModelInstructions; readonly messages: readonly ModelMessage[] } {
   const instructionContent: Array<{ kind: "text"; text: string }> = [];
   const messages: ModelMessage[] = [];
   let userContent: Array<{ kind: "text"; text: string }> = [];
@@ -336,6 +347,7 @@ export function modelInputFromSections(
       if (section.content.kind === "model_message") {
         throw new TypeError("Model input instructions cannot contain Conversation Messages.");
       }
+      locations?.push(Object.freeze({ sectionId: section.id, jsonPointers: Object.freeze([`/instructions/content/${instructionContent.length}`]) }));
       instructionContent.push({
         kind: "text",
         text: section.content.kind === "text"
@@ -350,10 +362,12 @@ export function modelInputFromSections(
         throw new TypeError("Model input message content role must match its section role.");
       }
       if (section.content.message.role === "user") {
+        locations?.push(Object.freeze({ sectionId: section.id, jsonPointers: Object.freeze(section.content.message.content.map((_, index) => `/messages/${messages.length}/content/${userContent.length + index}`)) }));
         userContent.push(...section.content.message.content);
         continue;
       }
       flushUser();
+      locations?.push(Object.freeze({ sectionId: section.id, jsonPointers: Object.freeze([`/messages/${messages.length}`]) }));
       messages.push(section.content.message);
       continue;
     }
@@ -364,10 +378,12 @@ export function modelInputFromSections(
       ? section.content.text
       : JSON.stringify(section.content.value);
     if (section.role === "user") {
+      locations?.push(Object.freeze({ sectionId: section.id, jsonPointers: Object.freeze([`/messages/${messages.length}/content/${userContent.length}`]) }));
       userContent.push({ kind: "text", text });
       continue;
     }
     flushUser();
+    locations?.push(Object.freeze({ sectionId: section.id, jsonPointers: Object.freeze([`/messages/${messages.length}`]) }));
     messages.push({
       role: "assistant",
       content: [{ kind: "text", text }],

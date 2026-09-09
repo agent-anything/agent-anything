@@ -61,7 +61,9 @@ import type {
   DelegationRequest,
   DelegationResult,
 } from "../delegation/index.js";
-import type { RunTranscriptPort } from "../transcript/index.js";
+import type { RunTranscriptPort, RunTranscriptObserver } from "../transcript/index.js";
+import type { RunObserver } from "./RunObserver.js";
+import type { RunExecutionObserver } from "./RunExecutionObserver.js";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
@@ -347,6 +349,9 @@ export interface RunnerDependencies {
   readonly telemetryPort?: TelemetryPort;
   readonly runTraceObserver?: RunTraceObserver;
   readonly runTranscriptPort?: RunTranscriptPort;
+  readonly runTranscriptObserver?: RunTranscriptObserver;
+  readonly runObserver?: RunObserver;
+  readonly executionObserver?: RunExecutionObserver;
   readonly resourceFinalizers?: readonly RunResourceFinalizerPort[];
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => string;

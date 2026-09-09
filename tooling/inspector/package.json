@@ -1,0 +1,42 @@
+{
+  "name": "@agent-anything/inspector",
+  "version": "0.0.0",
+  "description": "Independent local Agent Inspector.",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.server.json && vite build",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "start": "node dist/launcher/main.js",
+    "dev": "node dist/launcher/main.js",
+    "test:ui": "playwright test"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "tooling",
+      "component": "inspector"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/inspection": "workspace:*",
+    "@ant-design/icons": "6.3.4",
+    "@xyflow/react": "12.11.6",
+    "antd": "6.6.3",
+    "elkjs": "0.12.0",
+    "monaco-editor": "0.56.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-router-dom": "7.18.3",
+    "vis-data": "8.0.5",
+    "vis-timeline": "8.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "vite": "8.0.16"
+  }
+}

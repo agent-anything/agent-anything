@@ -950,6 +950,38 @@ describe("Runner semantic integration", () => {
     expect(persisted).not.toHaveProperty("records");
   });
 
+  it("keeps Tool execution and model input unchanged under throwing diagnostic observers", async () => {
+    const execute = async (observed: boolean) => {
+      const operation = operationRef("read-file");
+      const handler = internalHandler("handler.read-file", "code-workspace", { content: "hello" });
+      const operations = createOperationFixture([operationSpec(operation, "internal", { requestOrigins: ["tool_request"], handlerId: handler.id })], [handler]);
+      const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+      const controller = new ScriptedController([(input) => advance([{
+        kind: "tool_request", tool: { name: "codeAgent.readFile", revision: "1", input: { path: "README.md" }, origin: "model", controllerRequestId: input.toolExposure.controllerRequestId },
+      }], "model_tool_1"), complete("Done", "model_complete_2")]);
+      const agent = { ...createAgent(), instructions: createAgentInstructions({ id: "empty", release: { id: "empty", revision: "1" }, model: { providerId: "test-provider", modelId: "test-model" }, resolverRevision: "1", blocks: [] }) };
+      const transitions: import("./RunObserver.js").RunTransitionObservation[] = [];
+      const facts: import("./RunExecutionObserver.js").RunExecutionObservation[] = [];
+      const transcript: unknown[] = [];
+      const result = await createRunner(controller, operations, observed ? {
+        runObserver: { observe() { throw new Error("recorder unavailable"); }, transition(value) { transitions.push(value); throw new Error("transition observer failed"); } },
+        executionObserver: { observe(value) { facts.push(value); throw new Error("execution observer failed"); } },
+        runTranscriptObserver: { observe(value) { transcript.push(value.item); throw new Error("transcript observer failed"); } },
+      } : {}).run(agent, createRunInput(), createRunConfig(operations, { tools }));
+      return { result, calls: controller.calls, transitions, facts, transcript, dispatches: handler.execute.mock.calls.length };
+    };
+    const baseline = await execute(false);
+    const captured = await execute(true);
+    expect(captured.result).toEqual(baseline.result);
+    // Agent output validators are separate closures; compare the published input data.
+    expect(JSON.stringify(captured.calls)).toBe(JSON.stringify(baseline.calls));
+    expect(captured.dispatches).toBe(1);
+    expect(captured.transcript).toEqual(captured.result.items);
+    expect(captured.transitions.at(-1)?.status).toBe("succeeded");
+    expect(captured.transitions.every((transition) => transition.revision > transition.previousRevision)).toBe(true);
+    expect(captured.facts.map((fact) => fact.kind)).toEqual(expect.arrayContaining(["tool_exposure", "context_projection", "context_committed", "scheduling"]));
+  });
+
   it("executes one exposed Tool through its exact internal Operation binding", async () => {
     const operation = operationRef("read-file");
     const handler = internalHandler("handler.read-file", "code-workspace", {

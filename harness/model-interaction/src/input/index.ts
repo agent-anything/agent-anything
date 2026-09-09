@@ -1,3 +1,5 @@
+export { modelInputSectionLocations } from "./ModelInput.js";
+export type { ModelInputSectionLocation } from "./ModelInput.js";
 export type {
   ModelInputComposition,
   ModelInputContent,

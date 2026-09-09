@@ -15,6 +15,8 @@ import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspacePro
 import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 
 export const HELARC_IPC_CHANNELS = {
+  getInspectionSettings: "helarc:get-inspection-settings",
+  saveInspectionSettings: "helarc:save-inspection-settings",
   getInstructionSettings: "helarc:get-instruction-settings",
   saveInstructionSettings: "helarc:save-instruction-settings",
   cancelRun: "helarc:cancel-run",
@@ -32,6 +34,7 @@ export const HELARC_IPC_CHANNELS = {
 } as const;
 
 export interface RegisterHelarcIpcInput {
+  inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   instructionSettingsStore?: FileHelarcInstructionSettingsStore | null;
   window: BrowserWindow;
   controller: HelarcMainController;
@@ -53,6 +56,10 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   const productCommands = createHelarcProductCommandDispatcher({
     handlers: {
+      "inspection.save": async ({ settings }) => {
+        if (!input.inspection) throw new Error("Inspection source is unavailable.");
+        return input.inspection.save(settings);
+      },
       "instructions.save": async ({ settings }) => {
         if (!input.instructionSettingsStore) throw new Error("Instruction settings storage is unavailable.");
         const saved = await input.instructionSettingsStore.save(settings);
@@ -152,7 +159,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
         return projectHelarcDesktopSnapshot(
           input.controller.configureProvider({
-            provider: createHelarcProvider(saved.config),
+            provider: createHelarcProvider(saved.config, input.inspection?.providerObserver),
             profile: saved.profile,
           }),
         );
@@ -194,6 +201,11 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.getInstructionSettings, () => input.controller.getInstructionSettings());
+  ipcMain.handle(HELARC_IPC_CHANNELS.getInspectionSettings, () => {
+    if (!input.inspection) throw new Error("Inspection source is unavailable.");
+    return input.inspection.snapshot();
+  });
+  ipcMain.handle(HELARC_IPC_CHANNELS.saveInspectionSettings, (_event, command: unknown) => productCommands.dispatch(command, "inspection.save"));
   ipcMain.handle(HELARC_IPC_CHANNELS.saveInstructionSettings, (_event, command: unknown) =>
     productCommands.dispatch(command, "instructions.save"));
 

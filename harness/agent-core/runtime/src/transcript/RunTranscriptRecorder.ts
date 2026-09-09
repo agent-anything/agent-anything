@@ -1,6 +1,7 @@
 import {
   createRunTranscriptRecord,
   type RunTranscriptPort,
+  type RunTranscriptObserver,
 } from "./RunTranscript.js";
 import type { RunItem } from "../run/index.js";
 
@@ -9,14 +10,18 @@ export class RunTranscriptRecorder {
   private lastSequence = 0;
   private failures: string[] = [];
 
-  constructor(private readonly port: RunTranscriptPort | null) {}
+  constructor(private readonly port: RunTranscriptPort | null, private readonly observer?: RunTranscriptObserver) {}
 
   record<TOutput>(items: readonly RunItem<TOutput>[]): void {
-    if (this.port === null) return;
+    if (this.port === null && this.observer === undefined) return;
     for (const item of items) {
       if (item.ref.sequence <= this.lastSequence) continue;
       this.lastSequence = item.ref.sequence;
       const record = createRunTranscriptRecord(item);
+      if (this.observer) {
+        try { void Promise.resolve(this.observer.observe(record)).catch(() => {}); } catch { /* Independent diagnostic observer. */ }
+      }
+      if (this.port === null) continue;
       this.tail = this.tail.then(async () => {
         try {
           const result = await this.port!.append(record);
@@ -33,4 +38,3 @@ export class RunTranscriptRecorder {
     return Object.freeze([...this.failures]);
   }
 }
-

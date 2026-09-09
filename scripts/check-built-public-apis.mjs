@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const packageExportKeys = {
+  "harness/inspection": [".", "./adapters", "./content", "./query", "./recording", "./records", "./sources", "./storage", "./telemetry"],
   "harness/workspace": ["./identity", "./selection"],
   "harness/agent-core/contracts": [
     "./agent",
@@ -621,6 +622,7 @@ const expectedLowerValueExports = {
     "composeModelInput",
     "modelInputFromComposition",
     "modelInputFromSections",
+    "modelInputSectionLocations",
     "snapshotModelInputComposition",
     "snapshotModelOutputFormat",
   ],
@@ -636,6 +638,8 @@ const expectedLowerValueExports = {
   ],
   "@agent-anything/model-interaction/transport": [
     "accountProviderTransport",
+    "publishProviderObservation",
+    "snapshotProviderDiagnostic",
     "snapshotProviderTransportLimit",
     "verifyProviderTransportAccounting",
   ],
@@ -806,6 +810,7 @@ const expectedValueExports = {
     "toRunCancellationSummary",
   ],
   "@agent-anything/agent-runtime/runner": [
+    "RUN_LIFECYCLE_DESCRIPTION",
     "Runner",
   ],
   "@agent-anything/canonical-action/subject": [
@@ -1594,6 +1599,18 @@ checkBuiltSurfaces(
   ],
   join(repoRoot, "harness/integrations/enterprise-storage"),
 );
+
+checkBuiltSurfaces({
+  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey", "snapshotInspectionJson", "validateInspectionInput", "validateInspectionRef"],
+  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey", "snapshotInspectionJson", "validateInspectionInput", "validateInspectionRef"],
+  "@agent-anything/inspection/content": ["DEFAULT_INSPECTION_CAPTURE_POLICY", "captureClassEnabled", "redactInspectionContent", "validateInspectionCapturePolicy"],
+  "@agent-anything/inspection/sources": ["atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "registerInspectionSource", "validateOpaqueId"],
+  "@agent-anything/inspection/recording": ["InspectionRecorder"],
+  "@agent-anything/inspection/storage": ["InspectionDatabase", "inspectionSourceBytes", "retireInspectionDatasets", "wasInspectionDatasetRetired"],
+  "@agent-anything/inspection/telemetry": ["InspectionTelemetry"],
+  "@agent-anything/inspection/query": ["InspectionQueryService", "executeInspectionQuery", "readInspectionJson", "validateInspectionQuery"],
+  "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink"],
+}, ["@agent-anything/inspection/recording/InspectionRecorderWorker", "@agent-anything/inspection/storage/InspectionDatasetAccess"], join(repoRoot, "harness/inspection"));
 
 console.log("Built public API check passed.");
 

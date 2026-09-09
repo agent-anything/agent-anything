@@ -48,6 +48,7 @@ describe("Model Interaction public API", () => {
       "composeModelInput",
       "modelInputFromComposition",
       "modelInputFromSections",
+      "modelInputSectionLocations",
       "snapshotModelInputComposition",
       "snapshotModelOutputFormat",
     ]);

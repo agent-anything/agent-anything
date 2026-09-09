@@ -4,6 +4,9 @@
   "description": "A TypeScript Agent Harness for building tool-using AI agent products with structured tasks, permissions, evidence, and runtime output.",
   "scripts": {
     "runtime:check": "node scripts/check-runtime.mjs",
+    "inspector:build": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/inspector... build",
+    "inspector:start": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/inspector start",
+    "inspector:maintenance": "node scripts/check-runtime.mjs && node tooling/inspector/dist/launcher/maintenance.js",
     "preinstall": "node scripts/check-runtime.mjs",
     "api:check": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs build && node scripts/check-built-public-apis.mjs",
     "architecture:check": "node scripts/check-runtime.mjs && node scripts/check-architecture.mjs && node --test scripts/architecture/*.test.mjs",

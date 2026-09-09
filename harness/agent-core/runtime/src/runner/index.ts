@@ -61,3 +61,6 @@ export type {
   RunTreeApprovalSnapshot,
 } from "./RunTreeApprovalAccount.js";
 export { Runner } from "./Runner.js";
+export type { RunObserver, RunSnapshotObservation, RunTransitionObservation } from "./RunObserver.js";
+export { RUN_LIFECYCLE_DESCRIPTION } from "./RunObserver.js";
+export type { RunExecutionObserver, RunExecutionObservation } from "./RunExecutionObserver.js";

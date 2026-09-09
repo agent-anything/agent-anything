@@ -8,6 +8,7 @@ export type HelarcProductCommandKind =
   | "workspace.select"
   | "provider.save"
   | "instructions.save"
+  | "inspection.save"
   | "run.start"
   | "thread.open";
 
@@ -19,6 +20,7 @@ export type HelarcProductRunStartTarget =
     };
 
 export interface HelarcProductCommandPayloadMap {
+  readonly "inspection.save": { readonly settings: import("./HelarcInspectionSettings.js").HelarcInspectionSettings };
   readonly "instructions.save": { readonly settings: HelarcInstructionSettings };
   readonly "workspace.choose": Record<string, never>;
   readonly "workspace.select": {

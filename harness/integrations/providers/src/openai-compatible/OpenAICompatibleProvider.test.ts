@@ -17,6 +17,41 @@ import {
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 
 describe("OpenAICompatibleProvider", () => {
+  it("observes the existing exchange without extra reads, requests or changed results", async () => {
+    const sent: string[] = [];
+    const parsed = vi.fn(async () => ({ id: "response-1", choices: [{ message: { content: '{"action":"complete","summary":"done"}' } }] }));
+    const transport: FetchLike = async (_url, init) => {
+      sent.push(init.body);
+      return { ok: true, status: 200, json: parsed };
+    };
+    const observations: import("@agent-anything/model-interaction/transport").ProviderObservation[] = [];
+    const baseline = new OpenAICompatibleProvider(config(), transport);
+    const observed = new OpenAICompatibleProvider(config(), transport, { observe(value) {
+      observations.push(value);
+      if (value.stage === "dispatch") throw new Error("recorder failed");
+    } });
+    const input = request(baseline);
+    const expected = await baseline.send(input, context());
+    expect(await observed.send(input, context())).toEqual(expected);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toBe(sent[1]);
+    expect(parsed).toHaveBeenCalledTimes(2);
+    expect(observations.map((value) => value.stage)).toEqual(["request", "dispatch", "http_response", "response_body", "settled"]);
+    expect(new Set(observations.map((value) => value.attemptId)).size).toBe(1);
+    expect(observations[1]?.body).toBe(sent[1]);
+    expect(observations.at(-1)?.httpStatus).toBe(200);
+    expect(Object.isFrozen(observations[0]?.request)).toBe(true);
+  });
+
+  it("does not report a dispatch or HTTP response for local request rejection", async () => {
+    const transport = vi.fn();
+    const observations: import("@agent-anything/model-interaction/transport").ProviderObservation[] = [];
+    const provider = new OpenAICompatibleProvider(config(), transport, { observe(value) { observations.push(value); } });
+    const input = { ...request(provider), requestId: "" };
+    expect((await provider.send(input, context())).kind).not.toBe("succeeded");
+    expect(transport).not.toHaveBeenCalled();
+    expect(observations.some((value) => value.stage === "dispatch" || value.stage === "http_response")).toBe(false);
+  });
   afterEach(() => vi.useRealTimers());
 
   it("omits the system message for empty instructions while retaining native Tools", async () => {

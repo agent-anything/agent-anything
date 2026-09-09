@@ -18,6 +18,8 @@ export interface RunTranscriptPort {
   append(record: RunTranscriptRecord): Promise<RunTranscriptAppendResult>;
 }
 
+export interface RunTranscriptObserver { observe(record: RunTranscriptRecord): void }
+
 export function createRunTranscriptRecord<TOutput>(
   item: RunItem<TOutput>,
 ): RunTranscriptRecord<TOutput> {
@@ -34,4 +36,3 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   for (const child of Object.values(value)) deepFreeze(child, seen);
   return Object.freeze(value);
 }
-

@@ -1,3 +1,4 @@
+export * from "./ProviderObservation.js";
 export type {
   ProviderTransportAccounting,
   ProviderTransportBinding,

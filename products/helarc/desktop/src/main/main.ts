@@ -15,8 +15,18 @@ import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProf
 import { createHelarcWindowOptions } from "./windowOptions.js";
 import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
 import { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
+import { HelarcInspection } from "./inspection/HelarcInspection.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
+let inspection: Promise<HelarcInspection> | null = null;
+let inspectionClosed = false;
+
+app.on("before-quit", (event) => {
+  if (!inspection || inspectionClosed) return;
+  event.preventDefault();
+  inspectionClosed = true;
+  void inspection.then((source) => source.close()).catch(() => {}).finally(() => app.quit());
+});
 
 app.whenReady().then(() => {
   void createWindow().catch(reportWindowCreationFailure);
@@ -39,6 +49,8 @@ async function createWindow(): Promise<void> {
     join(currentDir, "../preload/preload.cjs"),
   ));
   const userDataPath = app.getPath("userData");
+  inspection ??= HelarcInspection.create(join(userDataPath, "inspection-settings.json"));
+  const inspectionSource = await inspection;
   const instructionSettingsStore = new FileHelarcInstructionSettingsStore(join(userDataPath, "instruction-settings.json"));
   const providerCredentialStore = createElectronProviderCredentialStore(userDataPath);
   const providerProfileStore = new FileHelarcProviderProfileStore(
@@ -66,8 +78,9 @@ async function createWindow(): Promise<void> {
     contextManifestStore.listManifests(),
   ]);
   const controller = new HelarcMainController({
+    inspection: inspectionSource,
     instructionSettings: await instructionSettingsStore.load(),
-    provider: providerConfig.ok ? createHelarcProvider(providerConfig.config) : null,
+    provider: providerConfig.ok ? createHelarcProvider(providerConfig.config, inspectionSource.providerObserver) : null,
     providerConfigError: providerConfig.ok ? null : providerConfig.error,
     providerProfile: providerConfig.ok ? providerConfig.profile : null,
     workspaceProfiles: await workspaceProfileStore.listProfiles(),
@@ -78,6 +91,7 @@ async function createWindow(): Promise<void> {
     runTranscriptPort: runTranscriptStore,
   });
   registerHelarcIpc({
+    inspection: inspectionSource,
     instructionSettingsStore,
     window,
     controller,

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { snapshotHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import { snapshotHelarcInspectionSettings } from "../shared/HelarcInspectionSettings.js";
 import {
   HELARC_PRODUCT_COMMAND_RECEIPT_LIMIT,
   HELARC_PRODUCT_COMMAND_VERSION,
@@ -114,6 +115,11 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
   assertProductCommandKind(candidate.kind, "Helarc Product command kind");
 
   switch (candidate.kind) {
+    case "inspection.save": {
+      assertRecord(candidate.payload, "Inspection save payload");
+      assertExactKeys(candidate.payload, ["settings"], "Inspection save payload");
+      return envelope(commandId, candidate.kind, { settings: snapshotHelarcInspectionSettings(candidate.payload.settings) });
+    }
     case "instructions.save": {
       assertRecord(candidate.payload, "Instructions save payload");
       assertExactKeys(candidate.payload, ["settings"], "Instructions save payload");
@@ -159,6 +165,8 @@ function invokeHandler(
   | HelarcProductCommandResultMap[HelarcProductCommandKind] {
   switch (command.kind) {
     case "instructions.save":
+      return handlers[command.kind](command.payload);
+    case "inspection.save":
       return handlers[command.kind](command.payload);
     case "workspace.choose":
       return handlers[command.kind](command.payload);
@@ -380,6 +388,7 @@ const PRODUCT_COMMAND_KINDS = [
   "workspace.select",
   "provider.save",
   "instructions.save",
+  "inspection.save",
   "run.start",
   "thread.open",
 ] as const satisfies readonly HelarcProductCommandKind[];

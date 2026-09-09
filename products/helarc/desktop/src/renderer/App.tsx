@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { InstructionSettingsPanel } from "./InstructionSettingsPanel.js";
+import { InspectionSettingsPanel } from "./InspectionSettingsPanel.js";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
@@ -940,15 +941,17 @@ export function SettingsPanel({
   snapshot: HelarcMainSnapshot;
   onSaved: (snapshot: HelarcMainSnapshot) => void;
 }) {
-  const [tab, setTab] = useState<"provider" | "instructions">("provider");
+  const [tab, setTab] = useState<"provider" | "instructions" | "inspection">("provider");
   const [instructionsOpened, setInstructionsOpened] = useState(false);
   return <div className="settings-content">
     <div className="settings-tabs" role="tablist" aria-label="Settings">
       <button type="button" role="tab" aria-selected={tab === "provider"} onClick={() => setTab("provider")}>Provider</button>
       <button type="button" role="tab" aria-selected={tab === "instructions"} onClick={() => { setInstructionsOpened(true); setTab("instructions"); }}>Instructions</button>
+      <button type="button" role="tab" aria-selected={tab === "inspection"} onClick={() => setTab("inspection")}>Inspection</button>
     </div>
     <div hidden={tab !== "provider"}><ProviderSettingsPanel snapshot={snapshot} onSaved={onSaved} /></div>
     <div hidden={tab !== "instructions"}>{instructionsOpened && <InstructionSettingsPanel api={getHelarcApi()} />}</div>
+    {tab === "inspection" && <InspectionSettingsPanel api={getHelarcApi()} />}
   </div>;
 }
 

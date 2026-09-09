@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 const COMMAND_VERSION = 1;
 
 const channels = Object.freeze({
+  getInspectionSettings: "helarc:get-inspection-settings",
+  saveInspectionSettings: "helarc:save-inspection-settings",
   getInstructionSettings: "helarc:get-instruction-settings",
   saveInstructionSettings: "helarc:save-instruction-settings",
   cancelRun: "helarc:cancel-run",
@@ -20,6 +22,8 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
+  getInspectionSettings: () => ipcRenderer.invoke(channels.getInspectionSettings),
+  saveInspectionSettings: (input) => ipcRenderer.invoke(channels.saveInspectionSettings, productCommand("inspection.save", input?.commandId, { settings: input?.settings })),
   getInstructionSettings: () => ipcRenderer.invoke(channels.getInstructionSettings),
   saveInstructionSettings: (input) => ipcRenderer.invoke(
     channels.saveInstructionSettings,

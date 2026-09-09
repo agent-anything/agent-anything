@@ -242,6 +242,7 @@ function applyActionExecution(
       }),
     });
   }
+  if (notification.kind !== "settled") return applied(current, sequence, {});
   const latest = current.enforcement.latestAttempt;
   const settledLatest = latest === null || latest.actionId !== notification.actionId
     ? latest

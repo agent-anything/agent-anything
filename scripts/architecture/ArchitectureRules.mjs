@@ -1,4 +1,19 @@
 export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
+  "@agent-anything/inspection": [
+    "@agent-anything/action-execution",
+    "@agent-anything/observability",
+    "@agent-anything/agent-core",
+    "@agent-anything/agent-hooks",
+    "@agent-anything/model-interaction",
+    "@agent-anything/tools",
+    "@agent-anything/agent-runtime",
+    "@opentelemetry/api",
+    "@opentelemetry/core",
+    "@opentelemetry/resources",
+    "@opentelemetry/sdk-logs",
+    "@opentelemetry/sdk-trace-base",
+    "better-sqlite3",
+  ],
   "@agent-anything/workspace": [],
   "@agent-anything/agent-core": ["@agent-anything/workspace"],
   "@agent-anything/operation-catalog": ["@agent-anything/agent-core"],
@@ -140,6 +155,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "chardet",
   ],
   "@agent-anything/helarc-desktop": [
+    "@agent-anything/inspection",
     "@agent-anything/action-execution",
     "@agent-anything/context",
     "@agent-anything/agent-core",
@@ -163,6 +179,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
 });
 
 export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
+  "@agent-anything/inspector": ["@agent-anything/inspection","@ant-design/icons","@xyflow/react","antd","elkjs","monaco-editor","react","react-dom","react-router-dom","vis-data","vis-timeline"],
   "@agent-anything/test-support": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-hooks",

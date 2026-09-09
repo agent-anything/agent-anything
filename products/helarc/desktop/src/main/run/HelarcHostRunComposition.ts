@@ -125,6 +125,7 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan" | "complet
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly inspection?: import("../inspection/HelarcInspection.js").HelarcInspection;
   readonly instructionSettings?: HelarcInstructionSettings;
   readonly sessionId: string;
   readonly productRunId: string;
@@ -265,6 +266,17 @@ export async function prepareHelarcHostRun(
     commandActions,
     now,
   });
+  const inspectionDefinitions = input.inspection?.definitions;
+  if (inspectionDefinitions) {
+    try {
+      inspectionDefinitions.agent(product.agent);
+      inspectionDefinitions.agent(product.delegatedAgent);
+      inspectionDefinitions.tools(product.actions.toolSelection);
+      inspectionDefinitions.provider(input.provider.descriptor, input.provider.modelContext.target.revision);
+      inspectionDefinitions.hooks(product.hookRegistrations);
+      product.agentHooks.subscribe((projection) => inspectionDefinitions.hookInvocations(projection));
+    } catch { /* Diagnostic capture cannot change Product composition. */ }
+  }
   const configurationFingerprint = await createCanonicalSha256Digest(
     "agent-anything.helarc.local-environment.v1",
     {
@@ -306,6 +318,7 @@ export async function prepareHelarcHostRun(
   const productRuntimeEventPublisher: RuntimeEventPublisher = Object.freeze({
     publish(event: RuntimeEvent) {
       product.recordRuntimeEvent(event);
+      try { input.inspection?.runtimeEvents?.publish(event); } catch { /* Diagnostic capture is optional. */ }
     },
   });
   const runMetadata = Object.freeze({
@@ -320,6 +333,10 @@ export async function prepareHelarcHostRun(
         manifestPersistence: input.contextManifestPersistence,
       });
   const runner = new Runner({
+    runObserver: input.inspection?.runObserver,
+    runTraceObserver: input.inspection?.traceObserver,
+    runTranscriptObserver: input.inspection?.transcriptObserver,
+    executionObserver: input.inspection?.executionObserver,
     controller: product.controller,
     contextProjection,
     operations: {
@@ -329,6 +346,7 @@ export async function prepareHelarcHostRun(
       internalHandlers: Object.freeze([]),
       availability: product.actions.operationAvailability,
       actionExecution: {
+        observer: input.inspection?.actionObserver,
         registrations: product.actions.registrations,
         adapters: product.actions.adapters,
         policy: createHelarcHostActionPolicy({

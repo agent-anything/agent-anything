@@ -188,6 +188,7 @@ function startHostRun<TOutput>(
       notification: Parameters<ActionExecutionObserver["observe"]>[0],
     ) {
       if (invocationState !== "active") return;
+      if (notification.kind !== "attempt_started" && notification.kind !== "settled") return;
       applyRequired(store, {
         kind: "action_execution",
         runId,

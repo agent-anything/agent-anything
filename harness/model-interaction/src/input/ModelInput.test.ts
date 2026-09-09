@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { modelInputFromSections } from "./ModelInput.js";
+import { modelInputFromSections, modelInputSectionLocations } from "./ModelInput.js";
 
 describe("Model Input semantic projection", () => {
+  it("locates each contribution in the same semantic projection without rewriting input", () => {
+    const sections = [section("s", "instruction", "Rules"), section("u1", "user", "Task"),
+      section("u2", "user", "Context"), section("a", "assistant", "Reply"), section("u3", "user", "More")];
+    const before = modelInputFromSections(sections);
+    expect(modelInputSectionLocations(sections)).toEqual([
+      { sectionId: "s", jsonPointers: ["/instructions/content/0"] },
+      { sectionId: "u1", jsonPointers: ["/messages/0/content/0"] },
+      { sectionId: "u2", jsonPointers: ["/messages/0/content/1"] },
+      { sectionId: "a", jsonPointers: ["/messages/1"] },
+      { sectionId: "u3", jsonPointers: ["/messages/2/content/0"] },
+    ]);
+    expect(modelInputFromSections(sections)).toEqual(before);
+  });
   it("keeps instructions separate and merges adjacent user sections", () => {
     const projected = modelInputFromSections([
       section("instruction-1", "instruction", "System A"),

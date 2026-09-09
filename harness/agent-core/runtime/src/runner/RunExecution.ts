@@ -182,6 +182,8 @@ import {
   snapshotRunSteeringInput,
 } from "../run/index.js";
 import type { RunExecutionUpdate, RunHandle } from "./RunHandle.js";
+import { publishRunTransition } from "./RunObserver.js";
+import { publishRunExecutionObservation } from "./RunExecutionObserver.js";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import type {
   RunnerAutomaticEffectfulVerificationCheckPort,
@@ -599,7 +601,7 @@ export class RunExecution<TOutput> {
       agentRevisionKey(agent),
       agent.instructions.ref.revision,
     );
-    this.transcript = new RunTranscriptRecorder(dependencies.runTranscriptPort ?? null);
+    this.transcript = new RunTranscriptRecorder(dependencies.runTranscriptPort ?? null, dependencies.runTranscriptObserver);
     this.traceAssembler = createRunnerTraceAssembler({
       runId,
       taskId: input.task.id,
@@ -636,7 +638,7 @@ export class RunExecution<TOutput> {
       initial,
       dependencies.now,
       dependencies.createId,
-      (state) => this.onStateCommitted(state),
+      (state, previous) => this.onStateCommitted(state, previous),
     );
     this.lastAuthorityPermission = initial.permission;
     this.recordTreeResources({
@@ -1225,6 +1227,11 @@ export class RunExecution<TOutput> {
                 semanticValidators: this.dependencies.operations.toolInputSemanticValidators })] as const]
             : [])),
         };
+        if (this.dependencies.executionObserver) decision.decision.candidates.forEach((candidate, position) => {
+          const admission = basis.admissions.get(candidate);
+          publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "scheduling", runId: this.runId, occurredAt: null, call: candidate.modelCallRef, position,
+            disposition: admission?.status === "rejected" ? "rejected" : "queued", rule: "decision_source_order", groupId: null, reason: admission?.status === "rejected" ? admission.code : null });
+        });
         for (let index = 0; index < decision.decision.candidates.length; index += 1) {
           if (this.config.cancellation.context.request !== null) {
             this.settleCandidateRange(
@@ -2327,6 +2334,11 @@ export class RunExecution<TOutput> {
     }
     if (resolvedExposure.runRevision !== state.revision) return null;
     const exposure = resolvedExposure.proof;
+    if (this.dependencies.executionObserver) publishRunExecutionObservation(this.dependencies.executionObserver, {
+      kind: "tool_exposure", runId: this.runId, occurredAt: null, turnId: turn.id,
+      exposure: resolvedExposure.exposure, proof: exposure,
+      selected: Object.freeze(this.config.tools.tools.filter((tool) => tool.origins.includes("model")).map((tool) => tool.registration.descriptor.ref)),
+    });
     let prepared: PreparedControllerOperation<TOutput>;
     try {
       prepared = prepareControllerOperation({
@@ -2343,9 +2355,11 @@ export class RunExecution<TOutput> {
         descendants: this.projectDescendantTargets(),
       });
       await this.persistSafeContextManifest(prepared.manifest, "projected", null);
+      publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_projection", runId: this.runId, occurredAt: prepared.manifest.createdAt, manifest: prepared.manifest, projection: prepared.context });
       this.emitContextProjectionCompleted(prepared.manifest, "projected", null);
     } catch (error) {
       if (error instanceof ContextProjectionPreparationError) {
+        publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_projection", runId: this.runId, occurredAt: error.manifest.createdAt, manifest: error.manifest, projection: null });
         await this.persistSafeContextManifest(
           error.manifest,
           "blocked",
@@ -2572,6 +2586,7 @@ export class RunExecution<TOutput> {
   private async processConcurrentToolCandidates(
     candidates: readonly ProgressionCandidate[], start: number, basis: CandidateBasis<TOutput>,
   ): Promise<CandidateProcessingOutcome<TOutput>> {
+    if (this.dependencies.executionObserver) candidates.forEach((candidate, index) => publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "scheduling", runId: this.runId, occurredAt: null, call: candidate.modelCallRef, position: start + index, disposition: "admitted", rule: "registered_concurrency_group", groupId: `${basis.turn.id}:${start}`, reason: null }));
     // Reserve RunAction identities in source order, then drain every started call.
     const results = await Promise.allSettled(candidates.map((candidate, index) =>
       this.processCandidate(candidate, start + index, basis)));
@@ -2621,6 +2636,7 @@ export class RunExecution<TOutput> {
     startIndex: number,
     basis: CandidateBasis<TOutput>,
   ): Promise<CandidateProcessingOutcome<TOutput>> {
+    if (this.dependencies.executionObserver) candidates.forEach((candidate, index) => publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "scheduling", runId: this.runId, occurredAt: null, call: candidate.modelCallRef, position: startIndex + index, disposition: "admitted", rule: "concurrent_sibling_admission", groupId: `${basis.turn.id}:${startIndex}`, reason: null }));
     const entries: ConcurrentDescendantCandidateEntry[] = [];
     for (let siblingIndex = 0; siblingIndex < candidates.length; siblingIndex += 1) {
       const candidate = candidates[siblingIndex]!;
@@ -2906,6 +2922,7 @@ export class RunExecution<TOutput> {
         runActions: sequence,
       }),
     }));
+    publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "scheduling", runId: this.runId, occurredAt: action.materializedAt, call: candidate.modelCallRef, position: candidateIndex, disposition: "dispatched", rule: "candidate_processing_started", groupId: null, reason: null });
     return action;
   }
 
@@ -3729,6 +3746,13 @@ export class RunExecution<TOutput> {
         {
           ...resolved.execution,
           now: this.dependencies.now,
+          observer: (definition, snapshot) => {
+            try { void Promise.resolve(resolved.execution.observer?.(definition, snapshot)).catch(() => {}); } catch {}
+            publishRunExecutionObservation(this.dependencies.executionObserver, {
+              kind: "composite", runId: this.runId, occurredAt: snapshot.terminal?.finishedAt ?? null,
+              parentRunActionId: action.ref.id, definition, snapshot,
+            });
+          },
           children: {
             start: async (child) => {
               if (this.writer.getSnapshot().counters.runActions >= this.config.limits.maxActions) {
@@ -4640,6 +4664,7 @@ export class RunExecution<TOutput> {
         resourceSettlement,
         createdAt: this.now(),
       });
+      publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "descendant_result", runId: this.runId, occurredAt: delegationResult.createdAt, parentRunActionId: managed.action.ref.id, raw: result, projected: delegationResult });
     } catch {
       this.failManagedDescendant(managed, "delegation_result_invalid");
       return;
@@ -6415,13 +6440,23 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private onStateCommitted(state: RunState<TOutput>): void {
+  private onStateCommitted(state: RunState<TOutput>, previous: RunState<TOutput>): void {
     if (state.permission !== this.lastAuthorityPermission) {
       this.lastAuthorityPermission = state.permission;
       this.runTree.advanceAuthorityRevision(this.runId);
     }
     this.accountCommittedResources(state);
     this.transcript.record(state.items);
+    if (previous.context !== state.context) publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_committed", runId: this.runId, occurredAt: state.context.createdAt, context: state.context });
+    if (state.status !== previous.status) {
+      const causes = state.items.slice(previous.items.length);
+      publishRunTransition(this.dependencies.runObserver, {
+        runId: this.runId, previousStatus: previous.status, status: state.status,
+        previousRevision: previous.revision, revision: state.revision,
+        occurredAt: causes.at(-1)?.createdAt ?? null,
+        causes: Object.freeze(causes.map((item) => item.ref)),
+      });
+    }
     if (this.runStartedEventEmitted) {
       this.emitCommittedContextTransition(state.context);
       this.emitCommittedRunItems(state);

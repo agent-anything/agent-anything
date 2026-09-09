@@ -1287,3 +1287,28 @@ textarea {
     flex-basis: 82px;
   }
 }
+.inspection-setting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.inspection-setting input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+}
+
+.inspection-health {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+  gap: 8px 16px;
+  font-size: 13px;
+}
+
+.inspection-health dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

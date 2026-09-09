@@ -126,6 +126,7 @@ export interface HelarcProductComposition {
   readonly delegation: RunnerDelegationComposition;
   readonly verification: HelarcVerificationComposition;
   readonly agentHooks: AgentHookExecutionStore;
+  readonly hookRegistrations: readonly import("@agent-anything/agent-hooks/composition").AgentHookRegistration[];
   readonly taskFulfillment: HelarcTaskFulfillmentHook;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
@@ -308,6 +309,7 @@ export async function createHelarcProductComposition(
     delegation: descendant.delegation,
     verification,
     agentHooks: providerController.store,
+    hookRegistrations: taskFulfillment.composition.registrations,
     taskFulfillment: taskFulfillment.hook,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {

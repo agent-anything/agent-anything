@@ -168,6 +168,30 @@ export interface ActionExecutionCoordinatorDependencies {
 
 export type ActionExecutionNotification =
   | {
+      readonly kind: "prepared";
+      readonly runId: string;
+      readonly actionId: string;
+      readonly parentRunAction: RunActionRef | null;
+      readonly subject: CanonicalActionSubjectRevision;
+      readonly occurredAt: string | null;
+    }
+  | {
+      readonly kind: "assessment";
+      readonly runId: string;
+      readonly actionId: string;
+      readonly policyStatus: ActionPolicyAssessment["status"];
+      readonly permissionStatus: ActionPermissionAssessment["status"] | null;
+      readonly occurredAt: string | null;
+    }
+  | {
+      readonly kind: "attempt_settled";
+      readonly runId: string;
+      readonly actionId: string;
+      readonly attemptId: string;
+      readonly result: SandboxExecutionResult;
+      readonly occurredAt: string | null;
+    }
+  | {
       readonly kind: "attempt_started";
       readonly runId: string;
       readonly actionId: string;
@@ -265,11 +289,16 @@ export class ActionExecutionCoordinator {
       kind: "begin_assessment",
     });
 
+    this.notify(Object.freeze({ kind: "prepared", runId: request.runId,
+      actionId: request.action.id, parentRunAction: request.parentRunAction,
+      subject: prepared.subject, occurredAt: null }));
     const policy = await this.dependencies.policy.evaluate({
       checkId: this.id("policy"),
       subject: prepared.subject,
       context: request.policyContext,
     });
+    this.notify(Object.freeze({ kind: "assessment", runId: request.runId,
+      actionId: request.action.id, policyStatus: policy.status, permissionStatus: null, occurredAt: null }));
     if (policy.status === "denied" || policy.status === "failed" || policy.status === "interrupted") {
       return this.settlePrepared<TOutput>(
         ledger,
@@ -294,6 +323,8 @@ export class ActionExecutionCoordinator {
       context: request.permissionContext(),
       interruption: request.interruption,
     });
+    this.notify(Object.freeze({ kind: "assessment", runId: request.runId,
+      actionId: request.action.id, policyStatus: policy.status, permissionStatus: permission.status, occurredAt: null }));
     if (permission.status === "approval_required") {
       if (this.dependencies.approval === null) {
         await ledger.transition({
@@ -350,6 +381,8 @@ export class ActionExecutionCoordinator {
         context: request.permissionContext(),
         interruption: request.interruption,
       });
+      this.notify(Object.freeze({ kind: "assessment", runId: request.runId,
+        actionId: request.action.id, policyStatus: policy.status, permissionStatus: permission.status, occurredAt: null }));
     }
     if (permission.status !== "authorized") {
       const permissionCode = permission.status === "approval_required"
@@ -559,6 +592,9 @@ export class ActionExecutionCoordinator {
         deadlineAt: request.deadlineAt,
         interruption: request.interruption,
       });
+      this.notify(Object.freeze({ kind: "attempt_settled", runId: request.runId,
+        actionId: request.action.id, attemptId: attempt.id, result: sandbox,
+        occurredAt: sandbox.status === "settled" ? sandbox.enforcementEvidence.settledAt : null }));
       const remainingAttempts = request.maxAttempts - attempt.ordinal;
       if (remainingAttempts < 1 || !canConsiderRetry(sandbox)) break;
       const decision = await this.dependencies.retry.decide({

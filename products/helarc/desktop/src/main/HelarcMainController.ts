@@ -286,6 +286,7 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   instructionSettings?: HelarcInstructionSettings;
   provider?: Provider | null;
   providerConfigError?: (HelarcMainError & { missingKeys?: string[] }) | null;
@@ -321,6 +322,7 @@ type DesktopActiveRunSlot =
     };
 
 export class HelarcMainController {
+  private readonly inspection: import("./inspection/HelarcInspection.js").HelarcInspection | undefined;
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
   private runProjection: HelarcRunProjection | null = null;
@@ -378,6 +380,7 @@ export class HelarcMainController {
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput = {}) {
+    this.inspection = input.inspection;
     this.instructionSettings = snapshotHelarcInstructionSettings(
       input.instructionSettings ?? createDefaultHelarcInstructionSettings(),
     );
@@ -626,6 +629,7 @@ export class HelarcMainController {
         modelContinuationStore: this.modelContinuationStore,
         contextManifestPersistence: this.contextManifestPersistence,
         runTranscriptPort: this.runTranscriptPort,
+        inspection: this.inspection,
         inputItems,
         permissionPreset: preparedStart.prepared.run.permissionPreset,
         sessionAuthorityPort: this.sessionAuthorityStore,

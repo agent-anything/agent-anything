@@ -32,6 +32,7 @@
     }
   },
   "dependencies": {
+    "@agent-anything/inspection": "workspace:*",
     "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/observability": "workspace:*",

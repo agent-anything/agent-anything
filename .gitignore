@@ -6,6 +6,8 @@ dist/
 out/
 build/
 coverage/
+test-results/
+playwright-report/
 .turbo/
 .artifacts/
 .tsbuildinfo

@@ -1,0 +1,81 @@
+{
+  "name": "@agent-anything/inspection",
+  "version": "0.0.0",
+  "description": "Bounded diagnostic recording, local telemetry and read-only Agent inspection queries.",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./records": {
+      "types": "./src/records/index.ts",
+      "import": "./dist/records/index.js"
+    },
+    "./sources": {
+      "types": "./src/sources/index.ts",
+      "import": "./dist/sources/index.js"
+    },
+    "./content": {
+      "types": "./src/content/index.ts",
+      "import": "./dist/content/index.js"
+    },
+    "./recording": {
+      "types": "./src/recording/index.ts",
+      "import": "./dist/recording/index.js"
+    },
+    "./storage": {
+      "types": "./src/storage/index.ts",
+      "import": "./dist/storage/index.js"
+    },
+    "./telemetry": {
+      "types": "./src/telemetry/index.ts",
+      "import": "./dist/telemetry/index.js"
+    },
+    "./query": {
+      "types": "./src/query/index.ts",
+      "import": "./dist/query/index.js"
+    },
+    "./adapters": {
+      "types": "./src/adapters/index.ts",
+      "import": "./dist/adapters/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:storage": "node scripts/qualify-storage.mjs"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "inspection"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/agent-runtime": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/agent-hooks": "workspace:*",
+    "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/model-interaction": "workspace:*",
+    "@agent-anything/tools": "workspace:*",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/core": "2.11.0",
+    "@opentelemetry/resources": "2.11.0",
+    "@opentelemetry/sdk-logs": "0.222.0",
+    "@opentelemetry/sdk-trace-base": "2.11.0",
+    "better-sqlite3": "13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0"
+  }
+}

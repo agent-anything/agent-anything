@@ -13,7 +13,7 @@ export class RunStateWriter<TOutput> {
     initial: RunState<TOutput>,
     private readonly now: () => string,
     private readonly createId: CreateRunnerIdentity,
-    private readonly onCommit: (state: RunState<TOutput>) => void,
+    private readonly onCommit: (state: RunState<TOutput>, previous: RunState<TOutput>) => void,
   ) {
     this.state = deepFreeze(initial);
   }
@@ -58,7 +58,7 @@ export class RunStateWriter<TOutput> {
       revision,
       items: [...current.items, ...items],
     }) as RunState<TOutput>;
-    this.onCommit(this.state);
+    this.onCommit(this.state, current);
     return this.state;
   }
 
@@ -72,7 +72,7 @@ export class RunStateWriter<TOutput> {
       ...transition(current),
       revision: current.revision + 1,
     }) as RunState<TOutput>;
-    this.onCommit(this.state);
+    this.onCommit(this.state, current);
     return this.state;
   }
 

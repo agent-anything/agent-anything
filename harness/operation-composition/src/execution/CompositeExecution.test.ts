@@ -8,6 +8,20 @@ import { CompositeExecution, type CompositeConflictResolverPort, type CompositeE
 const NOW = "2026-08-13T00:00:00.000Z";
 
 describe("CompositeExecution", () => {
+  it("publishes exact definitions and immutable node snapshots without observer authority", async () => {
+    const graph = definition([node("first"), { ...node("second"), dependencies: [{ nodeId: "first", requirement: "succeeded" }] }]);
+    const snapshots: ReturnType<CompositeExecution["getSnapshot"]>[] = [];
+    const observed = configuredExecution(graph, { observer(definition, snapshot) {
+      expect(definition.nodes[1]?.dependencies).toEqual([{ nodeId: "first", requirement: "succeeded" }]);
+      snapshots.push(snapshot);
+      throw new Error("diagnostic unavailable");
+    } });
+    const baseline = configuredExecution(graph);
+    expect(await observed.run({}, activeInterruption())).toEqual(await baseline.run({}, activeInterruption()));
+    expect(snapshots[0]?.nodes.every((node) => node.lifecycle === "declared")).toBe(true);
+    expect(snapshots.at(-1)?.terminal?.status).toBe("succeeded");
+    expect(snapshots.some((snapshot) => snapshot.nodes.some((node) => node.lifecycle === "active"))).toBe(true);
+  });
   it.each(["succeeded", "settled"] as const)("honors explicit %s dependencies with complete failure settlements", async (requirement) => {
     const seen: unknown[] = [];
     const graph = definition([node("first"), { ...node("second"), dependencies: [{ nodeId: "first", requirement }] }]);

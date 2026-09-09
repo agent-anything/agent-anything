@@ -10,7 +10,7 @@ initial code-agent desktop stage.
 
 ## Current State
 
-- The repository is split into eighteen focused workspaces with executable dependency,
+- The repository is split into focused workspaces with executable dependency,
   source, and public API checks.
 - `agent-core/contracts` provides the dependency-safe Agent Core surface for
   Agent, Task, Run input, Run relationships, Action, Workspace, Identity, and
@@ -34,6 +34,12 @@ initial code-agent desktop stage.
 - Helarc's agent behavior foundation includes prompt sections, a Controller action
   contract, a dynamic tool catalog, provider response recovery, deterministic system evaluation
   fixtures, and renderer-safe trace projection.
+- Native model Tool calling preserves complete Model Turns and exact call/result
+  correlation. Scheduling, explicit Composite prerequisites and descendant Run
+  progression remain separate responsibilities.
+- Independent Inspection records owner facts, protected content and local OTel
+  traces/logs in SQLite. Agent Inspector provides linked historical views without
+  becoming part of the execution path.
 
 ## Products
 
@@ -54,12 +60,16 @@ Current Helarc capabilities include:
 - Provider profile management for OpenAI-compatible APIs and Ollama
 - Local credential storage for provider API keys
 - Provider-backed Controller and unified Runner execution
-- Read-only code tools for listing, reading, and searching workspace files
-- Permission-gated shell execution for enabled runs
+- Complete Read, Glob, Grep, Edit and Write Tools
+- Permission-gated Bash/PowerShell execution and background task control
+- Model-requested Agent delegation, concurrent descendants and explicit resume
+- Multiple pending user questions, approvals and Run cancellation
 - Patch proposal, review, and application flow
 - Durable Thread, Conversation, Message, Run, and Artifact history
 - Safe trace projection for renderer-visible Controller behavior
 - Protocol fixtures for validating Controller action behavior
+- Editable Agent, Protocol and Stop Instructions with independent enable flags
+- Optional diagnostic capture settings for the standalone Inspector
 
 ## Tech Stack
 
@@ -69,6 +79,8 @@ Current Helarc capabilities include:
 - Electron for desktop hosts
 - Vite and React for Helarc renderer UI
 - Vitest
+- SQLite and OpenTelemetry for local Inspection
+- Ant Design, React Flow/ELK, vis-timeline and Monaco for Agent Inspector
 
 ## Repository Layout
 
@@ -81,24 +93,35 @@ agent-anything/
     context/            Context, Observation, Evidence, and persistence contracts
     model-interaction/  Provider-neutral model invocation contracts
     tools/              Declarative Tool registration, catalogs, and results
+    operation-catalog/  Operation registration and result protocols
+    operation-composition/ Explicit composite workflows and prerequisites
+    interaction/        User interaction protocols and coordination
+    agent-hooks/        Optional Agent lifecycle handlers
+    verification/       Check execution, evidence and completion policy
+    evaluation/         Deterministic evaluation definitions and results
     safety/
       governance/       Policy and managed constraint contracts
       permission/       Permission, approval, and authority contracts
       action-execution/ Canonical Action enforcement and Sandbox dispatch
+      canonical-action/ Action subjects, lifecycle and settlement contracts
     integrations/
       mcp/              MCP lifecycle and primitive adaptation
       plugins/          Plugin trust admission and contribution activation
       remote/           Protocol-neutral remote Tool and Action adaptation
       enterprise-storage/ Enterprise persistence adapters
+      providers/        Ollama and OpenAI-compatible HTTP adapters
     observability/      Events, Audit, Telemetry, tracing, and redaction
+    inspection/         Optional recording, SQLite, local OTel and read queries
     host/               Product-neutral Host composition and Run control
   products/
     helarc/
-      product/          Helarc Product model and workflows
-      code-agent/       Helarc code-oriented capabilities
+      core/             Helarc Agent composition and workflows
+      code-agent/       File and patch capabilities
+      local-environment/ Shell and local process capabilities
       desktop/          Electron delivery, persistence, IPC, and renderer
   tooling/
     test-support/       Development-only reusable fakes and fixtures
+    inspector/          Independent local inspection server and browser UI
   scripts/
     architecture/       Workspace discovery, dependency policy, and fixtures
     check-architecture.mjs
@@ -125,13 +148,16 @@ Reusable Harness packages are designed to point inward:
   application hosts and retains a bounded set of live and terminal handles.
 - focused Integration packages own MCP, Plugin, remote capability, and
   enterprise storage adapters without a generic extension owner.
-- Helarc Code Agent exposes focused workspace, filesystem, command, and patch
+- Helarc capability components expose focused workspace, filesystem, command, and patch
   capability subpaths while keeping external effects behind Action execution.
 - Product packages compose Harness contracts into product behavior.
 - Helarc Desktop owns UI, local persistence, credentials, IPC, and concrete
   Product hosting.
 - Test Support is a development-only dependency and defines no production
   Contracts.
+- Inspection consumes public owner observations. Producers do not import
+  Inspection or an OTel SDK to execute; source composition wires the adapters.
+  Inspector consumes read-only Inspection queries without importing Helarc.
 
 `pnpm-workspace.yaml` is the package-location authority.
 `scripts/check-architecture.mjs` validates exact package metadata, repository
@@ -227,10 +253,34 @@ Helarc desktop stores provider profiles locally and supports these provider kind
   `https://api.openai.com/v1` or a compatible provider endpoint. The adapter calls
   `/chat/completions`.
 - `ollama`: base URL is the Ollama server origin, such as
-  `http://localhost:11434`. The adapter calls `/api/generate`.
+  `http://localhost:11434`. Native Tool turns use `/api/chat`; structured
+  generation uses `/api/generate`.
 
 HTTP provider URLs are accepted only for loopback addresses.
 Provider timeout values use positive whole-second increments expressed in milliseconds.
+
+## Agent Inspector
+
+```powershell
+pnpm inspector:build
+pnpm inspector:start
+```
+
+Open the printed one-use local access URL. Inspector runs independently of
+Helarc and presents definitions, execution hierarchy, lifecycle transitions,
+data flow, scheduling, explicit dependencies and recorded inputs/outputs/events.
+Recording is continuous; viewing uses committed snapshots and manual Refresh.
+There is no live-update or execution-control API.
+
+Helarc Settings controls capture. Structural facts and definitions default on;
+Agent content, Provider bodies and execution I/O require opt-in before the Run.
+On Windows, recordings are under `%LOCALAPPDATA%/AgentAnything/inspection` and
+survive Helarc's `clean:user-data`. Capture failures cannot change Run results.
+Known sensitive fields are removed, but opted-in free text may still contain
+secrets. Missing or uncaptured facts remain unknown.
+
+See [Inspector](tooling/inspector/README.md) for views, access, limits and cleanup,
+and [Inspection](harness/inspection/README.md) for recording/query ownership.
 
 ## Status
 

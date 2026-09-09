@@ -7,6 +7,7 @@ packages:
   - "harness/model-interaction"
   - "harness/context"
   - "harness/observability"
+  - "harness/inspection"
   - "harness/evaluation"
   - "harness/verification"
   - "harness/agent-core/runtime"
@@ -17,6 +18,7 @@ packages:
   - "harness/integrations/*"
   - "products/helarc/*"
   - "tooling/test-support"
+  - "tooling/inspector"
 
 onlyBuiltDependencies:
   - esbuild

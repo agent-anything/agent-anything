@@ -89,6 +89,7 @@ export interface CompositeChildExecutionPort {
 }
 
 export interface CompositeExecutionDependencies {
+  readonly observer?: (definition: CompositeDefinitionRevision, snapshot: CompositeExecutionSnapshot) => void;
   readonly transforms: readonly CompositeTransformPort[];
   readonly conditions: readonly CompositeConditionPort[];
   readonly reducer: CompositeReducerPort;
@@ -132,6 +133,7 @@ export class CompositeExecution {
       }
       this.states.set(node.id, frozenState(node.id, "declared", null, null));
     }
+    this.publish();
   }
 
   getSnapshot(): CompositeExecutionSnapshot {
@@ -210,6 +212,7 @@ export class CompositeExecution {
         this.terminal = this.settleAggregate(compositeInput, startedAt);
       }
     }
+    this.publish();
     return this.terminal;
   }
 
@@ -281,6 +284,7 @@ export class CompositeExecution {
     if (current.lifecycle === lifecycle) return;
     this.states.set(nodeId, frozenState(nodeId, lifecycle, current.runAction, current.settlement));
     this.revision += 1;
+    this.publish();
   }
 
   private commitTerminal(
@@ -294,6 +298,13 @@ export class CompositeExecution {
       failure: failure === null ? result?.failure ?? null : Object.freeze(failure) });
     this.states.set(nodeId, frozenState(nodeId, "settled", runAction, settlement));
     this.revision += 1;
+    this.publish();
+  }
+
+  private publish(): void {
+    if (!this.dependencies.observer) return;
+    try { void Promise.resolve(this.dependencies.observer(this.definition, this.getSnapshot())).catch(() => {}); }
+    catch { /* Optional observation cannot alter Composite progression. */ }
   }
 
   private markRemainingNotSelected(): void {

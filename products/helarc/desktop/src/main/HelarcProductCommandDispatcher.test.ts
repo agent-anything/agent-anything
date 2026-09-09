@@ -183,6 +183,7 @@ function createHandlers(
     "workspace.select": vi.fn(() => snapshot()),
     "provider.save": vi.fn(() => snapshot()),
     "instructions.save": vi.fn(({ settings }) => ({ settings, defaults: createDefaultHelarcInstructionSettings() })),
+    "inspection.save": vi.fn(({ settings }) => ({ settings, health: { available: true, queued: 0, dropped: 0, rejected: 0, code: null } })),
     "run.start": vi.fn(() => ({
       ok: true as const,
       taskId: "task-1",

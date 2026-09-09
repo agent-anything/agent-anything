@@ -114,7 +114,7 @@ describe("Agent Core Runtime public API", () => {
       "snapshotRunSteeringInput",
       "toRunCancellationSummary",
     ]);
-    expect(Object.keys(runnerApi)).toEqual(["Runner"]);
+    expect(Object.keys(runnerApi)).toEqual(["Runner", "RUN_LIFECYCLE_DESCRIPTION"]);
     expect(runnerApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runnerApi).not.toHaveProperty("RunState");
     expect(runnerApi).not.toHaveProperty("RuntimeEventEmitter");
