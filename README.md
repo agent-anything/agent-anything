@@ -272,11 +272,12 @@ data flow, scheduling, explicit dependencies and recorded inputs/outputs/events.
 Recording is continuous; viewing uses committed snapshots and manual Refresh.
 There is no live-update or execution-control API.
 
-Helarc Settings controls capture. Structural facts and definitions default on;
-Agent content, Provider bodies and execution I/O require opt-in before the Run.
+Helarc Settings controls capture. Fresh Desktop settings enable structural
+facts, definitions, Agent content, Provider bodies and execution I/O. Each class
+can be disabled independently; saved settings take precedence over defaults.
 On Windows, recordings are under `%LOCALAPPDATA%/AgentAnything/inspection` and
 survive Helarc's `clean:user-data`. Capture failures cannot change Run results.
-Known sensitive fields are removed, but opted-in free text may still contain
+Known sensitive fields are removed, but captured free text may still contain
 secrets. Missing or uncaptured facts remain unknown.
 
 See [Inspector](tooling/inspector/README.md) for views, access, limits and cleanup,

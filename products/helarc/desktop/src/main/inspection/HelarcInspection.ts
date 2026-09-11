@@ -4,7 +4,7 @@ import { RunInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectio
 import { snapshotHelarcInspectionSettings, type HelarcInspectionSettings, type HelarcInspectionSettingsSnapshot } from "../../shared/HelarcInspectionSettings.js";
 import { SerializedAtomicFile } from "../persistence/SerializedAtomicFile.js";
 
-const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: false, provider: false, execution: false });
+const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: true, provider: true, execution: true });
 
 export class HelarcInspection {
   readonly runObserver: RunInspectionAdapter | undefined;

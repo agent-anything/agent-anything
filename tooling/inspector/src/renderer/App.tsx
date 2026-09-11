@@ -27,6 +27,8 @@ export function App() {
   const detail = bundle?.selected ?? null;
   const graph = bundle?.view.graph;
   const coverage = bundle?.snapshot.coverage;
+  const selectionRef = loading && detail ? detail.subject : selected;
+  const selectionRecord = detail && selectionRef && inspectionSubjectKey(detail.subject) === inspectionSubjectKey(selectionRef) ? detail : null;
   const visibleSelection = !selected || inventory.some((record) => inspectionSubjectKey(record.subject) === selectionKey);
   const recordColumns = [
     { title: "Seq", dataIndex: "commitSequence", width: 65 },
@@ -54,15 +56,20 @@ export function App() {
     {!datasetId ? <main className="empty-workspace"><Empty description={sources.length ? "Select a source and recording" : "No recorded sources"} /></main> : <main className="workspace">
       <aside className="object-pane">
         <Input aria-label="Search objects" prefix={<SearchOutlined />} placeholder="Search loaded objects" value={search} onChange={(event) => setSearch(event.target.value)} />
+        {selected && selectionRef && <div className="object-selection" role="group" aria-label="Selected object">
+          <div className="object-selection-label">Selected object{loading && <Spin size="small" />}</div>
+          <div className="object-selection-value">
+            <Typography.Text ellipsis={{ tooltip: `${selectionRef.kind}: ${selectionRef.id}` }}>{selectionRecord ? label(selectionRecord) : selectionRef.id}</Typography.Text>
+            <Tooltip title="Clear object selection"><Button size="small" type="text" aria-label="Clear object selection" icon={<CloseOutlined />} onClick={() => navigate({ subject: null, record: null })} /></Tooltip>
+          </div>
+          <span className="object-selection-kind">{selectionRef.kind}</span>
+        </div>}
         <div className="object-list">{inventory.map((record) => <button key={record.id} className={`object-row ${inspectionSubjectKey(record.subject) === selectionKey ? "selected" : ""}`} onClick={() => choose(record.subject)}>
           <span className="object-kind">{record.subject.kind}</span><strong title={label(record)}>{label(record)}</strong><small>{record.subject.owner}{record.payload.kind === "snapshot" ? ` / ${record.payload.status}` : ""}</small>
         </button>)}{inventory.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No objects in this scope" />}</div>
         {bundle?.inventory.next !== null && bundle && <Button size="small" disabled={loading || paging} onClick={() => { void loadMore("inventory"); }}>Load more objects</Button>}
       </aside>
       <section className="investigation" data-view={bundle?.view.kind} data-watermark={bundle?.snapshot.selection?.watermark}>
-        <div className="selection-heading"><Typography.Text strong ellipsis={{ tooltip: detail?.subject.id ?? selected?.id }}>{loading && detail ? `${detail.subject.kind}: ${detail.subject.id}` : selected ? `${selected.kind}: ${selected.id}` : "Recording overview"}</Typography.Text>{loading && <Spin size="small" />}
-          {selected && <Tooltip title="Clear object selection"><Button size="small" type="text" aria-label="Clear object selection" icon={<CloseOutlined />} onClick={() => navigate({ subject: null, record: null })} /></Tooltip>}
-        </div>
         {!visibleSelection && !loading && <div className="coverage-note">Selected object is outside the loaded catalog or current filter.</div>}
         <Suspense fallback={<div className="view-loading"><Spin /></div>}>
           {area === "Comparison" ? <div className="comparison-view"><div className="view-toolbar">

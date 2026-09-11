@@ -192,6 +192,29 @@ describe("Inspection recording", () => {
     expect(snapshot.coverage?.captured).toBe(1); expect(snapshot.coverage?.rejected).toBeGreaterThan(0);
     expect(snapshot.coverage?.limitations).toContain("conflicting_record_identity");
   });
+  it.each(["agent", "provider", "execution"] as const)("returns uncaptured %s metadata regardless of later capture settings", async (kind) => {
+    const { recorder, query, subject, selection } = await setup();
+    recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "uncaptured", sequence: null, code: null }, contents: [{ name: kind, stage: "received", class: kind, mediaType: "text/plain", value: "never retained" }] });
+    await recorder.flush();
+    const snapshot = (await query.query({ kind: "get_snapshot", ...selection })).selection!;
+    const descriptor = (await query.query({ kind: "list_records", ...snapshot })).records[0]!.contents[0]!;
+    const input = { kind: "get_content" as const, ...snapshot, contentId: descriptor.id };
+    const expected = { descriptor: { availability: "not_captured", retainedBytes: 0, digest: null }, text: "", nextOffset: null };
+    expect((await query.query(input)).content).toMatchObject(expected);
+    recorder.setPolicy({ ...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "disabled", enabled: false });
+    expect((await query.query(input)).content).toMatchObject(expected);
+    recorder.setPolicy({ ...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "enabled", agent: true, provider: true, execution: true });
+    expect((await query.query(input)).content).toMatchObject(expected);
+  });
+  it("keeps unavailable source content distinct from a revoked retained body", async () => {
+    const { recorder, query, subject, selection } = await setup(true);
+    recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "missing", sequence: null, code: null }, contents: [{ name: "body", stage: "received", class: "agent", mediaType: "text/plain", value: null, unavailableReason: "source_limit" }] });
+    await recorder.flush();
+    const snapshot = (await query.query({ kind: "get_snapshot", ...selection })).selection!;
+    const descriptor = (await query.query({ kind: "list_records", ...snapshot })).records[0]!.contents[0]!;
+    recorder.setPolicy({ ...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "revoked" });
+    expect((await query.query({ kind: "get_content", ...snapshot, contentId: descriptor.id })).content).toMatchObject({ descriptor: { availability: "unavailable", unavailableReason: "source_limit" }, text: "", nextOffset: null });
+  });
   it("revokes historical content access without deleting retained records", async () => {
     const { recorder, query, subject, selection } = await setup(true);
     recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "content", sequence: null, code: null }, contents: [{ name: "body", stage: "received", class: "agent", mediaType: "text/plain", value: "retained" }] });

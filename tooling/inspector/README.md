@@ -28,10 +28,12 @@ arbitrary-file or SQL endpoint. Stop the foreground service with Ctrl+C.
 
 ## Capture and Investigation
 
-Build/restart Helarc Desktop to begin recording. In its Settings, enable the
-desired Inspection capture classes before submitting a task. Definitions and
-structural facts are on by default; rich Agent, Provider and execution content
-is opt-in. Nothing reconstructs content from earlier uncaptured requests.
+Build/restart Helarc Desktop to begin recording. Fresh Desktop settings enable
+structural facts, definitions and rich Agent, Provider and execution content.
+Use its Inspection settings to select capture classes before submitting a task;
+saved settings are preserved. Nothing reconstructs earlier uncaptured content:
+those entries show `not_captured`, not an access error. Retained content whose
+class is currently disabled remains protected by read authorization.
 
 Choose a source and recording in Inspector. Refresh is explicit: no polling,
 SSE or automatic focus/reconnect refresh advances the selected snapshot.
@@ -56,6 +58,11 @@ has a two-second budget, and timelines use at most 100 lanes/2,000 intervals.
 Lists expose seek pages; timeline pages report incomplete interval coverage.
 Content opens a 256 KiB range with explicit loading up to the retained 8 MiB.
 Comparison uses exact records/scopes, not an inferred quality score.
+The shared content viewer offers Format JSON and Original actions for text and
+JSON, including comparisons. JSON content is formatted by default; other text
+starts as recorded. Manual formatting preserves literal values, reports invalid
+or incomplete JSON and display-limit failures, and never changes stored content
+or copy/download results.
 
 ## Local Data and Maintenance
 

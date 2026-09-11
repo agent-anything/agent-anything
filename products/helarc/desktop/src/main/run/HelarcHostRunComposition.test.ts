@@ -152,7 +152,6 @@ describe("Helarc Host Run composition", () => {
       return { result, provider };
     };
     try {
-      await inspection.save({ enabled: true, definition: true, agent: true, provider: true, execution: true });
       const baseline = await run(false); const recorded = await run(true);
       expect(recorded.result.runResult.status).toBe(baseline.result.runResult.status);
       expect(recorded.result.activity.map((event) => event.kind)).toEqual(baseline.result.activity.map((event) => event.kind));

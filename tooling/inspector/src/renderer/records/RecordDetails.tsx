@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Button, Descriptions, Empty, Spin, Tag } from "antd";
-import { FileTextOutlined } from "@ant-design/icons";
+import { FileTextOutlined, RightOutlined } from "@ant-design/icons";
 import type { InspectionRecord, InspectionSubjectRef, InspectionLink, InspectionPayload } from "@agent-anything/inspection/records";
 const ContentViewer = lazy(async () => ({ default: (await import("../content/ContentViewer.js")).ContentViewer }));
 
@@ -42,7 +42,7 @@ export function RecordDetails({ record, link, onSubject, onRecord, onContent }: 
     { key: "record", label: "Record", children: record.id },
     { key: "sequence", label: "Commit", children: record.commitSequence },
     { key: "time", label: "Occurred", children: record.occurredAt ?? "Not recorded" },
-  ]} />{record.contents.map((item) => <button className="content-row" key={item.id} onClick={() => onContent(item.id)}><FileTextOutlined /><span>{item.name}<small>{item.stage} / {item.availability}{item.truncated ? " / truncated" : ""}</small></span></button>)}
+  ]} />{record.contents.map((item) => <button type="button" className="content-row" key={item.id} onClick={() => onContent(item.id)}><FileTextOutlined /><span className="content-row-label"><span className="content-row-name">{item.name}</span><small>{item.stage} / {item.availability}{item.truncated ? " / truncated" : ""}</small></span><RightOutlined className="content-row-arrow" /></button>)}
     {record.links.filter((item) => item.kind === "trigger").map((item) => <Button key={item.id} type="link" onClick={() => onSubject(item.from)}>Trigger: {item.from.id}</Button>)}
     <Suspense fallback={<Spin />}><ContentViewer text={JSON.stringify(record.payload, null, 2)} language="json" /></Suspense></>;
 }

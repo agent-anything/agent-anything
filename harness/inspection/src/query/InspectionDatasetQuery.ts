@@ -88,8 +88,11 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
     if (query.kind === "get_subject") { const record = db.latest(inspectionSubjectKey(query.subject), watermark); return { ...result, records: record ? [record] : [], limitations: record ? [] : ["not_observed"] }; }
     if (query.kind === "get_content") {
       const descriptor = db.content(query.contentId, watermark);
-      const policy = validateInspectionCapturePolicy(readInspectionJson(containedInspectionPath(root, "sources", query.sourceId, "read-policy.json")));
-      if (descriptor && !captureClassEnabled(policy, descriptor.class)) throw new Error("inspection_access_denied");
+      // Capture absence is a recorded fact, not a denied read of retained bytes.
+      if (descriptor?.availability === "present") {
+        const policy = validateInspectionCapturePolicy(readInspectionJson(containedInspectionPath(root, "sources", query.sourceId, "read-policy.json")));
+        if (!captureClassEnabled(policy, descriptor.class)) throw new Error("inspection_access_denied");
+      }
       return { ...result, content: db.readContent(query.contentId, watermark, query.offset ?? 0, query.length ?? 256 * 1024) };
     }
     const key = query.subject ? inspectionSubjectKey(query.subject) : null;

@@ -67,6 +67,6 @@ export function ContentDrawer({ id, scope, onClose }: { id: string | null; scope
     </div>{baseline && <div className="coverage-note">Baseline: {baseline.name} @ {baseline.scope.watermark}{compare !== undefined ? " / first recorded range" : ""}</div>}
     {content.descriptor.availability === "present" ? <><Suspense fallback={<Spin />}><ContentViewer text={content.text} compare={compare} language={content.descriptor.mediaType === "application/json" ? "json" : "plaintext"} /></Suspense>
       {content.nextOffset !== null && <div className="view-toolbar"><span>Loaded {content.nextOffset} / {content.descriptor.retainedBytes} bytes</span><Button loading={busy} onClick={() => { void operate("more"); }}>Load next recorded range</Button></div>}</>
-      : <Empty description={content.descriptor.availability === "not_captured" ? "Content capture was disabled" : content.descriptor.unavailableReason ?? "Recorded content unavailable"} />}</> : loaded || error ? <Empty description="Recorded content unavailable" /> : <Spin />}
+      : <Empty description={content.descriptor.availability === "not_captured" ? "Content was not captured for this record" : content.descriptor.unavailableReason ?? "Recorded content unavailable"} />}</> : loaded || error ? <Empty description="Recorded content unavailable" /> : <Spin />}
   </Drawer>;
 }
