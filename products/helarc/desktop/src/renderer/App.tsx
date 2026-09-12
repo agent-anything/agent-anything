@@ -711,7 +711,6 @@ export function RunTerminalPanel({
   const terminal = run.host.terminal;
   if (terminal === null) return null;
   const safeOutput = run.product.result?.output ?? null;
-  const verification = run.product.result?.verification ?? null;
   const failed = run.display.status === "failed" ||
     run.display.status === "rejected" || run.display.status === "cancelled";
 
@@ -737,12 +736,6 @@ export function RunTerminalPanel({
           <div>
             <dt>Execution</dt>
             <dd>{enforcementLabel(safeOutput.enforcement)}</dd>
-          </div>
-        ) : null}
-        {verification ? (
-          <div>
-            <dt>Verification</dt>
-            <dd>{verificationLabel(verification)}</dd>
           </div>
         ) : null}
         <div>
@@ -1455,7 +1448,6 @@ function artifactKindLabel(kind: NonNullable<HelarcMainSnapshot["activeThread"]>
 
 function terminalTitle(snapshot: HelarcMainSnapshot): string {
   const terminalStatus = snapshot.run?.host.terminal?.status;
-  if (terminalStatus === "stopped") return "Run stopped";
   if (terminalStatus === "cancelled") {
     return "Run cancelled";
   }
@@ -1532,29 +1524,6 @@ function enforcementLabel(
     case "denied": return `${enforcement.selected} denied`;
     case "interrupted": return "Interrupted";
     case "failed": return "Failed";
-  }
-}
-
-function verificationLabel(
-  verification: NonNullable<ActiveRunProjection["product"]["result"]>["verification"],
-): string {
-  switch (verification.status) {
-    case "not_required":
-      return "Not required";
-    case "pending":
-      return verification.activeChecks > 0
-        ? `${verification.activeChecks} check${verification.activeChecks === 1 ? "" : "s"} running`
-        : "Pending";
-    case "satisfied":
-      return "Satisfied";
-    case "attention_required": {
-      const count = verification.counts
-        .filter(({ state }) => state === "violated" || state === "inconclusive" || state === "stale")
-        .reduce((total, entry) => total + entry.count, 0);
-      return count > 0 ? `Attention required (${count})` : "Attention required";
-    }
-    case "unavailable":
-      return "Unavailable";
   }
 }
 
@@ -1680,7 +1649,7 @@ function runTreeStatusTone(
 ): "active" | "warning" | "success" | "danger" | "neutral" {
   if (status === "running" || status === "waiting") return "active";
   if (status === "suspended" || status === "cancelling") return "warning";
-  if (status === "succeeded") return "success";
+  if (status === "completed") return "success";
   if (status === "failed" || status === "cancelled") return "danger";
   return "neutral";
 }

@@ -147,7 +147,21 @@ describe("Helarc Host Run composition", () => {
       stop: defaults.stop.map((entry) => ({ ...entry, enabled: false })),
     };
     const run = async (observed: boolean) => {
-      const provider = new ScriptedProvider([{ kind: "tool_call", toolName: "Glob", input: { pattern: "**/*", path: "." } }, { kind: "completion", summary: "Inspected." }]);
+      const provider = new ScriptedProvider(
+        [{ kind: "tool_call", toolName: "Glob", input: { pattern: "**/*", path: "." } }, { kind: "completion", summary: "Inspected." }],
+        (request) => {
+          if (!observed) return;
+          inspection.providerObserver!.observe({
+            attemptId: `${request.requestId}:attempt:1`, requestId: request.requestId,
+            runId: typeof request.metadata.runId === "string" ? request.metadata.runId : null,
+            controllerRequestId: request.correlation.controllerRequestId,
+            providerId: provider.descriptor.id, model: "host-run-test-model",
+            occurredAt: "2026-06-28T00:00:00.000Z", stage: "request", status: "prepared",
+            endpoint: null, httpStatus: null, encodedBytes: null, code: null,
+            request, result: null, body: null, representation: "semantic", contentUnavailable: false,
+          });
+        },
+      );
       const result = await executeReadOnlyTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings, inspection: observed ? inspection : undefined, now: () => "2026-06-28T00:00:00.000Z" });
       return { result, provider };
     };
@@ -160,13 +174,28 @@ describe("Helarc Host Run composition", () => {
       expect(recorded.provider.stopRequests).toHaveLength(0);
       expect(await readFile(join(workspaceRoot, "input.txt"), "utf8")).toBe("existing work");
       await inspection.recorder!.flush();
-      expect(inspection.snapshot().health).toMatchObject({ available: true, rejected: 0, dropped: 0 });
+      await expect.poll(() => inspection.recorder!.health().queued, { timeout: 15_000 }).toBe(0);
+      expect(inspection.snapshot().health).toMatchObject({ available: true, rejected: 0, dropped: 0, code: null });
       const scope = (await queries.query({ kind: "get_snapshot", sourceId: inspection.recorder!.source.sourceId, datasetId: inspection.recorder!.manifest.datasetId })).selection!;
       const definitions = (await queries.query({ ...scope, kind: "list_definitions", limit: 500 })).records;
       expect(definitions.some((record) => record.payload.kind === "definition" && record.payload.definitionKind === "tool")).toBe(true);
       const runs = (await queries.query({ ...scope, kind: "list_runs" })).records;
-      expect(runs[0]?.payload).toMatchObject({ status: "succeeded" });
-      expect((await queries.query({ ...scope, kind: "get_lifecycle", subject: runs[0]!.subject })).records.some((record) => record.payload.kind === "transition" && record.payload.to === "succeeded")).toBe(true);
+      expect(runs[0]?.payload).toMatchObject({ status: "completed" });
+      expect((await queries.query({ ...scope, kind: "get_lifecycle", subject: runs[0]!.subject })).records.some((record) => record.payload.kind === "transition" && record.payload.to === "completed")).toBe(true);
+      const execution = await queries.query({...scope,kind:"get_execution_flow",runId:recorded.result.runResult.runId,limit:500});
+      expect(execution.records.flatMap(record=>record.payload.kind === "flow_invocation" ? [record.payload.observation.definition.id] : [])).toEqual(expect.arrayContaining([
+        "run-execution", "model-call-execution", "model-turn", "model-context-admission", "result-delivery",
+      ]));
+      const nativeRefs = execution.records.flatMap((record) => record.links.flatMap((link) => [link.from, link.to]))
+        .filter((ref) => ref.kind === "request" || ref.kind === "operation");
+      expect(nativeRefs.map((ref) => ref.kind)).toEqual(expect.arrayContaining(["request", "operation"]));
+      const uniqueRefs = new Map(nativeRefs.map((ref) => [JSON.stringify(ref), ref]));
+      for (const subject of uniqueRefs.values()) {
+        const source = await queries.query({ ...scope, kind: "get_subject", subject });
+        expect(source.records.some((record) => record.subject.owner === subject.owner &&
+          record.subject.id === subject.id && record.subject.kind === subject.kind &&
+          record.subject.revision === subject.revision), `Missing native source: ${JSON.stringify(subject)}`).toBe(true);
+      }
       const flow = (await queries.query({ ...scope, kind: "get_data_flow" })).graph!;
       expect(flow.links.some((link) => link.targetLocation?.stage === "projected" && link.targetLocation.jsonPointer?.startsWith("/blocks/"))).toBe(true);
       expect((await queries.query({ ...scope, kind: "get_scheduling", subject: runs[0]!.subject })).records.length).toBeGreaterThan(0);
@@ -175,7 +204,7 @@ describe("Helarc Host Run composition", () => {
       if (!relative(tmpdir(), directory).startsWith("helarc-inspection-run-")) throw new Error("Invalid test cleanup target");
       await rm(directory, { recursive: true });
     }
-  });
+  }, 20_000);
   it("binds instruction settings before asynchronous preparation and allows a Run with no system instructions", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-instructions-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);
@@ -192,7 +221,7 @@ describe("Helarc Host Run composition", () => {
     settings.stop[0]!.enabled = true;
     const prepared = await preparing;
     const result = await prepared.start().result;
-    expect(result.runResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("completed");
     expect(provider.requests[0]?.instructions.content).toEqual([]);
     expect(provider.requests[0]?.interaction).toMatchObject({ kind: "native_tool_turn" });
     expect(provider.stopRequests).toHaveLength(0);
@@ -244,7 +273,7 @@ describe("Helarc Host Run composition", () => {
       now: () => new Date(startedAt + elapsedMs).toISOString(),
     });
 
-    expect(result.runResult).toMatchObject({ status: "succeeded" });
+    expect(result.runResult).toMatchObject({ status: "completed" });
     expect(result.product).toMatchObject({ status: "completed" });
   });
 
@@ -292,17 +321,15 @@ describe("Helarc Host Run composition", () => {
     });
 
     expect(result.product.status).toBe("completed");
-    expect(result.runResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("completed");
     expect(result.product.output).toMatchObject({
       agentSummary: "Workspace contains src/index.ts. No changes needed.",
-      runtimeStatus: "succeeded",
+      runtimeStatus: "completed",
       safeErrors: [],
     });
     expect(result.activity.map((item) => item.kind)).toEqual([
       "run.started",
       "context.transition.committed",
-      "context.transition.committed",
-      "run.item.appended",
       "context.transition.committed",
       "context.projection.completed",
       "controller.started",
@@ -321,9 +348,6 @@ describe("Helarc Host Run composition", () => {
       "run.item.appended",
       "controller.tool_exposure.resolved",
       "controller.finished",
-      "verification.gate.evaluated",
-      "context.transition.committed",
-      "run.item.appended",
       "run.item.appended",
       "run.item.appended",
       "run.item.appended",
@@ -403,7 +427,7 @@ describe("Helarc Host Run composition", () => {
     }).status).toBe("accepted_for_resolution");
 
     const result = await composition.result;
-    expect(result.runResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("completed");
     expect(result.product.interactions).toEqual([
       expect.objectContaining({ owner: "helarc", status: "resolved" }),
     ]);
@@ -441,7 +465,7 @@ describe("Helarc Host Run composition", () => {
       provider,
     });
 
-    expect(result.runResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("completed");
     expect(result.product.children).toEqual([
       expect.objectContaining({ owner: "agent-runtime", status: "succeeded" }),
     ]);
@@ -473,7 +497,7 @@ describe("Helarc Host Run composition", () => {
       { kind: "completion", summary: "Parent received the child result." },
     ]);
     const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
-    expect(result.runResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("completed");
     expect(provider.requests).toHaveLength(5);
     expect(findTextBlock(provider.requests[1]!, "Task:")).toBe(`Task:\n${childPrompt}`);
     expect(findTextBlock(provider.requests[2]!, "Task:")).toBe(`Task:\n${nestedPrompt}`);
@@ -499,7 +523,7 @@ describe("Helarc Host Run composition", () => {
       { kind: "completion", summary: "Parent received the explanation." },
     ]);
     const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
-    expect(result.runResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("completed");
     expect(provider.requests).toHaveLength(5);
     expect(provider.requests[3]?.messages).toContainEqual(expect.objectContaining({
       role: "user",
@@ -508,10 +532,10 @@ describe("Helarc Host Run composition", () => {
     expect(operationResults(result)).toEqual([]);
   });
 
-  it.each([true, false])("delivers a stopped Child's separate report and reason to the Parent (report: %s)", async (hasReport) => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-stopped-child-"));
+  it.each([true, false])("delivers a Child's final text with limitations to the Parent (report: %s)", async (hasReport) => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-child-report-"));
     const report = "SDK inspection findings.\n\nBuild and run commands.";
-    const stopReason = "No further work is available.";
+    const finalText = `${hasReport ? `${report}\n\n` : ""}No further work is available.`;
     const provider = new ScriptedProvider([
       { kind: "tool_call", toolName: "Agent", input: { prompt: "Inspect and report." } },
       {
@@ -519,15 +543,14 @@ describe("Helarc Host Run composition", () => {
         plan: [{ step: "Inspect and report", status: "completed" }],
         assistantTexts: hasReport ? ["SDK inspection findings.", "Build and run commands."] : [],
       },
-      { kind: "stop", reason: stopReason },
-      { kind: "completion", summary: "Parent received the stopped Child." },
+      { kind: "completion", summary: finalText },
+      { kind: "completion", summary: "Parent received the Child result." },
     ]);
     const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
-    expect(result.runResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("completed");
     const expectedOutput = {
-      status: "stopped",
-      summary: hasReport ? report : "",
-      stop_reason: stopReason,
+      status: "completed",
+      summary: finalText,
       failure_code: null,
     };
     expect(result.runResult.items).toContainEqual(expect.objectContaining({
@@ -574,7 +597,7 @@ describe("Helarc Host Run composition", () => {
     const composition = prepared.start();
     const result = await composition.result;
 
-    expect(result.product.status).toBe("completed");
+    expect(result.product.status, JSON.stringify({cause:result.runResult.cause, events:result.activity.filter(item=>item.kind.startsWith("retry") || item.kind.startsWith("controller"))})).toBe("completed");
     expect(provider.requests).toHaveLength(2);
     const retryProjection = composition.activeRun.getStatus().retry;
     expect(retryProjection).not.toBeNull();
@@ -589,7 +612,7 @@ describe("Helarc Host Run composition", () => {
       "retry_attempt_finished",
     ]);
     expect(new Set(retryActivity?.map((item) => item.operationId))).toEqual(
-      new Set([`${result.harnessRunId}:controller:1:provider-request:1`]),
+      new Set([`${provider.requests[0]!.correlation.controllerRequestId}:provider-request:1`]),
     );
     expect(retryActivity?.find((item) => item.event === "retry_scheduled")).toMatchObject({
       owner: "provider_request",
@@ -708,8 +731,8 @@ describe("Helarc Host Run composition", () => {
         input: createShellInput(markerPath),
       },
       {
-        kind: "stop",
-        reason: "Permission was denied.",
+        kind: "completion",
+        summary: "Permission was denied.",
       },
     ]);
     const result = await executeTestHostRun({
@@ -720,7 +743,7 @@ describe("Helarc Host Run composition", () => {
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
 
-    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("stopped");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("completed");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -741,8 +764,8 @@ describe("Helarc Host Run composition", () => {
         input: createShellInput(markerPath),
       },
       {
-        kind: "stop",
-        reason: "The automatic reviewer is unavailable.",
+        kind: "completion",
+        summary: "The automatic reviewer is unavailable.",
       },
     ]);
 
@@ -754,7 +777,7 @@ describe("Helarc Host Run composition", () => {
       automaticApprovalReviewer: unavailableAutomaticReviewer(),
     });
 
-    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("stopped");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("completed");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -944,7 +967,7 @@ describe("Helarc Host Run composition", () => {
       provider,
     });
 
-    expect(result.runResult).toMatchObject({ status: "succeeded" });
+    expect(result.runResult).toMatchObject({ status: "completed" });
     expect(result.product.status).toBe("completed");
     expect(result.product.runActions.map(({ status }) => status)).toEqual([
       "rejected",
@@ -1035,7 +1058,7 @@ describe("Helarc Host Run composition", () => {
         toolName: "Write",
         input: { file_path: "declined.txt", content: "must not exist\n" },
       },
-      { kind: "stop", reason: "The requested file change was declined." },
+      { kind: "completion", summary: "The requested file change was declined." },
     ]);
 
     const result = await executeTestHostRun({
@@ -1045,7 +1068,7 @@ describe("Helarc Host Run composition", () => {
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
 
-    expect(result.product.status).toBe("stopped");
+    expect(result.product.status).toBe("completed");
     expect(result.product.output.enforcement.status).toBe("denied");
     await expect(access(targetPath)).rejects.toThrow();
   });
@@ -1064,7 +1087,7 @@ describe("Helarc Host Run composition", () => {
           new_string: "changed",
         },
       },
-      { kind: "stop", reason: "The exact edit was ambiguous." },
+      { kind: "completion", summary: "The exact edit was ambiguous." },
     ]);
 
     const result = await executeTestHostRun({
@@ -1073,7 +1096,7 @@ describe("Helarc Host Run composition", () => {
       permissionPreset: "full_access",
     });
 
-    expect(result.product.status).toBe("stopped");
+    expect(result.product.status).toBe("completed");
     expect(result.product.output.safeErrors).toContainEqual(expect.objectContaining({
       code: "file_edit_ambiguous",
     }));
@@ -1094,7 +1117,7 @@ describe("Helarc Host Run composition", () => {
           new_string: "after",
         },
       },
-      { kind: "stop", reason: "The prepared baseline became stale." },
+      { kind: "completion", summary: "The prepared baseline became stale." },
     ]);
 
     const result = await executeTestHostRun({
@@ -1106,7 +1129,7 @@ describe("Helarc Host Run composition", () => {
       }),
     });
 
-    expect(result.product.status).toBe("stopped");
+    expect(result.product.status).toBe("completed");
     expect(result.product.output.safeErrors).toContainEqual(expect.objectContaining({
       code: "file_target_changed",
     }));
@@ -1233,7 +1256,7 @@ class ScriptedProvider implements Provider {
 
   constructor(
     private readonly outputs: unknown[],
-    private readonly beforeResponse: () => void = () => {},
+    private readonly beforeResponse: (request: ProviderRequest) => void = () => {},
   ) {}
 
   async send(
@@ -1247,7 +1270,7 @@ class ScriptedProvider implements Provider {
     this.requests.push(request);
     this.lastControllerInputContexts.push(readObservationCount(request));
     this.lastControllerInputPlans.push(readCurrentPlan(request));
-    this.beforeResponse();
+    this.beforeResponse(request);
     const scriptedOutput = this.outputs.shift();
     if (scriptedOutput === undefined) {
       return {
@@ -1428,7 +1451,6 @@ function scriptedCallableName(
   scripted: Record<string, unknown>,
 ): string {
   if (scripted.kind === "plan_update") return "update_plan";
-  if (scripted.kind === "stop") return "stop";
   if (scripted.kind !== "tool_call" || typeof scripted.toolName !== "string") {
     return "unknown_scripted_callable";
   }
@@ -1451,7 +1473,6 @@ function scriptedCallInput(scripted: Record<string, unknown>): {
       plan: scripted.plan as ModelJsonValue,
     };
   }
-  if (scripted.kind === "stop") return { reason: String(scripted.reason) };
   return scripted.input as { readonly [key: string]: ModelJsonValue };
 }
 

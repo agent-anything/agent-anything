@@ -6,26 +6,78 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "exports": {
-    ".": { "types": "./src/index.ts", "import": "./dist/index.js" },
-    "./agent": { "types": "./src/agent/index.ts", "import": "./dist/agent/index.js" },
-    "./task": { "types": "./src/task/index.ts", "import": "./dist/task/index.js" },
-    "./task-fulfillment": { "types": "./src/task-fulfillment/index.ts", "import": "./dist/task-fulfillment/index.js" },
-    "./configuration": { "types": "./src/configuration/index.ts", "import": "./dist/configuration/index.js" },
-    "./work-context": { "types": "./src/work-context/index.ts", "import": "./dist/work-context/index.js" },
-    "./thread": { "types": "./src/thread/index.ts", "import": "./dist/thread/index.js" },
-    "./run": { "types": "./src/run/index.ts", "import": "./dist/run/index.js" },
-    "./prompt": { "types": "./src/prompt/index.ts", "import": "./dist/prompt/index.js" },
-    "./controller": { "types": "./src/controller/index.ts", "import": "./dist/controller/index.js" },
-    "./interaction": { "types": "./src/interaction/index.ts", "import": "./dist/interaction/index.js" },
-    "./tools": { "types": "./src/tools/index.ts", "import": "./dist/tools/index.js" },
-    "./result": { "types": "./src/result/index.ts", "import": "./dist/result/index.js" },
-    "./artifacts": { "types": "./src/artifacts/index.ts", "import": "./dist/artifacts/index.js" },
-    "./composition": { "types": "./src/composition/index.ts", "import": "./dist/composition/index.js" },
-    "./observability": { "types": "./src/observability/index.ts", "import": "./dist/observability/index.js" },
-    "./verification": { "types": "./src/verification/index.ts", "import": "./dist/verification/index.js" },
-    "./model-qualification": { "types": "./src/model-qualification/index.ts", "import": "./dist/model-qualification/index.js" }
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./src/agent/index.ts",
+      "import": "./dist/agent/index.js"
+    },
+    "./task": {
+      "types": "./src/task/index.ts",
+      "import": "./dist/task/index.js"
+    },
+    "./task-fulfillment": {
+      "types": "./src/task-fulfillment/index.ts",
+      "import": "./dist/task-fulfillment/index.js"
+    },
+    "./configuration": {
+      "types": "./src/configuration/index.ts",
+      "import": "./dist/configuration/index.js"
+    },
+    "./work-context": {
+      "types": "./src/work-context/index.ts",
+      "import": "./dist/work-context/index.js"
+    },
+    "./thread": {
+      "types": "./src/thread/index.ts",
+      "import": "./dist/thread/index.js"
+    },
+    "./run": {
+      "types": "./src/run/index.ts",
+      "import": "./dist/run/index.js"
+    },
+    "./prompt": {
+      "types": "./src/prompt/index.ts",
+      "import": "./dist/prompt/index.js"
+    },
+    "./controller": {
+      "types": "./src/controller/index.ts",
+      "import": "./dist/controller/index.js"
+    },
+    "./interaction": {
+      "types": "./src/interaction/index.ts",
+      "import": "./dist/interaction/index.js"
+    },
+    "./tools": {
+      "types": "./src/tools/index.ts",
+      "import": "./dist/tools/index.js"
+    },
+    "./result": {
+      "types": "./src/result/index.ts",
+      "import": "./dist/result/index.js"
+    },
+    "./artifacts": {
+      "types": "./src/artifacts/index.ts",
+      "import": "./dist/artifacts/index.js"
+    },
+    "./composition": {
+      "types": "./src/composition/index.ts",
+      "import": "./dist/composition/index.js"
+    },
+    "./observability": {
+      "types": "./src/observability/index.ts",
+      "import": "./dist/observability/index.js"
+    },
+    "./model-qualification": {
+      "types": "./src/model-qualification/index.ts",
+      "import": "./dist/model-qualification/index.js"
+    }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -55,8 +107,9 @@
     "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/operation-composition": "workspace:*",
     "@agent-anything/tools": "workspace:*",
-    "@agent-anything/verification": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
-  "devDependencies": { "@types/node": "^25.9.1" }
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  }
 }

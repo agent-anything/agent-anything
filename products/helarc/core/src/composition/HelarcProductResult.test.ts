@@ -195,25 +195,6 @@ describe("HelarcProductResult", () => {
       },
       result,
       "disabled",
-      {
-        snapshot: { runId: "run-1", revision: 7 },
-        counts: [
-          { state: "unassessed", count: 1 },
-          { state: "violated", count: 1 },
-        ],
-        activeAttempts: [],
-        gate: {
-          ref: { id: "gate-1", revision: "1" },
-          status: "blocked_violated",
-          disposition: "continue",
-          reasonCodes: ["mandatory_verification_violated"],
-          affectedRequirements: [{ id: "requirement-1", revision: "1" }],
-        },
-        waiting: false,
-        recoveryNeeded: true,
-        safeReasons: ["mandatory_verification_violated"],
-        updatedAt: COMPLETED_AT,
-      },
       testQualification(),
     );
 
@@ -221,20 +202,6 @@ describe("HelarcProductResult", () => {
     expect(projected.runResult).toMatchObject({
       status: "failed",
       code: "file_effect_unknown",
-    });
-    expect(projected.verification).toEqual({
-      status: "attention_required",
-      snapshotRevision: 7,
-      counts: [
-        { state: "unassessed", count: 1 },
-        { state: "violated", count: 1 },
-      ],
-      activeChecks: 0,
-      gateStatus: "blocked_violated",
-      waiting: false,
-      recoveryNeeded: true,
-      safeReasons: ["mandatory_verification_violated"],
-      updatedAt: COMPLETED_AT,
     });
     expect(projected.runActions).toEqual([
       expect.objectContaining({

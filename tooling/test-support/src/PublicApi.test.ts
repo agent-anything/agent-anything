@@ -13,7 +13,6 @@ describe("Test Support public API", () => {
       "FakeTelemetryPort",
       "createFakeProviderContext",
       "createTestContextProjection",
-      "createTestVerificationExecutionFactory",
       "fakeNativeModelOutput",
       "fakeNativeProviderResult",
     ]);

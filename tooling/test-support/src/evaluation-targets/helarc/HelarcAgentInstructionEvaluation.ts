@@ -63,7 +63,6 @@ export interface HelarcAgentInstructionTrialMetrics {
   readonly planUpdates: number;
   readonly correctionEvents: number;
   readonly delegationCalls: number;
-  readonly verificationObserved: boolean;
   readonly terminalTruth: boolean;
   readonly latencyMs: number;
   readonly inputTokens: number;
@@ -98,7 +97,6 @@ export type HelarcInstructionBehavior =
   | "planning"
   | "correction"
   | "delegation"
-  | "verification"
   | "completion";
 
 export interface HelarcAgentInstructionConformanceReport {
@@ -366,7 +364,6 @@ function scriptedCase(
       requiredActionNames: Object.freeze([...requiredActionNames].sort()),
       retryCount: 0,
     }),
-    verificationTargets: Object.freeze([]),
   });
 }
 
@@ -444,8 +441,6 @@ function trialMetrics(
     };
   }, { inputTokens: 0, outputTokens: 0 });
   const outcomeCorrect = expectedOutcomeMatches(material);
-  const verificationObserved = material.product.verification.status !== "not_required" ||
-    items.some((item) => item.payload.kind === "verification_feedback");
   const invalidOrUnsafeActionAttempts = material.product.effects.filter((effect) =>
     effect.status !== "succeeded"
   ).length;
@@ -464,7 +459,6 @@ function trialMetrics(
       item.payload.kind === "controller_feedback"
     ).length,
     delegationCalls: actionNames.filter((name) => name === "Agent").length,
-    verificationObserved: verificationObserved,
     terminalTruth: expectedTerminalMatches(material),
     latencyMs: Math.max(
       0,
@@ -542,13 +536,6 @@ function semanticOutcomeFingerprint(
       effectCertainty: effect.effectCertainty,
       completionExtent: effect.completionExtent,
     })),
-    verification: {
-      status: material.product.verification.status,
-      counts: material.product.verification.counts,
-      activeChecks: material.product.verification.activeChecks,
-      gateStatus: material.product.verification.gateStatus,
-      safeReasons: material.product.verification.safeReasons,
-    },
     plans: material.runResult.items.flatMap((item) =>
       item.payload.kind === "state_transition" && item.payload.transition === "plan"
         ? [item.payload.plan]
@@ -581,11 +568,11 @@ function scenarioBehavior(scenario: string): readonly HelarcInstructionBehavior[
     controlled_file_write: ["edit", "completion"],
     denied_command: ["command", "completion"],
     malformed_output_retry: ["correction", "completion"],
-    multi_file_mutation: ["edit", "verification", "completion"],
-    ordinary_shell_verification: ["command", "verification", "completion"],
-    failed_check_recovery: ["command", "correction", "verification", "completion"],
-    stale_evidence: ["edit", "verification", "completion"],
-    premature_completion: ["verification", "completion"],
+    multi_file_mutation: ["edit", "completion"],
+    ordinary_shell_verification: ["command", "completion"],
+    failed_check_recovery: ["command", "correction", "completion"],
+    stale_evidence: ["edit", "completion"],
+    premature_completion: [ "completion"],
   };
   return Object.freeze([...(map[scenario] ?? ["completion"])]);
 }

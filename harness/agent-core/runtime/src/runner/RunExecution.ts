@@ -1,5 +1,12 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
 import { deriveRunStatusAfterPendingChange } from "./RunPendingStatus.js";
+import { RunExecutionFlow } from "./RunExecutionFlow.js";
+import { RUN_CONTROL_EXECUTION_FLOW, RUN_SUSPENSION_WAIT_FLOW } from "./RunControlExecutionFlow.js";
+import { DESCENDANT_TRANSFER_EXECUTION_FLOW } from "./DescendantTransferExecutionFlow.js";
+import { createExecutionFlowDefinition, ExecutionFlowInvocation, ExecutionFlowPath, type ExecutionFlowContext, type ExecutionFlowOccurrenceRef, type ExecutionFlowStep } from "@agent-anything/observability/execution-flow";
+import { CONTROLLER_EXECUTION_FLOW } from "./ControllerExecutionFlow.js";
+import { RUN_CALL_EXECUTION_FLOW, OPERATION_EXECUTION_FLOW } from "./RunCallExecutionFlow.js";
+import { snapshotRunSuspendRequestInput, type RunSuspendRequestInput, type RunSuspendReceipt } from "../run/RunSuspension.js";
 import { snapshotAgent, toAgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ControllerTurnRef, InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { AgentTask } from "@agent-anything/agent-core/task";
@@ -61,27 +68,6 @@ import {
   type ActionExecutionResult,
 } from "@agent-anything/action-execution/enforcement";
 import { createCanonicalSha256Digest } from "@agent-anything/canonical-action/subject";
-import {
-  snapshotCompletionGateDecision,
-  snapshotCompletionGateInput,
-  type CompletionGateDecision,
-  type CompletionGateInput,
-} from "@agent-anything/verification/completion";
-import {
-  createVerificationFailure,
-  materializeVerificationProfile,
-  type VerificationFailure,
-  type VerificationRequirement,
-} from "@agent-anything/verification/definition";
-import {
-  VerificationExecutionError,
-  type CheckResult,
-  type VerificationExecutionPort,
-  type VerificationOperationCheckInput,
-  type VerificationOperationCheckResolverPort,
-  type VerificationLowerCheckSettlement,
-} from "@agent-anything/verification/execution";
-import type { VerificationHostProjection, VerificationRunnerProjection } from "@agent-anything/verification/projection";
 import { createActionPermissionAssessmentPort } from "@agent-anything/permission/authority";
 import {
   APPROVAL_INTERACTION_PROTOCOL,
@@ -148,7 +134,9 @@ import {
   applyPlanUpdate,
   projectPlan,
 } from "../plan/index.js";
-import { snapshotRetryEvent, type RetryEventSink } from "../retry/index.js";
+import { snapshotRetryEvent, RetryInvocationInvalidatedError, type RetryEventSink } from "../retry/index.js";
+import { RunDecisionBasis } from "./RunDecisionBasis.js";
+import { RunRetryWaitScope } from "./RunRetryWaitScope.js";
 import { RunTranscriptRecorder } from "../transcript/index.js";
 import {
   createRunResult,
@@ -185,12 +173,7 @@ import type { RunExecutionUpdate, RunHandle } from "./RunHandle.js";
 import { publishRunTransition } from "./RunObserver.js";
 import { publishRunExecutionObservation } from "./RunExecutionObserver.js";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
-import type {
-  RunnerAutomaticEffectfulVerificationCheckPort,
-  RunnerAutomaticEffectfulVerificationCheckRequest,
-  RunnerVerificationCheckRequest,
-  ResolvedRunnerDependencies,
-} from "./RunnerDependencies.js";
+import type { ResolvedRunnerDependencies } from "./RunnerDependencies.js";
 import {
   assertDelegationAuthorityRestrictionWithinCeiling,
   projectDelegationRunAuthority,
@@ -272,21 +255,7 @@ import { evaluateRunDeadline, evaluateRunNumericLimits, type RunLimitViolation }
 import { recordRunnerLifecycle } from "./RunnerObservability.js";
 import { completeRunnerTrace, createRunnerTraceAssembler } from "./RunnerTracing.js";
 import { RunStateWriter } from "./RunStateWriter.js";
-import {
-  createCurrentRunContextAdmissionProfile,
-  createCurrentRunContextContributions,
-  createDelegationSelectedContextAdmissionProfile,
-  createDelegationSelectedContextContribution,
-  createObservationContextAdmissionProfile,
-  createObservationContextContribution,
-  createControllerFeedbackContextAdmissionProfile,
-  createControllerFeedbackContextContribution,
-  createSteeringContextAdmissionProfile,
-  createSteeringContextContribution,
-  createTaskContextAdmissionProfile,
-  createTaskContextContribution,
-  createVerificationContextAdmissionProfile,
-} from "../context-contribution/index.js";
+import { createCurrentRunContextAdmissionProfile, createCurrentRunContextContributions, createDelegationSelectedContextAdmissionProfile, createDelegationSelectedContextContribution, createObservationContextAdmissionProfile, createObservationContextContribution, createControllerFeedbackContextAdmissionProfile, createControllerFeedbackContextContribution, createSteeringContextAdmissionProfile, createSteeringContextContribution, createTaskContextAdmissionProfile, createTaskContextContribution } from "../context-contribution/index.js";
 import type {
   DescendantDispatchProvenance,
   DescendantRunReservationFailureCode,
@@ -295,6 +264,7 @@ import type {
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 
 export interface RuntimeDescendantRunAdmissionInput {
+  readonly executionFlow?: ExecutionFlowContext;
   readonly relationId: string;
   readonly relationKind: DescendantRunRelation["kind"];
   readonly parentRunAction: RunActionRef;
@@ -312,6 +282,7 @@ export type RuntimeDescendantRunLaunchResult =
       readonly status: "started";
       readonly relation: DescendantRunRelation;
       readonly handle: RunHandle;
+      readonly getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null;
       readonly resourceSettlement: Promise<RunTreeResourceSettlement>;
       readonly reservedTreeRevision: number;
       readonly treeRevision: number;
@@ -353,12 +324,7 @@ export type RuntimeDescendantRunAdmitter = (
 
 type TerminalCandidate<TOutput> =
   | {
-      readonly status: "stopped";
-      readonly reason: string;
-      readonly source: RunCauseSourceRef;
-    }
-  | {
-      readonly status: "succeeded";
+      readonly status: "completed";
       readonly output: TOutput;
       readonly source?: RunCauseSourceRef;
     }
@@ -489,6 +455,7 @@ interface ManagedActiveDescendant {
   readonly request: DelegationRequest;
   readonly childRunId: string;
   readonly handle: RunHandle;
+  readonly getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null;
   readonly action: RuntimeRunAction;
   readonly composition: NonNullable<ResolvedRunnerDependencies["operations"]["delegation"]>;
   readonly pending: PendingRunSubject;
@@ -510,6 +477,13 @@ interface InteractionActionContext {
 }
 
 export class RunExecution<TOutput> {
+  getTerminalFlowOccurrence(): ExecutionFlowOccurrenceRef | null {
+    return this.terminalResult === null ? null : this.flow.current?.ref ?? null;
+  }
+
+  private readonly flow: RunExecutionFlow;
+  private readonly actionFlows = new Map<string, ExecutionFlowPath>();
+  private readonly operationFlows = new Map<string, ExecutionFlowPath>();
   private readonly startedAt: string;
   private readonly startedAtMs: number;
   private readonly writer: RunStateWriter<TOutput>;
@@ -527,6 +501,7 @@ export class RunExecution<TOutput> {
   private suspendedWaiter: {
     readonly suspension: RunSuspension;
     readonly resolve: () => void;
+    readonly resumed: Promise<void>;
   } | null = null;
   private emittedItemCount = 0;
   private nextInteractionRequest = 1;
@@ -552,11 +527,8 @@ export class RunExecution<TOutput> {
   private runStartedEventEmitted = false;
   private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
-  private verificationExecution: VerificationExecutionPort | null = null;
-  private verificationRequirements: readonly VerificationRequirement[] = Object.freeze([]);
-  private verificationClosed = false;
-  private verificationHostProjection: VerificationHostProjection | null = null;
-  private readonly emittedVerificationRecordKeys = new Set<string>();
+  private readonly decisionBasis = new RunDecisionBasis();
+  private readonly retryScopes = new Map<string, RunRetryWaitScope>();
   private readonly toolExposure: RunToolExposureCoordinator;
   private readonly transcript: RunTranscriptRecorder;
   private accountedResourceItemCount = 0;
@@ -587,7 +559,9 @@ export class RunExecution<TOutput> {
     initialContextBytes: number,
     private readonly runTree: import("./RunTreeExecution.js").RunTreeExecution,
     private readonly onUpdate: (update: RunExecutionUpdate<TOutput>) => void,
+    executionFlow?: ExecutionFlowContext,
   ) {
+    this.flow = new RunExecutionFlow(executionFlow ?? dependencies.executionFlow ?? {}, runId);
     this.startedAt = startedAt;
     this.startedAtMs = Date.parse(this.startedAt);
     this.activeAgent = agent;
@@ -660,7 +634,7 @@ export class RunExecution<TOutput> {
       localProtocols: Object.freeze([approvalProtocol]),
       now: dependencies.now,
       createId: (kind, sequence) => dependencies.createId({ kind, runId, sequence }),
-      onOpened: (pending) => this.openPendingInteraction(pending),
+      onOpened: (pending, parentRunAction) => this.openPendingInteraction(pending, parentRunAction),
       onSettled: (pending, terminal, settlement) =>
         this.queueInteractionSettlement(pending, terminal, settlement),
     });
@@ -675,6 +649,7 @@ export class RunExecution<TOutput> {
       getDescendantMessageAvailability: (targetAgent) =>
         this.descendantMessageAvailability(targetAgent),
       getRunRevision: () => this.writer.getSnapshot().revision,
+      getDecisionRevision: (id) => this.decisionBasis.revision(id, this.writer.getSnapshot().revision),
       getRunTreeSnapshot: () => this.runTree.getSnapshot(),
     });
 
@@ -719,6 +694,19 @@ export class RunExecution<TOutput> {
   }
 
   submitResume(input: RunResumeRequestInput): RunResumeReceipt {
+    const flow = new ExecutionFlowPath(RUN_CONTROL_EXECUTION_FLOW, {...this.flow.context, relationship:"spawn"}, this.runId, []);
+    const before = this.writer.getSnapshot();
+    flow.advance("receive", {control:"resume",status:before.status,runRevision:before.revision});
+    const admission = flow.advance("admit");
+    try {
+      const receipt = this.applyResume(input);
+      admission.check("control_admission", receipt.status === "accepted" ? "passed" : "not_satisfied", {status:receipt.status,code:receipt.status === "rejected" ? receipt.code : null});
+      flow.advance("receipt", {runStatus:this.writer.getSnapshot().status,runRevision:this.writer.getSnapshot().revision});
+      return receipt;
+    } finally {flow.close("returned");}
+  }
+
+  private applyResume(input: RunResumeRequestInput): RunResumeReceipt {
     const current = this.writer.getSnapshot();
     const requestId = typeof input?.id === "string" ? input.id : "";
     let candidate: RunResumeRequestInput;
@@ -730,7 +718,7 @@ export class RunExecution<TOutput> {
     if (current.status === "cancelling") {
       return rejectedResume("run_cancelling", candidate.id, current.revision);
     }
-    if (current.status === "succeeded" || current.status === "stopped" || current.status === "failed" || current.status === "cancelled") {
+    if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
       return rejectedResume("run_settled", candidate.id, current.revision);
     }
     if (this.settling) return rejectedResume("run_settling", candidate.id, current.revision);
@@ -755,7 +743,7 @@ export class RunExecution<TOutput> {
       suspension: current.suspension,
       resume: request,
     }, () => Object.freeze({
-      status: "running" as const,
+      status: this.statusAfterPendingChange({ ...current, status: "running", suspension: null } as RunState<TOutput>, current.pending),
       suspension: null,
     }));
     this.suspendedWaiter = null;
@@ -767,19 +755,32 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private async suspendRun(
-    code: RunSuspensionCode,
-    source: RunCauseSourceRef,
-    reason: string,
-  ): Promise<void> {
+  submitSuspend(input: RunSuspendRequestInput): RunSuspendReceipt {
+    const flow = new ExecutionFlowPath(RUN_CONTROL_EXECUTION_FLOW, {...this.flow.context, relationship:"spawn"}, this.runId, []);
+    const before = this.writer.getSnapshot();
+    flow.advance("receive", {control:"suspend",status:before.status,runRevision:before.revision});
+    const admission = flow.advance("admit");
+    try {
+      const receipt = this.applySuspend(input);
+      admission.check("control_admission", receipt.status === "accepted" ? "passed" : "not_satisfied", {status:receipt.status,code:receipt.status === "rejected" ? receipt.code : null});
+      flow.advance("receipt", {runStatus:this.writer.getSnapshot().status,runRevision:this.writer.getSnapshot().revision});
+      return receipt;
+    } finally {flow.close("returned");}
+  }
+
+  private applySuspend(input: RunSuspendRequestInput): RunSuspendReceipt {
     const current = this.writer.getSnapshot();
-    if (this.terminalResult !== null || current.status === "cancelling") return;
-    if (current.status === "suspended") {
-      if (this.suspendedWaiter === null) {
-        throw new TypeError("Suspended Run is missing its invocation-local resume waiter.");
-      }
-      return;
-    }
+    const reject = (code: Extract<RunSuspendReceipt, {status: "rejected"}>["code"]): RunSuspendReceipt => ({
+      status: "rejected", code, requestId: typeof input?.id === "string" ? input.id : "", currentRunRevision: current.revision,
+    });
+    let request: RunSuspendRequestInput;
+    try { request = snapshotRunSuspendRequestInput(input); } catch { return reject("suspend_invalid"); }
+    if (this.terminalResult !== null || ["completed", "failed", "cancelled"].includes(current.status)) return reject("run_settled");
+    if (this.config.cancellation.context.request !== null) return reject("run_cancelling");
+    if (this.settling) return reject("run_settling");
+    if (current.status === "suspended") return reject("run_already_suspended");
+    if (current.status === "initializing") return reject("run_not_started");
+    if (request.expectedRunRevision !== current.revision) return reject("run_revision_stale");
     const nextRevision = current.revision + 1;
     const suspension: RunSuspension = Object.freeze({
       ref: Object.freeze({
@@ -787,9 +788,9 @@ export class RunExecution<TOutput> {
         id: this.id("run_suspension"),
         revision: String(nextRevision),
       }),
-      code,
-      source,
-      reason: boundedReason(reason),
+      code: "run_suspension_requested",
+      source: Object.freeze({owner: request.origin, kind: "suspend_request", id: request.id, revision: null, run: current.run}),
+      reason: request.reason,
       runRevision: nextRevision,
       suspendedAt: this.now(),
     });
@@ -797,7 +798,7 @@ export class RunExecution<TOutput> {
     const resumed = new Promise<void>((resolve) => {
       resume = resolve;
     });
-    this.suspendedWaiter = Object.freeze({ suspension, resolve: resume });
+    this.suspendedWaiter = Object.freeze({ suspension, resolve: resume, resumed });
     this.writer.commit({
       kind: "suspension_transition",
       transition: "suspended",
@@ -808,21 +809,35 @@ export class RunExecution<TOutput> {
       suspension,
     }));
 
-    const deadlineAtMs = Date.parse(current.deadlineAt);
-    const remainingMs = Math.max(0, deadlineAtMs - Date.parse(this.now()));
+    return Object.freeze({status: "accepted", suspension, currentRunRevision: nextRevision});
+  }
+
+  private async awaitSuspension(): Promise<void> {
+    const waiter = this.suspendedWaiter;
+    if (waiter === null) return;
+    const flow = new ExecutionFlowPath(RUN_SUSPENSION_WAIT_FLOW, this.flow.context, this.runId, []);
+    flow.advance("wait", {suspensionId:waiter.suspension.ref.id,suspensionRevision:waiter.suspension.ref.revision});
+    const deadlineAtMs = Date.parse(this.writer.getSnapshot().deadlineAt);
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
     const deadlineReached = new Promise<void>((resolve) => {
-      deadlineTimer = setTimeout(resolve, remainingMs);
+      const arm = () => {
+        const remaining = deadlineAtMs - Date.parse(this.now());
+        if (remaining <= 0) resolve();
+        else deadlineTimer = setTimeout(arm, Math.min(remaining, 2_147_483_647));
+      };
+      arm();
     });
-    const cancelled = new Promise<void>((resolve) => {
-      const signal = this.config.cancellation.context.signal;
-      if (signal.aborted) resolve();
-      else signal.addEventListener("abort", () => resolve(), { once: true });
-    });
-    await Promise.race([resumed, deadlineReached, cancelled]);
-    if (deadlineTimer !== null) clearTimeout(deadlineTimer);
-    if (this.suspendedWaiter?.suspension.ref.id === suspension.ref.id) {
-      this.suspendedWaiter = null;
+    const signal = this.config.cancellation.context.signal;
+    let onAbort!: () => void;
+    const cancelled = new Promise<void>(resolve => { onAbort = resolve; });
+    signal.addEventListener("abort", onAbort, {once: true});
+    if (signal.aborted) onAbort();
+    try { await Promise.race([waiter.resumed, deadlineReached, cancelled]); }
+    finally {
+      if (deadlineTimer !== null) clearTimeout(deadlineTimer); signal.removeEventListener("abort", onAbort);
+      const release = signal.aborted ? "cancellation" : this.suspendedWaiter !== waiter ? "accepted_resume" : "deadline";
+      flow.advance("released", {status:this.writer.getSnapshot().status,runRevision:this.writer.getSnapshot().revision}).check("release_source","passed",{release});
+      flow.close(release === "accepted_resume" ? "returned" : "interrupted");
     }
   }
 
@@ -1044,6 +1059,7 @@ export class RunExecution<TOutput> {
   }
 
   async run(): Promise<RunResult<TOutput>> {
+    const initialization = this.flow.enter("initialize", {agentId: this.activeAgent.id, revision: this.writer.getSnapshot().revision});
     this.interruptionCoordinator.start();
     try {
       const initialContext = this.delegationRequest === null
@@ -1097,10 +1113,11 @@ export class RunExecution<TOutput> {
         instructionBindingRevision: this.activeInstructionBinding.ref.revision,
       }, this.startedAt);
       this.runStartedEventEmitted = true;
+      initialization.check("initial_context", "passed", {contextId: this.writer.getSnapshot().context.ref.id});
       this.emitCommittedContextTransition(this.writer.getSnapshot().context);
       this.emitCommittedRunItems(this.writer.getSnapshot());
-      await this.initializeVerification();
       const startFailures = await this.recordLifecycle("started");
+      initialization.check("required_start_records", startFailures.length ? "error" : "passed", {failureCount: startFailures.length});
       if (startFailures.length > 0) {
         return await this.settle({
           status: "failed",
@@ -1113,11 +1130,15 @@ export class RunExecution<TOutput> {
       }
 
       while (this.terminalResult === null) {
+        const controls = this.flow.enter("controls", {status: this.writer.getSnapshot().status, revision: this.writer.getSnapshot().revision});
+        await this.awaitSuspension();
         this.drainInteractionSettlements();
+        controls.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
         if (this.config.cancellation.context.request !== null) {
           return await this.settle({ status: "cancelled" });
         }
         if (this.resourceFailure !== null) {
+          controls.check("resource_account", "not_satisfied", {dimension: this.resourceFailure.dimension});
           return await this.settleResourceFailure(this.resourceFailure);
         }
         this.drainSteering("apply");
@@ -1125,20 +1146,25 @@ export class RunExecution<TOutput> {
           deadlineAt: this.writer.getSnapshot().deadlineAt,
           now: this.now(),
         });
+        controls.check("deadline", deadline === null ? "passed" : "not_satisfied", {deadlineAt: this.writer.getSnapshot().deadlineAt});
         if (deadline !== null) return await this.settleLimitViolation(deadline);
 
         const numericLimit = evaluateRunNumericLimits({
           counters: this.writer.getSnapshot().counters,
           limits: this.config.limits,
         });
+        controls.check("numeric_limits", numericLimit === null ? "passed" : "not_satisfied", {code: numericLimit?.code ?? null});
         if (numericLimit !== null) return await this.settleLimitViolation(numericLimit);
 
+        this.flow.enter("controller");
         const decision = await this.nextDecision();
         if (decision === null) continue;
+        const decisionStep = this.flow.enter("decision", {kind: decision.decision.kind, turnId: decision.turn.id, basisRevision: decision.basisRevision});
         if (this.resourceFailure !== null) {
           return await this.settleResourceFailure(this.resourceFailure);
         }
         const settlementsAfterDecision = this.drainInteractionSettlements();
+        decisionStep.check("current_basis", settlementsAfterDecision ? "not_satisfied" : "passed", {settlementsAfterDecision});
         if (this.config.cancellation.context.request !== null) {
           this.settleUnprocessedModelCalls(
             decision.decision,
@@ -1171,50 +1197,23 @@ export class RunExecution<TOutput> {
           continue;
         }
         if (decision.decision.kind === "propose_completion") {
-          const completion = await this.evaluateRunStop(
+          const completion = this.processCompletionCandidate(
             decision.turn,
-            decision.decision.output,
           );
-          if (completion.kind === "succeeded") {
+          if (completion.kind === "completed") {
             return await this.settle({
-              status: "succeeded",
+              status: "completed",
               output: decision.decision.output,
               source: completion.source,
-            });
-          }
-          if (completion.kind === "suspend") {
-            await this.suspendRun(
-              completion.code,
-              controllerTurnSource(decision.turn),
-              completion.code,
-            );
-            continue;
-          }
-          if (completion.kind === "failed") {
-            return await this.settle({
-              status: "failed",
-              failure: createRunFailureCause("verification", completion.failure),
-              source: controllerTurnSource(decision.turn),
             });
           }
           if (completion.kind === "cancelled") {
             return await this.settle({ status: "cancelled" });
           }
-          if (completion.kind === "wait") {
-            await this.waitForMandatoryVerification(completion);
-          }
           continue;
         }
-        if (decision.decision.kind === "propose_stop") {
-          this.settleTerminalControllerCall(decision.decision, decision.turn);
-          if (this.hasUnsettledDescendantObligations()) continue;
-          return await this.settle({
-            status: "stopped",
-            reason: decision.decision.reason.trim(),
-            source: controllerTurnSource(decision.turn),
-          });
-        }
 
+        this.flow.enter("admission", {turnId: decision.turn.id, calls: decision.decision.candidates.length});
         const basis: CandidateBasis<TOutput> = {
           turn: decision.turn,
           runRevision: decision.basisRevision,
@@ -1233,6 +1232,8 @@ export class RunExecution<TOutput> {
             disposition: admission?.status === "rejected" ? "rejected" : "queued", rule: "decision_source_order", groupId: null, reason: admission?.status === "rejected" ? admission.code : null });
         });
         for (let index = 0; index < decision.decision.candidates.length; index += 1) {
+          this.flow.enter("dispatch", {turnId: decision.turn.id, candidateIndex: index});
+          await this.awaitSuspension();
           if (this.config.cancellation.context.request !== null) {
             this.settleCandidateRange(
               decision.decision.candidates,
@@ -1344,6 +1345,7 @@ export class RunExecution<TOutput> {
             break;
           }
         }
+        this.flow.enter("join");
         await this.waitForModelCallSettlements();
       }
       return this.terminalResult;
@@ -1360,248 +1362,10 @@ export class RunExecution<TOutput> {
       }
       return await this.settle(failure);
     } finally {
+      this.flow.close(this.terminalResult?.status ?? "failed");
       this.interactions.close();
       this.interruptionCoordinator.dispose();
     }
-  }
-
-  private async initializeVerification(): Promise<void> {
-    const execution = await this.dependencies.verification.executionFactory.create({
-      run: Object.freeze({ id: this.runId }),
-      operationChecks: this.createVerificationOperationCheckResolver(),
-    });
-    if (!execution || typeof execution.admitSpecification !== "function") {
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_execution_unavailable",
-        stage: "admission",
-        message: "Verification execution factory did not create a valid Run-scoped execution.",
-        retryable: false,
-        cause: this.config.verification.profile.ref,
-      }), 0);
-    }
-    this.verificationExecution = execution;
-    const materialized = materializeVerificationProfile({
-      profile: this.config.verification.profile,
-      run: { id: this.runId },
-      createdAt: this.startedAt,
-    });
-    this.verificationRequirements = materialized.requirements;
-    await execution.admitSpecification({
-      specification: materialized.specification,
-      requirements: materialized.requirements,
-      expectedRevision: 0,
-    }, this.invocationInterruption());
-    try {
-      if (this.dependencies.verification.preparation !== null) {
-        await this.dependencies.verification.preparation.prepare({
-          run: Object.freeze({ id: this.runId }),
-          execution,
-          automaticEffectfulChecks: this.createAutomaticEffectfulVerificationCheckPort(),
-        }, this.invocationInterruption());
-      }
-    } catch (error) {
-      if (error instanceof VerificationExecutionError) throw error;
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_preparation_failed",
-        stage: "admission",
-        message: error instanceof Error ? error.message : "Verification preparation failed.",
-        retryable: false,
-        cause: this.config.verification.profile.ref,
-      }), (await execution.readCurrentSnapshot()).ref.revision);
-    }
-    await this.commitVerificationFeedback(null);
-  }
-
-  private async evaluateRunStop(
-    turn: ControllerTurnRef,
-    output: TOutput,
-  ): Promise<
-    | { readonly kind: "succeeded"; readonly source: RunCauseSourceRef }
-    | { readonly kind: "continue" | "cancelled" }
-    | {
-        readonly kind: "suspend";
-        readonly code: "completion_gate_feedback_exhausted";
-      }
-    | {
-        readonly kind: "wait";
-        readonly snapshotRevision: number;
-        readonly pending: readonly {
-          readonly attemptId: string;
-          readonly attemptOrdinal: number;
-          readonly requirementId: string;
-          readonly requirementRevision: string;
-        }[];
-      }
-    | { readonly kind: "failed"; readonly owner: "verification"; readonly failure: VerificationFailure }
-  > {
-    const execution = this.requireVerificationExecution();
-    const runState = this.writer.getSnapshot();
-    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
-    if (runState.status !== "running" && runState.status !== "waiting") {
-      return { kind: "continue" };
-    }
-    if (this.hasUnsettledDescendantObligations()) return { kind: "continue" };
-    const current = await execution.readCurrentSnapshot();
-    const gateSteeringEpoch = this.steeringEpoch;
-    const outputDigest = await createCanonicalSha256Digest(
-      "agent-anything.verification.completion-output.v1",
-      output,
-    );
-    const proposal = Object.freeze({
-      id: this.id("verification_proposal"),
-      revision: outputDigest,
-    });
-    const gateRequestedAt = this.now();
-    const gateConfiguredDeadline = Date.parse(gateRequestedAt) +
-      this.config.verification.completion.maximumDurationMs;
-    const gateDeadlineAt = new Date(Math.min(
-      Date.parse(runState.deadlineAt),
-      gateConfiguredDeadline,
-    )).toISOString();
-    const invocation = Object.freeze({
-      id: this.id("verification_gate"),
-      revision: "1",
-    });
-    const mandatoryStates = current.requirementStates.flatMap((state) => {
-      const requirement = this.verificationRequirements.find((candidate) =>
-        candidate.ref.id === state.requirement.id &&
-        candidate.ref.revision === state.requirement.revision);
-      if (requirement?.necessity !== "mandatory") return [];
-      return [Object.freeze({
-        current: state,
-        disposition: state.status === "satisfied"
-          ? null
-          : requirement.completionHandling[state.status],
-      })];
-    });
-    const gateInput = snapshotCompletionGateInput({
-      invocation,
-      run: runState.run,
-      turn,
-      proposal,
-      proposalOutputDigest: outputDigest,
-      outputContract: this.config.verification.completion.outputContract,
-      specification: current.specification,
-      verificationSnapshot: current.ref,
-      mandatoryStates,
-      pendingWork: mandatoryStates.flatMap((item) =>
-        item.current.pendingAttempts.map((attempt) => Object.freeze({
-          owner: "verification",
-          kind: "check_attempt",
-          id: attempt.id,
-          revision: String(attempt.ordinal),
-        }))),
-      conditions: this.config.verification.completion.conditions,
-      lifecycle: {
-        runRevision: runState.revision,
-        status: runState.status,
-        cancellationRevision: this.config.cancellation.context.request === null ? 0 : 1,
-        deadlineAt: gateDeadlineAt,
-      },
-      policy: this.config.verification.completion.policy,
-      correlation: this.config.verification.profile.ref,
-      requestedAt: gateRequestedAt,
-    });
-
-    let decision: CompletionGateDecision;
-    try {
-      decision = snapshotCompletionGateDecision(await this.invokeCompletionGate(gateInput));
-    } catch (error) {
-      if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
-      return Object.freeze({
-        kind: "failed" as const,
-        owner: "verification" as const,
-        failure: error instanceof VerificationExecutionError
-          ? error.failure
-          : createVerificationFailure({
-              code: "verification_gate_failed",
-              stage: "completion_gate",
-              message: error instanceof Error ? error.message : "Completion Gate evaluation failed.",
-              retryable: false,
-              cause: this.config.verification.completion.policy,
-            }),
-      });
-    }
-    const afterGate = this.writer.getSnapshot();
-    const currentAfterGate = await execution.readCurrentSnapshot();
-    if (currentAfterGate.ref.revision !== current.ref.revision ||
-        decision.invocation.id !== invocation.id ||
-        decision.invocation.revision !== invocation.revision ||
-        decision.verificationSnapshot.runId !== current.ref.runId ||
-        decision.verificationSnapshot.revision !== current.ref.revision) {
-      return { kind: "continue" };
-    }
-    const runBasisCurrent = afterGate.revision === runState.revision &&
-      this.steeringEpoch === gateSteeringEpoch &&
-      this.config.cancellation.context.request === null;
-    const inputRevision = await createCanonicalSha256Digest(
-      "agent-anything.verification.completion-gate-input.v1",
-      gateInput,
-    );
-    const recorded = await execution.recordCompletionGate({
-      record: { ref: invocation, inputRevision, decision },
-      expectedRevision: current.ref.revision,
-    }, this.invocationInterruption());
-    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
-    if (!runBasisCurrent || this.writer.getSnapshot().revision !== runState.revision) {
-      return { kind: "continue" };
-    }
-    await this.commitVerificationFeedback(decision);
-
-    if (decision.status === "completion_eligible") {
-      return this.acceptRunCompletion(proposal);
-    }
-    if (decision.status === "invalid" || decision.status === "failed") {
-      return Object.freeze({ kind: "failed" as const, owner: "verification" as const, failure: decision.failure });
-    }
-    if (decision.disposition === "fail") {
-      return Object.freeze({
-        kind: "failed" as const,
-        owner: "verification" as const,
-        failure: createVerificationFailure({
-          code: "verification_completion_policy_failed",
-          stage: "completion_gate",
-          message: decision.reasons[0].message,
-          retryable: false,
-          cause: this.config.verification.completion.policy,
-        }),
-      });
-    }
-    if (decision.disposition === "wait" && gateInput.pendingWork.length === 0) {
-      return Object.freeze({
-        kind: "failed" as const,
-        owner: "verification" as const,
-        failure: createVerificationFailure({
-          code: "verification_gate_wait_without_pending_work",
-          stage: "completion_gate",
-          message: "Completion Gate requested waiting without exact active pending work.",
-          retryable: false,
-          cause: this.config.verification.completion.policy,
-        }),
-      });
-    }
-    if (decision.disposition === "wait") {
-      return {
-        kind: "wait",
-        snapshotRevision: recorded.current.ref.revision,
-        pending: mandatoryStates.flatMap((item) =>
-          item.current.status === "pending"
-            ? item.current.pendingAttempts.map((attempt) => Object.freeze({
-                attemptId: attempt.id,
-                attemptOrdinal: attempt.ordinal,
-                requirementId: item.current.requirement.id,
-                requirementRevision: item.current.requirement.revision,
-              }))
-            : []),
-      };
-    }
-    const feedbackRounds = this.writer.getSnapshot().verification.feedbackRounds + 1;
-    this.writer.commitState((state) => Object.freeze({
-      verification: Object.freeze({ ...state.verification, feedbackRounds }),
-    }));
-    return feedbackRounds > this.config.limits.completionGate.maxFeedbackRounds
-      ? Object.freeze({ kind: "suspend" as const, code: "completion_gate_feedback_exhausted" as const })
-      : Object.freeze({ kind: "continue" as const });
   }
 
   private commitControllerFeedback(
@@ -1649,9 +1413,24 @@ export class RunExecution<TOutput> {
     return true;
   }
 
+  private processCompletionCandidate(
+    turn: ControllerTurnRef,
+  ): { readonly kind: "completed"; readonly source: RunCauseSourceRef } | { readonly kind: "continue" | "cancelled" } {
+    const step = this.flow.enter("completion", {turnId: turn.id});
+    step.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
+    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
+    const current = this.writer.getSnapshot();
+    step.check("active_state", current.status === "running" || current.status === "waiting" ? "passed" : "not_satisfied", {status: current.status, revision: current.revision});
+    if (current.status !== "running" && current.status !== "waiting") return { kind: "continue" };
+    const outstanding = this.hasUnsettledDescendantObligations();
+    step.check("descendant_obligations", outstanding ? "not_satisfied" : "passed", {pendingDescendants: current.pending.filter(pending => pending.kind === "descendant_run").length});
+    if (outstanding) return { kind: "continue" };
+    return this.acceptRunCompletion({ id: turn.id, revision: String(turn.sequence) });
+  }
+
   private acceptRunCompletion(
     proposal: Readonly<{ readonly id: string; readonly revision: string }>,
-  ): { readonly kind: "succeeded"; readonly source: RunCauseSourceRef } {
+  ): { readonly kind: "completed"; readonly source: RunCauseSourceRef } {
     const state = this.writer.getSnapshot();
     const source: RunCauseSourceRef = Object.freeze({
       owner: "agent-runtime",
@@ -1667,419 +1446,7 @@ export class RunExecution<TOutput> {
       candidateRevision: proposal.revision,
       acceptedAt: this.now(),
     })]));
-    return Object.freeze({ kind: "succeeded" as const, source });
-  }
-
-  private async waitForMandatoryVerification(input: {
-    readonly snapshotRevision: number;
-    readonly pending: readonly {
-      readonly attemptId: string;
-      readonly attemptOrdinal: number;
-      readonly requirementId: string;
-      readonly requirementRevision: string;
-    }[];
-  }): Promise<void> {
-    if (input.pending.length === 0) {
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_gate_wait_without_pending_work",
-        stage: "completion_gate",
-        message: "Completion Gate waiting requires exact active mandatory work.",
-        retryable: false,
-        cause: this.config.verification.completion.policy,
-      }), input.snapshotRevision);
-    }
-    const pendingSubjects = input.pending.map((item): PendingRunSubject => Object.freeze({
-      kind: "verification_check",
-      attemptId: item.attemptId,
-      attemptOrdinal: item.attemptOrdinal,
-      requirementId: item.requirementId,
-      requirementRevision: item.requirementRevision,
-      branchId: `verification:${item.attemptId}#${item.attemptOrdinal}`,
-      required: true,
-      openedInRunRevision: this.writer.getSnapshot().revision,
-    }));
-    for (const pending of pendingSubjects) this.addPending(pending);
-    this.publishCurrentState();
-
-    const deadlineAt = this.writer.getSnapshot().deadlineAt;
-    const waitController = new AbortController();
-    const runSignal = this.invocationInterruption().signal;
-    const abortForRun = () => waitController.abort();
-    runSignal.addEventListener("abort", abortForRun, { once: true });
-    let deadlineExpired = false;
-    const timeout = setTimeout(() => {
-      deadlineExpired = true;
-      waitController.abort();
-    }, Math.max(1, Date.parse(deadlineAt) - Date.parse(this.now())));
-    try {
-      await this.requireVerificationExecution().waitForCurrentSnapshotChange(
-        input.snapshotRevision,
-        Object.freeze({ signal: waitController.signal, interruption: null }),
-      );
-    } catch (error) {
-      if (!deadlineExpired && this.config.cancellation.context.request === null) throw error;
-    } finally {
-      clearTimeout(timeout);
-      runSignal.removeEventListener("abort", abortForRun);
-      const transition = this.config.cancellation.context.request !== null
-        ? "cancelled" as const
-        : deadlineExpired
-          ? "expired" as const
-          : "resolved" as const;
-      for (const pending of pendingSubjects) this.removePending(pending, transition, null);
-      this.publishCurrentState();
-    }
-  }
-
-  private async invokeCompletionGate(input: CompletionGateInput): Promise<CompletionGateDecision> {
-    const delay = Math.max(
-      1,
-      Date.parse(input.lifecycle.deadlineAt!) - Date.parse(input.requestedAt),
-    );
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const interruption = this.invocationInterruption();
-    let removeAbortListener: (() => void) | undefined;
-    const timedOut = new Promise<CompletionGateDecision>((_resolve, reject) => {
-      timeout = setTimeout(() => reject(new VerificationExecutionError(
-        createVerificationFailure({
-          code: "verification_gate_timed_out",
-          stage: "completion_gate",
-          message: "Completion Gate evaluation exceeded its deadline.",
-          retryable: true,
-          cause: this.config.verification.completion.policy,
-        }),
-        input.verificationSnapshot.revision,
-      )), delay);
-    });
-    const cancelled = new Promise<CompletionGateDecision>((_resolve, reject) => {
-      const onAbort = () => reject(new VerificationExecutionError(
-        createVerificationFailure({
-          code: "verification_gate_cancelled",
-          stage: "completion_gate",
-          message: "Completion Gate evaluation was cancelled.",
-          retryable: false,
-          cause: this.config.verification.completion.policy,
-        }),
-        input.verificationSnapshot.revision,
-      ));
-      if (interruption.signal.aborted) onAbort();
-      else {
-        interruption.signal.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => interruption.signal.removeEventListener("abort", onAbort);
-      }
-    });
-    try {
-      return await Promise.race([
-        this.dependencies.verification.completionGate.evaluate(
-          input,
-          interruption,
-        ),
-        timedOut,
-        cancelled,
-      ]);
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout);
-      removeAbortListener?.();
-    }
-  }
-
-  private async commitVerificationFeedback(
-    decision: CompletionGateDecision | null,
-  ): Promise<void> {
-    const runState = this.writer.getSnapshot();
-    if (this.config.cancellation.context.request !== null ||
-        this.terminalResult !== null ||
-        (runState.status !== "running" && runState.status !== "waiting")) {
-      return;
-    }
-    const execution = this.requireVerificationExecution();
-    await this.emitVerificationRecords(execution);
-    const contextProjection = await execution.projectContext({
-      maxPayloadBytes: this.dependencies.contextProjection.maxContributionPayloadBytes,
-    });
-    const projection = await execution.projectRunner({
-      contextContribution: contextProjection.contribution?.ref ?? null,
-    });
-    const hostProjection = await execution.projectHost();
-    if (projection.snapshot.runId !== this.runId ||
-        contextProjection.snapshot.runId !== this.runId ||
-        contextProjection.snapshot.revision !== projection.snapshot.revision ||
-        !sameOptionalRevisionRef(
-          projection.contextContribution,
-          contextProjection.contribution?.ref ?? null,
-        )) {
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_projection_mismatch",
-        stage: "projection",
-        message: "Verification projections do not describe the current Run snapshot.",
-        retryable: false,
-        cause: null,
-      }), projection.snapshot.revision);
-    }
-    if (hostProjection.snapshot.runId !== this.runId ||
-        hostProjection.snapshot.revision !== projection.snapshot.revision) {
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_host_projection_mismatch",
-        stage: "projection",
-        message: "Verification Host projection does not match the current Run snapshot.",
-        retryable: false,
-        cause: null,
-      }), projection.snapshot.revision);
-    }
-    this.verificationHostProjection = hostProjection;
-    this.writer.commit({
-      kind: "verification_feedback",
-      verification: projection,
-    }, (current) => Object.freeze({
-      status: decision?.disposition === "wait"
-        ? "waiting" as const
-        : current.status === "waiting"
-          ? "running" as const
-          : current.status,
-      verification: Object.freeze({
-        snapshot: projection.snapshot,
-        gate: projection.gate?.ref ?? null,
-        feedbackRounds: current.verification.feedbackRounds,
-      }),
-      context: contextProjection.contribution === null
-        ? current.context
-        : this.applyContextContributions(
-            current.context,
-            Object.freeze([contextProjection.contribution]),
-            createVerificationContextAdmissionProfile(),
-            "verification_feedback",
-            projection.gate?.ref.id ?? null,
-          ),
-    }));
-  }
-
-  private async emitVerificationRecords(execution: VerificationExecutionPort): Promise<void> {
-    const history = await execution.readHistory();
-    const snapshotRevision = (await execution.readCurrentSnapshot()).ref.revision;
-    for (const item of history) {
-      if (item.kind === "check_attempt") {
-        const key = `check_attempt:${item.record.ref.id}:${item.record.ref.ordinal}`;
-        if (this.emittedVerificationRecordKeys.has(key) || item.record.startedAt === null) continue;
-        this.emittedVerificationRecordKeys.add(key);
-        this.emit("verification.check.started", {
-          snapshotRevision,
-          attemptId: item.record.ref.id,
-          requirementId: item.record.requirement.id,
-          origin: item.record.origin,
-        }, item.record.startedAt);
-      } else if (item.kind === "check_result") {
-        const key = `check_result:${item.record.ref.id}@${item.record.ref.revision}`;
-        if (this.emittedVerificationRecordKeys.has(key)) continue;
-        this.emittedVerificationRecordKeys.add(key);
-        this.emit("verification.check.finished", {
-          snapshotRevision,
-          attemptId: item.record.attempt.id,
-          status: item.record.status,
-          code: item.record.failure?.code ?? null,
-          durationMs: Date.parse(item.record.finishedAt) - Date.parse(item.record.startedAt),
-          coverageRatio: item.record.coverage.ratio,
-        }, item.record.finishedAt);
-      } else if (item.kind === "assessment") {
-        const key = `assessment:${item.record.ref.id}@${item.record.ref.revision}`;
-        if (this.emittedVerificationRecordKeys.has(key)) continue;
-        this.emittedVerificationRecordKeys.add(key);
-        this.emit("verification.assessment.committed", {
-          snapshotRevision,
-          requirementId: item.record.requirement.id,
-          assessmentId: item.record.ref.id,
-          verdict: item.record.verdict,
-        }, item.record.assessedAt);
-      } else if (item.kind === "completion_gate") {
-        const key = `completion_gate:${item.record.ref.id}@${item.record.ref.revision}`;
-        if (this.emittedVerificationRecordKeys.has(key)) continue;
-        this.emittedVerificationRecordKeys.add(key);
-        this.emit("verification.gate.evaluated", {
-          snapshotRevision,
-          gateId: item.record.ref.id,
-          status: item.record.decision.status,
-          disposition: item.record.decision.disposition,
-          reasonCodes: Object.freeze(item.record.decision.reasons.map((reason) => reason.code)),
-        }, item.record.decision.decidedAt);
-      }
-    }
-  }
-
-  private requireVerificationExecution(): VerificationExecutionPort {
-    if (this.verificationExecution === null) {
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_execution_unavailable",
-        stage: "admission",
-        message: "Run-scoped Verification execution is not initialized.",
-        retryable: false,
-        cause: this.config.verification.profile.ref,
-      }), 0);
-    }
-    return this.verificationExecution;
-  }
-
-  private createVerificationOperationCheckResolver(): VerificationOperationCheckResolverPort {
-    return Object.freeze({
-      resolve: (definition: import("@agent-anything/verification/execution").CheckDefinition) => definition.effect.kind === "effectful"
-        ? Object.freeze({
-            requestSettlement: (
-              input: VerificationOperationCheckInput,
-              interruption: InvocationInterruptionContext,
-            ) => this.executeVerificationOperationCheck(input, interruption),
-          })
-        : null,
-    });
-  }
-
-  private createAutomaticEffectfulVerificationCheckPort(): RunnerAutomaticEffectfulVerificationCheckPort {
-    return Object.freeze({
-      execute: async (
-        request: RunnerAutomaticEffectfulVerificationCheckRequest,
-        interruption: InvocationInterruptionContext,
-      ) => {
-        const execution = this.requireVerificationExecution();
-        const current = await execution.readCurrentSnapshot();
-        const invocationId = this.id("operation_invocation");
-        const action = this.materializeAutomaticVerificationRunAction(
-          request.definition.id,
-          invocationId,
-        );
-        const result = await execution.executeCheck({
-          ...request,
-          origin: "trusted_automatic",
-          runAction: action.ref,
-          expectedRevision: current.ref.revision,
-        }, interruption);
-        await this.processVerificationCheckResult(request, result, interruption);
-        return result;
-      },
-    });
-  }
-
-  private async executeVerificationOperationCheck(
-    input: VerificationOperationCheckInput,
-    interruption: InvocationInterruptionContext,
-  ): Promise<VerificationLowerCheckSettlement> {
-    if (input.definition.effect.kind !== "effectful") {
-      return this.rejectVerificationOperationCheck(
-        "verification_operation_check_binding_invalid",
-        "An operation-backed Verification Check requires an effectful definition.",
-      );
-    }
-    if (interruption.signal.aborted || this.config.cancellation.context.request !== null) {
-      return this.rejectVerificationOperationCheck(
-        "verification_operation_check_cancelled",
-        "Verification operation Check was cancelled before dispatch.",
-      );
-    }
-    if (input.attempt.runAction === null) {
-      return this.rejectVerificationOperationCheck(
-        "verification_effectful_check_action_required",
-        "An effectful Verification Check requires a Runner-materialized RunAction.",
-      );
-    }
-    const action = this.findRunAction(input.attempt.runAction);
-    if (action === null) {
-      return this.rejectVerificationOperationCheck(
-        "verification_run_action_missing",
-        "Verification Check references a RunAction that is not committed in this Run.",
-      );
-    }
-    if (action.subject.kind !== "operation" || action.subject.invocationId === null) {
-      return this.rejectVerificationOperationCheck(
-        "verification_run_action_subject_invalid",
-        "An operation-backed Verification Check requires an Operation RunAction.",
-      );
-    }
-    const invocationId = action.subject.invocationId;
-    const automatic = action.provenance.kind === "automatic";
-
-    const result = await this.executeOperation({
-      action,
-      operation: input.definition.effect.operationBinding.operation,
-      request: Object.freeze({
-        requirement: input.requirement.ref,
-        subject: input.subject.ref,
-        checkDefinition: input.definition.ref,
-        attempt: input.attempt.ref,
-        configuration: input.attempt.configuration,
-      }),
-      requestOrigin: automatic ? "automatic_stage" : "controller_protocol",
-      invocationId,
-      parentInvocation: null,
-      basis: Object.freeze({
-        owner: "verification",
-        kind: "check_attempt",
-        id: input.attempt.ref.id,
-        revision: String(input.attempt.ref.ordinal),
-      }),
-    });
-    if (result === null) {
-      return this.rejectVerificationOperationCheck(
-        "verification_operation_check_unavailable",
-        "Verification Check Operation could not be dispatched.",
-      );
-    }
-    this.commitOperationObservation(action, Object.freeze({ result, toolResult: null }));
-    const settlementRef = result.lowerRefs.find((reference) =>
-      reference.owner === "canonical-action" && reference.kind === "action_settlement");
-    const actionId = typeof result.metadata.actionId === "string"
-      ? result.metadata.actionId
-      : null;
-    const effectCertainty = isActionEffectCertainty(result.metadata.effectCertainty)
-      ? result.metadata.effectCertainty
-      : result.status === "succeeded"
-        ? "confirmed"
-        : result.status === "partial"
-          ? "partial"
-          : result.status === "unknown_effect"
-            ? "unknown"
-            : "none";
-    return Object.freeze({
-      operationInvocation: result.ref.invocation,
-      operationResult: result,
-      actionSettlement: settlementRef === undefined || actionId === null
-        ? null
-        : Object.freeze({ action: Object.freeze({ id: actionId }), id: settlementRef.id }),
-      effectCertainty,
-      costUnits: typeof result.metadata.costUnits === "number" &&
-          Number.isFinite(result.metadata.costUnits) && result.metadata.costUnits >= 0
-        ? result.metadata.costUnits
-        : null,
-    });
-  }
-
-  private materializeAutomaticVerificationRunAction(
-    checkAttemptId: string,
-    invocationId: string,
-  ): RuntimeRunAction {
-    const state = this.writer.getSnapshot();
-    const sequence = state.counters.runActions + 1;
-    const action: RuntimeRunAction = Object.freeze({
-      ref: Object.freeze({
-        run: state.run,
-        id: this.id("run_action", sequence),
-        sequence,
-      }),
-      provenance: Object.freeze({
-        kind: "automatic" as const,
-        trigger: Object.freeze({ owner: "verification", operationId: checkAttemptId }),
-      }),
-      subject: Object.freeze({
-        kind: "operation" as const,
-        invocationId,
-        requestOrigin: "automatic_stage" as const,
-      }),
-      basis: Object.freeze({
-        runRevision: state.revision,
-        activeAgentId: state.activeAgent.id,
-        controllerProjectionRevision: null,
-      }),
-      materializedAt: this.now(),
-    });
-    this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
-      counters: Object.freeze({ ...current.counters, runActions: sequence }),
-    }));
-    return action;
+    return Object.freeze({ kind: "completed" as const, source });
   }
 
   private findRunAction(ref: RunActionRef): RuntimeRunAction | null {
@@ -2168,7 +1535,11 @@ export class RunExecution<TOutput> {
     this.writer.commit({
       kind: "model_call_settlement",
       result,
-    });
+    }, current => ({ status: this.statusAfterPendingChange(current, current.pending, action.ref.id) }));
+    const flow = this.actionFlows.get(action.ref.id);
+    flow?.advance("settlement", {settlement: result.settlement, callId: call.modelCallRef.id}, [{owner:"runtime",kind:"call",id:call.modelCallRef.id,revision:null}]).check("single_settlement", "passed");
+    flow?.close(result.settlement === "cancelled" ? "cancelled" : result.settlement === "failed" ? "failed" : "returned");
+    this.actionFlows.delete(action.ref.id);
   }
 
   private settleUnprocessedModelCalls(
@@ -2209,28 +1580,6 @@ export class RunExecution<TOutput> {
     this.commitLocalModelCallResult(call, settlement, {
       status: settlement,
       code,
-    }, Object.freeze([Object.freeze({
-      owner: "agent-runtime",
-      kind: "controller_turn",
-      id: turn.id,
-      revision: String(turn.sequence),
-    })]));
-  }
-
-  private settleTerminalControllerCall(
-    decision: Extract<ControllerDecision<TOutput>, { readonly kind: "propose_stop" }>,
-    turn: ControllerTurnRef,
-  ): void {
-    const calls = decision.modelItems.flatMap((item) =>
-      item.kind === "model_tool_call" ? [item.call] : []
-    );
-    if (calls.length === 0) return;
-    if (calls.length !== 1 || this.hasModelCallSettlement(calls[0]!)) {
-      throw new TypeError("A terminal Controller stop must contain at most one unsettled model call.");
-    }
-    this.commitLocalModelCallResult(calls[0]!, "succeeded", {
-      status: "succeeded",
-      control: "stop",
     }, Object.freeze([Object.freeze({
       owner: "agent-runtime",
       kind: "controller_turn",
@@ -2294,22 +1643,6 @@ export class RunExecution<TOutput> {
     return null;
   }
 
-  private async rejectVerificationOperationCheck(
-    code: `verification_${string}`,
-    message: string,
-  ): Promise<never> {
-    const revision = this.verificationExecution === null
-      ? 0
-      : (await this.verificationExecution.readCurrentSnapshot()).ref.revision;
-    throw new VerificationExecutionError(createVerificationFailure({
-      code,
-      stage: "check",
-      message,
-      retryable: false,
-      cause: null,
-    }), revision);
-  }
-
   private async nextDecision(): Promise<{
     readonly decision: ControllerDecision<TOutput>;
     readonly turn: ControllerTurnRef;
@@ -2317,6 +1650,9 @@ export class RunExecution<TOutput> {
     readonly agent: Agent<TOutput>;
     readonly prepared: PreparedControllerOperation<TOutput>;
   } | null> {
+    const flow = new ExecutionFlowPath(CONTROLLER_EXECUTION_FLOW, this.flow.context, this.runId, []);
+    let flowDisposition: "returned" | "failed" | "interrupted" = "interrupted";
+    try {
     this.synchronizeCurrentContext();
     const state = this.writer.getSnapshot();
     const iteration = state.counters.controllerTurns + 1;
@@ -2326,12 +1662,14 @@ export class RunExecution<TOutput> {
       sequence: iteration,
     });
     let resolvedExposure;
+    const exposureStep = flow.advance("exposure", {turnId: turn.id, revision: state.revision});
     try {
       resolvedExposure = await this.toolExposure.resolve(turn.id);
     } catch (error) {
       if (error instanceof ToolExposureBasisChangedError) return null;
       throw error;
     }
+    exposureStep.check("basis_revision", resolvedExposure.runRevision === state.revision ? "passed" : "not_satisfied");
     if (resolvedExposure.runRevision !== state.revision) return null;
     const exposure = resolvedExposure.proof;
     if (this.dependencies.executionObserver) publishRunExecutionObservation(this.dependencies.executionObserver, {
@@ -2340,6 +1678,7 @@ export class RunExecution<TOutput> {
       selected: Object.freeze(this.config.tools.tools.filter((tool) => tool.origins.includes("model")).map((tool) => tool.registration.descriptor.ref)),
     });
     let prepared: PreparedControllerOperation<TOutput>;
+    const contextStep = flow.advance("context");
     try {
       prepared = prepareControllerOperation({
         agent: this.activeAgent,
@@ -2357,6 +1696,7 @@ export class RunExecution<TOutput> {
       await this.persistSafeContextManifest(prepared.manifest, "projected", null);
       publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_projection", runId: this.runId, occurredAt: prepared.manifest.createdAt, manifest: prepared.manifest, projection: prepared.context });
       this.emitContextProjectionCompleted(prepared.manifest, "projected", null);
+      contextStep.check("projection_contract", "passed", {manifestId: prepared.manifest.id, contextId: prepared.context.id});
     } catch (error) {
       if (error instanceof ContextProjectionPreparationError) {
         publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_projection", runId: this.runId, occurredAt: error.manifest.createdAt, manifest: error.manifest, projection: null });
@@ -2373,6 +1713,9 @@ export class RunExecution<TOutput> {
       }
       throw error;
     }
+    this.decisionBasis.capture(turn.id, state.revision);
+    flow.advance("controller", {turnId: turn.id}, [{owner: "runtime", kind: "turn", id: turn.id, revision: null}]);
+    const retryScope = this.createRetryScope(turn.id, state.revision, flow.callContext);
     this.emit("controller.started", { turnId: turn.id, iteration });
     try {
       const candidate = await this.interruptionCoordinator.execute(
@@ -2382,9 +1725,12 @@ export class RunExecution<TOutput> {
           prepared,
           config: this.config,
           retryEvents: this.retryEvents(),
+          retryWaitControl: retryScope,
+          executionFlow: flow.callContext,
         }),
         state.deadlineAt,
       );
+      const validityStep = flow.advance("validity");
       let currentExposure;
       try {
         currentExposure = await this.toolExposure.resolve(turn.id);
@@ -2393,11 +1739,12 @@ export class RunExecution<TOutput> {
         currentExposure = null;
       }
       const stale = currentExposure === null ||
-        this.writer.getSnapshot().revision !== state.revision ||
+        this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== state.revision ||
         currentExposure.exposure.basis.revision !== resolvedExposure.exposure.basis.revision ||
         this.interactionSettlements.length > 0 ||
         this.steeringQueue.length > 0 ||
         this.config.cancellation.context.request !== null;
+      validityStep.check("freshness", stale ? "not_satisfied" : "passed", {capturedRevision: state.revision, currentRevision: this.writer.getSnapshot().revision, relevantRevision: this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision)});
       if (stale) {
         this.writer.commit({
           kind: "controller_turn",
@@ -2424,6 +1771,8 @@ export class RunExecution<TOutput> {
         return null;
       }
       const decision = validateControllerDecision(candidate, prepared.input);
+      const decisionStep = flow.advance("decision", {kind: decision.kind});
+      decisionStep.check("decision_contract", "passed");
       this.writer.commit({
         kind: "controller_turn",
         turn,
@@ -2446,6 +1795,7 @@ export class RunExecution<TOutput> {
         code: null,
         decisionKind: decision.kind,
       });
+      flowDisposition = "returned";
       return Object.freeze({
         decision,
         turn,
@@ -2454,6 +1804,11 @@ export class RunExecution<TOutput> {
         prepared,
       });
     } catch (error) {
+      if (error instanceof RetryInvocationInvalidatedError) {
+        this.writer.commit({kind: "controller_turn", turn, status: "interrupted", decisionKind: null, instructionBinding: prepared.input.instructionBinding.ref, toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id), modelItems: Object.freeze([]), failure: null}, current => ({counters: {...current.counters, controllerTurns: iteration}}));
+        this.emit("controller.finished", {turnId: turn.id, iteration, status: "interrupted", code: "retry_invocation_invalidated", decisionKind: null});
+        return null;
+      }
       if (this.config.cancellation.context.request !== null) throw error;
       const terminal = this.failureFromError(error);
       this.writer.commit({
@@ -2479,7 +1834,30 @@ export class RunExecution<TOutput> {
         decisionKind: null,
       });
       throw error;
+    } finally {
+      retryScope.dispose();
+      this.retryScopes.delete(turn.id);
+      this.decisionBasis.release(turn.id);
     }
+    } catch (error) { flowDisposition = "failed"; throw error; }
+    finally { flow.close(flowDisposition); }
+  }
+
+  private createRetryScope(invocationId: string, revision: number, executionFlow = this.flow.context): RunRetryWaitScope {
+    const scope = new RunRetryWaitScope({
+      runId: this.runId, invocationId, branchId: invocationId,
+      executionFlow,
+      deadlineAt: this.writer.getSnapshot().deadlineAt,
+      cancellation: this.config.cancellation.context, now: () => this.now(),
+      snapshot: () => this.writer.getSnapshot(),
+      isCurrent: () => this.decisionBasis.revision(invocationId, this.writer.getSnapshot().revision) === revision &&
+        this.steeringQueue.length === 0 && this.interactionSettlements.length === 0,
+      open: pending => this.addPending(pending),
+      ready: pending => this.writer.commit({ kind: "retry_transition", transition: "ready", pending }),
+      close: (pending, outcome) => this.removePending(pending, outcome === "elapsed" ? "resolved" : "invalidated", pending.waitId),
+    });
+    this.retryScopes.set(invocationId, scope);
+    return scope;
   }
 
   private async settleLimitViolation(
@@ -2828,13 +2206,6 @@ export class RunExecution<TOutput> {
           );
           if (outcome !== null) {
             this.commitOperationObservation(action, outcome);
-            await this.processSettledOperationVerification(
-              action,
-              candidate.operation,
-              candidate.request,
-              "controller_protocol",
-              outcome.result,
-            );
             if (outcome.result.status === "unknown_effect") {
               terminal = {
                 status: "failed",
@@ -2917,11 +2288,17 @@ export class RunExecution<TOutput> {
       materializedAt: this.now(),
     });
     this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
+      status: current.status === "waiting" ? "running" : current.status,
       counters: Object.freeze({
         ...current.counters,
         runActions: sequence,
       }),
     }));
+    const flow = new ExecutionFlowPath(RUN_CALL_EXECUTION_FLOW, this.flow.context, this.runId, [{owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null}]);
+    const admission = basis.admissions.get(candidate);
+    flow.advance("admission", {candidateIndex, kind:candidate.kind, runActionId:action.ref.id}).check("admission", admission?.status === "rejected" ? "not_satisfied" : admission ? "passed" : "not_applicable", {status:admission?.status ?? null});
+    flow.advance("execute", {runActionId:action.ref.id});
+    this.actionFlows.set(action.ref.id, flow);
     publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "scheduling", runId: this.runId, occurredAt: action.materializedAt, call: candidate.modelCallRef, position: candidateIndex, disposition: "dispatched", rule: "candidate_processing_started", groupId: null, reason: null });
     return action;
   }
@@ -2960,6 +2337,7 @@ export class RunExecution<TOutput> {
       materializedAt: this.now(),
     });
     this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
+      status: current.status === "waiting" ? "running" : current.status,
       counters: Object.freeze({ ...current.counters, runActions: sequence }),
     }));
     return action;
@@ -3132,6 +2510,7 @@ export class RunExecution<TOutput> {
     const opened = this.interactions.open({
       requestId,
       protocol: candidate.protocol,
+      executionFlow: this.actionFlows.get(action.ref.id)?.callContext,
       subject: candidate.subject,
       subjectRef: candidate.subjectRef,
       correlation: this.runActionCorrelation(action),
@@ -3231,13 +2610,6 @@ export class RunExecution<TOutput> {
             result,
             toolResult: adaptToolResult(call, result),
           });
-          await this.processSettledOperationVerification(
-            action,
-            call.binding.operation,
-            call.input,
-            call.origin === "model" ? "tool_request" : "trusted_workflow",
-            result,
-          );
           if (result.status === "unknown_effect") {
             return Object.freeze({
               dispatchStop: null,
@@ -3273,6 +2645,7 @@ export class RunExecution<TOutput> {
     const opened = this.interactions.open({
       requestId,
       protocol: call.binding.protocol,
+      executionFlow: this.actionFlows.get(action.ref.id)?.callContext,
       subject: call.input,
       subjectRef: Object.freeze({
         owner: call.binding.protocol.owner,
@@ -3344,105 +2717,6 @@ export class RunExecution<TOutput> {
     return Object.freeze({ result: executed, toolResult: null });
   }
 
-  private async processSettledOperationVerification(
-    action: RuntimeRunAction,
-    operation: OperationRevisionRef,
-    request: unknown,
-    requestOrigin: OperationRequestOrigin,
-    result: OperationResult,
-  ): Promise<void> {
-    const processor = this.dependencies.verification.settledOperationResults;
-    if (processor === null) return;
-    try {
-      const changed = await processor.process({
-        run: Object.freeze({ id: this.runId }),
-        execution: this.requireVerificationExecution(),
-        runAction: action.ref,
-        operation,
-        request,
-        requestOrigin,
-        settlement: this.verificationLowerSettlement(result),
-      }, this.invocationInterruption());
-      if (!changed) return;
-    } catch (error) {
-      if (error instanceof VerificationExecutionError) throw error;
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_settled_operation_processing_failed",
-        stage: "check",
-        message: error instanceof Error
-          ? error.message
-          : "Settled Operation Verification processing failed.",
-        retryable: false,
-        cause: null,
-      }), (await this.requireVerificationExecution().readCurrentSnapshot()).ref.revision);
-    }
-    await this.commitVerificationFeedback(null);
-  }
-
-  private verificationLowerSettlement(
-    result: OperationResult,
-  ): VerificationLowerCheckSettlement {
-    const settlementRef = result.lowerRefs.find((reference) =>
-      reference.owner === "canonical-action" &&
-      reference.kind === "action_settlement");
-    const actionId = typeof result.metadata.actionId === "string"
-      ? result.metadata.actionId
-      : null;
-    const effectCertainty = isActionEffectCertainty(result.metadata.effectCertainty)
-      ? result.metadata.effectCertainty
-      : result.status === "succeeded"
-        ? "confirmed"
-        : result.status === "partial"
-          ? "partial"
-          : result.status === "unknown_effect"
-            ? "unknown"
-            : "none";
-    return Object.freeze({
-      operationInvocation: result.ref.invocation,
-      operationResult: result,
-      actionSettlement: settlementRef === undefined || actionId === null
-        ? null
-        : Object.freeze({
-            action: Object.freeze({ id: actionId }),
-            id: settlementRef.id,
-          }),
-      effectCertainty,
-      costUnits: typeof result.metadata.costUnits === "number" &&
-          Number.isFinite(result.metadata.costUnits) &&
-          result.metadata.costUnits >= 0
-        ? result.metadata.costUnits
-        : null,
-    });
-  }
-
-  private async processVerificationCheckResult(
-    request: RunnerVerificationCheckRequest,
-    result: CheckResult,
-    interruption: InvocationInterruptionContext,
-  ): Promise<void> {
-    const processor = this.dependencies.verification.checkResults;
-    if (processor === null) return;
-    try {
-      await processor.process({
-        run: Object.freeze({ id: this.runId }),
-        execution: this.requireVerificationExecution(),
-        request,
-        result,
-      }, interruption);
-    } catch (error) {
-      if (error instanceof VerificationExecutionError) throw error;
-      throw new VerificationExecutionError(createVerificationFailure({
-        code: "verification_check_result_processing_failed",
-        stage: "assessment",
-        message: error instanceof Error
-          ? error.message
-          : "Verification Check Result processing failed.",
-        retryable: false,
-        cause: null,
-      }), (await this.requireVerificationExecution().readCurrentSnapshot()).ref.revision);
-    }
-  }
-
   private async executeOperation(input: {
     readonly action: RuntimeRunAction;
     readonly operation: OperationRevisionRef;
@@ -3452,11 +2726,18 @@ export class RunExecution<TOutput> {
     readonly parentInvocation: OperationInvocationRef | null;
     readonly basis: unknown;
     readonly allowedBindings?: readonly ResolvedOperationBinding["kind"][];
+    readonly executionFlow?: ExecutionFlowContext;
   }): Promise<OperationResult | null> {
+    const flow = new ExecutionFlowPath(OPERATION_EXECUTION_FLOW, input.executionFlow ?? (input.parentInvocation ? this.operationFlows.get(input.parentInvocation.id)?.callContext : undefined) ?? this.actionFlows.get(input.action.ref.id)?.callContext ?? this.flow.context, this.runId, [{owner:"operations",kind:"operation",id:input.invocationId,revision:null}]);
+    this.operationFlows.set(input.invocationId, flow);
+    let flowDisposition: "returned" | "failed" = "failed";
+    try {
+    const registrationStep = flow.advance("registration", {invocationId:input.invocationId, origin:input.requestOrigin});
     const registration = findRegisteredOperation(
       this.dependencies.operations.catalog,
       input.operation,
     );
+    registrationStep.check("registration", registration && !registration.retirement ? "passed" : "not_satisfied");
     if (registration === undefined) {
       this.commitRejectedOperation(
         input.action,
@@ -3475,6 +2756,7 @@ export class RunExecution<TOutput> {
       );
       return null;
     }
+    registrationStep.check("origin", registration.allowedRequestOrigins.includes(input.requestOrigin) ? "passed" : "not_satisfied");
     if (!registration.allowedRequestOrigins.includes(input.requestOrigin)) {
       this.commitRejectedOperation(
         input.action,
@@ -3494,6 +2776,7 @@ export class RunExecution<TOutput> {
       parentInvocation: input.parentInvocation,
       interruption: this.invocationInterruption(),
     });
+    const bindingStep = flow.advance("binding");
     const resolution = await this.dependencies.operations.bindings.resolve({
       operation: registration,
       context,
@@ -3514,6 +2797,7 @@ export class RunExecution<TOutput> {
       return result;
     }
     const binding = resolution.binding;
+    bindingStep.check("binding", bindingMatchesResolution(registration, context, binding) ? "passed" : "not_satisfied", {kind:binding.kind});
     if (input.allowedBindings !== undefined && !input.allowedBindings.includes(binding.kind)) {
       return this.operationFailureResult(registration, invocation, "invalid", "operation-composition",
         "composite_child_binding_not_allowed", this.now(), this.now());
@@ -3545,6 +2829,7 @@ export class RunExecution<TOutput> {
       parentRunActionId: input.action.ref.id,
     }, startedAt);
     let result: OperationResult;
+    flow.advance("execute", {bindingKind:binding.kind, invocationId:invocation.id});
     try {
       const execute = () => this.executeResolvedBinding(
         registration,
@@ -3581,7 +2866,10 @@ export class RunExecution<TOutput> {
       resultId: result.ref.id,
       lowerResultRefs: Object.freeze(result.lowerRefs.map((reference) => reference.id)),
     }, result.finishedAt);
+    flow.advance("result", {status:result.status, resultId:result.ref.id, code:result.failure?.code ?? null});
+    flowDisposition = result.status === "failed" ? "failed" : "returned";
     return result;
+    } finally { flow.close(flowDisposition); this.operationFlows.delete(input.invocationId); }
   }
 
   private async executeResolvedBinding(
@@ -3661,6 +2949,7 @@ export class RunExecution<TOutput> {
     }
     const dispatchSteeringEpoch = this.steeringEpoch;
     const outcome = await this.actionExecution.execute({
+      executionFlow: this.operationFlows.get(context.invocation.id)?.callContext ?? this.actionFlows.get(action.ref.id)?.callContext,
       action: Object.freeze({ id: this.id("action") }),
       parentRunAction: action.ref,
       runId: this.runId,
@@ -3745,6 +3034,7 @@ export class RunExecution<TOutput> {
         resolved.definition,
         {
           ...resolved.execution,
+          executionFlow: {...this.operationFlows.get(context.invocation.id)?.callContext,runId:this.runId},
           now: this.dependencies.now,
           observer: (definition, snapshot) => {
             try { void Promise.resolve(resolved.execution.observer?.(definition, snapshot)).catch(() => {}); } catch {}
@@ -3777,6 +3067,7 @@ export class RunExecution<TOutput> {
                 parentInvocation: binding.invocation,
                 basis: child,
                 allowedBindings: child.node.allowedBindings,
+                executionFlow: child.executionFlow,
               });
               if (result === null) {
                 const observation = this.findRunActionObservation(childAction.ref);
@@ -3787,8 +3078,6 @@ export class RunExecution<TOutput> {
                     retryable: false, metadata: Object.freeze({ nodeId: child.node.id }) }) });
               }
               this.commitOperationObservation(childAction, { result, toolResult: null });
-              await this.processSettledOperationVerification(childAction, child.node.operation,
-                child.request, "trusted_workflow", result);
               return Object.freeze({ runAction: childAction.ref, result });
             },
           },
@@ -4425,6 +3714,7 @@ export class RunExecution<TOutput> {
     const relationId = this.id("descendant_relation");
 
     const admission = this.admitDescendantRun({
+      executionFlow: {...this.actionFlows.get(action.ref.id)?.callContext, relationship:"spawn"},
       relationId,
       relationKind: request.continuation !== null ? "continuation" : "delegation",
       parentRunAction: action.ref,
@@ -4554,6 +3844,7 @@ export class RunExecution<TOutput> {
       request,
       childRunId: child.runId,
       handle: child,
+      getTerminalFlowOccurrence: started.getTerminalFlowOccurrence,
       action,
       composition,
       pending,
@@ -4638,10 +3929,24 @@ export class RunExecution<TOutput> {
     result: RunResult,
     dispatch: DescendantDispatchProvenance,
   ): Promise<void> {
+    const flow = new ExecutionFlowPath(DESCENDANT_TRANSFER_EXECUTION_FLOW, {observer:this.flow.invocation.context.observer}, this.runId, [
+      {owner:"runtime",kind:"run",id:managed.childRunId,runId:managed.childRunId,revision:null},
+      {owner:"runtime",kind:"action",id:managed.action.ref.id,revision:null},
+    ]);
+    const received = flow.advance("receive", {childRunId:managed.childRunId,childStatus:result.status,relationId:managed.relationId});
+    const childTerminal = managed.getTerminalFlowOccurrence();
+    if (childTerminal !== null) {
+      flow.link(childTerminal, received.ref, "join", null, {
+        owner: "runtime", kind: "descendant_relation", id: managed.relationId, revision: null,
+      });
+    }
+    try {
     let resourceSettlement: RunTreeResourceSettlement;
     let delegationResult: DelegationResult;
     try {
+      flow.advance("account");
       resourceSettlement = await managed.resourceSettlement;
+      flow.advance("project");
       const narrative = managed.composition.narrativeProjection.project({
         request: managed.request,
         childResult: result,
@@ -4665,11 +3970,15 @@ export class RunExecution<TOutput> {
         createdAt: this.now(),
       });
       publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "descendant_result", runId: this.runId, occurredAt: delegationResult.createdAt, parentRunActionId: managed.action.ref.id, raw: result, projected: delegationResult });
+      flow.current?.check("result_projection","passed",{resultId:delegationResult.ref.id});
     } catch {
+      if (flow.current) flow.current.end("failed");
+      flow.close("failed");
       this.failManagedDescendant(managed, "delegation_result_invalid");
       return;
     }
 
+    flow.advance("retain", {}, [{owner:"agent-runtime",kind:"contribution",id:delegationResult.ref.id,revision:delegationResult.ref.revision}]);
     this.settledDelegations.set(delegationResult.ref.id, Object.freeze({
       result: delegationResult,
     }));
@@ -4690,6 +3999,7 @@ export class RunExecution<TOutput> {
       continuation: continuation?.ref ?? null,
       resourceSettlement,
     });
+    flow.advance("deliver", {initialDelivery:managed.initialBoundaryKind === "pending"});
     if (managed.initialBoundaryKind === "pending") {
       managed.initialBoundaryKind = "terminal";
       managed.resolveInitialBoundary(outcome);
@@ -4700,6 +4010,9 @@ export class RunExecution<TOutput> {
       }
     }
     this.cleanupManagedDescendant(managed, "resolved", delegationResult.ref.id);
+    flow.advance("settle", {resultId:delegationResult.ref.id});
+    flow.close("returned");
+    } catch (error) {flow.close("failed");throw error;}
   }
 
   private failManagedDescendant(
@@ -4787,7 +4100,6 @@ export class RunExecution<TOutput> {
       ).length,
       evidenceCount: result.evidence.totalCount,
       artifactCount: result.artifacts.totalCount,
-      verificationStatus: result.verification.status,
       effectStatus: result.effects.status,
       uncertaintyCount: result.uncertainty.length,
       controllerTurns: result.usage.controllerTurns.status === "measured"
@@ -5255,6 +4567,9 @@ export class RunExecution<TOutput> {
       id: this.id("context_contribution"),
       observation,
     });
+    this.actionFlows.get(action.ref.id)?.advance("observation", {kind: payload.kind, owner}, [
+      {owner, kind: "contribution", id: observation.id, revision: "1"},
+    ]);
     this.writer.commit({ kind: "observation", observation }, (current) => Object.freeze({
       context: this.applyContextContributions(
         current.context,
@@ -5379,11 +4694,11 @@ export class RunExecution<TOutput> {
     return next;
   }
 
-  private openPendingInteraction(pending: PendingInteractionRef): void {
+  private openPendingInteraction(pending: PendingInteractionRef, parentRunAction: RunActionRef | null): void {
     const value: PendingRunSubject = Object.freeze({
       kind: "interaction",
       interaction: pending,
-      branchId: pending.request.id,
+      branchId: parentRunAction?.id ?? pending.request.id,
       required: pending.blockingScope !== "none",
       openedInRunRevision: this.writer.getSnapshot().revision,
     });
@@ -5396,7 +4711,7 @@ export class RunExecution<TOutput> {
       const nextPending = Object.freeze([...current.pending, value]);
       return Object.freeze({
         pending: nextPending,
-        status: deriveActiveStatus(current.status, nextPending),
+        status: this.statusAfterPendingChange(current, nextPending),
       });
     });
     this.emit("interaction.opened", {
@@ -5438,7 +4753,7 @@ export class RunExecution<TOutput> {
       const nextPending = Object.freeze(snapshot.pending.filter((candidate) => candidate !== current));
       return Object.freeze({
         pending: nextPending,
-        status: deriveActiveStatus(snapshot.status, nextPending),
+        status: this.statusAfterPendingChange(snapshot, nextPending),
       });
     });
     this.emit("interaction.settled", {
@@ -5573,7 +4888,7 @@ export class RunExecution<TOutput> {
       recordRef: null,
     }, (current) => {
       const next = Object.freeze([...current.pending, pending]);
-      return Object.freeze({ pending: next, status: deriveActiveStatus(current.status, next) });
+      return Object.freeze({ pending: next, status: this.statusAfterPendingChange(current, next) });
     });
   }
 
@@ -5591,8 +4906,27 @@ export class RunExecution<TOutput> {
       recordRef,
     }, (state) => {
       const next = Object.freeze(state.pending.filter((candidate) => candidate !== pending));
-      return Object.freeze({ pending: next, status: deriveActiveStatus(state.status, next) });
+      return Object.freeze({ pending: next, status: this.statusAfterPendingChange(state, next) });
     });
+  }
+
+  private statusAfterPendingChange(state: RunState<TOutput>, pending: readonly PendingRunSubject[], settledAction?: string): RunState["status"] {
+    const blocked = new Set(pending.filter(item => item.required).map(item => item.branchId));
+    const settled = new Set(state.items.flatMap(item => item.payload.kind === "observation"
+      ? [item.payload.observation.runAction.id] : []));
+    if (settledAction !== undefined) settled.add(settledAction);
+    const completedCalls = new Set(state.items.flatMap(item => item.payload.kind === "model_call_settlement"
+      ? [modelCallRefKey(item.payload.result.modelCallRef)] : []));
+    const progressable = state.items.flatMap(item => {
+      if (item.payload.kind !== "run_action") return [];
+      const action = item.payload.action;
+      if (settled.has(action.ref.id) || blocked.has(action.ref.id)) return [];
+      if (action.provenance.kind === "controller" && completedCalls.has(modelCallRefKey(action.provenance.modelCallRef))) return [];
+      return [action.ref.id];
+    });
+    for (const [id, scope] of this.retryScopes) if (!scope.isWaiting) progressable.push(id);
+    const runBlocked = pending.some(item => item.kind === "interaction" && item.interaction.blockingScope === "run");
+    return deriveRunStatusAfterPendingChange(state.status, pending, runBlocked ? [] : progressable);
   }
 
   private createActionApprovalPort(): ActionApprovalResolutionPort {
@@ -5657,6 +4991,7 @@ export class RunExecution<TOutput> {
         const opened = this.interactions.open({
           requestId,
           protocol: APPROVAL_INTERACTION_PROTOCOL,
+          executionFlow: input.parentRunAction === null ? undefined : this.actionFlows.get(input.parentRunAction.id)?.callContext,
           subject: Object.freeze({
             requirement: input.assessment.requirement,
             pendingVersion,
@@ -5938,6 +5273,7 @@ export class RunExecution<TOutput> {
   }
 
   private async performSettlement(candidate: TerminalCandidate<TOutput>): Promise<RunResult<TOutput>> {
+    const finalizerStep = this.flow.enter("finalizers", {candidate: candidate.status});
     this.drainSteering(candidate.status === "cancelled" ? "cancelled" : "run_settled");
     this.interactions.close();
     this.drainInteractionSettlements();
@@ -5994,8 +5330,9 @@ export class RunExecution<TOutput> {
           finalizationObservabilityContext(finalization.context),
         ),
       ];
+      finalizerStep.check("required_finalizers", failures.length ? "error" : "passed", {failureCount: failures.length, finalizerCount: this.dependencies.resourceFinalizers?.length ?? 0});
       if (failures.length > 0) {
-        terminal = terminal.status === "succeeded" || terminal.status === "stopped"
+        terminal = terminal.status === "completed"
           ? {
               status: "failed",
               failure: failures[0]!,
@@ -6012,7 +5349,7 @@ export class RunExecution<TOutput> {
 
     if (this.resourceFailure !== null) {
       const resource = this.resourceFailureCandidate(this.resourceFailure);
-      terminal = terminal.status === "succeeded" || terminal.status === "stopped"
+      terminal = terminal.status === "completed"
         ? resource
         : this.appendTerminalFailures(
             terminal,
@@ -6033,7 +5370,7 @@ export class RunExecution<TOutput> {
     });
     if (resultResource.status !== "recorded") {
       const resource = this.resourceFailureCandidate(resultResource);
-      terminal = terminal.status === "succeeded" || terminal.status === "stopped"
+      terminal = terminal.status === "completed"
         ? resource
         : this.appendTerminalFailures(
             terminal,
@@ -6045,19 +5382,21 @@ export class RunExecution<TOutput> {
 
     const completedAt = this.now();
     const cancellationRequest = this.config.cancellation.context.request;
-    if (cancellationRequest !== null && (terminal.status === "succeeded" || terminal.status === "stopped")) {
+    if (cancellationRequest !== null && (terminal.status === "completed")) {
       terminal = { status: "cancelled" };
     }
     this.config.cancellation.close();
     const cause = this.createSettlementCause(terminal, cancellationRequest, completedAt);
-    const settlement: RunSettlement<TOutput> = terminal.status === "succeeded"
+    const terminalStep = this.flow.enter("terminal", {status: terminal.status, causeId: cause.ref.id});
+    terminalStep.check("terminal_barrier", "passed", {alreadyTerminal: this.terminalResult !== null});
+    const settlement: RunSettlement<TOutput> = terminal.status === "completed"
       ? Object.freeze({
-          status: "succeeded" as const,
+          status: "completed" as const,
           completedAt,
           cause: cause.ref,
           output: terminal.output,
         })
-      : terminal.status === "failed" || terminal.status === "stopped"
+      : terminal.status === "failed"
         ? Object.freeze({
             status: terminal.status,
             completedAt,
@@ -6084,7 +5423,6 @@ export class RunExecution<TOutput> {
       completedAt,
       Object.freeze([...current.settlementCauses, cause]),
     ));
-    await this.closeVerification(completedAt);
     await this.transcript.flush();
     const state = this.writer.getSnapshot();
     const base = {
@@ -6123,32 +5461,20 @@ export class RunExecution<TOutput> {
       id: this.id("run_settlement_cause"),
       revision: String(state.revision + 1),
     });
-    const underlyingCandidates = terminal.status === "succeeded" || terminal.status === "stopped"
+    const underlyingCandidates = terminal.status === "completed"
       ? Object.freeze([])
       : terminal.underlying ?? Object.freeze([]);
     const underlying = Object.freeze([...underlyingCandidates].slice(0, 8));
-    const omittedUnderlyingCount = terminal.status === "succeeded" || terminal.status === "stopped"
+    const omittedUnderlyingCount = terminal.status === "completed"
       ? 0
       : (terminal.omittedUnderlyingCount ?? 0) +
         Math.max(0, underlyingCandidates.length - 8);
-    if (terminal.status === "succeeded") {
+    if (terminal.status === "completed") {
       return Object.freeze({
         ref,
         kind: "completion" as const,
         code: "completion_accepted" as const,
         source: terminal.source ?? this.runSource("completion_acceptance", "run_completion_acceptance"),
-        underlying,
-        omittedUnderlyingCount,
-        recordedAt,
-      });
-    }
-    if (terminal.status === "stopped") {
-      return Object.freeze({
-        ref,
-        kind: "stop" as const,
-        code: "stop_accepted" as const,
-        reason: terminal.reason,
-        source: terminal.source,
         underlying,
         omittedUnderlyingCount,
         recordedAt,
@@ -6190,7 +5516,7 @@ export class RunExecution<TOutput> {
     relation: RunCausalLink["relation"],
   ): TerminalCandidate<TOutput> {
     if (failures.length === 0) return terminal;
-    if (terminal.status === "succeeded" || terminal.status === "stopped") {
+    if (terminal.status === "completed") {
       return Object.freeze({
         status: "failed" as const,
         failure: failures[0]!,
@@ -6239,12 +5565,6 @@ export class RunExecution<TOutput> {
   }
 
   private failureFromError(error: unknown): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
-    if (error instanceof VerificationExecutionError) {
-      return {
-        status: "failed",
-        failure: createRunFailureCause("verification", error.failure),
-      };
-    }
     if (error instanceof ContextContractError) {
       return {
         status: "failed",
@@ -6295,20 +5615,6 @@ export class RunExecution<TOutput> {
         error instanceof Error ? { causeName: error.name } : {},
       ),
     };
-  }
-
-  private async closeVerification(closedAt: string): Promise<void> {
-    if (this.verificationExecution === null || this.verificationClosed) return;
-    this.verificationClosed = true;
-    try {
-      const current = await this.verificationExecution.readCurrentSnapshot();
-      await this.verificationExecution.closeCurrentState({
-        expectedRevision: current.ref.revision,
-        closedAt,
-      });
-    } catch {
-      // Terminal Run truth is already committed; late Verification close failure is diagnostic only.
-    }
   }
 
   private operationFailureResult(
@@ -6441,6 +5747,17 @@ export class RunExecution<TOutput> {
   }
 
   private onStateCommitted(state: RunState<TOutput>, previous: RunState<TOutput>): void {
+    const changes = state.items.slice(previous.items.length);
+    const owner = changes.length > 0 && changes.every(item =>
+      (item.payload.kind === "pending_transition" || item.payload.kind === "retry_transition") && item.payload.pending.kind === "retry_wait")
+      ? (changes[0]!.payload as Extract<RunItemPayload<TOutput>, { readonly kind: "pending_transition" | "retry_transition" }>).pending
+      : null;
+    const retryOwner = owner?.kind === "retry_wait" && changes.every(item =>
+      (item.payload.kind === "pending_transition" || item.payload.kind === "retry_transition") &&
+      item.payload.pending.kind === "retry_wait" && item.payload.pending.invocationId === owner.invocationId)
+      ? owner.invocationId : null;
+    this.decisionBasis.committed(state.revision, retryOwner);
+    for (const scope of this.retryScopes.values()) scope.notifyStateChanged();
     if (state.permission !== this.lastAuthorityPermission) {
       this.lastAuthorityPermission = state.permission;
       this.runTree.advanceAuthorityRevision(this.runId);
@@ -6586,7 +5903,6 @@ export class RunExecution<TOutput> {
       plan: state.plan === null ? null : projectPlan(state.plan),
       suspension: state.suspension,
       retry: this.retryProjection,
-      verification: this.verificationHostProjection,
       pendingInteractions: Object.freeze([
         ...this.interactions.getPendingProjections(),
         ...childPending,
@@ -6712,14 +6028,13 @@ export class RunExecution<TOutput> {
         ? [result.cause.failure.failure.code]
         : []),
     };
-    if (result.status === "succeeded") this.emit("run.completed", { ...payload, status: "succeeded", code: null });
-    else if (result.status === "stopped") this.emit("run.stopped", { ...payload, status: "stopped", code });
+    if (result.status === "completed") this.emit("run.completed", { ...payload, status: "completed", code: null });
     else if (result.status === "cancelled") this.emit("run.cancelled", { ...payload, status: "cancelled", code });
     else this.emit("run.failed", { ...payload, status: "failed", code });
   }
 
   private async recordLifecycle(
-    phase: "started" | "succeeded" | "stopped" | "failed" | "cancelled",
+    phase: "started" | "completed" | "failed" | "cancelled",
     skipKinds = new Set<import("../run/index.js").RunFailureKind>(),
     context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
   ): Promise<RunFailureCause[]> {
@@ -6785,9 +6100,9 @@ function terminalStatePatch<TOutput>(
   cancellationRequest: import("../run/index.js").RunCancellationRequest | null,
   completedAt: string,
   settlementCauses: readonly RunSettlementCauseRecord[],
-): Readonly<Record<string, unknown>> {
-  if (terminal.status === "succeeded") return Object.freeze({
-    status: "succeeded",
+): import("./RunStateWriter.js").RunStatePatch<TOutput> {
+  if (terminal.status === "completed") return Object.freeze({
+    status: "completed",
     finalOutput: terminal.output,
     settlement,
     settlementCause: cause,
@@ -7527,11 +6842,10 @@ function measureTerminalResultBytes<TOutput>(
 ): number {
   const encoded = JSON.stringify({
     status: terminal.status,
-    code: terminal.status === "succeeded" ? null : terminal.status === "cancelled"
+    code: terminal.status === "completed" ? null : terminal.status === "cancelled"
       ? "runtime_cancelled"
-      : terminal.status === "stopped" ? "stop_accepted" : terminal.failure.failure.code,
-    stopReason: terminal.status === "stopped" ? terminal.reason : null,
-    finalOutput: terminal.status === "succeeded" ? terminal.output : null,
+      : terminal.failure.failure.code,
+    finalOutput: terminal.status === "completed" ? terminal.output : null,
     evidenceRefs,
     artifactRefs,
   });

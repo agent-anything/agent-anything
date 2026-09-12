@@ -1,18 +1,21 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { containedInspectionPath, datasetDirectory, validateOpaqueId, type InspectionSource, type InspectionDatasetManifest } from "../sources/index.js";
-import { inspectionSubjectKey, snapshotInspectionJson, validateInspectionRef, type InspectionRecord, type InspectionRelationKind, type InspectionSubjectRef } from "../records/index.js";
+import { inspectionSubjectKey, type InspectionRecord, type InspectionRelationKind, type InspectionSubjectRef } from "../records/index.js";
+import { snapshotInspectionJson, validateInspectionRef } from "../records/InspectionValidation.js";
 import { InspectionDatabase, wasInspectionDatasetRetired } from "../storage/index.js";
 import { acquireInspectionReadLease } from "../storage/InspectionDatasetAccess.js";
 import { validateInspectionCapturePolicy, captureClassEnabled } from "../content/index.js";
 import type { InspectionQuery, InspectionReadResult, InspectionGraph, InspectionTimelineInterval } from "./InspectionQuery.js";
+import { INSPECTION_FORMAT_VERSION } from "../records/index.js";
+import { executeFlowQuery, validateFlowQueryFields } from "./InspectionFlowQuery.js";
 
 const viewKinds = ["list_definitions", "list_runs", "list_records", "get_hierarchy", "get_lifecycle", "get_data_flow", "get_dependencies", "get_scheduling", "get_model_request", "get_execution", "get_timeline", "get_telemetry"];
 export function validateInspectionQuery(value: unknown): InspectionQuery {
   const copy = snapshotInspectionJson(value, 256 * 1024) as unknown as Record<string, unknown>;
   if (copy === null || typeof copy !== "object" || typeof copy.kind !== "string") throw new Error("inspection_query_invalid");
-  const all = ["list_sources", "list_datasets", "get_snapshot", "get_record", "get_subject", "get_content", ...viewKinds];
+  const all = ["list_sources", "list_datasets", "get_snapshot", "get_record", "get_subject", "get_content", "get_execution_flow", "list_flow_occurrences", "get_flow_occurrence", ...viewKinds];
   if (!all.includes(copy.kind)) throw new Error("inspection_query_invalid");
-  const allowed = copy.kind === "list_sources" ? ["kind"] : copy.kind === "list_datasets" ? ["kind", "sourceId", "after"] : copy.kind === "get_snapshot" ? ["kind", "sourceId", "datasetId", "watermark"] : ["kind", "sourceId", "datasetId", "watermark", "subject", "runId", "recordKind", "after", "limit", "recordId", "contentId", "offset", "length"];
+  const allowed = copy.kind === "list_sources" ? ["kind"] : copy.kind === "list_datasets" ? ["kind", "sourceId", "after"] : copy.kind === "get_snapshot" ? ["kind", "sourceId", "datasetId", "watermark"] : ["kind", "sourceId", "datasetId", "watermark", "subject", "runId", "recordKind", "after", "limit", "recordId", "contentId", "offset", "length", "invocationId", "occurrenceId", "stepId", "cursor"];
   if (Object.keys(copy).some((key) => !allowed.includes(key))) throw new Error("inspection_query_invalid");
   if (copy.kind !== "list_sources") validateOpaqueId(String(copy.sourceId));
   if (!["list_sources", "list_datasets"].includes(copy.kind)) validateOpaqueId(String(copy.datasetId));
@@ -27,6 +30,7 @@ export function validateInspectionQuery(value: unknown): InspectionQuery {
   if (copy.kind !== "list_datasets" && copy.after !== undefined && (!Number.isSafeInteger(copy.after) || Number(copy.after) < 0)) throw new Error("inspection_cursor_invalid");
   if (Number(copy.limit ?? 100) > 500 || Number(copy.length ?? 262144) > 262144) throw new Error("inspection_query_invalid");
   if (copy.kind === "get_subject" && !copy.subject || copy.kind === "get_record" && !copy.recordId || copy.kind === "get_content" && !copy.contentId) throw new Error("inspection_query_invalid");
+  validateFlowQueryFields(copy);
   return copy as unknown as InspectionQuery;
 }
 
@@ -52,14 +56,14 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
       try {
         validateOpaqueId(id);
         const source = readInspectionJson<InspectionSource>(containedInspectionPath(root, "sources", id, "source.json"));
-        if (source.sourceId !== id || source.formatVersion !== 1 || typeof source.name !== "string" || typeof source.application !== "string") throw new Error();
+        if (source.sourceId !== id || source.formatVersion !== INSPECTION_FORMAT_VERSION || typeof source.name !== "string" || typeof source.application !== "string") throw new Error();
         sources.push(source);
       } catch { limitations.push("unsupported_source"); }
     }
     return { ...base, sources, limitations };
   }
   const source = readInspectionJson<InspectionSource>(containedInspectionPath(root, "sources", query.sourceId, "source.json"));
-  if (source.sourceId !== query.sourceId || source.formatVersion !== 1) throw new Error("inspection_source_unavailable");
+  if (source.sourceId !== query.sourceId || source.formatVersion !== INSPECTION_FORMAT_VERSION) throw new Error("inspection_source_unavailable");
   if (query.kind === "list_datasets") {
     const datasets: InspectionDatasetManifest[] = [];
     const limitations: string[] = [];
@@ -67,7 +71,7 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
     for (const id of names.slice(0, 100)) {
       try {
         const manifest = readInspectionJson<InspectionDatasetManifest>(containedInspectionPath(datasetDirectory(root, query.sourceId, id), "manifest.json"));
-        if (manifest.formatVersion !== 1 || manifest.sourceId !== query.sourceId || manifest.datasetId !== id) throw new Error();
+        if (manifest.formatVersion !== INSPECTION_FORMAT_VERSION || manifest.sourceId !== query.sourceId || manifest.datasetId !== id) throw new Error();
         datasets.push(manifest);
       } catch { limitations.push("unsupported_dataset"); }
     }
@@ -84,6 +88,7 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
     const coverage = db.snapshotAt(watermark);
     const result = { ...base, coverage, selection: { sourceId: query.sourceId, datasetId: query.datasetId, watermark } };
     if (query.kind === "get_snapshot") return result;
+    if (query.kind === "get_execution_flow" || query.kind === "list_flow_occurrences" || query.kind === "get_flow_occurrence") return executeFlowQuery(db, query, result);
     if (query.kind === "get_record") { const record = db.record(query.recordId, watermark); return { ...result, records: record ? [record] : [], limitations: record ? [] : ["not_observed"] }; }
     if (query.kind === "get_subject") { const record = db.latest(inspectionSubjectKey(query.subject), watermark); return { ...result, records: record ? [record] : [], limitations: record ? [] : ["not_observed"] }; }
     if (query.kind === "get_content") {

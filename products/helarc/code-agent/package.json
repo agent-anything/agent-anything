@@ -4,12 +4,22 @@
   "description": "Bounded Code Workspace source and file-operation semantics retained until Phase 28.",
   "type": "module",
   "exports": {
-    "./workspace": { "types": "./src/workspace/index.ts", "import": "./dist/workspace/index.js" },
-    "./source": { "types": "./src/source/index.ts", "import": "./dist/source/index.js" },
-    "./verification": { "types": "./src/verification/index.ts", "import": "./dist/verification/index.js" },
-    "./file-operation": { "types": "./src/file-operation/index.ts", "import": "./dist/file-operation/index.js" }
+    "./workspace": {
+      "types": "./src/workspace/index.ts",
+      "import": "./dist/workspace/index.js"
+    },
+    "./source": {
+      "types": "./src/source/index.ts",
+      "import": "./dist/source/index.js"
+    },
+    "./file-operation": {
+      "types": "./src/file-operation/index.ts",
+      "import": "./dist/file-operation/index.js"
+    }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -29,7 +39,6 @@
     "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/tools": "workspace:*",
-    "@agent-anything/verification": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {

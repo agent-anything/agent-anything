@@ -41,6 +41,7 @@ export interface RunToolExposureCoordinatorDependencies {
     agent: Readonly<{ readonly id: string; readonly revision: string }>,
   ) => ToolPathAvailability;
   readonly getRunRevision: () => number;
+  readonly getDecisionRevision: (invocationId: string) => number;
   readonly getRunTreeSnapshot: () => RunTreeExecutionSnapshot;
 }
 
@@ -172,7 +173,7 @@ export class RunToolExposureCoordinator {
       owner: "agent-runtime",
       kind: "run_exposure",
       id: this.dependencies.run.id,
-      revision: String(runRevision),
+      revision: String(this.dependencies.getDecisionRevision(controllerRequestId)),
     });
     const modelTools = this.dependencies.selection.tools.filter(
       (selected) => selected.origins.includes("model"),

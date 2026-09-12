@@ -19,12 +19,6 @@ import type {
   ActionRetryDecisionPort,
 } from "@agent-anything/action-execution/enforcement";
 import { Runner, type RunTreeLimits } from "@agent-anything/agent-runtime/runner";
-import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
-import type {
-  VerificationExecutionFactory,
-  VerificationExecutionPort,
-} from "@agent-anything/verification/execution";
-import type { VerificationEvaluationProjection } from "@agent-anything/verification/projection";
 import {
   createRunFailureCause,
   runSettlementCauseCode,
@@ -97,7 +91,6 @@ import {
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
-import { bindHelarcVerificationCompletionGate } from "@agent-anything/helarc/verification";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import {
   createCodeAgentCanonicalWorkspaceRoots,
@@ -163,7 +156,6 @@ export interface HelarcEvaluationExecutableCase {
   readonly fixture: HelarcEvaluationCaseDefinition["fixture"];
   readonly script: HelarcEvaluationCaseDefinition["script"];
   readonly expectedClaim: HelarcEvaluationCaseDefinition["expectedClaim"];
-  readonly verificationTargets: HelarcEvaluationCaseDefinition["verificationTargets"];
 }
 
 export interface HelarcEvaluationRunOptions {
@@ -189,7 +181,6 @@ export interface HelarcEvaluationRunMaterial<
   readonly productProjection: HelarcProductRunProjection;
   readonly runResult: RunResult<HelarcAgentOutput>;
   readonly hostProjection: HostRunStatusProjection;
-  readonly verificationEvaluationProjection: VerificationEvaluationProjection;
   readonly runtimeEvents: readonly RuntimeEvent[];
   readonly trace: RunTrace;
   readonly before: HelarcEvaluationWorkspaceSnapshot;
@@ -595,10 +586,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     codeSource: createLocalCodeSourcePort(clock.now),
     fileActions,
     commandActions,
-    verificationTargets: bindVerificationTargets(
-      caseDefinition.verificationTargets,
-      workspace.primary.id,
-    ),
     now: clock.now,
   });
   const gateway = createHelarcLocalSandboxGateway({
@@ -614,18 +601,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     },
   });
   let allocatedRunCount = 0;
-  const verificationExecutions = new Map<string, VerificationExecutionPort>();
-  const verification = bindHelarcVerificationCompletionGate(
-    product.verification,
-    new CurrentVerificationCompletionGate(clock.now),
-  );
-  const verificationFactory: VerificationExecutionFactory = Object.freeze({
-    async create(input: Parameters<VerificationExecutionFactory["create"]>[0]) {
-      const execution = await verification.executionFactory.create(input);
-      verificationExecutions.set(input.run.id, execution);
-      return execution;
-    },
-  });
   const runner = new Runner({
     controller: product.controller,
     contextProjection: createHelarcContextProjectionConfiguration(),
@@ -645,10 +620,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         retry: createEvaluationActionRetryPort(),
       },
     },
-    verification: Object.freeze({
-      ...verification,
-      executionFactory: verificationFactory,
-    }),
     interactions: product.interactions,
     runtimeEventPublisher: runtimePublisher,
     runTraceObserver: {
@@ -726,10 +697,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         enforcement: "disabled",
         metadata: {},
       },
-      verification: Object.freeze({
-        profile: product.verification.profile,
-        completion: createEvaluationVerificationCompletionConfig(),
-      }),
       limits: {
         maxIterations: options.maxIterations ?? 8,
         maxActions: options.maxActions ?? 8,
@@ -741,7 +708,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
           maxStepLength: 300,
           maxExplanationLength: 1_000,
         },
-        completionGate: { maxFeedbackRounds: 2 },
       },
       runTreeLimits: options.runTreeLimits ?? {
         maxTotalDescendantRuns: 0,
@@ -859,14 +825,9 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     unsubscribeSuspension();
   });
   const terminalProjection = active.getProjection();
-  const verificationExecution = verificationExecutions.get(hostResult.runResult.runId);
-  if (verificationExecution === undefined) {
-    throw new TypeError("Helarc Evaluation requires the root Verification execution.");
-  }
   const productResult = product.projectResult(
     hostResult.runResult,
     "disabled",
-    terminalProjection.verification,
   );
   if (trace === null) throw new TypeError("Helarc Evaluation requires one complete RunTrace.");
   const observationRef = createEvaluationRecordRef({
@@ -886,7 +847,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     productProjection: product.getProductProjection(),
     runResult: hostResult.runResult,
     hostProjection: terminalProjection,
-    verificationEvaluationProjection: await verificationExecution.projectEvaluation(),
     runtimeEvents: Object.freeze([...runtimeEvents]),
     trace,
     before: lease.before,
@@ -923,48 +883,13 @@ function createEvaluationInteractionSubmission(
   return Object.freeze({ answers: Object.freeze(normalized) });
 }
 
-function bindVerificationTargets(
-  targets: HelarcEvaluationCaseDefinition["verificationTargets"],
-  primaryWorkspaceId: string,
-): HelarcEvaluationCaseDefinition["verificationTargets"] {
-  return Object.freeze(targets.map((requirement) => Object.freeze({
-    ...requirement,
-    target: Object.freeze({
-      ...requirement.target,
-      expected: Object.freeze({
-        ...requirement.target.expected,
-        target: Object.freeze({
-          ...requirement.target.expected.target,
-          rootName: primaryWorkspaceId,
-          workspaceId: primaryWorkspaceId,
-        }),
-      }),
-    }),
-  })));
-}
-
-function createEvaluationVerificationCompletionConfig() {
-  const owner = (id: string) => Object.freeze({
-    owner: "helarc-evaluation",
-    kind: "verification",
-    id,
-    revision: "1",
-  });
-  return Object.freeze({
-    policy: owner("current-verification-gate"),
-    outputContract: owner("helarc-output-contract"),
-    conditions: Object.freeze([]),
-    maximumDurationMs: 1_000,
-  });
-}
-
 function targetObservation(
   material: HelarcEvaluationRunMaterial,
   trial: EvaluationTrial,
 ): EvaluationTargetObservation {
   const status = material.product.status === "completed"
     ? "succeeded"
-    : material.product.status === "cancelled" || material.product.status === "stopped"
+    : material.product.status === "cancelled"
       ? material.product.status
       : "failed";
   const artifactRefs = material.runResult.artifactRefs.map((artifactRef, index) => ({
@@ -1002,7 +927,7 @@ function targetObservation(
 function targetOutcomeCode(
   material: HelarcEvaluationRunMaterial,
 ): string | null {
-  if (material.runResult.status === "succeeded") {
+  if (material.runResult.status === "completed") {
     return null;
   }
   return runSettlementCauseCode(material.runResult.cause);
@@ -1166,11 +1091,6 @@ function captureHelarcMaterial(
       })),
       issues: material.trace.issues.map((issue) => issue.code),
     }),
-    captured(
-      "verification-summary",
-      "verification",
-      snapshotEvaluationData(material.verificationEvaluationProjection),
-    ),
     captured("tool-exposure-summary", "agent-core", {
       turns: exposureTurns,
       turnCount: exposureTurns.length,

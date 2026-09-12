@@ -27,7 +27,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
   private readonly lineage: RunLineage;
   private nextSpanSequence = 1;
   private lastEventSequence = 0;
-  private terminalEvent: RuntimeEvent<"run.completed" | "run.stopped" | "run.failed" | "run.cancelled"> | null = null;
+  private terminalEvent: RuntimeEvent<"run.completed" | "run.failed" | "run.cancelled"> | null = null;
   private completed = false;
 
   constructor(private readonly input: CreateRunTraceAssemblerInput) {
@@ -46,7 +46,6 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
       errorCodes: [],
       contextTransitions: [],
       contextProjections: [],
-      verification: [],
     });
   }
 
@@ -212,51 +211,6 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           code: event.payload.code,
         });
         break;
-      case "verification.check.started":
-        this.appendVerificationTrace(event, {
-          event: "check_started",
-          snapshotRevision: event.payload.snapshotRevision,
-          subjectId: event.payload.attemptId,
-          status: "running",
-          code: null,
-          durationMs: null,
-          coverageRatio: null,
-        });
-        break;
-      case "verification.check.finished":
-        this.appendVerificationTrace(event, {
-          event: "check_finished",
-          snapshotRevision: event.payload.snapshotRevision,
-          subjectId: event.payload.attemptId,
-          status: event.payload.status,
-          code: event.payload.code,
-          durationMs: event.payload.durationMs,
-          coverageRatio: event.payload.coverageRatio,
-        });
-        break;
-      case "verification.assessment.committed":
-        this.appendVerificationTrace(event, {
-          event: "assessment_committed",
-          snapshotRevision: event.payload.snapshotRevision,
-          subjectId: event.payload.assessmentId,
-          status: event.payload.verdict,
-          code: null,
-          durationMs: null,
-          coverageRatio: null,
-        });
-        break;
-      case "verification.gate.evaluated":
-        this.appendVerificationTrace(event, {
-          event: "gate_evaluated",
-          snapshotRevision: event.payload.snapshotRevision,
-          subjectId: event.payload.gateId,
-          status: event.payload.status,
-          code: event.payload.reasonCodes[0] ?? null,
-          durationMs: null,
-          coverageRatio: null,
-        });
-        break;
-      case "run.stopped":
       case "run.completed":
       case "run.failed":
       case "run.cancelled":
@@ -268,18 +222,6 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
   }
 
   getSnapshot(): RunTrace { return this.snapshot(this.completed ? this.finalStatus() : "active"); }
-
-  private appendVerificationTrace(
-    event: RuntimeEvent,
-    record: import("./RunTrace.js").VerificationTraceRecord,
-  ): void {
-    const root = this.spans.get(this.input.runId)!;
-    root.attributes.verification = [
-      ...(root.attributes.verification as import("./RunTrace.js").VerificationTraceRecord[]),
-      Object.freeze(record),
-    ];
-    root.links.push(link("runtime_event", event.id));
-  }
 
   complete(input: CompleteRunTraceInput): RunTrace {
     if (this.completed) return this.getSnapshot();
@@ -391,7 +333,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
 function link(kind: TraceLink["kind"], id: string): TraceLink { return Object.freeze({ kind, id }); }
 function operationStatus(status: string): TraceSpanStatus { return status === "succeeded" || status === "partial" ? "succeeded" : status === "cancelled" ? "cancelled" : status === "unknown_effect" ? "unknown" : "failed"; }
 function interactionStatus(status: string): TraceSpanStatus { return status === "resolved" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed"; }
-function rootStatus(status: string): TraceSpanStatus { return status === "succeeded" ? "succeeded" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed"; }
+function rootStatus(status: string): TraceSpanStatus { return status === "completed" ? "succeeded" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed"; }
 function token(value: unknown, field: string): string { if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(`${field} must be non-empty.`); return value; }
 function sameLineage(left: RunLineage, right: RunLineage): boolean {
   if (left.kind !== right.kind || left.root.id !== right.root.id || left.depth !== right.depth) return false;

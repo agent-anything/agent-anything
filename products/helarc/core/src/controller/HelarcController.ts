@@ -6,6 +6,8 @@ import {
   type ProgressionCandidate,
   type ProviderRequestBuildContext,
 } from "@agent-anything/agent-runtime/controller";
+import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
+import { HELARC_REQUEST_EXECUTION_FLOW, HELARC_RESPONSE_EXECUTION_FLOW } from "./HelarcControllerExecutionFlow.js";
 import {
   composeModelInput,
   modelInputFromComposition,
@@ -26,7 +28,6 @@ import {
   findHelarcModelCallableBinding,
   type HelarcModelCallableCatalog,
 } from "./HelarcModelCallableCatalog.js";
-import { HELARC_STOP_REASON_MAX_LENGTH } from "./HelarcControllerControlGuidance.js";
 import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
 import type {
   HelarcModelQualificationResolution,
@@ -48,6 +49,24 @@ class HelarcInstructionModelMismatchError extends TypeError {
 }
 
 export function buildHelarcProviderRequest(
+  input: ControllerInput<HelarcAgentOutput>,
+  context: ProviderRequestBuildContext,
+  protocol: HelarcControllerProtocolComposition,
+  qualification: HelarcModelQualificationResolution,
+): ProviderRequest {
+  const flow = new ExecutionFlowPath(HELARC_REQUEST_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId);
+  try {
+    const step = flow.advance("compose", {agentId:input.agent.id, instructionBlocks:input.agent.instructions.blocks.length, unsettledCalls:input.interaction.unsettledCalls.length});
+    const request = buildRequest(input, context, protocol, qualification);
+    step.check("instruction_binding", "passed", {bindingId:input.instructionBinding.ref.id});
+    step.check("settled_interaction", "passed");
+    flow.advance("request", {compositionId:request.composition.id}, [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
+    flow.close("returned");
+    return request;
+  } catch (error) { flow.close("failed"); throw error; }
+}
+
+function buildRequest(
   input: ControllerInput<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
@@ -186,6 +205,23 @@ export function parseHelarcProviderResponse(
   input: ControllerInput<HelarcAgentOutput>,
   protocol: HelarcControllerProtocolComposition,
   qualification: HelarcModelQualificationResolution,
+  executionFlow?: ExecutionFlowContext,
+): ControllerDecision<HelarcAgentOutput> {
+  const flow = new ExecutionFlowPath(HELARC_RESPONSE_EXECUTION_FLOW, executionFlow ?? {}, input.runId);
+  flow.advance("interpret", {controllerRequestId:input.toolExposure.controllerRequestId, responseKind:response.kind});
+  try {
+    const decision = interpretResponse(response, input, protocol, qualification);
+    flow.advance("decision", {kind:decision.kind, candidates:decision.kind === "advance" ? decision.candidates.length : 0});
+    flow.close("returned");
+    return decision;
+  } catch (error) { flow.close("failed"); throw error; }
+}
+
+function interpretResponse(
+  response: ProviderResponse,
+  input: ControllerInput<HelarcAgentOutput>,
+  protocol: HelarcControllerProtocolComposition,
+  qualification: HelarcModelQualificationResolution,
 ): ControllerDecision<HelarcAgentOutput> {
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
@@ -206,8 +242,8 @@ export function parseHelarcProviderResponse(
   if (response.turn.finish.kind === "refusal") {
     if (calls.length > 0) return nativeTurnFailure("helarc_refusal_with_calls");
     return Object.freeze({
-      kind: "propose_stop",
-      reason: boundedStopReason(response.turn.finish.reason ?? text),
+      kind: "propose_completion",
+      output: Object.freeze({ kind: "complete", summary: response.turn.finish.reason ?? text }),
       modelItems,
     });
   }
@@ -223,17 +259,7 @@ export function parseHelarcProviderResponse(
     });
   }
 
-  if (calls.length === 1) {
-    const binding = findHelarcModelCallableBinding(catalog, calls[0]!.name);
-    if (binding?.kind === "control" && binding.control === "stop") {
-      const reason = readStopReason(calls[0]!);
-      if (reason !== null) {
-        return Object.freeze({ kind: "propose_stop", reason, modelItems });
-      }
-    }
-  }
-
-  const candidates = calls.map((call) => bindModelCall(call, calls.length, catalog, input));
+  const candidates = calls.map((call) => bindModelCall(call, catalog, input));
   return Object.freeze({
     kind: "advance",
     candidates: Object.freeze(candidates) as readonly [
@@ -246,7 +272,6 @@ export function parseHelarcProviderResponse(
 
 function bindModelCall(
   call: ModelToolCall,
-  callCount: number,
   catalog: HelarcModelCallableCatalog,
   input: ControllerInput<HelarcAgentOutput>,
 ): ProgressionCandidate {
@@ -267,21 +292,12 @@ function bindModelCall(
       modelCallRef: call.modelCallRef,
     });
   }
-  if (binding.control === "update_plan") {
-    return Object.freeze({
+  return Object.freeze({
       kind: "state_transition",
       transition: "plan_update",
       input: call.input,
       modelCallRef: call.modelCallRef,
-    });
-  }
-  return rejectedCall(
-    call,
-    callCount === 1 ? "stop_input_invalid" : "stop_must_be_sole_call",
-    callCount === 1
-      ? "The stop control requires one bounded non-empty reason."
-      : "The stop control must be the only call in its Model Turn.",
-  );
+  });
 }
 
 function rejectedCall(call: ModelToolCall, code: string, message: string): ProgressionCandidate {
@@ -292,21 +308,6 @@ function rejectedCall(call: ModelToolCall, code: string, message: string): Progr
     message,
     modelCallRef: call.modelCallRef,
   });
-}
-
-function readStopReason(call: ModelToolCall): string | null {
-  return typeof call.input.reason === "string" &&
-      call.input.reason.trim().length > 0 &&
-      call.input.reason.trim().length <= HELARC_STOP_REASON_MAX_LENGTH
-    ? call.input.reason.trim()
-    : null;
-}
-
-function boundedStopReason(reason: string | null): string {
-  const normalized = reason?.trim() ?? "";
-  return normalized.length === 0
-    ? "Model refused the request."
-    : normalized.slice(0, HELARC_STOP_REASON_MAX_LENGTH);
 }
 
 function assertTurnCorrelation(

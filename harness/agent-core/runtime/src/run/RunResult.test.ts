@@ -17,26 +17,15 @@ const TEST_INSTRUCTION_BINDING = Object.freeze({
 });
 
 describe("RunResult", () => {
-  it("constructs the four structurally distinct terminal settlements", () => {
+  it("constructs the three structurally distinct terminal settlements", () => {
     const completion = completionCause();
     const failure = failureCause();
     const cancellation = cancellationCause();
-    const stop = stopCause();
-
     expect(createRunResult(input(
-      { status: "stopped", completedAt, cause: stop.ref },
-      stop,
-    ))).toMatchObject({
-      status: "stopped",
-      finalOutput: null,
-      cause: { kind: "stop", code: "stop_accepted", reason: "No useful continuation remains." },
-    });
-
-    expect(createRunResult(input(
-      { status: "succeeded", completedAt, cause: completion.ref, output: { answer: "done" } },
+      { status: "completed", completedAt, cause: completion.ref, output: { answer: "done" } },
       completion,
     ))).toMatchObject({
-      status: "succeeded",
+      status: "completed",
       finalOutput: { answer: "done" },
       cause: { kind: "completion", code: "completion_accepted" },
     });
@@ -68,33 +57,29 @@ describe("RunResult", () => {
   it("allows null when it is the Agent-validated successful output", () => {
     const cause = completionCause();
     expect(createRunResult(input<null>(
-      { status: "succeeded", completedAt, cause: cause.ref, output: null },
+      { status: "completed", completedAt, cause: cause.ref, output: null },
       cause,
-    ))).toMatchObject({ status: "succeeded", finalOutput: null });
+    ))).toMatchObject({ status: "completed", finalOutput: null });
   });
 
   it("rejects settlement and direct-cause disagreement", () => {
     const failure = failureCause();
     expect(() => createRunResult(input(
-      { status: "succeeded", completedAt, cause: failure.ref, output: "invalid" },
+      { status: "completed", completedAt, cause: failure.ref, output: "invalid" },
       failure,
     ))).toThrow("status disagrees with its cause record");
-    const stop = stopCause();
+    const completion = completionCause();
     expect(() => createRunResult(input(
-      { status: "failed", completedAt, cause: stop.ref },
-      stop,
+      { status: "failed", completedAt, cause: completion.ref },
+      completion,
     ))).toThrow("status disagrees with its cause record");
   });
 
-  it("requires a nonempty stop reason and rejects output on a stopped settlement", () => {
-    const stop = stopCause();
+  it("rejects output on failed settlement", () => {
+    const failure = failureCause();
     expect(() => createRunResult(input(
-      { status: "stopped", completedAt, cause: stop.ref },
-      { ...stop, reason: " " },
-    ))).toThrow();
-    expect(() => createRunResult(input(
-      { status: "stopped", completedAt, cause: stop.ref, output: "not success" } as never,
-      stop,
+      { status: "failed", completedAt, cause: failure.ref, output: "not a normal final reply" } as never,
+      failure,
     ))).toThrow();
   });
 
@@ -139,7 +124,7 @@ describe("RunResult", () => {
     const cause = completionCause();
     const result = createRunResult({
       ...input(
-        { status: "succeeded", completedAt, cause: cause.ref, output: { answer: "done" } },
+        { status: "completed", completedAt, cause: cause.ref, output: { answer: "done" } },
         cause,
       ),
       evidenceRefs: ["evidence-1"],
@@ -180,19 +165,6 @@ function completionCause(): Extract<RunSettlementCauseRecord, { kind: "completio
     kind: "completion",
     code: "completion_accepted",
     source: source("run_completion_acceptance"),
-    underlying: [],
-    omittedUnderlyingCount: 0,
-    recordedAt: completedAt,
-  };
-}
-
-function stopCause(): Extract<RunSettlementCauseRecord, { kind: "stop" }> {
-  return {
-    ref: causeRef(),
-    kind: "stop",
-    code: "stop_accepted",
-    reason: "No useful continuation remains.",
-    source: source("controller_turn"),
     underlying: [],
     omittedUnderlyingCount: 0,
     recordedAt: completedAt,

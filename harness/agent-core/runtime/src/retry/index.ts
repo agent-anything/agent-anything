@@ -54,3 +54,5 @@ export { snapshotRetryPolicy } from "./RetryPolicy.js";
 export { systemRetryClock } from "./RetryDependencies.js";
 export { RetryExecutor } from "./RetryExecutor.js";
 export { createSystemRetryExecutor } from "./createSystemRetryExecutor.js";
+export type { RetryWaitControl, RetryWaitRequest, RetryWaitOutcome } from "./RetryWaitControl.js";
+export { RetryInvocationInvalidatedError } from "./RetryWaitControl.js";

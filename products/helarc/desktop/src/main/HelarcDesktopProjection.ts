@@ -7,18 +7,7 @@ import type {
   HostRunStatusQueryReceipt,
 } from "@agent-anything/host/transport";
 import type { HelarcMainSnapshot as MainSnapshot } from "./HelarcMainController.js";
-import type {
-  HelarcAdditionalPermissionsSnapshot,
-  HelarcApprovalReviewRequestSnapshot,
-  HelarcHostCommandReceipt,
-  HelarcHostVerificationSnapshot,
-  HelarcInteractionRequestRefSnapshot,
-  HelarcMainSnapshot as DesktopSnapshot,
-  HelarcPendingInteractionSnapshot,
-  HelarcProductPhaseSnapshot,
-  HelarcRunStatusResponse,
-  HelarcRunSnapshot,
-} from "../shared/HelarcDesktopApi.js";
+import type { HelarcAdditionalPermissionsSnapshot, HelarcApprovalReviewRequestSnapshot, HelarcHostCommandReceipt, HelarcInteractionRequestRefSnapshot, HelarcMainSnapshot as DesktopSnapshot, HelarcPendingInteractionSnapshot, HelarcProductPhaseSnapshot, HelarcRunStatusResponse, HelarcRunSnapshot } from "../shared/HelarcDesktopApi.js";
 import { HELARC_CLARIFICATION_PROTOCOL } from "@agent-anything/helarc/interaction";
 
 export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSnapshot {
@@ -301,7 +290,6 @@ export function projectHelarcRunStatusQueryReceipt(
       runTree: projectRunTree(receipt.projection.runTree),
       activeDelegations: projectActiveDelegations(receipt.projection.activeDelegations),
       continuationTargets: projectContinuationTargets(receipt.projection.continuationTargets),
-      verification: projectHostVerification(receipt.projection.verification),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
       terminal: receipt.projection.terminal === null
         ? null
@@ -377,7 +365,6 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       runTree: projectRunTree(run.host.runTree),
       activeDelegations: projectActiveDelegations(run.host.activeDelegations),
       continuationTargets: projectContinuationTargets(run.host.continuationTargets),
-      verification: projectHostVerification(run.host.verification),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
         ? null
@@ -416,17 +403,6 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             qualification: projectModelQualification(
               run.product.result.qualification,
             ),
-            verification: {
-              status: run.product.result.verification.status,
-              snapshotRevision: run.product.result.verification.snapshotRevision,
-              counts: run.product.result.verification.counts.map((entry) => ({ ...entry })),
-              activeChecks: run.product.result.verification.activeChecks,
-              gateStatus: run.product.result.verification.gateStatus,
-              waiting: run.product.result.verification.waiting,
-              recoveryNeeded: run.product.result.verification.recoveryNeeded,
-              safeReasons: [...run.product.result.verification.safeReasons],
-              updatedAt: run.product.result.verification.updatedAt,
-            },
             output: {
               taskId: run.product.result.output.taskId,
               workspace: {
@@ -589,22 +565,6 @@ function projectActivitySource(
       relationId: source.lineage.relation.id,
       depth: source.lineage.depth,
     },
-  };
-}
-
-function projectHostVerification(
-  verification: NonNullable<NonNullable<MainSnapshot["run"]>["host"]["verification"]> | null,
-): HelarcHostVerificationSnapshot | null {
-  if (verification === null) return null;
-  return {
-    snapshotRevision: verification.snapshot.revision,
-    counts: verification.counts.map((entry) => ({ ...entry })),
-    activeChecks: verification.activeAttempts.length,
-    gateStatus: verification.gate?.status ?? null,
-    waiting: verification.waiting,
-    recoveryNeeded: verification.recoveryNeeded,
-    safeReasons: [...verification.safeReasons],
-    updatedAt: verification.updatedAt,
   };
 }
 

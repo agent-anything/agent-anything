@@ -19,7 +19,6 @@ describe("Helarc Desktop IPC projection", () => {
       "startedAt",
       "taskId",
       "terminal",
-      "verification",
     ]);
     expect(Object.keys(projected.run?.product ?? {}).sort()).toEqual([
       "activity",
@@ -42,16 +41,7 @@ describe("Helarc Desktop IPC projection", () => {
       reason: null,
       occurredAt: "2026-07-19T00:00:00.000Z",
     });
-    expect(projected.run?.host.verification).toEqual({
-      snapshotRevision: 3,
-      counts: [{ state: "pending", count: 1 }],
-      activeChecks: 1,
-      gateStatus: null,
-      waiting: true,
-      recoveryNeeded: true,
-      safeReasons: ["verification_pending"],
-      updatedAt: "2026-07-19T00:00:00.000Z",
-    });
+    expect(projected.run?.host).not.toHaveProperty("verification");
     expect(projected.run?.host.instructionBinding).toMatchObject({
       agent: { id: "helarc", revision: "agent-revision-1" },
       release: { id: "helarc.production", revision: "1" },
@@ -236,17 +226,6 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       plan: { privatePlanState: SECRET },
       pendingInteractions,
       retry: { privateRetryState: SECRET },
-      verification: {
-        snapshot: { runId: "harness-run-1", revision: 3 },
-        counts: [{ state: "pending", count: 1 }],
-        activeAttempts: [{ id: "verification-attempt-1", ordinal: 1 }],
-        gate: null,
-        waiting: true,
-        recoveryNeeded: true,
-        safeReasons: ["verification_pending"],
-        updatedAt: "2026-07-19T00:00:00.000Z",
-        privateVerificationState: SECRET,
-      },
       cancellation: { privateCancellationState: SECRET },
       enforcement: { privateAttemptState: SECRET },
       terminal: null,

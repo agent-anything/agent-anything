@@ -1,4 +1,6 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
+import { AGENT_HOOK_HANDLER_FLOW } from "./AgentHookExecutionFlow.js";
 import {
   matchingAgentHooks,
   type AgentHookBinding,
@@ -40,6 +42,15 @@ export interface AgentHookProjection {
   readonly revision: number;
   readonly invocationCount: number;
   readonly recentInvocations: readonly AgentHookInvocationRecord[];
+  readonly recentDispositions: readonly AgentStopDispositionRecord[];
+}
+
+export interface AgentStopDispositionRecord {
+  readonly runId: string;
+  readonly controllerRequestId: string;
+  readonly disposition: "continuation_limit_reached";
+  readonly feedbackCount: number;
+  readonly recordedAt: string;
 }
 
 export type AgentHookProjectionListener = (projection: AgentHookProjection) => void;
@@ -47,10 +58,13 @@ export type AgentHookProjectionListener = (projection: AgentHookProjection) => v
 export class AgentHookExecutionStore {
   private records: readonly AgentHookInvocationRecord[] = Object.freeze([]);
   private revision = 0;
+  private invocationCount = 0;
+  private dispositions: readonly AgentStopDispositionRecord[] = Object.freeze([]);
   private readonly listeners = new Set<AgentHookProjectionListener>();
 
   append(record: AgentHookInvocationRecord): void {
     this.revision += 1;
+    this.invocationCount += 1;
     this.records = Object.freeze([...this.records.slice(-63), record]);
     const projection = this.getProjection();
     for (const listener of [...this.listeners]) {
@@ -61,8 +75,9 @@ export class AgentHookExecutionStore {
   getProjection(): AgentHookProjection {
     return Object.freeze({
       revision: this.revision,
-      invocationCount: this.revision,
+      invocationCount: this.invocationCount,
       recentInvocations: Object.freeze([...this.records]),
+      recentDispositions: Object.freeze([...this.dispositions]),
     });
   }
 
@@ -71,6 +86,15 @@ export class AgentHookExecutionStore {
     this.listeners.add(listener);
     try { listener(this.getProjection()); } catch { /* Projection consumers are non-authoritative. */ }
     return () => { this.listeners.delete(listener); };
+  }
+
+  recordDisposition(record: AgentStopDispositionRecord): void {
+    this.revision += 1;
+    this.dispositions = Object.freeze([...this.dispositions.slice(-63), Object.freeze({...record})]);
+    const projection = this.getProjection();
+    for (const listener of [...this.listeners]) {
+      try { listener(projection); } catch { /* Observation cannot affect Agent control. */ }
+    }
   }
 }
 
@@ -82,6 +106,7 @@ export interface AgentStopDispatchResult {
 }
 
 export async function dispatchAgentStopHooks(input: {
+  readonly executionFlow?: ExecutionFlowContext;
   readonly composition: AgentHookComposition;
   readonly event: AgentStopEvent;
   readonly interruption: InvocationInterruptionContext;
@@ -93,10 +118,10 @@ export async function dispatchAgentStopHooks(input: {
   const blocking = matches.filter((match) => match.registration.mode === "blocking");
   const background = matches.filter((match) => match.registration.mode === "background");
   for (const match of background) {
-    void invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now);
+    void invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow);
   }
   const outcomes = await Promise.all(blocking.map((match) =>
-    invokeStopHandler(match, input.event, input.interruption, input.deadlineAt, input.store, input.now)));
+    invokeStopHandler(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow)));
   const continuations = outcomes.flatMap((outcome) =>
     outcome?.disposition === "continue" ? [outcome] : []);
   const unique = continuations.filter((outcome, index) =>
@@ -122,6 +147,7 @@ export async function dispatchAgentStopHooks(input: {
 }
 
 export async function dispatchAgentStopFailureHooks(input: {
+  readonly executionFlow?: ExecutionFlowContext;
   readonly composition: AgentHookComposition;
   readonly event: AgentStopFailureEvent;
   readonly interruption: InvocationInterruptionContext;
@@ -133,10 +159,10 @@ export async function dispatchAgentStopFailureHooks(input: {
   const blocking = matches.filter((match) => match.registration.mode === "blocking");
   const background = matches.filter((match) => match.registration.mode === "background");
   for (const match of background) {
-    void invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now);
+    void invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow);
   }
   await Promise.all(blocking.map((match) =>
-    invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now)));
+    invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow)));
 }
 
 async function invokeStopHandler(
@@ -146,9 +172,12 @@ async function invokeStopHandler(
   deadlineAt: string,
   store: AgentHookExecutionStore,
   now: () => string,
+  executionFlow?: ExecutionFlowContext,
 ): Promise<AgentStopHandlerResult | null> {
+  const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, executionFlow ?? {}, event.run.id, []);
+  flow.advance("invoke", {hookId:match.registration.ref.id, timeoutMs:match.registration.timeoutMs, mode:match.registration.mode});
   const result = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) =>
-    (match.binding.handler as AgentStopHandler).handle(event, context));
+    (match.binding.handler as AgentStopHandler).handle(event, context, flow.callContext));
   let decision: AgentStopHandlerResult | null = null;
   let status: AgentHookInvocationStatus;
   let code: string | null = null;
@@ -164,6 +193,8 @@ async function invokeStopHandler(
     message = result.message;
   }
   store.append(record(match.registration.ref, event, match.registration.mode, status, code, message, result, now));
+  flow.advance("settle", {status, code}).check("result_contract", status === "allowed" || status === "continued" ? "passed" : "error");
+  flow.close(status === "allowed" || status === "continued" ? "returned" : status === "cancelled" ? "cancelled" : "failed");
   return decision;
 }
 
@@ -174,14 +205,19 @@ async function invokeObserver(
   deadlineAt: string,
   store: AgentHookExecutionStore,
   now: () => string,
+  executionFlow?: ExecutionFlowContext,
 ): Promise<void> {
+  const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, {...executionFlow, relationship:match.registration.mode === "background" ? "spawn" : "call"}, event.run.id, []);
+  flow.advance("invoke", {hookId:match.registration.ref.id, mode:match.registration.mode, timeoutMs:match.registration.timeoutMs});
   const result = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) => {
     if (event.point === "Stop") {
-      await (match.binding.handler as AgentStopObserver).observe(event, context);
+      await (match.binding.handler as AgentStopObserver).observe(event, context, flow.callContext);
     } else {
-      await (match.binding.handler as AgentStopFailureObserver).observe(event, context);
+      await (match.binding.handler as AgentStopFailureObserver).observe(event, context, flow.callContext);
     }
   });
+  flow.advance("settle", {status:result.status});
+  flow.close(result.status === "completed" ? "returned" : result.status === "cancelled" ? "cancelled" : "failed");
   store.append(record(
     match.registration.ref,
     event,

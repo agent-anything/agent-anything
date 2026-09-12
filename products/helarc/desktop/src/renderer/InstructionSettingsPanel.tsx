@@ -14,7 +14,7 @@ const TITLES: Readonly<Record<string, string>> = {
   tool_use_guidance: "Tool use guidance",
   code_change_behavior: "Code change behavior",
   planning_and_progress: "Planning and progress",
-  verification_and_completion: "Verification and completion",
+  checking_and_final_response: "Checking and final response",
   communication: "Communication",
   safety_and_uncertainty: "Safety and uncertainty",
   delegated_work: "Delegated work",

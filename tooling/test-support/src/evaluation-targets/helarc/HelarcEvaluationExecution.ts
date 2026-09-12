@@ -404,7 +404,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.call-admission-scheduling-baseline-result`,
+      id: `${definition.ref.id}.normal-completion-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -415,7 +415,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.call-admission-scheduling.report.baseline",
+      id: "helarc.normal-completion.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -461,7 +461,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.child-report-transfer.report.baseline",
+      id: "helarc.call-admission-scheduling.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -477,13 +477,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.call-admission-scheduling.baseline-acceptance",
+      id: "helarc.normal-completion.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "call-admission-scheduling-v1",
+      revision: "normal-completion-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -492,14 +492,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Reviewed as the call admission and scheduling successor: request provenance is preserved independently of dispatch state; outcome and safety gates remain absolute.",
+      "Normal Run completion is independent of task success; raw execution facts and external Evaluation oracles remain authoritative in their own domains.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.child-report-transfer.baseline-acceptance",
+      id: "helarc.call-admission-scheduling.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -524,10 +524,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v22-")) {
-    throw new TypeError(`Unknown Call admission scheduling Target revision '${revision}'.`);
+  if (!revision.startsWith("v23-")) {
+    throw new TypeError(`Unknown Normal completion Target revision '${revision}'.`);
   }
-  return revision.replace(/^v22-/, "v21-");
+  return revision.replace(/^v23-/, "v22-");
 }
 
 function gradeExpectedOutcome(

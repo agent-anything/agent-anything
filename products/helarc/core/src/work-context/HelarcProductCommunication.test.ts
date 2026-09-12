@@ -55,7 +55,6 @@ describe("Helarc Product communication", () => {
         severity: "high",
         summary: "The exported contract no longer matches its consumer.",
         evidenceRefs: [recordRef("context", "evidence", "evidence-1", "1")],
-        verificationRefs: [],
         uncertainty: ["The downstream package was not executed."],
       }],
       coveredScopes: ["public API"],
@@ -98,7 +97,6 @@ describe("Helarc Product communication", () => {
       severity: "medium" as const,
       summary: "Finding.",
       evidenceRefs: [],
-      verificationRefs: [],
       uncertainty: [],
     };
     expect(snapshotHelarcReviewRecord({

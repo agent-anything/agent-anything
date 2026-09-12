@@ -30,10 +30,10 @@ interface RunResultBase<TOutput> {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export type SucceededRunResult<TOutput> = RunResultBase<TOutput> & {
-  readonly status: "succeeded";
+export type CompletedRunResult<TOutput> = RunResultBase<TOutput> & {
+  readonly status: "completed";
   readonly finalOutput: TOutput;
-  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "succeeded" }>;
+  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "completed" }>;
   readonly cause: Extract<RunSettlementCauseRecord, { readonly kind: "completion" }>;
 };
 
@@ -44,13 +44,6 @@ export type FailedRunResult<TOutput = never> = RunResultBase<TOutput> & {
   readonly cause: Extract<RunSettlementCauseRecord, { readonly kind: "failure" }>;
 };
 
-export type StoppedRunResult<TOutput = never> = RunResultBase<TOutput> & {
-  readonly status: "stopped";
-  readonly finalOutput: null;
-  readonly settlement: Extract<RunSettlement<TOutput>, { readonly status: "stopped" }>;
-  readonly cause: Extract<RunSettlementCauseRecord, { readonly kind: "stop" }>;
-};
-
 export type CancelledRunResult<TOutput = never> = RunResultBase<TOutput> & {
   readonly status: "cancelled";
   readonly finalOutput: null;
@@ -59,8 +52,7 @@ export type CancelledRunResult<TOutput = never> = RunResultBase<TOutput> & {
 };
 
 export type RunResult<TOutput = unknown> =
-  | SucceededRunResult<TOutput>
-  | StoppedRunResult<TOutput>
+  | CompletedRunResult<TOutput>
   | FailedRunResult<TOutput>
   | CancelledRunResult<TOutput>;
 
@@ -86,14 +78,11 @@ export function createRunResult<TOutput>(input: CreateRunResultInput<TOutput>): 
   const settlement = snapshotRunSettlement(input.settlement, cause);
   const common = base(input, settlement.completedAt);
   const settlementCauses = snapshotCauseRecords(input.settlementCauses, input.runId, cause);
-  if (settlement.status === "succeeded" && cause.kind === "completion") {
-    return deepFreeze({ ...common, status: "succeeded" as const, finalOutput: settlement.output, settlement, cause, settlementCauses });
+  if (settlement.status === "completed" && cause.kind === "completion") {
+    return deepFreeze({ ...common, status: "completed" as const, finalOutput: settlement.output, settlement, cause, settlementCauses });
   }
   if (settlement.status === "failed" && cause.kind === "failure") {
     return deepFreeze({ ...common, status: "failed" as const, finalOutput: null, settlement, cause, settlementCauses });
-  }
-  if (settlement.status === "stopped" && cause.kind === "stop") {
-    return deepFreeze({ ...common, status: "stopped" as const, finalOutput: null, settlement, cause, settlementCauses });
   }
   if (settlement.status === "cancelled" && cause.kind === "cancellation") {
     return deepFreeze({ ...common, status: "cancelled" as const, finalOutput: null, settlement, cause, settlementCauses });

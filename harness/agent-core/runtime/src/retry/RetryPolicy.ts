@@ -5,7 +5,12 @@ export interface RetryPolicy<TCategory extends string> {
   readonly delay: RetryDelayPolicy;
   readonly retryableCategories: readonly TCategory[];
   readonly serverDelay: RetryServerDelayPolicy;
+  readonly exhaustion?: RetryExhaustionDisposition;
 }
+
+export type RetryExhaustionDisposition =
+  | { readonly kind: "return_failure" }
+  | { readonly kind: "retry_after_delay"; readonly delayMs: number; readonly maxAdditionalAttempts: number };
 
 export type RetryServerDelayPolicy =
   | { readonly mode: "ignore" }
@@ -79,6 +84,16 @@ export function snapshotRetryPolicy<TCategory extends string>(
     throw new TypeError(`${field}.serverDelay.mode is unsupported.`);
   }
 
+  const exhaustion = policy.exhaustion;
+  if (exhaustion !== undefined && exhaustion.kind !== "return_failure") {
+    if (exhaustion.kind !== "retry_after_delay") throw new TypeError(`${field}.exhaustion is invalid.`);
+    assertTimerDelay(exhaustion.delayMs, `${field}.exhaustion.delayMs`);
+    assertNonNegativeInteger(exhaustion.maxAdditionalAttempts, `${field}.exhaustion.maxAdditionalAttempts`);
+    if (exhaustion.delayMs === 0 || exhaustion.maxAdditionalAttempts === 0 ||
+        !Number.isSafeInteger(policy.maxRetries + 1 + exhaustion.maxAdditionalAttempts)) {
+      throw new TypeError(`${field}.exhaustion requires positive bounded recovery allowances.`);
+    }
+  }
   return Object.freeze({
     maxRetries: policy.maxRetries,
     delay: Object.freeze({
@@ -90,6 +105,7 @@ export function snapshotRetryPolicy<TCategory extends string>(
     }),
     retryableCategories: Object.freeze(categories),
     serverDelay,
+    ...(exhaustion === undefined ? {} : { exhaustion: Object.freeze({ ...exhaustion }) }),
   });
 }
 

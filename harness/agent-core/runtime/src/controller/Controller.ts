@@ -145,7 +145,6 @@ export interface ControllerInput<TOutput = unknown> {
   readonly interaction: ModelInteractionProjection;
   readonly plan: PlanProjection | null;
   readonly planLimits: PlanLimits;
-  readonly verification: ControllerVerificationProjection;
   readonly permission: PermissionContextProjection;
   readonly pending: readonly PendingRunSubjectProjection[];
   readonly descendants: DescendantTargetsProjection;
@@ -154,25 +153,19 @@ export interface ControllerInput<TOutput = unknown> {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export interface ControllerVerificationProjection {
-  readonly snapshot: Readonly<{ readonly runId: string; readonly revision: number }>;
-  readonly gate: Readonly<{
-    readonly id: string;
-    readonly revision: string;
-  }> | null;
-}
-
 export type ControllerPreProjectionInput<TOutput = unknown> = Omit<
   ControllerInput<TOutput>,
   "context" | "contextManifest"
 >;
 
 export interface ControllerCallContext {
+  readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly cancellation: CancellationContext;
   readonly retry: ControllerRetryContext;
 }
 
 export interface ControllerRetryContext {
+  readonly waitControl?: import("../retry/RetryWaitControl.js").RetryWaitControl;
   readonly providerRequest: RetryPolicy<string>;
   readonly structuredOutput: RetryPolicy<string>;
   readonly deadlineAt: string;
@@ -199,11 +192,6 @@ export type ControllerDecision<TOutput = unknown> =
   | {
       readonly kind: "advance";
       readonly candidates: readonly [ProgressionCandidate, ...ProgressionCandidate[]];
-      readonly modelItems: readonly ControllerModelItem[];
-    }
-  | {
-      readonly kind: "propose_stop";
-      readonly reason: string;
       readonly modelItems: readonly ControllerModelItem[];
     }
   | {

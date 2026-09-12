@@ -11,6 +11,7 @@ const RelationGraph = lazy(async () => ({ default: (await import("./graph/Relati
 const ExecutionTimeline = lazy(async () => ({ default: (await import("./timeline/ExecutionTimeline.js")).ExecutionTimeline }));
 const ContentViewer = lazy(async () => ({ default: (await import("./content/ContentViewer.js")).ContentViewer }));
 const LifecycleView = lazy(async () => ({ default: (await import("./runs/LifecycleView.js")).LifecycleView }));
+const ExecutionFlowView = lazy(async () => ({ default: (await import("./execution-flow/ExecutionFlowView.js")).ExecutionFlowView }));
 const label = (record: InspectionRecord) => record.payload.kind === "definition" ? record.payload.name : record.subject.id;
 
 export function App() {
@@ -53,7 +54,7 @@ export function App() {
     </> : <span>No recording selected</span>}</div>
     {error && <Alert className="query-alert" type="error" closable onClose={() => setError(null)} title={error} />}
     <nav className="area-tabs"><Tabs activeKey={area} onChange={(value) => navigate({ area: value })} items={areas.map((key) => ({ key, label: key }))} /></nav>
-    {!datasetId ? <main className="empty-workspace"><Empty description={sources.length ? "Select a source and recording" : "No recorded sources"} /></main> : <main className="workspace">
+    {!datasetId ? <main className="empty-workspace"><Empty description={sources.length ? "Select a source and recording" : "No recorded sources"} /></main> : <main className={`workspace${view === "Execution Flow" ? " workspace-flow" : ""}`}>
       <aside className="object-pane">
         <Input aria-label="Search objects" prefix={<SearchOutlined />} placeholder="Search loaded objects" value={search} onChange={(event) => setSearch(event.target.value)} />
         {selected && selectionRef && <div className="object-selection" role="group" aria-label="Selected object">
@@ -77,22 +78,23 @@ export function App() {
             <span>{comparison ? `Baseline: ${comparison.record.subject.id} @ ${comparison.selection.watermark}` : "No baseline selected"}</span>
           </div>{detail && comparison ? <ContentViewer text={JSON.stringify(detail, null, 2)} compare={JSON.stringify(comparison.record, null, 2)} language="json" /> : <Empty description="Pin a baseline, then select another object" />}</div> : <>
             <Tabs className="view-tabs" activeKey={view} onChange={(value) => navigate({ view: value })} items={Object.keys(views).map((key) => ({ key, label: key }))} />
-            <div className="view-content">{graph ? graph.nodes.length ? <RelationGraph graph={graph} selected={selected} onSelect={choose} onLink={(id) => setSelectedLink(graph.links.find((link) => link.id === id) ?? null)} /> : <Empty description="No recorded relations in this scope" />
+            <div className="view-content">{view === "Execution Flow" ? bundle?.snapshot.selection && selected?.runId ? <ExecutionFlowView key={`${sourceId}:${datasetId}:${selected.runId}`} scope={bundle.snapshot.selection} runId={selected.runId} paused={loading} params={params} navigate={navigate} onContent={setContentId} onSubject={(subject) => navigate({view: "Records", subject: JSON.stringify(subject), record: null})} /> : <Empty description="Select a Run to inspect its execution flow" />
+              : graph ? graph.nodes.length ? <RelationGraph graph={graph} selected={selected} onSelect={choose} onLink={(id) => setSelectedLink(graph.links.find((link) => link.id === id) ?? null)} /> : <Empty description="No recorded relations in this scope" />
               : view === "Timeline" ? bundle?.view.intervals.length ? <ExecutionTimeline intervals={bundle.view.intervals} onSelect={choose} /> : <Empty description="No execution intervals recorded" />
               : view === "Lifecycle" ? selected ? <LifecycleView records={records} onRecord={showRecord} /> : <Empty description="Select an object to inspect its lifecycle" />
               : view === "Telemetry" ? <ContentViewer text={JSON.stringify(bundle?.view.telemetry ?? [], null, 2)} language="json" />
               : <><Table className="records-table" size="small" rowKey="id" columns={recordColumns} dataSource={[...records]} pagination={{ pageSize: 25, showSizeChanger: false }} scroll={{ x: 650 }} rowClassName={(record) => record.id === params.get("record") ? "record-selected" : ""} onRow={(record) => ({ onClick: () => showRecord(record) })} />
                 </>}
-              {bundle?.view.next !== null && bundle && <Button disabled={loading || paging} onClick={() => { void loadMore("view"); }}>{view === "Timeline" ? "Next interval page" : "Load more records"}</Button>}
+              {view !== "Execution Flow" && bundle?.view.next !== null && bundle && <Button disabled={loading || paging} onClick={() => { void loadMore("view"); }}>{view === "Timeline" ? "Next interval page" : "Load more records"}</Button>}
             </div>
           </>}
         </Suspense>
         {bundle?.view.limitations.length ? <div className="coverage-note">{bundle.view.limitations.join(" / ")}</div> : null}
         {coverage?.limitations.length ? <div className="coverage-note">{coverage.limitations.join(" / ")}</div> : null}
       </section>
-      <aside className="detail-pane"><h2>{selectedLink ? "Recorded relation" : "Object detail"}</h2>
+      {view !== "Execution Flow" && <aside className="detail-pane"><h2>{selectedLink ? "Recorded relation" : "Object detail"}</h2>
         <RecordDetails record={detail} link={selectedLink} onSubject={choose} onRecord={(id) => { void findRecord(id); }} onContent={setContentId} />
-      </aside>
+      </aside>}
     </main>}
     <ContentDrawer id={contentId} scope={bundle?.snapshot.selection ?? null} onClose={() => setContentId(null)} />
   </div>;

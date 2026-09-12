@@ -5,14 +5,7 @@ import type {
   RunTreeResourceMeasurement,
   RunTreeResourceSettlement,
 } from "../runner/RunTreeResourceAccount.js";
-import {
-  createDelegationResult,
-  type DelegationEffectSummary,
-  type DelegationLimitDisposition,
-  type DelegationResult,
-  type DelegationUsageSummary,
-  type DelegationVerificationSummary,
-} from "./DelegationResult.js";
+import { createDelegationResult, type DelegationEffectSummary, type DelegationLimitDisposition, type DelegationResult, type DelegationUsageSummary } from "./DelegationResult.js";
 import type { DelegationRequest } from "./DelegationRequest.js";
 
 export interface DelegationResultConstructionInput {
@@ -35,7 +28,6 @@ export function constructDelegationResult(
     correlation: input.correlation,
     childResult: input.childResult,
     narrative: input.narrative,
-    verification: verificationSummary(input.childResult.items),
     effects: effectSummary(input.childResult.items),
     usage,
     limitDisposition: limitDisposition(
@@ -44,49 +36,6 @@ export function constructDelegationResult(
       input.resourceSettlement,
     ),
     createdAt: input.createdAt,
-  });
-}
-
-function verificationSummary(
-  items: readonly RunItem[],
-): DelegationVerificationSummary {
-  const projection = [...items].reverse().find(
-    ({ payload }) => payload.kind === "verification_feedback",
-  );
-  if (projection === undefined || projection.payload.kind !== "verification_feedback") {
-    return Object.freeze({
-      status: "not_required" as const,
-      snapshotRevision: null,
-      mandatoryTotal: 0,
-      mandatorySatisfied: 0,
-      limitationCodes: Object.freeze([]),
-    });
-  }
-  const verification = projection.payload.verification;
-  const mandatory = verification.feedback.filter(({ necessity }) => necessity === "mandatory");
-  const states = mandatory.map(({ state }) => state);
-  const status = mandatory.some(({ activeAttempts }) => activeAttempts.length > 0) ||
-      states.some((state) => state === "pending" || state === "unassessed")
-    ? "pending" as const
-    : states.some((state) => state === "violated")
-      ? "violated" as const
-      : states.some((state) => state === "inconclusive")
-        ? "inconclusive" as const
-        : states.some((state) => state === "stale")
-          ? "stale" as const
-          : states.length === 0
-            ? "not_required" as const
-            : "satisfied" as const;
-  const limitationCodes = mandatory
-    .filter(({ state }) => state !== "satisfied")
-    .flatMap(({ reasonCodes }) => reasonCodes)
-    .filter((code, index, values) => values.indexOf(code) === index);
-  return Object.freeze({
-    status,
-    snapshotRevision: `${verification.snapshot.runId}:${verification.snapshot.revision}`,
-    mandatoryTotal: mandatory.length,
-    mandatorySatisfied: states.filter((state) => state === "satisfied").length,
-    limitationCodes: Object.freeze(limitationCodes),
   });
 }
 

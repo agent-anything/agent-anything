@@ -67,7 +67,6 @@ export interface HelarcMessageCorrelation {
 export type HelarcPersistedRunStatus =
   | "inactive"
   | "completed"
-  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -1120,7 +1119,6 @@ function isHostRunProjection(value: unknown): value is HostRunProjection {
     (projection.sequence ?? -1) >= 0 &&
     projection.terminal === null &&
     projection.status !== "completed" &&
-    projection.status !== "stopped" &&
     projection.status !== "failed" &&
     projection.status !== "cancelled";
 }
@@ -1144,7 +1142,7 @@ function isCompatibleProductTerminal(
 ): boolean {
   if (product === null) return true;
   if (
-    product.status !== "completed" && product.status !== "stopped" && product.status !== "rejected" &&
+    product.status !== "completed" && product.status !== "rejected" &&
     product.status !== "failed" &&
     product.status !== "cancelled"
   ) {
@@ -1166,7 +1164,7 @@ function isCompatibleProductTerminal(
   ) {
     return false;
   }
-  const expectedRuntimeStatus = host.status === "completed" ? "succeeded" : host.status;
+  const expectedRuntimeStatus = host.status;
   if (output.runtimeStatus !== expectedRuntimeStatus) return false;
   if (host.status === "completed") return product.status !== "cancelled";
   return product.status === host.status;
@@ -1210,9 +1208,6 @@ function isHostTerminalProjection(value: HostTerminalRunProjection): boolean {
   if (value.status === "completed") {
     return value.code === "completion_accepted" && value.failure === null &&
       value.cancellation === null;
-  }
-  if (value.status === "stopped") {
-    return value.code === "stop_accepted" && value.failure === null && value.cancellation === null;
   }
   if (value.status === "cancelled") {
     return value.code === "runtime_cancelled" && value.failure === null &&
@@ -1259,7 +1254,7 @@ function isCancellationSummary(value: unknown): boolean {
 }
 
 function isRuntimeResultStatus(value: unknown): boolean {
-  return value === "succeeded" || value === "stopped" || value === "blocked" || value === "failed" ||
+  return value === "completed" || value === "failed" ||
     value === "cancelled";
 }
 
@@ -1278,7 +1273,7 @@ function isEnforcementSummary(value: unknown): boolean {
 function isHostTerminalStatus(
   value: unknown,
 ): value is HostTerminalRunProjection["status"] {
-  return value === "completed" || value === "stopped" || value === "blocked" || value === "failed" || value === "cancelled";
+  return value === "completed" || value === "failed" || value === "cancelled";
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -1470,7 +1465,6 @@ function isArtifactKind(value: unknown): value is HelarcArtifactKind {
     value === "trace-projection" ||
     value === "tool-output-summary" ||
     value === "evidence-bundle" ||
-    value === "verification-report" ||
     value === "evaluation-report" ||
     value === "engineering-review" ||
     value === "error-report";
@@ -1478,7 +1472,7 @@ function isArtifactKind(value: unknown): value is HelarcArtifactKind {
 
 function isArtifactProducerKind(value: unknown): value is HelarcArtifactProducer["kind"] {
   return value === "agent" || value === "product" || value === "tool" ||
-    value === "operation" || value === "verification" || value === "evaluation" ||
+    value === "operation" || value === "evaluation" ||
     value === "review" || value === "user";
 }
 

@@ -13,7 +13,6 @@ export type HelarcArtifactKind =
   | "trace-projection"
   | "tool-output-summary"
   | "evidence-bundle"
-  | "verification-report"
   | "evaluation-report"
   | "engineering-review"
   | "error-report";
@@ -23,7 +22,6 @@ export type HelarcArtifactProducerKind =
   | "product"
   | "tool"
   | "operation"
-  | "verification"
   | "evaluation"
   | "review"
   | "user";

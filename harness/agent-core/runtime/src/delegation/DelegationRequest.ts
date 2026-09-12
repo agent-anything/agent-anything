@@ -72,7 +72,6 @@ export type DelegationExpectedResultForm =
   | "narrative"
   | "evidence"
   | "artifacts"
-  | "verification"
   | "effects";
 
 export interface DelegationExpectedResultRequirement {
@@ -648,7 +647,7 @@ function snapshotRequirements(
   }
   const requirements = input.map((requirement, index) => {
     strictRecord(requirement, `requirements[${index}]`, ["form", "required", "maxItems"]);
-    if (!["narrative", "evidence", "artifacts", "verification", "effects"].includes(requirement.form)) {
+    if (!["narrative", "evidence", "artifacts", "effects"].includes(requirement.form)) {
       throw new TypeError("Delegation expected-result form is unsupported.");
     }
     if (typeof requirement.required !== "boolean") {

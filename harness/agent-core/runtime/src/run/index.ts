@@ -62,14 +62,7 @@ export {
   deriveEffectivePermissionContext,
   projectPermissionContext,
 } from "./RunPermissionState.js";
-export type {
-  CancelledRunResult,
-  CreateRunResultInput,
-  FailedRunResult,
-  RunResult,
-  SucceededRunResult,
-  StoppedRunResult,
-} from "./RunResult.js";
+export type { CancelledRunResult, CreateRunResultInput, FailedRunResult, RunResult, CompletedRunResult } from "./RunResult.js";
 export { createRunResult } from "./RunResult.js";
 export type {
   RunCausalLink,
@@ -87,6 +80,8 @@ export {
 } from "./RunSettlement.js";
 export type {
   RunResumeReceipt,
+  RunSuspendReceipt,
+  RunSuspendRequestInput,
   RunResumeRejectionCode,
   RunResumeRequest,
   RunResumeRequestInput,
@@ -97,8 +92,9 @@ export type {
 export {
   sameRunSuspensionRef,
   snapshotRunResumeRequestInput,
+  snapshotRunSuspendRequestInput,
 } from "./RunSuspension.js";
-export type { RunCounters, RunState, RunVerificationState } from "./RunState.js";
+export type { RunCounters, RunState } from "./RunState.js";
 export type {
   RunSteeringApplication,
   RunSteeringAttribution,

@@ -13,7 +13,6 @@ export type DelegationAuthorityDimensionKind =
   | "permission"
   | "action_execution"
   | "sandbox"
-  | "verification"
   | "disclosure"
   | "resource";
 
@@ -75,7 +74,6 @@ const dimensionKinds: readonly DelegationAuthorityDimensionKind[] = [
   "permission",
   "action_execution",
   "sandbox",
-  "verification",
   "disclosure",
   "resource",
 ];

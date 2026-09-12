@@ -34,6 +34,7 @@
     "vis-timeline": "8.5.4"
   },
   "devDependencies": {
+    "@agent-anything/observability": "workspace:*",
     "@playwright/test": "1.63.0",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

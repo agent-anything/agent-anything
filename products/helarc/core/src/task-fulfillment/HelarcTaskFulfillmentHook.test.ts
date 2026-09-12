@@ -264,10 +264,6 @@ function createEvent(): AgentStopEvent<{ readonly summary: string }> {
       settledCallCount: 0,
     }),
     plan: null,
-    verification: Object.freeze({
-      snapshot: Object.freeze({ runId: "run-1", revision: 2 }),
-      gate: Object.freeze({ id: "completion-gate-1", revision: "1" }),
-    }),
     pending: Object.freeze([]),
     emittedAt: NOW,
   });

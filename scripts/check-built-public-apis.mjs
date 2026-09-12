@@ -58,6 +58,7 @@ const packageExportKeys = {
     ".",
     "./audit",
     "./events",
+    "./execution-flow",
     "./redaction",
     "./telemetry",
     "./tracing",
@@ -71,16 +72,6 @@ const packageExportKeys = {
     "./persistence",
     "./report",
     "./trial",
-  ],
-  "harness/verification": [
-    "./assessment",
-    "./completion",
-    "./definition",
-    "./evidence",
-    "./execution",
-    "./persistence",
-    "./projection",
-    "./subject",
   ],
   "harness/model-interaction": [".", "./context", "./continuation", "./input", "./transport"],
   "tooling/test-support": [
@@ -121,7 +112,6 @@ const packageExportKeys = {
   "products/helarc/code-agent": [
     "./file-operation",
     "./source",
-    "./verification",
     "./workspace",
   ],
   "products/helarc/core": [
@@ -141,7 +131,6 @@ const packageExportKeys = {
     "./task-fulfillment",
     "./thread",
     "./tools",
-    "./verification",
     "./work-context",
   ],
   "products/helarc/local-environment": [
@@ -446,6 +435,12 @@ const expectedLowerValueExports = {
     "createTelemetryRecord",
   ],
   "@agent-anything/observability/redaction": ["Redactor", "defaultRedactionRules"],
+  "@agent-anything/observability/execution-flow": [
+    "ExecutionFlowInvocation",
+    "ExecutionFlowPath",
+    "createExecutionFlowDefinition",
+    "validateExecutionFlowDefinition",
+  ],
   "@agent-anything/observability/tracing": [
     "RUN_TRACE_SCHEMA_VERSION",
     "RunTraceAssembler",
@@ -498,7 +493,6 @@ const expectedLowerValueExports = {
     "FakeTelemetryPort",
     "createFakeProviderContext",
     "createTestContextProjection",
-    "createTestVerificationExecutionFactory",
     "fakeNativeModelOutput",
     "fakeNativeProviderResult",
   ],
@@ -774,6 +768,7 @@ const expectedValueExports = {
   ],
   "@agent-anything/agent-runtime/retry": [
     "RetryExecutor",
+    "RetryInvocationInvalidatedError",
     "createSystemRetryExecutor",
     "snapshotRetryEvent",
     "snapshotRetryOperation",
@@ -807,6 +802,7 @@ const expectedValueExports = {
     "snapshotRunSettlement",
     "snapshotRunSettlementCauseRecord",
     "snapshotRunSteeringInput",
+    "snapshotRunSuspendRequestInput",
     "toRunCancellationSummary",
   ],
   "@agent-anything/agent-runtime/runner": [
@@ -914,12 +910,6 @@ const expectedValueExports = {
   ],
   "@agent-anything/helarc-code-agent/workspace": ["resolveWorkspacePath"],
   "@agent-anything/helarc-code-agent/source": [],
-  "@agent-anything/helarc-code-agent/verification": [
-    "EXACT_CODE_SOURCE_CHECK_FAMILY",
-    "EXACT_CODE_SOURCE_EVALUATOR_REF",
-    "EXACT_CODE_SOURCE_SUBJECT_KIND",
-    "createExactCodeSourceVerificationContribution",
-  ],
   "@agent-anything/helarc-code-agent/file-operation": [
     "CODE_AGENT_EDIT_TOOL",
     "CODE_AGENT_GLOB_TOOL",
@@ -958,7 +948,6 @@ const expectedValueExports = {
     "HELARC_CONTROLLER_CAPABILITY",
     "HELARC_CONTROLLER_CONTROL_GUIDANCE",
     "HELARC_NATIVE_TOOL_PROTOCOL_REVISION",
-    "HELARC_STOP_REASON_MAX_LENGTH",
     "buildHelarcProviderRequest",
     "createHelarcBaselineControllerProtocolComposition",
     "createHelarcContextProjectionConfiguration",
@@ -1077,10 +1066,6 @@ const expectedValueExports = {
     "projectHelarcProductResult",
   ],
   "@agent-anything/helarc/artifacts": ["createHelarcArtifact"],
-  "@agent-anything/helarc/verification": [
-    "bindHelarcVerificationCompletionGate",
-    "createHelarcVerificationComposition",
-  ],
   "@agent-anything/helarc-local-environment/command": [
     "HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID",
     "HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID",
@@ -1169,51 +1154,6 @@ const expectedEvaluationValueExports = {
 const expectedRemoteIntegrationValueExports = {
   "@agent-anything/remote-integrations/operation": ["createRemoteOperationContribution"],
   "@agent-anything/remote-integrations/transport": [],
-};
-
-const expectedVerificationValueExports = {
-  "@agent-anything/verification/definition": [
-    "createVerificationFailure",
-    "materializeVerificationProfile",
-    "snapshotVerificationProfile",
-    "snapshotVerificationRequirement",
-    "snapshotVerificationSpecification",
-  ],
-  "@agent-anything/verification/subject": [
-    "snapshotVerificationSubjectSnapshot",
-  ],
-  "@agent-anything/verification/execution": [
-    "DefaultVerificationExecutionFactory",
-    "VerificationExecution",
-    "VerificationExecutionError",
-    "snapshotCheckAttempt",
-    "snapshotCheckDefinition",
-    "snapshotCheckResult",
-  ],
-  "@agent-anything/verification/evidence": [
-    "snapshotVerificationEvidence",
-  ],
-  "@agent-anything/verification/assessment": [
-    "snapshotVerificationAssessment",
-    "snapshotVerificationCurrentRequirementState",
-    "snapshotVerificationCurrentSnapshot",
-  ],
-  "@agent-anything/verification/completion": [
-    "CurrentVerificationCompletionGate",
-    "snapshotCompletionGateConfiguration",
-    "snapshotCompletionGateDecision",
-    "snapshotCompletionGateInput",
-  ],
-  "@agent-anything/verification/projection": [
-    "snapshotVerificationContextProjection",
-    "snapshotVerificationEvaluationProjection",
-    "snapshotVerificationHostProjection",
-    "snapshotVerificationObservabilityProjection",
-    "snapshotVerificationRunnerProjection",
-  ],
-  "@agent-anything/verification/persistence": [
-    "snapshotVerificationPersistenceReceipt",
-  ],
 };
 
 const expectedProviderIntegrationValueExports = {
@@ -1356,21 +1296,6 @@ if (process.argv.includes("--evaluation-only")) {
     join(repoRoot, "harness/evaluation"),
   );
   console.log("Built Evaluation public API check passed.");
-  process.exit(0);
-}
-
-if (process.argv.includes("--verification-only")) {
-  checkBuiltSurfaces(
-    expectedVerificationValueExports,
-    [
-      "@agent-anything/verification",
-      "@agent-anything/verification/internal",
-      "@agent-anything/verification/common",
-      "@agent-anything/verification/shared",
-    ],
-    join(repoRoot, "harness/verification"),
-  );
-  console.log("Built Verification public API check passed.");
   process.exit(0);
 }
 
@@ -1522,16 +1447,6 @@ checkBuiltSurfaces(
   join(repoRoot, "harness/evaluation"),
 );
 checkBuiltSurfaces(
-  expectedVerificationValueExports,
-  [
-    "@agent-anything/verification",
-    "@agent-anything/verification/internal",
-    "@agent-anything/verification/common",
-    "@agent-anything/verification/shared",
-  ],
-  join(repoRoot, "harness/verification"),
-);
-checkBuiltSurfaces(
   selectExpectedExports(expectedValueExports, ["@agent-anything/agent-hooks"]),
   [],
   join(repoRoot, "harness/agent-hooks"),
@@ -1601,15 +1516,15 @@ checkBuiltSurfaces(
 );
 
 checkBuiltSurfaces({
-  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey", "snapshotInspectionJson", "validateInspectionInput", "validateInspectionRef"],
-  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey", "snapshotInspectionJson", "validateInspectionInput", "validateInspectionRef"],
+  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey"],
+  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey"],
   "@agent-anything/inspection/content": ["DEFAULT_INSPECTION_CAPTURE_POLICY", "captureClassEnabled", "redactInspectionContent", "validateInspectionCapturePolicy"],
   "@agent-anything/inspection/sources": ["atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "registerInspectionSource", "validateOpaqueId"],
   "@agent-anything/inspection/recording": ["InspectionRecorder"],
   "@agent-anything/inspection/storage": ["InspectionDatabase", "inspectionSourceBytes", "retireInspectionDatasets", "wasInspectionDatasetRetired"],
   "@agent-anything/inspection/telemetry": ["InspectionTelemetry"],
   "@agent-anything/inspection/query": ["InspectionQueryService", "executeInspectionQuery", "readInspectionJson", "validateInspectionQuery"],
-  "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink"],
+  "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ExecutionFlowInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink"],
 }, ["@agent-anything/inspection/recording/InspectionRecorderWorker", "@agent-anything/inspection/storage/InspectionDatasetAccess"], join(repoRoot, "harness/inspection"));
 
 console.log("Built public API check passed.");

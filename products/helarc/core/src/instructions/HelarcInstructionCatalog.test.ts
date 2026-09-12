@@ -27,7 +27,7 @@ describe("Helarc instruction releases", () => {
       "tool_use_guidance",
       "code_change_behavior",
       "planning_and_progress",
-      "verification_and_completion",
+      "checking_and_final_response",
       "communication",
       "safety_and_uncertainty",
     ]);
@@ -41,10 +41,13 @@ describe("Helarc instruction releases", () => {
     expect(HELARC_INSTRUCTION_CATALOG.sources.every(({ provenance }) => provenance.license === "Apache-2.0"))
       .toBe(true);
     expect(minimal.blocks[0]?.content).toContain(
-      "An Operation completing does not by itself prove that a Check passed",
+      "A normally ending Run does not by itself prove that the user's objective was achieved",
     );
-    expect(production.blocks.find(({ id }) => id === "verification_and_completion")?.content)
-      .toContain("refresh stale subject state");
+    expect(production.blocks.find(({ id }) => id === "checking_and_final_response")?.content)
+      .toContain("Refresh stale observations");
+    for (const resolved of [minimal, production, delegated]) {
+      expect(JSON.stringify(resolved)).not.toMatch(/Verification feedback|Verification Requirement|Completion Gate/);
+    }
   });
 
   it("is deterministic and changes resolved identity with model correlation", () => {

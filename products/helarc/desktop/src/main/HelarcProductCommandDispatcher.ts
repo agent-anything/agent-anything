@@ -68,7 +68,7 @@ export function createHelarcProductCommandDispatcher(
         command = snapshotHelarcProductCommand(candidate);
       } catch (error) {
         return Promise.resolve(
-          rejectedReceipt(candidate, verificationCode(error)),
+          rejectedReceipt(candidate, commandValidationCode(error)),
         ) as Promise<HelarcProductCommandReceipt<TKind>>;
       }
 
@@ -356,12 +356,6 @@ function digestCommand(command: HelarcProductCommand): string {
     .digest("hex");
 }
 
-function verificationCode(error: unknown): HelarcProductCommandRejectionCode {
-  return error instanceof ProductCommandValidationError
-    ? error.code
-    : "helarc_product_command_invalid";
-}
-
 class ProductCommandValidationError extends TypeError {
   constructor(
     readonly code: HelarcProductCommandRejectionCode,
@@ -463,6 +457,12 @@ function assertExactKeys(
   ) {
     invalid(`${field} contains unsupported fields.`);
   }
+}
+
+function commandValidationCode(error: unknown): HelarcProductCommandRejectionCode {
+  return error instanceof ProductCommandValidationError
+    ? error.code
+    : "helarc_product_command_invalid";
 }
 
 function invalid(message: string): never {

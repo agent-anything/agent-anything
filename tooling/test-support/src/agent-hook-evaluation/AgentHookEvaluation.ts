@@ -140,7 +140,6 @@ function stopEvent(): AgentStopEvent<{ readonly summary: string }> {
       settledCallCount: 0,
     },
     plan: null,
-    verification: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
     pending: [],
     emittedAt: NOW,
   });

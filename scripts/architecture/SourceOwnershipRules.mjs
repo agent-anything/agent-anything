@@ -184,48 +184,6 @@ export function evaluateSourceOwnershipRules({
       );
     }
 
-    const isBoundedVerificationConsumer =
-      path.startsWith("harness/agent-core/contracts/src/") ||
-      path.startsWith("harness/context/src/") ||
-      path.startsWith("harness/host/src/") ||
-      path.startsWith("harness/observability/src/") ||
-      path.startsWith("products/helarc/desktop/src/shared/") ||
-      /^products\/helarc\/core\/src\/(?:result|run|work-context)\//.test(path);
-    if (
-      isBoundedVerificationConsumer &&
-      /\b(?:VerificationExecution(?:Port|Factory)?|VerificationLedgerSnapshot|VerificationRecord|VerificationEvidence|VerificationAssessment|VerificationSubjectSnapshot|VerificationCurrentRequirementState|CheckAttempt|CheckResult)\b/.test(text)
-    ) {
-      reject(
-        "verification_detailed_state_leakage",
-        "Canonical state and consumer-facing surfaces must use bounded Verification projections instead of detailed Verification records or execution authority.",
-      );
-    }
-
-    const isProductVerificationSource = path.startsWith("products/helarc/core/src/verification/");
-    if (
-      isProductVerificationSource &&
-      /from\s+["']@agent-anything\/(?:action-execution|helarc-local-environment)(?:[/'"]|$)/.test(text)
-    ) {
-      reject(
-        "product_verification_physical_execution_dependency",
-        "Product Verification may compose Operations and exact adapters but cannot depend on physical execution, sandbox, or local-environment implementations.",
-      );
-    }
-
-    const isVerificationSource =
-      path.startsWith("harness/verification/src/") ||
-      path.startsWith("products/helarc/core/src/verification/") ||
-      path.startsWith("products/helarc/code-agent/src/verification/");
-    if (
-      isVerificationSource &&
-      /from\s+["'][^"']*(?:tree-sitter|language-server|semantic-search|code-understanding|source-indexer|ast-parser|compiler-adapter)[^"']*["']/.test(text)
-    ) {
-      reject(
-        "verification_semantic_processor_dependency",
-        "Verification Contracts and composition cannot depend on language-specific or Code Understanding processors.",
-      );
-    }
-
     if (
       path.startsWith("harness/agent-core/runtime/src/") &&
       /\b(?:AgentHook|RunLifecycleHook|invokeStopLifecycleHooks)\b|@agent-anything\/agent-hooks/.test(text)
@@ -247,13 +205,6 @@ export function evaluateSourceOwnershipRules({
       reject(
         "runner_progression_contract_required",
         "RunExecution must preserve current continuation and descendant progression semantics.",
-      );
-    }
-
-    if (/\bcreateNoCheckVerificationExecutionFactory\b/.test(text)) {
-      reject(
-        "production_verification_bypass",
-        "Production sources cannot provide or consume a no-check Verification execution bypass.",
       );
     }
 

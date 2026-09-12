@@ -11,23 +11,7 @@ export type {
 export {
   createHelarcActionComposition,
 } from "./HelarcActionComposition.js";
-export type {
-  HelarcActivityItem,
-  HelarcActivitySource,
-  HelarcCanonicalActionSummary,
-  HelarcChildWorkSummary,
-  HelarcCompositeWorkSummary,
-  HelarcEnforcementSummary,
-  HelarcEffectSummary,
-  HelarcInteractionSummary,
-  HelarcProductOutput,
-  HelarcProductResult,
-  HelarcProductStatus,
-  HelarcRunActionSettlementStatus,
-  HelarcRunActionSummary,
-  HelarcRunResultSummary,
-  HelarcVerificationCommunication,
-} from "./HelarcProductResult.js";
+export type { HelarcActivityItem, HelarcActivitySource, HelarcCanonicalActionSummary, HelarcChildWorkSummary, HelarcCompositeWorkSummary, HelarcEnforcementSummary, HelarcEffectSummary, HelarcInteractionSummary, HelarcProductOutput, HelarcProductResult, HelarcProductStatus, HelarcRunActionSettlementStatus, HelarcRunActionSummary, HelarcRunResultSummary } from "./HelarcProductResult.js";
 export {
   mapRuntimeEventToHelarcActivity,
   projectHelarcProductResult,

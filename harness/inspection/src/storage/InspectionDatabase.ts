@@ -30,8 +30,14 @@ CREATE TABLE telemetry_logs (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, tra
 CREATE TABLE telemetry_correlations (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, subject_key TEXT NOT NULL, kind TEXT NOT NULL);
 CREATE INDEX telemetry_subject ON telemetry_correlations(subject_key, sequence);
 CREATE TABLE capture_issues (sequence INTEGER PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE flow_definitions (definition_key TEXT PRIMARY KEY, digest TEXT NOT NULL, record_id TEXT NOT NULL, sequence INTEGER NOT NULL);
+CREATE TABLE flow_records (sequence INTEGER PRIMARY KEY, definition_key TEXT NOT NULL, invocation_id TEXT NOT NULL, occurrence_id TEXT, step_id TEXT, event_kind TEXT NOT NULL, run_id TEXT NOT NULL);
+CREATE INDEX flow_invocations ON flow_records(invocation_id, event_kind, sequence);
+CREATE INDEX flow_occurrences ON flow_records(occurrence_id, sequence);
+CREATE INDEX flow_runs ON flow_records(run_id, event_kind, sequence);
+CREATE INDEX flow_steps ON flow_records(invocation_id, step_id, event_kind, sequence);
 `;
-const TABLES = ["dataset", "records", "relations", "contents", "definitions", "lifecycle_definitions", "subject_snapshots", "telemetry_spans", "telemetry_logs", "telemetry_correlations", "capture_issues"];
+const TABLES = ["dataset", "records", "relations", "contents", "definitions", "lifecycle_definitions", "subject_snapshots", "telemetry_spans", "telemetry_logs", "telemetry_correlations", "capture_issues", "flow_definitions", "flow_records"];
 type Row = Record<string, string | number | null>;
 
 export class InspectionDatabase {
@@ -93,6 +99,7 @@ export class InspectionDatabase {
       if (prior.fingerprint !== fingerprint) throw new Error("inspection_record_conflict");
       return { record: JSON.parse(String(prior.value)), duplicate: true };
     }
+    this.validateFlow(record);
     for (const content of contents) {
       if (content.text === null) continue;
       validateOpaqueId(content.descriptor.id);
@@ -114,9 +121,84 @@ export class InspectionDatabase {
       this.db.prepare("INSERT INTO subject_snapshots VALUES (?, ?, ?)").run(key, sequence, record.id);
       if (record.payload.kind === "definition") this.db.prepare("INSERT INTO definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
       if (record.payload.kind === "lifecycle") this.db.prepare("INSERT INTO lifecycle_definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
+      if (record.payload.kind === "flow_definition") {
+        const definition = record.payload.definition;
+        this.db.prepare("INSERT INTO flow_definitions VALUES (?, ?, ?, ?)").run(flowDefinitionKey(definition), definition.contentDigest, record.id, sequence);
+      } else if (isFlowRecord(record)) {
+        const value = record.payload.observation;
+        this.db.prepare("INSERT INTO flow_records VALUES (?, ?, ?, ?, ?, ?, ?)").run(sequence, flowDefinitionKey(value.definition), value.invocationId, "stepExecutionId" in value ? value.stepExecutionId : null, "stepId" in value ? value.stepId : null, value.kind, value.runId);
+      }
       this.db.prepare("UPDATE dataset SET watermark=?, coverage=? WHERE id=1").run(sequence, JSON.stringify({ ...previous, watermark: sequence, captured: previous.captured + 1, heartbeat: new Date().toISOString() }));
       return { record: committed, duplicate: false };
     })();
+  }
+
+  writeBatch<T>(write: () => T): T {
+    return this.db.transaction(write)();
+  }
+
+  private validateFlow(record: InspectionRecord): void {
+    if (record.payload.kind === "flow_definition") {
+      const definition = record.payload.definition;
+      const row = this.db.prepare("SELECT digest, record_id FROM flow_definitions WHERE definition_key=?").get(flowDefinitionKey(definition)) as Row | undefined;
+      if (row && (row.digest !== definition.contentDigest || row.record_id !== record.id)) throw new Error("inspection_flow_definition_conflict");
+      return;
+    }
+    if (!isFlowRecord(record)) return;
+    const observation = record.payload.observation;
+    const watermark = this.snapshot().watermark;
+    const invocation = this.flowRecords({watermark,invocationId:observation.invocationId,eventKind:"invocation_entered",limit:1})[0];
+    if (invocation?.payload.kind === "flow_invocation") {
+      const original = invocation.payload.observation;
+      if (original.runId !== observation.runId || flowDefinitionKey(original.definition) !== flowDefinitionKey(observation.definition) || original.definition.contentDigest !== observation.definition.contentDigest || observation.kind === "invocation_entered") throw new Error("inspection_flow_invocation_conflict");
+    }
+    if ("stepExecutionId" in observation) {
+      const entries = this.flowRecords({watermark,occurrenceId:observation.stepExecutionId,eventKind:"step_entered",limit:1});
+      const original = entries[0]?.payload;
+      if (original?.kind === "flow_step" && (observation.kind === "step_entered" || original.observation.invocationId !== observation.invocationId || original.observation.stepId !== observation.stepId)) throw new Error("inspection_flow_occurrence_conflict");
+      if (observation.kind === "step_exited" && this.flowRecords({watermark,occurrenceId:observation.stepExecutionId,eventKind:"step_exited",limit:1}).length) throw new Error("inspection_flow_occurrence_conflict");
+    }
+    if (observation.kind === "invocation_exited" && this.flowRecords({watermark,invocationId:observation.invocationId,eventKind:"invocation_exited",limit:1}).length) throw new Error("inspection_flow_invocation_conflict");
+    const definitionRecord = this.flowDefinition(observation.definition, watermark);
+    if (!definitionRecord || definitionRecord.payload.kind !== "flow_definition") return;
+    const definition = definitionRecord.payload.definition;
+    if (definition.contentDigest !== observation.definition.contentDigest) throw new Error("inspection_flow_definition_mismatch");
+    if ("stepId" in observation) {
+      const step = definition.steps.find(step => step.id === observation.stepId);
+      if (!step || (observation.kind === "constraint" && !step.checks.includes(observation.checkId))) throw new Error("inspection_flow_step_invalid");
+    }
+    if (observation.kind === "link" && observation.relation === "next") {
+      const edge = definition.transitions.find(edge => edge.id === observation.transitionId);
+      if (!edge || [observation.from,observation.to].some(ref => ref.invocationId !== observation.invocationId || ref.runId !== observation.runId || ref.owner !== definition.owner || ref.stepExecutionId === null)) throw new Error("inspection_flow_edge_invalid");
+      for (const [ref,stepId] of [[observation.from,edge.from],[observation.to,edge.to]] as const) {
+        const endpoint = this.flowRecords({watermark,occurrenceId:ref.stepExecutionId!,eventKind:"step_entered",limit:1})[0]?.payload;
+        if (endpoint?.kind === "flow_step" && endpoint.observation.stepId !== stepId) throw new Error("inspection_flow_edge_invalid");
+      }
+    }
+  }
+
+  flowDefinition(ref: {owner: string; id: string; revision: string}, watermark: number): InspectionRecord | null {
+    const row = this.db.prepare("SELECT record_id FROM flow_definitions WHERE definition_key=? AND sequence<=?").get(flowDefinitionKey(ref), watermark) as Row | undefined;
+    return row ? this.record(String(row.record_id), watermark) : null;
+  }
+
+  flowRecords(input: {watermark: number; runId?: string; invocationId?: string; occurrenceId?: string; stepId?: string; eventKind?: string; after?: number; limit?: number}): InspectionRecord[] {
+    const clauses = ["f.sequence<=?", "f.sequence>?"];
+    const args: (number | string)[] = [input.watermark, input.after ?? 0];
+    for (const [column,value] of [["run_id",input.runId],["invocation_id",input.invocationId],["occurrence_id",input.occurrenceId],["step_id",input.stepId],["event_kind",input.eventKind]]) {
+      if (value !== undefined) { clauses.push(`f.${column}=?`); args.push(value); }
+    }
+    return (this.db.prepare(`SELECT r.value FROM flow_records f JOIN records r ON r.sequence=f.sequence WHERE ${clauses.join(" AND ")} ORDER BY f.sequence LIMIT ?`).all(...args, Math.min(input.limit ?? 101, 501)) as Row[]).map(row => JSON.parse(String(row.value)));
+  }
+
+  flowStatistics(invocationId: string, watermark: number): {stepId: string; visits: number; exits: number; failed: number}[] {
+    return (this.db.prepare("SELECT step_id, SUM(event_kind='step_entered') visits, SUM(event_kind='step_exited') exits, SUM(event_kind='step_exited' AND json_extract(r.value,'$.payload.observation.disposition')='failed') failed FROM flow_records f JOIN records r ON r.sequence=f.sequence WHERE f.invocation_id=? AND f.sequence<=? AND f.step_id IS NOT NULL GROUP BY f.step_id LIMIT 128").all(invocationId, watermark) as Row[])
+      .map(row => ({stepId: String(row.step_id), visits: Number(row.visits), exits: Number(row.exits), failed: Number(row.failed)}));
+  }
+
+  flowTransitions(invocationId: string, watermark: number): {transitionId: string; traversals: number}[] {
+    return (this.db.prepare("SELECT json_extract(r.value,'$.payload.observation.transitionId') transition_id, COUNT(*) traversals FROM flow_records f JOIN records r ON r.sequence=f.sequence WHERE f.invocation_id=? AND f.sequence<=? AND f.event_kind='link' AND json_extract(r.value,'$.payload.observation.relation')='next' GROUP BY transition_id LIMIT 512").all(invocationId, watermark) as Row[])
+      .map(row => ({transitionId: String(row.transition_id), traversals: Number(row.traversals)}));
   }
 
   writeTelemetry(input: InspectionTelemetryWrite): void {
@@ -217,4 +299,9 @@ export class InspectionDatabase {
 function nextSequence(value: number): number {
   if (!Number.isSafeInteger(value) || value >= Number.MAX_SAFE_INTEGER) throw new Error("inspection_sequence_exhausted");
   return value + 1;
+}
+
+function flowDefinitionKey(ref: {owner: string; id: string; revision: string}): string { return JSON.stringify([ref.owner, ref.id, ref.revision]); }
+function isFlowRecord(record: InspectionRecord): record is InspectionRecord & {payload: Extract<InspectionRecord["payload"], {kind: "flow_invocation" | "flow_step" | "flow_constraint" | "flow_link"}>} {
+  return ["flow_invocation", "flow_step", "flow_constraint", "flow_link"].includes(record.payload.kind);
 }

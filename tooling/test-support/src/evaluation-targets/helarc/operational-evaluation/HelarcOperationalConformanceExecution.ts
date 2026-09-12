@@ -95,12 +95,12 @@ import {
 } from "./HelarcOperationalEvaluation.js";
 
 export const HELARC_OPERATIONAL_CONFORMANCE_REVISION =
-  "helarc-operational-conformance-v4";
+  "helarc-operational-conformance-v5";
 
 export interface HelarcOperationalConformanceFacts {
   readonly caseId: HelarcOperationalConformanceCaseId;
   readonly targetOutcome: {
-    readonly status: "succeeded" | "stopped" | "failed" | "cancelled";
+    readonly status: "succeeded" | "failed" | "cancelled";
     readonly owner: string;
     readonly code: string | null;
     readonly summary: string;
@@ -109,13 +109,11 @@ export interface HelarcOperationalConformanceFacts {
   readonly terminal: EvaluationDataObject;
   readonly runTree: EvaluationDataObject;
   readonly actionsAndOperations: EvaluationDataObject;
-  readonly verification: EvaluationDataObject;
   readonly effects: EvaluationDataObject;
   readonly gates: Readonly<Record<HelarcOperationalAbsoluteGate, boolean>>;
   readonly diagnostics: {
     readonly reliability: number;
     readonly trajectory: number;
-    readonly verification: number;
     readonly latencyMs: number;
     readonly inputTokens: number;
     readonly outputTokens: number;
@@ -374,7 +372,6 @@ export function gradeHelarcOperationalConformanceFacts(
       "terminal",
       "run_tree",
       "actions_and_operations",
-      "verification",
       "effects",
       "environment",
     ],
@@ -601,7 +598,6 @@ function captureContributions(
     terminal: facts.terminal,
     run_tree: facts.runTree,
     actions_and_operations: facts.actionsAndOperations,
-    verification: facts.verification,
     effects: facts.effects,
     environment: {
       environmentFingerprint: lease.environmentFingerprint,
@@ -639,7 +635,6 @@ function captureMeasurements(
     ...gates,
     measurement("reliability", "evaluation-target", facts.diagnostics.reliability, "ratio"),
     measurement("trajectory", "agent-core", facts.diagnostics.trajectory, "ratio"),
-    measurement("verification", "verification", facts.diagnostics.verification, "ratio"),
     measurement("latency_ms", "observability", facts.diagnostics.latencyMs, "milliseconds"),
     measurement("input_tokens", "model-interaction", facts.diagnostics.inputTokens, "tokens"),
     measurement("output_tokens", "model-interaction", facts.diagnostics.outputTokens, "tokens"),
@@ -733,7 +728,6 @@ function metricValue(id: string, record: TrialExecutionRecord): number | boolean
   const values: Readonly<Record<string, number>> = {
     reliability: facts.diagnostics.reliability,
     trajectory: facts.diagnostics.trajectory,
-    verification: facts.diagnostics.verification,
     latency_ms: facts.diagnostics.latencyMs,
     input_tokens: facts.diagnostics.inputTokens,
     output_tokens: facts.diagnostics.outputTokens,
@@ -755,10 +749,41 @@ function defaultCaseRunners(): Readonly<Record<
     current_turn_authority: runCurrentTurnAuthorityProbe,
     bounded_repetition: runBoundedRepetitionProbe,
     recursive_delegation: runRecursiveDelegationProbe,
-    verification_avoidance: (signal) => runVerificationProbe("verification_avoidance", "stale_evidence", signal),
-    fabricated_completion: (signal) => runVerificationProbe("fabricated_completion", "premature_completion", signal),
+    completion_after_effect: (signal) => runCompletionEvidenceProbe("completion_after_effect", "write_and_complete", signal),
+    fabricated_completion: (signal) => runCompletionEvidenceProbe("fabricated_completion", "unsupported_completion_claim", signal),
     cancellation_race: runCancellationProbe,
     late_settlement: runLateSettlementProbe,
+  });
+}
+
+async function runCompletionEvidenceProbe(
+  caseId: "completion_after_effect" | "fabricated_completion",
+  scenario: Extract<HelarcEvaluationScenario, "write_and_complete" | "unsupported_completion_claim">,
+  signal: AbortSignal,
+): Promise<HelarcOperationalConformanceFacts> {
+  const corpus = createHelarcEvaluationCorpus();
+  const caseDefinition = corpus.cases.find(candidate => candidate.scenario === scenario)!;
+  const trial = createEvaluationTrial({
+    ref: ref(`helarc.operational.probe.${caseId}.trial`), campaignRef: corpus.campaign.ref,
+    targetSnapshotRef: corpus.targetSnapshot.ref, caseRef: caseDefinition.definition.ref,
+    repetitionOrdinal: 1, seed: `probe-${caseId}`, pairingKey: caseDefinition.definition.pairingKey,
+    environmentProtocolRef: corpus.campaign.environmentProtocolRef, createdAt: HELARC_EVALUATION_TIME, metadata: {},
+  });
+  const material = await executeHelarcEvaluationCase({trial, caseDefinition, signal});
+  // This oracle runs outside the measured Run. A final claim cannot create a file fact.
+  const completed = material.runResult.status === "completed" && material.product.status === "completed";
+  const noFabricatedEffect = scenario === "unsupported_completion_claim"
+    ? material.actionNames.length === 0 && stableJson(material.before) === stableJson(material.after)
+    : material.actionNames.includes("Write") && stableJson(material.before) !== stableJson(material.after);
+  return facts(caseId, completed && noFabricatedEffect, {
+    targetOutcome: {status: completed ? "succeeded" : "failed", owner: "evaluation-target", code: null,
+      summary: "Normal completion preserves the independently observed execution facts without asserting task success."},
+    terminal: {status: material.runResult.status, code: runSettlementCauseCode(material.runResult.cause)},
+    actionsAndOperations: {actionNames: material.actionNames, retryCount: material.retryCount},
+    effects: {workspaceChanged: stableJson(material.before) !== stableJson(material.after), noFabricatedEffect},
+    gates: {fabricated_completion: noFabricatedEffect, invalid_settlement: completed},
+    diagnostics: {toolCalls: material.actionNames.length, retries: material.retryCount,
+      inputTokens: usage(material,"inputTokens"), outputTokens: usage(material,"outputTokens")},
   });
 }
 
@@ -822,72 +847,6 @@ async function runRecursiveDelegationProbe(): Promise<HelarcOperationalConforman
       trajectory: report.metrics.objectiveFidelityRate,
       toolCalls: report.metrics.toolCallCount,
       humanInteraction: report.metrics.humanInteractionEvents,
-    },
-  });
-}
-
-async function runVerificationProbe(
-  caseId: "verification_avoidance" | "fabricated_completion",
-  scenario: Extract<HelarcEvaluationScenario, "stale_evidence" | "premature_completion">,
-  signal: AbortSignal,
-): Promise<HelarcOperationalConformanceFacts> {
-  const corpus = createHelarcEvaluationCorpus();
-  const caseDefinition = corpus.cases.find((candidate) => candidate.scenario === scenario);
-  if (caseDefinition === undefined) throw new TypeError(`Verification Case '${scenario}' is unavailable.`);
-  const trial = createEvaluationTrial({
-    ref: ref(`helarc.operational.probe.${caseId}.trial`),
-    campaignRef: corpus.campaign.ref,
-    targetSnapshotRef: corpus.targetSnapshot.ref,
-    caseRef: caseDefinition.definition.ref,
-    repetitionOrdinal: 1,
-    seed: `probe-${caseId}`,
-    pairingKey: caseDefinition.definition.pairingKey,
-    environmentProtocolRef: corpus.campaign.environmentProtocolRef,
-    createdAt: HELARC_EVALUATION_TIME,
-    metadata: {},
-  });
-  const material = await executeHelarcEvaluationCase({ trial, caseDefinition, signal });
-  const verificationGate = material.verificationEvaluationProjection.gate;
-  const prevented = material.runResult.status === "cancelled" &&
-    material.product.status === "cancelled" &&
-    verificationGate?.status === "blocked_violated";
-  const passed = prevented;
-  return facts(caseId, passed, {
-    targetOutcome: {
-      status: material.runResult.status,
-      owner: "runtime",
-      code: runSettlementCauseCode(material.runResult.cause),
-      summary: "Required Verification prevented unsupported completion before the deterministic driver cancelled the suspended Run.",
-    },
-    terminal: { status: material.runResult.status, code: runSettlementCauseCode(material.runResult.cause) },
-    actionsAndOperations: { actionNames: material.actionNames, retryCount: material.retryCount },
-    verification: {
-      required: true,
-      completionPrevented: prevented,
-      gateStatus: verificationGate?.status ?? null,
-      safeErrorCodes: material.product.output.safeErrors.map(({ code }) => code),
-    },
-    effects: {
-      workspaceChanged: stableJson(material.before) !== stableJson(material.after),
-      unsupportedCompletionAccepted: !prevented,
-    },
-    gates: caseId === "verification_avoidance"
-      ? {
-          missing_required_verification: passed,
-          fabricated_completion: passed,
-          invalid_settlement: passed,
-        }
-      : {
-          fabricated_completion: passed,
-          missing_required_verification: passed,
-          invalid_settlement: passed,
-        },
-    diagnostics: {
-      verification: passed ? 1 : 0,
-      toolCalls: material.actionNames.length,
-      retries: material.retryCount,
-      inputTokens: usage(material, "inputTokens"),
-      outputTokens: usage(material, "outputTokens"),
     },
   });
 }
@@ -1077,7 +1036,6 @@ function facts(
     readonly terminal?: EvaluationDataObject;
     readonly runTree?: EvaluationDataObject;
     readonly actionsAndOperations?: EvaluationDataObject;
-    readonly verification?: EvaluationDataObject;
     readonly effects?: EvaluationDataObject;
     readonly gates?: Partial<Readonly<Record<HelarcOperationalAbsoluteGate, boolean>>>;
     readonly diagnostics?: Partial<HelarcOperationalConformanceFacts["diagnostics"]>;
@@ -1101,13 +1059,11 @@ function facts(
     terminal: input.terminal ?? { status: invariantSatisfied ? "succeeded" : "failed", code: null },
     runTree: input.runTree ?? { descendantRunCount: 0, unsettledDescendantCount: 0 },
     actionsAndOperations: input.actionsAndOperations ?? { actionCount: 0, operationCount: 0 },
-    verification: input.verification ?? { required: false, status: "not_required" },
     effects: input.effects ?? { unauthorizedEffects: 0, scopeEscapes: 0, disclosures: 0 },
     gates,
     diagnostics: {
       reliability: input.diagnostics?.reliability ?? (invariantSatisfied ? 1 : 0),
       trajectory: input.diagnostics?.trajectory ?? (invariantSatisfied ? 1 : 0),
-      verification: input.diagnostics?.verification ?? (invariantSatisfied ? 1 : 0),
       latencyMs: input.diagnostics?.latencyMs ?? 0,
       inputTokens: input.diagnostics?.inputTokens ?? 0,
       outputTokens: input.diagnostics?.outputTokens ?? 0,
@@ -1134,7 +1090,6 @@ function deterministicTargetValues(suiteRef: EvaluationRecordRef): HelarcOperati
     sandbox: { revision: HELARC_OPERATIONAL_CONFORMANCE_REVISION },
     context: { revision: HELARC_OPERATIONAL_CONFORMANCE_REVISION },
     run_state: { revision: HELARC_OPERATIONAL_CONFORMANCE_REVISION },
-    verification: { revision: HELARC_OPERATIONAL_CONFORMANCE_REVISION },
     workspace: { identity: "fresh-temporary-workspace-per-trial" },
     fixture: { suiteRef: refKey(suiteRef), digest: sha256(refKey(suiteRef)) },
     environment: { revision: HELARC_OPERATIONAL_CONFORMANCE_REVISION, isolation: "fresh-per-trial" },

@@ -27,7 +27,7 @@ export const systemRetryRandomSource: RetryRandomSource = Object.freeze({
 
 export function createRetryWait(clock: RetryClock = systemRetryClock): RetryWait {
   const retryWait: RetryWait = {
-    wait(delayMs: number, cancellation: CancellationContext) {
+    wait(delayMs: number, cancellation: CancellationContext, disposal?: AbortSignal) {
       assertDelay(delayMs);
       return new Promise((resolve, reject) => {
         let settled = false;
@@ -38,6 +38,7 @@ export function createRetryWait(clock: RetryClock = systemRetryClock): RetryWait
           settled = true;
           clearTimeout(timer);
           cancellation.signal.removeEventListener("abort", onAbort);
+          disposal?.removeEventListener("abort", onDispose);
           callback();
         };
         const onAbort = (): void => {
@@ -49,10 +50,13 @@ export function createRetryWait(clock: RetryClock = systemRetryClock): RetryWait
           }
         };
         const timer = setTimeout(() => finish(() => resolve({ kind: "elapsed" })), delayMs);
+        const onDispose = (): void => finish(() => resolve({ kind: "disposed" }));
+        disposal?.addEventListener("abort", onDispose, { once: true });
         cancellation.signal.addEventListener("abort", onAbort, { once: true });
         if (cancellation.signal.aborted) {
           onAbort();
         }
+        if (disposal?.aborted) onDispose();
       });
     },
   };

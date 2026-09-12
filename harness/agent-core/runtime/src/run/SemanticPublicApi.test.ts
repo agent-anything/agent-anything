@@ -54,7 +54,7 @@ describe("Agent Core Run public API", () => {
         },
         startedAt: "2026-01-01T00:00:00.000Z",
         settlement: {
-          status: "succeeded",
+          status: "completed",
           completedAt: "2026-01-01T00:00:01.000Z",
           cause: cause.ref,
           output: { summary: "done" },
@@ -65,7 +65,7 @@ describe("Agent Core Run public API", () => {
       });
 
     expect(result.items).toEqual([item]);
-    expect(result.status).toBe("succeeded");
+    expect(result.status).toBe("completed");
     expectTypeOf(result).toMatchTypeOf<RunResult<{ summary: string }>>();
     expectTypeOf<RunInput>().toBeObject();
   });

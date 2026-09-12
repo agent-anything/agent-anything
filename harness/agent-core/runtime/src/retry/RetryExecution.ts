@@ -10,6 +10,7 @@ import type { RetryAttempt, RetryOperation } from "./RetryOperation.js";
 import type { RetryPolicy } from "./RetryPolicy.js";
 
 export interface RetryExecutionInput<TError, TCategory extends string> {
+  readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly operation: RetryOperation;
   readonly budgetId: string;
   readonly priorProgress: RetryOperationProgress;
@@ -17,6 +18,7 @@ export interface RetryExecutionInput<TError, TCategory extends string> {
   readonly classifier: RetryClassifier<TError, TCategory>;
   readonly cancellation: CancellationContext;
   readonly events: RetryEventSink;
+  readonly waitControl?: import("./RetryWaitControl.js").RetryWaitControl;
 }
 
 export type RetryAttemptExecutionResult<TResult, TError> =
@@ -28,6 +30,7 @@ export type RetryAttemptExecutionResult<TResult, TError> =
     };
 
 export interface RetryAttemptContext {
+  readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly attempt: RetryAttempt;
   readonly signal: AbortSignal;
   readonly cancellation: CancellationContext;
@@ -80,8 +83,10 @@ export interface RetryWait {
   wait(
     delayMs: number,
     cancellation: CancellationContext,
+    disposal?: AbortSignal,
   ): Promise<
     | { readonly kind: "elapsed" }
+    | { readonly kind: "disposed" }
     | {
         readonly kind: "cancelled";
         readonly attribution: CancellationAttribution;

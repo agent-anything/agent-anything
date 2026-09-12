@@ -1,5 +1,6 @@
 import type { InspectionCoverage, InspectionLink, InspectionRecord, InspectionSubjectRef, InspectionContentDescriptor } from "../records/index.js";
 import type { InspectionSource, InspectionDatasetManifest } from "../sources/index.js";
+import type { ExecutionFlowDefinition } from "@agent-anything/observability/execution-flow";
 
 export interface InspectionSelection { readonly sourceId: string; readonly datasetId: string; readonly watermark: number }
 export type InspectionViewQuery = "list_definitions" | "list_runs" | "list_records" | "get_hierarchy" | "get_lifecycle" | "get_data_flow" | "get_dependencies" | "get_scheduling" | "get_model_request" | "get_execution" | "get_timeline" | "get_telemetry";
@@ -10,7 +11,23 @@ export type InspectionQuery =
   | ({ readonly kind: InspectionViewQuery; readonly subject?: InspectionSubjectRef; readonly runId?: string; readonly recordKind?: string; readonly after?: number; readonly limit?: number } & InspectionSelection)
   | ({ readonly kind: "get_record"; readonly recordId: string } & InspectionSelection)
   | ({ readonly kind: "get_subject"; readonly subject: InspectionSubjectRef } & InspectionSelection)
-  | ({ readonly kind: "get_content"; readonly contentId: string; readonly offset?: number; readonly length?: number } & InspectionSelection);
+  | ({ readonly kind: "get_content"; readonly contentId: string; readonly offset?: number; readonly length?: number } & InspectionSelection)
+  | InspectionFlowQuery;
+
+export type InspectionFlowQuery = InspectionSelection & ({readonly kind: "get_execution_flow"} | {readonly kind: "list_flow_occurrences"} | {readonly kind: "get_flow_occurrence"}) & {
+  readonly runId: string;
+  readonly invocationId?: string;
+  readonly occurrenceId?: string;
+  readonly stepId?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+};
+export interface InspectionFlowRead {
+  readonly definition: ExecutionFlowDefinition | null;
+  readonly steps: readonly {readonly stepId: string; readonly visits: number; readonly exits: number; readonly failed: number}[];
+  readonly transitions: readonly {readonly transitionId: string; readonly traversals: number}[];
+  readonly links: readonly InspectionLink[];
+}
 
 export interface InspectionGraphNode { readonly subject: InspectionSubjectRef; readonly record: InspectionRecord | null; readonly availability: "present" | "not_observed" }
 export interface InspectionGraph { readonly nodes: readonly InspectionGraphNode[]; readonly links: readonly InspectionLink[]; readonly limited: boolean; readonly scope: "selected_neighborhood" | "dataset"; readonly nodeLimit: number; readonly edgeLimit: number }
@@ -29,4 +46,5 @@ export interface InspectionReadResult {
   readonly content: { readonly descriptor: InspectionContentDescriptor; readonly text: string; readonly offset: number; readonly nextOffset: number | null } | null;
   readonly next: number | string | null;
   readonly limitations: readonly string[];
+  readonly flow?: InspectionFlowRead;
 }

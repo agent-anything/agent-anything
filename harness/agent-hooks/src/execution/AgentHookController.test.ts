@@ -46,9 +46,9 @@ class FakeController implements Controller<TestOutput> {
 }
 
 describe("AgentHookController", () => {
-  it("preserves a stop after one actionable continuation and a later allow", async () => {
+  it("preserves a normal completion after one actionable continuation and a later allow", async () => {
     let calls = 0;
-    const decision: ControllerDecision<TestOutput> = { kind: "propose_stop", reason: "No useful work remains.", modelItems: [] };
+    const decision = complete("No useful work remains.");
     const controller = new AgentHookController({
       controller: new FakeController(() => decision),
       composition: stopComposition([handler("stop", () => ++calls === 1
@@ -112,9 +112,10 @@ describe("AgentHookController", () => {
       .toEqual(["continued", "allowed", "continued"]);
   });
 
-  it("converts exhausted consecutive continuation into an ordinary stop candidate", async () => {
+  it("preserves the candidate at the continuation cap without another model request", async () => {
+    const next = vi.fn(() => complete("Still premature"));
     const controller = new AgentHookController({
-      controller: new FakeController(() => complete("Still premature")),
+      controller: new FakeController(next),
       composition: stopComposition([handler("continue", () => ({
         disposition: "continue",
         code: "not_done",
@@ -129,10 +130,13 @@ describe("AgentHookController", () => {
       kind: "continue_with_feedback",
     });
     await expect(controller.next(controllerInput(2), callContext())).resolves.toEqual({
-      kind: "propose_stop",
-      reason: "Agent Stop continuation limit exhausted.",
+      kind: "propose_completion",
+      output: { summary: "Still premature" },
       modelItems: [],
     });
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(controller.store.getProjection().invocationCount).toBe(1);
+    expect(controller.store.getProjection().recentDispositions).toMatchObject([{ disposition: "continuation_limit_reached" }]);
   });
 
   it("fails open and records blocking Handler failure and timeout", async () => {
@@ -317,6 +321,7 @@ function controllerInput(iteration = 1): ControllerInput<TestOutput> {
       requestId: `controller-request-${iteration}`,
       projectionId: `projection-${iteration}`,
     },
+    toolExposure: { controllerRequestId: `controller-request-${iteration}` },
     interaction: {
       id: "interaction-1",
       revision: "1",
@@ -325,7 +330,6 @@ function controllerInput(iteration = 1): ControllerInput<TestOutput> {
       settledCallCount: 0,
     },
     plan: null,
-    verification: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
     pending: [],
   } as unknown as ControllerInput<TestOutput>;
 }

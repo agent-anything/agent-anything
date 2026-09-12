@@ -50,7 +50,6 @@ export interface HelarcEngineeringReviewFinding {
   readonly severity: HelarcEngineeringFindingSeverity;
   readonly summary: string;
   readonly evidenceRefs: readonly HelarcOwnedRecordRef[];
-  readonly verificationRefs: readonly HelarcOwnedRecordRef[];
   readonly uncertainty: readonly string[];
 }
 
@@ -183,20 +182,19 @@ function snapshotFinding(
 ): HelarcEngineeringReviewFinding | null {
   if (
     !hasExactKeys(value, [
-      "id", "category", "severity", "summary", "evidenceRefs", "verificationRefs", "uncertainty",
+      "id", "category", "severity", "summary", "evidenceRefs", "uncertainty",
     ]) || !hasIdentity(value.id) || !hasIdentity(value.category) ||
     !isFindingSeverity(value.severity) || !hasIdentity(value.summary) ||
-    !Array.isArray(value.evidenceRefs) || !Array.isArray(value.verificationRefs) ||
+    !Array.isArray(value.evidenceRefs) ||
     !Array.isArray(value.uncertainty)
   ) {
     return null;
   }
   const evidenceRefs = value.evidenceRefs.map(snapshotOwnedRecordRef);
-  const verificationRefs = value.verificationRefs.map(snapshotOwnedRecordRef);
   const uncertainty = snapshotTextList(value.uncertainty);
   if (
     evidenceRefs.some((reference) => reference === null) ||
-    verificationRefs.some((reference) => reference === null) || uncertainty === null
+    uncertainty === null
   ) {
     return null;
   }
@@ -206,7 +204,6 @@ function snapshotFinding(
     category: value.category.trim(),
     summary: value.summary.trim(),
     evidenceRefs: Object.freeze(evidenceRefs as HelarcOwnedRecordRef[]),
-    verificationRefs: Object.freeze(verificationRefs as HelarcOwnedRecordRef[]),
     uncertainty,
   });
 }

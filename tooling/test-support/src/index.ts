@@ -28,4 +28,3 @@ export { FakeRuntimeEventPublisher } from "./FakeRuntimeEventPublisher.js";
 export {
   createTestContextProjection,
 } from "./TestContextProjectionConfiguration.js";
-export { createTestVerificationExecutionFactory } from "./TestVerificationExecutionFactory.js";

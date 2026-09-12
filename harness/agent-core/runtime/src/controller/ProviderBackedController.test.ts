@@ -297,15 +297,15 @@ describe("ProviderBackedController", () => {
     });
   });
 
-  it("normalizes stop decisions", async () => {
+  it("preserves a normal completion output without imposing business interpretation", async () => {
     const controller = createController(
-      new FakeProvider({ results: [succeededResult({ action: "stop" })] }),
+      new FakeProvider({ results: [succeededResult({ action: "complete" })] }),
       {
         parseResponse() {
           return {
-            kind: "propose_stop",
-            reason: "  No safe next action.  ",
-            modelItems: modelItems("model_item_1", { action: "stop" }),
+            kind: "propose_completion",
+            output: { summary: "  No safe next action.  " },
+            modelItems: modelItems("model_item_1", { action: "complete" }),
           };
         },
       },
@@ -314,8 +314,8 @@ describe("ProviderBackedController", () => {
     await expect(
       controller.next(createControllerInput(), callContext()),
     ).resolves.toMatchObject({
-      kind: "propose_stop",
-      reason: "No safe next action.",
+      kind: "propose_completion",
+      output: { summary: "  No safe next action.  " },
     });
   });
 
@@ -1347,7 +1347,6 @@ function createControllerInput(): ControllerInput<TestOutput> {
       maxStepLength: 200,
       maxExplanationLength: 500,
     }),
-    verification: { snapshot: { runId: "run_001", revision: 0 }, gate: null },
     permission: testPermissionProjection(),
     pending: [],
     descendants: { active: [], continuations: [] },

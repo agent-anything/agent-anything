@@ -33,6 +33,9 @@ import type { RetryAttempt, RetryOperation } from "./RetryOperation.js";
 import { snapshotRetryOperation } from "./RetryOperation.js";
 import type { RetryPolicy } from "./RetryPolicy.js";
 import { snapshotRetryPolicy } from "./RetryPolicy.js";
+import { RetryInvocationInvalidatedError } from "./RetryWaitControl.js";
+import { ExecutionFlowPath } from "@agent-anything/observability/execution-flow";
+import { RETRY_EXECUTION_FLOW } from "./RetryExecutionFlow.js";
 
 export class RetryExecutor {
   constructor(private readonly dependencies: RetryExecutorDependencies) {
@@ -41,9 +44,23 @@ export class RetryExecutor {
 
   async execute<TResult, TError, TCategory extends string>(
     input: RetryExecutionInput<TError, TCategory>,
+    executeAttempt: (context: RetryAttemptContext) => Promise<RetryAttemptExecutionResult<TResult, TError>>,
+  ): Promise<RetryExecutionResult<TResult, RetryFailure<TCategory>, TError>> {
+    const flow = new ExecutionFlowPath(RETRY_EXECUTION_FLOW, input.executionFlow ?? {}, input.operation.runId, []);
+    try {
+      const result = await this.executeWithFlow(input, executeAttempt, flow);
+      flow.advance("settled", {outcome: result.kind});
+      flow.close(result.kind === "succeeded" ? "returned" : result.kind === "cancelled" ? "cancelled" : "failed");
+      return result;
+    } catch (error) { flow.close(error instanceof RetryInvocationInvalidatedError ? "interrupted" : "failed"); throw error; }
+  }
+
+  private async executeWithFlow<TResult, TError, TCategory extends string>(
+    input: RetryExecutionInput<TError, TCategory>,
     executeAttempt: (
       context: RetryAttemptContext,
     ) => Promise<RetryAttemptExecutionResult<TResult, TError>>,
+    flow: ExecutionFlowPath,
   ): Promise<RetryExecutionResult<TResult, RetryFailure<TCategory>, TError>> {
     const operation = snapshotRetryOperation(input.operation);
     const policy = snapshotRetryPolicy(input.policy);
@@ -63,6 +80,11 @@ export class RetryExecutor {
     }
 
     const maxBudgetAttempts = policy.maxRetries + 1;
+    const recovery = policy.exhaustion?.kind === "retry_after_delay" ? policy.exhaustion : null;
+    if (recovery !== null && operation.owner !== "provider_request" && operation.owner !== "response_stream") {
+      throw new TypeError("Additional network recovery is only available to Provider request owners.");
+    }
+    const maximumAttempts = maxBudgetAttempts + (recovery?.maxAdditionalAttempts ?? 0);
     const attemptIds = new Set<string>();
     let budgetAttemptNumber = 1;
     let completedAttempts = progress.completedAttempts;
@@ -103,13 +125,16 @@ export class RetryExecutor {
         input.budgetId,
         attemptNumber,
         budgetAttemptNumber,
-        maxBudgetAttempts,
+        maximumAttempts,
         this.dependencies,
       );
       if (attemptIds.has(attempt.attemptId)) {
         throw new TypeError(`Retry attempt id ${attempt.attemptId} is duplicated.`);
       }
       attemptIds.add(attempt.attemptId);
+      const attemptStep = flow.advance("attempt", {attemptId: attempt.attemptId, operationId: operation.operationId, attemptNumber, budgetAttemptNumber, initialMaximum: maxBudgetAttempts, maximumAttempts, deadlineAt: operation.deadlineAt ?? null}, operation.owner === "provider_request" ? [{owner: "provider",kind:"provider-attempt",id:attempt.attemptId,revision:null}] : []);
+      attemptStep.check("cancellation", "passed");
+      attemptStep.check("deadline", "passed");
 
       const interruption = this.dependencies.interruptions.create(
         operation,
@@ -119,6 +144,7 @@ export class RetryExecutor {
       try {
         await emit(input, retryAttemptStartedEvent(operation, attempt));
         attemptResult = await executeAttempt(Object.freeze({
+          executionFlow: flow.callContext,
           attempt,
           signal: interruption.signal,
           cancellation: input.cancellation,
@@ -169,6 +195,8 @@ export class RetryExecutor {
       }
 
       const classification = input.classifier.classify(attemptResult.error);
+      const classificationStep = flow.advance("classify");
+      classificationStep.check("failure_classification", "passed", {disposition: classification.disposition});
       const failure = snapshotClassification(classification);
       lastFailure = failure;
 
@@ -251,7 +279,10 @@ export class RetryExecutor {
         );
       }
 
-      if (budgetAttemptNumber >= maxBudgetAttempts) {
+      const budgetStep = flow.advance("budget", {completedAttempts, maximumAttempts});
+      budgetStep.check("initial_allowance", budgetAttemptNumber < maxBudgetAttempts ? "passed" : "not_satisfied", {maxBudgetAttempts, budgetAttemptNumber});
+      budgetStep.check("recovery_allowance", recovery === null ? "not_applicable" : budgetAttemptNumber < maximumAttempts ? "passed" : "not_satisfied", {additionalAttempts: recovery?.maxAdditionalAttempts ?? 0});
+      if (budgetAttemptNumber >= maximumAttempts) {
         await emit(input, retryAttemptFinishedEvent(
           operation,
           attempt,
@@ -274,7 +305,9 @@ export class RetryExecutor {
         };
       }
 
-      const delay = resolveDelay(
+      const delay = recovery !== null && budgetAttemptNumber >= maxBudgetAttempts
+        ? { kind: "delay" as const, value: createDelay(recovery.delayMs, "delayed_recovery", now(this.dependencies)) }
+        : resolveDelay(
         policy,
         budgetAttemptNumber,
         failure,
@@ -331,10 +364,15 @@ export class RetryExecutor {
         nowIso(this.dependencies),
       ));
 
-      const waitResult = await this.dependencies.wait.wait(
-        delay.value.delayMs,
-        input.cancellation,
-      );
+      const arm = (disposal?: AbortSignal) => this.dependencies.wait.wait(delay.value.delayMs, input.cancellation, disposal);
+      flow.advance("wait", {delayMs: delay.value.delayMs, nextAttemptAt: delay.value.nextAttemptAt, controlled: input.waitControl !== undefined});
+      const waitResult = input.waitControl === undefined
+        ? await arm()
+        : await input.waitControl.wait({ operation, precedingAttempt: attempt, policy, delay: delay.value, executionFlow: flow.callContext }, arm);
+      if (waitResult.kind === "invalidated" || waitResult.kind === "disposed") throw new RetryInvocationInvalidatedError();
+      if (waitResult.kind === "deadline_exceeded") {
+        return this.deadlineExhausted(input, operation, completedAttempts, totalRetryDelayMs, lastFailure);
+      }
       if (waitResult.kind === "cancelled") {
         assertCancellationAttribution(waitResult.attribution, input, operation);
         await emit(input, retryCancelledEvent(

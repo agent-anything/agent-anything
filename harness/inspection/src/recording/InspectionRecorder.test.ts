@@ -5,7 +5,7 @@ import { join, resolve, relative } from "node:path";
 import { InspectionRecorder } from "../../dist/recording/InspectionRecorder.js";
 import { InspectionQueryService } from "../../dist/query/InspectionQueryService.js";
 import { DEFAULT_INSPECTION_CAPTURE_POLICY } from "../content/index.js";
-import { snapshotInspectionJson } from "../records/index.js";
+import { snapshotInspectionJson } from "../records/InspectionValidation.js";
 import { retireInspectionDatasets } from "../../dist/storage/index.js";
 import { datasetDirectory } from "../sources/index.js";
 import { acquireInspectionReadLease } from "../storage/InspectionDatasetAccess.js";

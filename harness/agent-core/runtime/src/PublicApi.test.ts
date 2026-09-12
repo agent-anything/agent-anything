@@ -79,6 +79,7 @@ describe("Agent Core Runtime public API", () => {
     ]);
     expect(Object.keys(retryApi).sort()).toEqual([
       "RetryExecutor",
+      "RetryInvocationInvalidatedError",
       "createSystemRetryExecutor",
       "snapshotRetryEvent",
       "snapshotRetryOperation",
@@ -112,6 +113,7 @@ describe("Agent Core Runtime public API", () => {
       "snapshotRunSettlement",
       "snapshotRunSettlementCauseRecord",
       "snapshotRunSteeringInput",
+      "snapshotRunSuspendRequestInput",
       "toRunCancellationSummary",
     ]);
     expect(Object.keys(runnerApi)).toEqual(["Runner", "RUN_LIFECYCLE_DESCRIPTION"]);

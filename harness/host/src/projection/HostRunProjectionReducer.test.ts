@@ -114,26 +114,12 @@ describe("HostRunProjectionReducer", () => {
     expect(projection).toMatchObject({ status: "running", pendingInteractions: [] });
   });
 
-  it("projects only the bounded Host Verification view from a RunHandle snapshot", () => {
-    const verification = Object.freeze({
-      snapshot: Object.freeze({ runId: "run-1", revision: 7 }),
-      counts: Object.freeze([
-        Object.freeze({ state: "satisfied" as const, count: 1 }),
-      ]),
-      activeChecks: 0,
-      gateStatus: "completion_eligible" as const,
-      safeReasons: Object.freeze(["verification_completion_eligible"]),
-      updatedAt: NOW,
-    });
+  it("projects Run execution facts without a business-completion gate", () => {
     const projection = apply(initialProjection(), runOperationUpdate(1, {
       sequence: 1,
       runRevision: 3,
-      verification,
     }));
-
-    expect(projection.verification).toEqual(verification);
-    expect(JSON.stringify(projection.verification)).not.toContain("evidence");
-    expect(JSON.stringify(projection.verification)).not.toContain("command");
+    expect(projection).not.toHaveProperty("verification");
   });
 
   it("projects canonical Action attempt and settlement without executor payload", () => {
@@ -407,7 +393,6 @@ function runOperationUpdate(
       plan: null,
       suspension: null,
       retry: null,
-      verification: null,
       pendingInteractions: [],
       activeDelegations: [],
       continuationTargets: [],
@@ -576,7 +561,7 @@ function succeededResult() {
     finalInstructionBinding: instructionBindingRef("run-1"),
     startedAt: NOW,
     settlement: Object.freeze({
-      status: "succeeded" as const,
+      status: "completed" as const,
       completedAt: LATER,
       cause: cause.ref,
       output: Object.freeze({ summary: "private final output" }),

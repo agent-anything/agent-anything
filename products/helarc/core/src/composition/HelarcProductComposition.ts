@@ -13,7 +13,8 @@ import {
   type AgentHookExecutionStore,
 } from "@agent-anything/agent-hooks/execution";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
-import type { VerificationHostProjection } from "@agent-anything/verification/projection";
+import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
+import { HELARC_RESULT_EXECUTION_FLOW } from "./HelarcResultExecutionFlow.js";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -53,11 +54,6 @@ import {
   resolveHelarcModelQualification,
 } from "./HelarcModelUseAdmission.js";
 import type { Provider } from "@agent-anything/model-interaction";
-import {
-  createHelarcVerificationComposition,
-  type HelarcExactTargetVerificationRequirement,
-  type HelarcVerificationComposition,
-} from "../verification/index.js";
 import {
   ModelContinuationLifecycle,
   type ModelContinuationSafeEvent,
@@ -99,6 +95,7 @@ type HelarcProductProjectionUpdatePayload =
     : never;
 
 export interface CreateHelarcProductCompositionInput {
+  readonly executionFlow?: ExecutionFlowContext;
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
   readonly workspace: WorkspaceSelection;
@@ -110,7 +107,6 @@ export interface CreateHelarcProductCompositionInput {
   readonly codeSource: CodeSourcePort;
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution;
-  readonly verificationTargets?: readonly HelarcExactTargetVerificationRequirement[];
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly now?: () => string;
 }
@@ -124,7 +120,6 @@ export interface HelarcProductComposition {
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
-  readonly verification: HelarcVerificationComposition;
   readonly agentHooks: AgentHookExecutionStore;
   readonly hookRegistrations: readonly import("@agent-anything/agent-hooks/composition").AgentHookRegistration[];
   readonly taskFulfillment: HelarcTaskFulfillmentHook;
@@ -138,7 +133,6 @@ export interface HelarcProductComposition {
   projectResult(
     runResult: RunResult<HelarcAgentOutput>,
     selectedEnforcement: SandboxEnforcement,
-    verification: VerificationHostProjection | null,
   ): HelarcProductResult;
 }
 
@@ -163,14 +157,6 @@ export async function createHelarcProductComposition(
   const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId, instructionSettings });
   const clarification = createHelarcClarificationContribution(admittedAt);
   const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt);
-  const verification = await createHelarcVerificationComposition({
-    workspace: input.workspace,
-    codeSource: input.codeSource,
-    commandEnvironment: input.commandActions.environment,
-    exactTargets: input.verificationTargets,
-    admittedAt,
-    now,
-  });
   const taskFulfillment = createHelarcTaskFulfillmentHookComposition(
     input.provider,
     (instructionSettings ?? createDefaultHelarcInstructionSettings()).stop,
@@ -259,12 +245,13 @@ export async function createHelarcProductComposition(
           controllerProtocol,
           qualification,
         ),
-      parseResponse: (response, controllerInput) =>
+      parseResponse: (response, controllerInput, executionFlow) =>
         parseHelarcProviderResponse(
           response,
           controllerInput,
           controllerProtocol,
           qualification,
+          executionFlow,
         ),
       responseProtocol: Object.freeze({ kind: "native_tool_turn" }),
       retryExecutor: createSystemRetryExecutor(retryClock),
@@ -307,7 +294,6 @@ export async function createHelarcProductComposition(
     actions,
     interactions,
     delegation: descendant.delegation,
-    verification,
     agentHooks: providerController.store,
     hookRegistrations: taskFulfillment.composition.registrations,
     taskFulfillment: taskFulfillment.hook,
@@ -350,18 +336,23 @@ export async function createHelarcProductComposition(
     projectResult(
       runResult: RunResult<HelarcAgentOutput>,
       selectedEnforcement: SandboxEnforcement,
-      verificationProjection: VerificationHostProjection | null,
     ): HelarcProductResult {
+      const flow = new ExecutionFlowPath(HELARC_RESULT_EXECUTION_FLOW, input.executionFlow ?? {}, runResult.runId, [{owner:"runtime",kind:"run",id:runResult.runId,revision:null}]);
+      flow.advance("result", {status:runResult.status});
+      try {
+      flow.advance("project");
       const result = projectHelarcProductResult(
         input.task,
         input.workspace,
         runResult,
         selectedEnforcement,
-        verificationProjection,
         qualification.safeProjection,
       );
+      flow.advance("deliver", {productStatus:result.status});
       publishProductUpdate({ kind: "result_settled", result });
+      flow.close("returned");
       return result;
+      } catch (error) {flow.close("failed");throw error;}
     },
   });
 }

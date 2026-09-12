@@ -169,9 +169,9 @@ describe("Helarc native Tool controller", () => {
       [...request.interaction.callables.map(({ name }) => name)].sort(),
     );
     expect(request.interaction.callables.map(({ name }) => name)).toEqual(
-      expect.arrayContaining(["stop", "update_plan"]),
+      expect.arrayContaining(["update_plan"]),
     );
-    expect(request.interaction.callables).toHaveLength(FILE_TOOLS.length + 2);
+    expect(request.interaction.callables).toHaveLength(FILE_TOOLS.length + 1);
     expect(request.interaction.callables.every(({ name }) => /^[A-Za-z0-9_-]+$/u.test(name)))
       .toBe(true);
     expect(request.interaction.callables.some(({ name }) => name === "Read")).toBe(false);
@@ -320,25 +320,22 @@ describe("Helarc native Tool controller", () => {
       throw new Error("Expected native Tool interaction.");
     }
     expect(request.interaction.callables.map(({ name }) => name)).toEqual([
-      "stop",
       "update_plan",
     ]);
   });
 
-  it("renders admitted Verification Context once through its current-turn section", () => {
+  it("renders admitted structured Context through the generic projection", () => {
     const controllerInput = createControllerInput();
-    const verificationBlock = {
-      id: "verification-block",
-      item: { id: "verification-item" },
-      contribution: { id: "verification-context-run-1", revision: "ledger-3" },
+    const block = {
+      id: "check-output-block",
+      item: { id: "check-output-item" },
+      contribution: { id: "check-output-run-1", revision: "3" },
       instructionRole: "data" as const,
       payload: {
         kind: "structured" as const,
         value: {
-          kind: "verification_feedback",
-          snapshot: { runId: "run-1", revision: 3 },
-          requirements: [],
-          gate: null,
+          kind: "test_output",
+          exitCode: 0,
         },
       },
       accounting: { unit: "bytes" as const, amount: 1 },
@@ -349,17 +346,14 @@ describe("Helarc native Tool controller", () => {
         ...controllerInput,
         context: {
           ...controllerInput.context,
-          blocks: [verificationBlock],
+          blocks: [block],
           accounting: { unit: "bytes", amount: 1 },
         },
       },
     });
     const general = assembly.promptSections.find(({ id }) => id === "context_projection");
-    const verification = assembly.promptSections.find(({ id }) => id === "current_verification");
-
-    expect(general?.content).not.toContain("verification_feedback");
-    expect(verification?.content).toContain("verification_feedback");
-    expect(assembly.sections.find(({ id }) => id === "helarc:model-input:current_verification")?.source)
+    expect(general?.content).toContain("test_output");
+    expect(assembly.sections.find(({ id }) => id === "helarc:model-input:context_projection")?.source)
       .toMatchObject({ owner: "context", id: "projection-1", revision: "1" });
   });
 
@@ -582,7 +576,7 @@ describe("Helarc native Tool controller", () => {
     });
   });
 
-  it("maps text completion, stop control, and refusal to terminal decisions", () => {
+  it("maps final text, limitations, and refusal to normal completion candidates", () => {
     const input = createControllerInput();
 
     expect(parseHelarcProviderResponse(nativeResponse(input, [
@@ -592,24 +586,23 @@ describe("Helarc native Tool controller", () => {
       output: { kind: "complete", summary: "The task is complete." },
     });
     expect(parseHelarcProviderResponse(nativeResponse(input, [{
-      kind: "call",
-      name: "stop",
-      input: { reason: "Cannot continue safely." },
+      kind: "text",
+      text: "Cannot continue safely.",
     }]), input)).toMatchObject({
-      kind: "propose_stop",
-      reason: "Cannot continue safely.",
+      kind: "propose_completion",
+      output: { summary: "Cannot continue safely." },
     });
     expect(parseHelarcProviderResponse(nativeResponse(
       input,
       [{ kind: "text", text: "Policy refusal." }],
       { kind: "refusal", reason: null },
     ), input)).toMatchObject({
-      kind: "propose_stop",
-      reason: "Policy refusal.",
+      kind: "propose_completion",
+      output: { summary: "Policy refusal." },
     });
   });
 
-  it("turns unknown, malformed, and mixed stop calls into explicit rejection candidates", () => {
+  it("rejects unknown calls without discarding valid sibling calls", () => {
     const input = createControllerInput();
     const catalog = createHelarcModelCallableCatalog({
       toolExposure: input.toolExposure,
@@ -631,7 +624,7 @@ describe("Helarc native Tool controller", () => {
       input: { reason: "" },
     }]), input)).toMatchObject({
       kind: "advance",
-      candidates: [{ kind: "model_call_rejection", code: "stop_input_invalid" }],
+      candidates: [{ kind: "model_call_rejection", code: "model_callable_unknown" }],
     });
     expect(parseHelarcProviderResponse(nativeResponse(input, [
       { kind: "call", name: "stop", input: { reason: "Stop." } },
@@ -639,7 +632,7 @@ describe("Helarc native Tool controller", () => {
     ]), input)).toMatchObject({
       kind: "advance",
       candidates: [
-        { kind: "model_call_rejection", code: "stop_must_be_sole_call" },
+        { kind: "model_call_rejection", code: "model_callable_unknown" },
         { kind: "tool_request", tool: { name: "Read" } },
       ],
     });
@@ -763,7 +756,6 @@ function createControllerInput(
       maxStepLength: 500,
       maxExplanationLength: 2_000,
     },
-    verification: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
     permission: {
       profile: {
         profileId: "test-profile",

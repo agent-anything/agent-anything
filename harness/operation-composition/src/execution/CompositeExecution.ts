@@ -1,4 +1,6 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
+import { COMPOSITE_EXECUTION_FLOW, COMPOSITE_NODE_FLOW } from "./CompositeExecutionFlow.js";
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import { snapshotCompositeDefinition } from "../definition/index.js";
@@ -76,6 +78,7 @@ export interface CompositeReducerPort {
 
 export interface CompositeChildExecutionPort {
   start(input: {
+    readonly executionFlow?: ExecutionFlowContext;
     readonly compositeId: string;
     readonly definition: CompositeDefinitionRevision["ref"];
     readonly node: CompositeNodeDefinition;
@@ -89,6 +92,7 @@ export interface CompositeChildExecutionPort {
 }
 
 export interface CompositeExecutionDependencies {
+  readonly executionFlow?: ExecutionFlowContext & {readonly runId: string};
   readonly observer?: (definition: CompositeDefinitionRevision, snapshot: CompositeExecutionSnapshot) => void;
   readonly transforms: readonly CompositeTransformPort[];
   readonly conditions: readonly CompositeConditionPort[];
@@ -107,6 +111,8 @@ export class CompositeExecution {
   private readonly transforms: ReadonlyMap<string, CompositeTransformPort>;
   private readonly conditions: ReadonlyMap<string, CompositeConditionPort>;
   private readonly now: () => string;
+  private flow: ExecutionFlowPath | null = null;
+  private readonly nodeFlows = new Map<string, ExecutionFlowPath>();
 
   constructor(
     readonly compositeId: string,
@@ -152,6 +158,18 @@ export class CompositeExecution {
   }
 
   private async execute(compositeInput: unknown, interruption: InvocationInterruptionContext): Promise<CompositeResult> {
+    const observation = this.dependencies.executionFlow;
+    if (observation) this.flow = new ExecutionFlowPath(COMPOSITE_EXECUTION_FLOW, observation, observation.runId,
+      [{owner:"operation-composition",kind:"operation",id:this.compositeId,revision:null}]);
+    this.flow?.advance("eligibility");
+    try {
+      const result = await this.executeGraph(compositeInput, interruption);
+      this.flow?.close(result.status === "cancelled" ? "cancelled" : "returned");
+      return result;
+    } catch (error) { this.flow?.close("failed"); throw error; }
+  }
+
+  private async executeGraph(compositeInput: unknown, interruption: InvocationInterruptionContext): Promise<CompositeResult> {
     const startedAt = this.now();
     while (this.terminal === null) {
       if (interruption.signal.aborted) {
@@ -167,12 +185,14 @@ export class CompositeExecution {
       }
       let wave: readonly CompositeNodeDefinition[];
       try {
+        this.flow?.advance("schedule", {readyCount:ready.length,maxParallel:this.definition.limits.maxParallel});
         wave = this.selectWave(ready);
       } catch (error) {
         this.terminal = this.settleAggregate(compositeInput, startedAt, "failed",
           handlerFailure("conflict", this.definition.conflictPolicyRevision, error));
         break;
       }
+      this.flow?.advance("dispatch", {waveSize:wave.length});
       // Each branch contains callback failures; the wave drains before any next dispatch.
       await Promise.all(wave.map(async (node) => {
         if (interruption.signal.aborted) {
@@ -181,6 +201,7 @@ export class CompositeExecution {
         }
         let request: unknown;
         try {
+          this.nodeFlows.get(node.id)?.advance("transform", {transformId:node.transformId});
           request = this.transforms.get(node.transformId)!.transform({
             compositeInput, dependencies: this.dependencySettlements(node),
           });
@@ -191,7 +212,9 @@ export class CompositeExecution {
         this.commitLifecycle(node.id, "prepared");
         this.commitLifecycle(node.id, "active");
         try {
+          this.nodeFlows.get(node.id)?.advance("execute");
           const child = await this.dependencies.children.start({
+            executionFlow:this.nodeFlows.get(node.id)?.callContext,
             compositeId: this.compositeId, definition: this.definition.ref,
             node, instance: 1, request, interruption,
           });
@@ -202,6 +225,11 @@ export class CompositeExecution {
           this.commitTerminal(node.id, "unknown_effect", null, null, handlerFailure("child_execution", node.id, error));
         }
       }));
+      const join = this.flow?.advance("join", {waveSize:wave.length});
+      if (join) for (const node of wave) {
+        const nodeFlow = this.nodeFlows.get(node.id);
+        if (nodeFlow?.current) this.flow!.link(nodeFlow.current.ref, join.ref, "join");
+      }
       if ([...this.states.values()].some((state) => state.settlement?.status === "unknown_effect")) {
         this.terminal = this.settleAggregate(compositeInput, startedAt, "unknown_effect");
       } else if (interruption.signal.aborted) {
@@ -211,6 +239,7 @@ export class CompositeExecution {
         this.markRemainingNotSelected();
         this.terminal = this.settleAggregate(compositeInput, startedAt);
       }
+      if (this.terminal === null) this.flow?.advance("eligibility");
     }
     this.publish();
     return this.terminal;
@@ -232,13 +261,23 @@ export class CompositeExecution {
       for (const node of this.definition.nodes) {
         const state = this.states.get(node.id)!;
         if (state.lifecycle !== "declared" && state.lifecycle !== "waiting_dependencies") continue;
-        if (node.dependencies.some(({ nodeId }) => this.states.get(nodeId)!.lifecycle !== "settled")) {
+        let nodeFlow = this.nodeFlows.get(node.id);
+        if (!nodeFlow && this.flow) {
+          nodeFlow = new ExecutionFlowPath(COMPOSITE_NODE_FLOW, {...this.flow.callContext,relationship:"spawn"},this.flow.runId,
+            [{owner:"operation-composition",kind:"operation",id:`${this.compositeId}:${node.id}`,revision:null}]);
+          this.nodeFlows.set(node.id,nodeFlow);
+        }
+        const check = nodeFlow?.advance("dependencies", {nodeId:node.id,dependencyCount:node.dependencies.length});
+        const settled = node.dependencies.every(({nodeId})=>this.states.get(nodeId)!.lifecycle === "settled");
+        check?.check("dependencies_settled", settled ? "passed" : "not_satisfied");
+        if (!settled) {
           this.commitLifecycle(node.id, "waiting_dependencies");
           continue;
         }
         changed = true;
-        if (node.dependencies.some(({ nodeId, requirement }) =>
-            requirement === "succeeded" && this.states.get(nodeId)!.settlement!.status !== "succeeded")) {
+        const succeeded = node.dependencies.every(({nodeId,requirement})=>requirement !== "succeeded" || this.states.get(nodeId)!.settlement!.status === "succeeded");
+        check?.check("dependencies_succeeded", succeeded ? "passed" : "not_satisfied");
+        if (!succeeded) {
           this.commitTerminal(node.id, "dependency_failed", null, null, {
             code: "composite_dependency_failed", message: "A required-success prerequisite did not succeed.",
             retryable: false, metadata: { dependencies: node.dependencies },
@@ -247,7 +286,9 @@ export class CompositeExecution {
         }
         try {
           const condition = node.conditionId === null ? null : this.conditions.get(node.conditionId)!;
-          if (condition !== null && !condition.evaluate({ compositeInput, dependencies: this.dependencySettlements(node) })) {
+          const selected = condition === null || condition.evaluate({ compositeInput, dependencies: this.dependencySettlements(node) });
+          check?.check("condition", condition === null ? "not_applicable" : selected ? "passed" : "not_satisfied", {conditionId:node.conditionId});
+          if (!selected) {
             this.commitTerminal(node.id, "not_selected", null, null);
           } else {
             this.commitLifecycle(node.id, "ready");
@@ -270,8 +311,11 @@ export class CompositeExecution {
       if (this.dependencies.conflicts === null) break;
       const safe = selected.every((current) => {
         const proof = this.dependencies.conflicts!.evaluate(current.resourceClaims, candidate.resourceClaims);
-        return proof.revision === this.definition.conflictPolicyRevision &&
+        const accepted = proof.revision === this.definition.conflictPolicyRevision &&
           proof.status === "non_conflicting" && proof.evidenceRef !== null;
+        this.flow?.current?.check("resource_conflict", accepted ? "passed" : "not_satisfied",
+          {left:current.id,right:candidate.id,policyRevision:proof.revision,evidenceRef:proof.evidenceRef,status:proof.status});
+        return accepted;
       });
       if (!safe) break;
       selected.push(candidate);
@@ -297,6 +341,9 @@ export class CompositeExecution {
     const settlement = Object.freeze({ nodeId, instance: 1, runAction, status, result,
       failure: failure === null ? result?.failure ?? null : Object.freeze(failure) });
     this.states.set(nodeId, frozenState(nodeId, "settled", runAction, settlement));
+    const flow = this.nodeFlows.get(nodeId);
+    flow?.advance("settle", {status,nodeId});
+    flow?.close("returned");
     this.revision += 1;
     this.publish();
   }
@@ -325,6 +372,7 @@ export class CompositeExecution {
     forcedStatus?: CompositeResult["status"],
     cause: CompositeFailure | null = null,
   ): CompositeResult {
+    this.flow?.advance("reduce", {forcedStatus:forcedStatus ?? null,reducerId:this.dependencies.reducer.id});
     for (const node of this.definition.nodes) {
       if (this.states.get(node.id)!.lifecycle !== "settled") this.commitTerminal(node.id, "invalidated", null, null);
     }

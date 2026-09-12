@@ -1,4 +1,28 @@
 :root { font-family: "Segoe UI", sans-serif; color: #24292c; background: #f3f5f6; font-synthesis: none; letter-spacing: 0; }
+.execution-flow-view { height: 100%; min-height: 620px; display: flex; flex-direction: column; gap: 8px; }
+.execution-flow-view .view-toolbar .ant-select { flex: 1; min-width: 180px; }
+.flow-definition-heading { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.flow-definition-heading strong { font-size: 14px; }
+.flow-digest { color: #65717a; font-family: monospace; }
+.flow-splitter { flex: 1; min-height: 520px; }
+.flow-graph { height: 100%; min-height: 240px; display: flex; flex-direction: column; }
+.flow-graph .react-flow { flex: 1; min-height: 190px; }
+.flow-step-node { height: 100%; border: 1px solid #8ea1a9; border-radius: 4px; background: #fff; padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; gap: 3px; }
+.flow-step-node strong { font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+.flow-step-node small, .flow-step-node span { font-size: 10px; color: #627078; }
+.react-flow__node-step.selected .flow-step-node { outline: 2px solid #286958; background: #edf6f2; }
+.flow-edge-count { position: absolute; padding: 2px 5px; border: 1px solid #cad8d2; background: #fff; font-size: 10px; border-radius: 3px; }
+.flow-legend::before { content: ""; display: inline-block; width: 22px; border-top: 2px solid #286958; margin-right: 5px; vertical-align: middle; }
+.flow-legend.declared::before { border-top: 1px dashed #a6afb8; }
+.flow-occurrences, .flow-details { height: 100%; min-width: 0; padding: 8px; overflow: auto; }
+.flow-details .ant-descriptions-item-content { overflow-wrap: anywhere; }
+.flow-basis { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; font-size: 11px; }
+.flow-reference { display: flex; gap: 4px; align-items: flex-start; }
+.flow-reference .ant-btn-link, .flow-relations .ant-btn-link { white-space: normal; height: auto; text-align: left; overflow-wrap: anywhere; min-width: 0; max-width: 100%; padding: 4px 0; }
+.flow-relations { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.flow-relations h3 { font-size: 12px; margin: 12px 0 4px; }
+.flow-narrow-panel { flex: 1; min-height: 460px; overflow: auto; }
+.flow-narrow-panel .flow-graph { height: 460px; }
 .table-owner { display: block; color: #677379; margin-top: 4px; }
 .record-selected td { background: #e1f0ea !important; }
 .view-loading { flex: 1; display: grid; place-items: center; min-height: 200px; }
@@ -21,6 +45,7 @@ button, input { font: inherit; }
 .area-tabs .ant-tabs-nav, .view-tabs .ant-tabs-nav { margin-bottom: 0; }
 .query-alert { margin: 8px 18px; }
 .workspace { display: grid; grid-template-columns: 235px minmax(0, 1fr) 330px; flex: 1; min-height: 0; }
+.workspace.workspace-flow { grid-template-columns: 235px minmax(0, 1fr); }
 .object-pane { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid #d7dee1; padding: 12px 10px; display: flex; flex-direction: column; gap: 10px; background: #fafbfb; }
 .object-pane > :not(.object-list) { flex-shrink: 0; }
 .object-list { overflow: auto; flex: 1; min-height: 0; scrollbar-gutter: stable; }

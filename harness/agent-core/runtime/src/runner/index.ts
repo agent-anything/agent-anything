@@ -1,31 +1,5 @@
-export type {
-  RootRunConfig,
-  RunConfig,
-  RunLimits,
-  RunTreeLimits,
-  RunVerificationConfig,
-} from "./RunConfig.js";
-export type {
-  DelegationPreparationPort,
-  DelegationPreparationResult,
-  DelegationNarrativeProjectionPort,
-  DelegationResultProjectionPort,
-  DelegationProgressProjectionPort,
-  DescendantOperationOutcome,
-  OperationToolAvailabilityParticipant,
-  RunnerContextProjection,
-  RunInvocationOptions,
-  RunnerAutomaticEffectfulVerificationCheckPort,
-  RunnerAutomaticEffectfulVerificationCheckRequest,
-  RunnerDependencies,
-  RunnerDelegationComposition,
-  RunnerVerificationCheckRequest,
-  RunnerVerificationCheckResultProcessorPort,
-  RunnerVerificationComposition,
-  RunnerVerificationPreparationPort,
-  RunnerVerificationSettledOperationResultProcessorPort,
-  ToolPathAvailability,
-} from "./RunnerDependencies.js";
+export type { RootRunConfig, RunConfig, RunLimits, RunTreeLimits } from "./RunConfig.js";
+export type { DelegationPreparationPort, DelegationPreparationResult, DelegationNarrativeProjectionPort, DelegationResultProjectionPort, DelegationProgressProjectionPort, DescendantOperationOutcome, OperationToolAvailabilityParticipant, RunnerContextProjection, RunInvocationOptions, RunnerDependencies, RunnerDelegationComposition, ToolPathAvailability } from "./RunnerDependencies.js";
 export type {
   ActiveDelegationProjection,
   RunHandle,

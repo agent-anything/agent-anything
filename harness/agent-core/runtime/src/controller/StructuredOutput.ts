@@ -17,6 +17,7 @@ export interface StructuredOutputFailure {
 }
 
 export interface ProviderRequestBuildContext {
+  readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly attemptNumber: number;
   readonly correction: StructuredOutputCorrection | null;
   readonly target: ProviderModelTarget;

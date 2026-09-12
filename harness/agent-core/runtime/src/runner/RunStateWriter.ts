@@ -1,9 +1,11 @@
 import type { RunItemPayload, RunState } from "../run/index.js";
 import type { CreateRunnerIdentity } from "./RunnerDependencies.js";
 
+export type RunStatePatch<TOutput> = { readonly [K in keyof RunState<TOutput>]?: RunState<TOutput>[K] };
+
 export type RunStateTransition<TOutput> = (
   current: RunState<TOutput>,
-) => Readonly<Record<string, unknown>>;
+) => RunStatePatch<TOutput>;
 
 /** Invocation-local sole writer for one RunState revision chain. */
 export class RunStateWriter<TOutput> {
@@ -77,7 +79,7 @@ export class RunStateWriter<TOutput> {
   }
 
   private assertWritable(): void {
-    if (["succeeded", "stopped", "failed", "cancelled"].includes(this.state.status)) {
+    if (["completed", "failed", "cancelled"].includes(this.state.status)) {
       throw new TypeError("A terminal Run cannot accept state mutations.");
     }
   }

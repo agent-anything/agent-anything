@@ -9,7 +9,6 @@ packages:
   - "harness/observability"
   - "harness/inspection"
   - "harness/evaluation"
-  - "harness/verification"
   - "harness/agent-core/runtime"
   - "harness/agent-hooks"
   - "harness/tools"

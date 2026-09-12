@@ -547,7 +547,7 @@ function observedResult(
         summary: status,
         data: {},
       },
-      childRuns: [{ runId: `${trial.ref.id}:run`, status: status === "failed" ? "failed" : "succeeded" }],
+      childRuns: [{ runId: `${trial.ref.id}:run`, status: status === "failed" ? "failed" : "completed" }],
       artifactRefs: [],
       observedAt: TIME,
       limitations: [],

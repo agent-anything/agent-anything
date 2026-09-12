@@ -3,7 +3,8 @@ import { deriveActiveRunStatus, type PendingRunSubject, type RunStatus } from ".
 export function deriveRunStatusAfterPendingChange(
   status: RunStatus,
   pending: readonly PendingRunSubject[],
+  progressableBranchIds: readonly string[] = [],
 ): RunStatus {
   if (status !== "initializing" && status !== "running" && status !== "waiting") return status;
-  return deriveActiveRunStatus({ pending, progressableBranchIds: Object.freeze([]) });
+  return deriveActiveRunStatus({ pending, progressableBranchIds });
 }

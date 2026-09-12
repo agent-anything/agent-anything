@@ -15,14 +15,12 @@ import type {
 import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcControllerTraceProjection } from "../observability/index.js";
-import type { VerificationHostProjection, VerificationStateCount } from "@agent-anything/verification/projection";
 import type {
   HelarcModelQualificationSafeProjection,
 } from "../model-qualification/index.js";
 
 export type HelarcProductStatus =
   | "completed"
-  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -133,23 +131,6 @@ export interface HelarcInteractionSummary {
   readonly status: "resolved" | "expired" | "cancelled" | "invalidated" | "failed";
 }
 
-export interface HelarcVerificationCommunication {
-  readonly status:
-    | "not_required"
-    | "pending"
-    | "satisfied"
-    | "attention_required"
-    | "unavailable";
-  readonly snapshotRevision: number | null;
-  readonly counts: readonly VerificationStateCount[];
-  readonly activeChecks: number;
-  readonly gateStatus: NonNullable<VerificationHostProjection["gate"]>["status"] | null;
-  readonly waiting: boolean;
-  readonly recoveryNeeded: boolean;
-  readonly safeReasons: readonly string[];
-  readonly updatedAt: string | null;
-}
-
 export interface HelarcEnforcementSummary {
   readonly selected: SandboxEnforcement;
   readonly status:
@@ -174,7 +155,6 @@ export interface HelarcProductResult {
   readonly composites: readonly HelarcCompositeWorkSummary[];
   readonly children: readonly HelarcChildWorkSummary[];
   readonly interactions: readonly HelarcInteractionSummary[];
-  readonly verification: HelarcVerificationCommunication;
   readonly uncertainty: readonly string[];
   readonly residualRisk: readonly string[];
   readonly incompleteWork: readonly string[];
@@ -187,10 +167,9 @@ export function projectHelarcProductResult(
   workspace: WorkspaceSelection,
   runResult: RunResult<HelarcAgentOutput>,
   selectedEnforcement: SandboxEnforcement,
-  verification: VerificationHostProjection | null,
   qualification: HelarcModelQualificationSafeProjection,
 ): HelarcProductResult {
-  const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
+  const agentOutput = runResult.status === "completed" ? runResult.finalOutput : null;
   const safeErrors = collectSafeRunErrors(runResult);
   const effects = collectEffects(runResult);
   const runActions = collectRunActions(runResult);
@@ -217,7 +196,7 @@ export function projectHelarcProductResult(
         primaryId: workspace.primary.id,
         additionalIds: Object.freeze(workspace.additional.map(({ id }) => id)),
       }),
-      agentSummary: agentOutput?.summary ?? (runResult.cause.kind === "stop" ? runResult.cause.reason : null),
+      agentSummary: agentOutput?.summary ?? null,
       runtimeStatus: runResult.status,
       enforcement: Object.freeze(createEnforcementSummary(runResult, selectedEnforcement)),
       safeErrors: Object.freeze(safeErrors.map((error) => Object.freeze({ ...error }))),
@@ -228,7 +207,6 @@ export function projectHelarcProductResult(
     composites,
     children,
     interactions,
-    verification: projectVerificationCommunication(verification),
     uncertainty,
     residualRisk: Object.freeze(uncertainty.length === 0 ? [] : [
       "One or more effects could not be confirmed from the terminal Run record.",
@@ -238,49 +216,6 @@ export function projectHelarcProductResult(
       "Inspect the recorded failure or unresolved effect before continuing.",
     ]),
     artifactRefs: Object.freeze([...runResult.artifactRefs]),
-  });
-}
-
-function projectVerificationCommunication(
-  verification: VerificationHostProjection | null,
-): HelarcVerificationCommunication {
-  if (verification === null) {
-    return Object.freeze({
-      status: "unavailable" as const,
-      snapshotRevision: null,
-      counts: Object.freeze([]),
-      activeChecks: 0,
-      gateStatus: null,
-      waiting: false,
-      recoveryNeeded: false,
-      safeReasons: Object.freeze(["verification_projection_unavailable"]),
-      updatedAt: null,
-    });
-  }
-  const count = (state: VerificationStateCount["state"]) =>
-    verification.counts.find((entry) => entry.state === state)?.count ?? 0;
-  const total = verification.counts.reduce((sum, entry) => sum + entry.count, 0);
-  const status: HelarcVerificationCommunication["status"] = total === 0
-    ? "not_required"
-    : count("violated") > 0 || count("inconclusive") > 0 || count("stale") > 0
-      ? "attention_required"
-      : verification.waiting || verification.activeAttempts.length > 0 || count("pending") > 0
-        ? "pending"
-        : count("satisfied") > 0
-          ? "satisfied"
-          : verification.gate?.status === "completion_eligible"
-            ? "not_required"
-            : "pending";
-  return Object.freeze({
-    status,
-    snapshotRevision: verification.snapshot.revision,
-    counts: Object.freeze(verification.counts.map((entry) => Object.freeze({ ...entry }))),
-    activeChecks: verification.activeAttempts.length,
-    gateStatus: verification.gate?.status ?? null,
-    waiting: verification.waiting,
-    recoveryNeeded: verification.recoveryNeeded,
-    safeReasons: Object.freeze([...verification.safeReasons]),
-    updatedAt: verification.updatedAt,
   });
 }
 
@@ -720,14 +655,13 @@ function safeProductErrorMessage(code: string): string {
 }
 
 function mapRunStatus(status: RunResultStatus): HelarcProductStatus {
-  return status === "succeeded" ? "completed" : status;
+  return status;
 }
 
 function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>): string {
   switch (name) {
     case "run.started": return "Run started";
     case "run.completed": return "Run completed";
-    case "run.stopped": return "Run stopped";
     case "run.failed": return "Run failed";
     case "run.cancelled": return "Run cancelled";
     case "controller.started":

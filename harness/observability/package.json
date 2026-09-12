@@ -29,6 +29,10 @@
     "./tracing": {
       "types": "./src/tracing/index.ts",
       "import": "./dist/tracing/index.js"
+    },
+    "./execution-flow": {
+      "types": "./src/execution-flow/index.ts",
+      "import": "./dist/execution-flow/index.js"
     }
   },
   "files": [

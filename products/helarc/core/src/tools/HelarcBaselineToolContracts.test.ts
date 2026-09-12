@@ -58,11 +58,10 @@ describe("Helarc baseline Tool Contracts", () => {
     expect(findHelarcBaselineToolContract("Agent").outputSchema).toMatchObject({
       anyOf: [
         {
-          required: expect.arrayContaining(["agent_id", "status", "summary", "stop_reason"]),
+          required: expect.arrayContaining(["agent_id", "status", "summary", "failure_code"]),
           properties: {
             agent_id: { anyOf: expect.any(Array) },
-            status: { enum: ["succeeded", "stopped", "failed", "cancelled"] },
-            stop_reason: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
+            status: { enum: ["completed", "failed", "cancelled"] },
           },
         },
         {
@@ -92,7 +91,6 @@ describe("Helarc baseline Tool Contracts", () => {
       required: ["command"],
       properties: {
         run_in_background: { type: "boolean" },
-        verification_claim: { type: "string" },
       },
     });
     expect(findHelarcBaselineToolContract("TaskStop").binding).toMatchObject({

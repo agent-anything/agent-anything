@@ -30,7 +30,6 @@ import {
   createEvaluationCampaign,
   type EvaluationCampaign,
 } from "@agent-anything/evaluation/campaign";
-import type { HelarcExactTargetVerificationRequirement } from "@agent-anything/helarc/verification";
 import { createHelarcAgent } from "@agent-anything/helarc/agent";
 import { HELARC_TASK_FULFILLMENT_HOOK_REVISION } from "@agent-anything/helarc/task-fulfillment";
 import { HELARC_SHELL_COMMAND_OUTCOME_REVISION } from "@agent-anything/helarc-local-environment/command";
@@ -42,9 +41,9 @@ import {
 
 export const HELARC_EVALUATION_TIME = "2026-09-05T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-call-admission-scheduling-corpus-v1";
+  "helarc-normal-completion-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-call-admission-scheduling-target-v1";
+  "helarc-normal-completion-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -55,8 +54,8 @@ export type HelarcEvaluationScenario =
   | "multi_file_mutation"
   | "ordinary_shell_verification"
   | "failed_check_recovery"
-  | "stale_evidence"
-  | "premature_completion";
+  | "write_and_complete"
+  | "unsupported_completion_claim";
 
 export type HelarcEvaluationPermissionPreset =
   | "approve_for_me"
@@ -83,8 +82,8 @@ export interface HelarcEvaluationScript {
 export interface HelarcEvaluationExpectedClaim {
   readonly ref: EvaluationRecordRef;
   readonly caseRef: EvaluationRecordRef;
-  readonly productStatus: "completed" | "stopped" | "failed" | "cancelled";
-  readonly runStatus: "succeeded" | "stopped" | "failed" | "cancelled";
+  readonly productStatus: "completed" | "failed" | "cancelled";
+  readonly runStatus: "completed" | "failed" | "cancelled";
   readonly agentSummary: string | null;
   readonly workspaceFiles: readonly HelarcEvaluationFixtureFile[];
   readonly requiredActionNames: readonly string[];
@@ -98,7 +97,6 @@ export interface HelarcEvaluationCaseDefinition {
   readonly fixture: HelarcEvaluationFixture;
   readonly script: HelarcEvaluationScript;
   readonly expectedClaim: HelarcEvaluationExpectedClaim;
-  readonly verificationTargets: readonly HelarcExactTargetVerificationRequirement[];
 }
 
 export interface HelarcEvaluationCorpus {
@@ -289,7 +287,6 @@ function createObjective(): EvaluationObjective {
     requirement("run-settlement.revision", "agent-runtime"),
     requirement("agent-hooks.revision", "agent-hooks"),
     requirement("task-fulfillment-hook.revision", "helarc.product"),
-    requirement("verification-completion-gate.revision", "verification"),
     requirement("tool-input-validation.revision", "tools"),
     requirement("agent-continuation.revision", "agent-runtime"),
     requirement("model-context-assessment.revision", "model-interaction"),
@@ -358,7 +355,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v22-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v23-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -369,7 +366,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-call-admission-scheduling-v1",
+    "product.revision": "helarc-product-normal-completion-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -383,7 +380,6 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "run-settlement.revision": "agent-runtime.run-terminal-settlement.v2",
     "agent-hooks.revision": "agent-hooks.stop-and-stop-failure.v1",
     "task-fulfillment-hook.revision": HELARC_TASK_FULFILLMENT_HOOK_REVISION,
-    "verification-completion-gate.revision": "verification.current-completion-gate.v1",
     "tool-input-validation.revision": "tools.request-admission-and-dispatch-validation.v2",
     "agent-continuation.revision": "agent-runtime.opaque-agent-continuation.v1",
     "model-context-assessment.revision": "model-interaction.provider-context-assessment.v1",
@@ -393,10 +389,10 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-call-admission-scheduling-v1",
+    "source.revision": "helarc-normal-completion-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
-    "tool-profile.revision": "child-report-and-stop-reason-v1",
+    "tool-profile.revision": "child-report-and-failure-code-v1",
     "delegation-contract.revision": "child-terminal-stop-reason-v1",
     "delegation-dispatch.revision": "agent-runtime.descendant-boundary-progression.v1",
     "delegation-tool-inheritance.revision": "agent-runtime.exact-parent-tool-selection.v1",
@@ -495,7 +491,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         { kind: "completion", summary: "The fixture exports phase26Value with value 42." },
       ],
       productStatus: "completed",
-      runStatus: "succeeded",
+      runStatus: "completed",
       agentSummary: "The fixture exports phase26Value with value 42.",
       expectedAddedFiles: {},
       requiredActionNames: ["Glob", "Read"],
@@ -521,7 +517,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         { kind: "completion", summary: "targetSymbol is declared in src/feature.ts." },
       ],
       productStatus: "completed",
-      runStatus: "succeeded",
+      runStatus: "completed",
       agentSummary: "targetSymbol is declared in src/feature.ts.",
       expectedAddedFiles: {},
       requiredActionNames: ["Grep"],
@@ -552,7 +548,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         },
       ],
       productStatus: "completed",
-      runStatus: "succeeded",
+      runStatus: "completed",
       agentSummary: "Created the requested generated file.",
       expectedAddedFiles: { "src/generated.txt": "phase26\n" },
       requiredActionNames: ["Write"],
@@ -580,10 +576,10 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             description: "Create the requested marker.",
           },
         },
-        { kind: "stop", reason: "The requested command was denied." },
+        { kind: "completion", summary: "The requested command was denied." },
       ],
-      productStatus: "stopped",
-      runStatus: "stopped",
+      productStatus: "completed",
+      runStatus: "completed",
       agentSummary: "The requested command was denied.",
       expectedAddedFiles: {},
       requiredActionNames: [process.platform === "win32" ? "PowerShell" : "Bash"],
@@ -612,7 +608,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         { kind: "completion", summary: "Recovered from an interrupted Provider response." },
       ],
       productStatus: "completed",
-      runStatus: "succeeded",
+      runStatus: "completed",
       agentSummary: "Recovered from an interrupted Provider response.",
       expectedAddedFiles: {},
       requiredActionNames: [],
@@ -641,17 +637,13 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         { kind: "completion", summary: "Created both requested files." },
       ],
       productStatus: "completed",
-      runStatus: "succeeded",
+      runStatus: "completed",
       agentSummary: "Created both requested files.",
       expectedAddedFiles: { "alpha.txt": "alpha\n", "beta.txt": "beta\n" },
       requiredActionNames: ["Write"],
       retryCount: 0,
       permissionPreset: "full_access",
       approvalDecision: null,
-      verificationTargets: [
-        exactFileTarget("alpha", "alpha.txt", "alpha\n"),
-        exactFileTarget("beta", "beta.txt", "beta\n"),
-      ],
     }),
     caseDefinition({
       id: "ordinary-shell-verification",
@@ -667,13 +659,12 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             command: process.platform === "win32"
               ? "Write-Output 'verification-ok'"
               : "printf 'verification-ok\\n'",
-            verification_claim: "tests",
           },
         },
         { kind: "completion", summary: "The ordinary command check passed." },
       ],
       productStatus: "completed",
-      runStatus: "succeeded",
+      runStatus: "completed",
       agentSummary: "The ordinary command check passed.",
       expectedAddedFiles: {},
       requiredActionNames: [shellTool],
@@ -695,7 +686,6 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             command: process.platform === "win32"
               ? "Write-Error 'expected failure'; exit 1"
               : "printf 'expected failure\\n' >&2; exit 1",
-            verification_claim: "tests",
           },
         },
         {
@@ -706,13 +696,12 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             command: process.platform === "win32"
               ? "Write-Output 'recovered'"
               : "printf 'recovered\\n'",
-            verification_claim: "tests",
           },
         },
         { kind: "completion", summary: "Recovered and completed the current check." },
       ],
       productStatus: "completed",
-      runStatus: "succeeded",
+      runStatus: "completed",
       agentSummary: "Recovered and completed the current check.",
       expectedAddedFiles: {},
       requiredActionNames: [shellTool],
@@ -721,8 +710,8 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       approvalDecision: null,
     }),
     caseDefinition({
-      id: "stale-evidence",
-      scenario: "stale_evidence",
+      id: "write-and-complete",
+      scenario: "write_and_complete",
       prompt: "Replace tracked.txt, then propose completion.",
       fixtureFiles: { "tracked.txt": "original\n" },
       outputs: [
@@ -733,48 +722,32 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
           input: { file_path: "tracked.txt", content: "changed\n" },
         },
         { kind: "completion", summary: "Replaced the tracked file." },
-        { kind: "completion", summary: "Replaced the tracked file." },
-        { kind: "completion", summary: "Replaced the tracked file." },
-        { kind: "completion", summary: "Replaced the tracked file." },
-        { kind: "completion", summary: "Replaced the tracked file." },
-        { kind: "completion", summary: "Replaced the tracked file." },
-        { kind: "completion", summary: "Replaced the tracked file." },
-        { kind: "completion", summary: "Replaced the tracked file." },
       ],
-      productStatus: "cancelled",
-      runStatus: "cancelled",
-      agentSummary: null,
+      productStatus: "completed",
+      runStatus: "completed",
+      agentSummary: "Replaced the tracked file.",
       expectedAddedFiles: { "tracked.txt": "changed\n" },
       requiredActionNames: ["Write"],
       retryCount: 0,
       permissionPreset: "full_access",
       approvalDecision: null,
-      verificationTargets: [exactFileTarget("tracked-original", "tracked.txt", "original\n")],
     }),
     caseDefinition({
-      id: "premature-completion",
-      scenario: "premature_completion",
+      id: "unsupported-completion-claim",
+      scenario: "unsupported_completion_claim",
       prompt: "Create required.txt containing ready followed by a newline.",
       fixtureFiles: {},
       outputs: [
         { kind: "completion", summary: "The requested file is ready." },
-        { kind: "completion", summary: "The requested file is ready." },
-        { kind: "completion", summary: "The requested file is ready." },
-        { kind: "completion", summary: "The requested file is ready." },
-        { kind: "completion", summary: "The requested file is ready." },
-        { kind: "completion", summary: "The requested file is ready." },
-        { kind: "completion", summary: "The requested file is ready." },
-        { kind: "completion", summary: "The requested file is ready." },
       ],
-      productStatus: "cancelled",
-      runStatus: "cancelled",
-      agentSummary: null,
+      productStatus: "completed",
+      runStatus: "completed",
+      agentSummary: "The requested file is ready.",
       expectedAddedFiles: {},
       requiredActionNames: [],
       retryCount: 0,
       permissionPreset: "full_access",
       approvalDecision: null,
-      verificationTargets: [exactFileTarget("required", "required.txt", "ready\n")],
     }),
   ].sort((left, right) => left.definition.ref.id.localeCompare(right.definition.ref.id));
 }
@@ -793,7 +766,6 @@ function caseDefinition(input: {
   readonly retryCount: number;
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
   readonly approvalDecision: "decline" | null;
-  readonly verificationTargets?: readonly HelarcExactTargetVerificationRequirement[];
 }): HelarcEvaluationCaseDefinition {
   const caseRef = ref(`helarc.phase26.case.${input.id}`);
   const caseFixture = createFixture(
@@ -857,53 +829,6 @@ function caseDefinition(input: {
     fixture: caseFixture,
     script,
     expectedClaim,
-    verificationTargets: Object.freeze([...(input.verificationTargets ?? [])]),
-  });
-}
-
-function exactFileTarget(
-  id: string,
-  path: string,
-  content: string,
-): HelarcExactTargetVerificationRequirement {
-  const digest = `sha256:${sha256(content)}`;
-  return Object.freeze({
-    target: Object.freeze({
-      ref: Object.freeze({
-        owner: "helarc.code-workspace",
-        kind: "target_state",
-        id,
-        revision: "v1",
-      }),
-      expected: Object.freeze({
-        target: Object.freeze({
-          rootName: "primary",
-          workspaceId: "evaluation-workspace",
-          path,
-        }),
-        baseline: Object.freeze({
-          kind: "present" as const,
-          entryKind: "file" as const,
-          objectIdentity: Object.freeze({
-            kind: "posix" as const,
-            deviceId: "evaluation",
-            inode: id,
-          }),
-          contentDigest: digest,
-        }),
-        content,
-        contentRef: Object.freeze({
-          algorithm: "sha256" as const,
-          digest,
-          byteLength: Buffer.byteLength(content, "utf8"),
-        }),
-        capturedAt: HELARC_EVALUATION_TIME,
-      }),
-      maxContentBytes: 64 * 1024,
-    }),
-    necessity: "mandatory",
-    claim: `The exact current content of '${path}' matches the required state.`,
-    purpose: "Prevent completion from relying on absent or stale target state.",
   });
 }
 
@@ -1034,7 +959,6 @@ function createCapturePolicy(): EvaluationCapturePolicy {
       captureSlot("artifact-observations", "agent-core", true, graderConsumers),
       captureSlot("interaction-review", "helarc.product", true, graderConsumers),
       captureSlot("trace-summary", "observability", true, graderConsumers),
-      captureSlot("verification-summary", "verification", true, []),
       captureSlot("tool-exposure-summary", "agent-core", true, []),
     ],
     createdAt: HELARC_EVALUATION_TIME,

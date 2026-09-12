@@ -18,7 +18,6 @@ describe("Context Continuity adverse-path conformance", () => {
       [{ providerTransportFailed: true }, "provider_transport"],
       [{ modelReasoningFailed: true }, "model_reasoning"],
       [{ executionFailed: true }, "execution"],
-      [{ verificationFailed: true }, "verification"],
       [{}, "none"],
     ];
 

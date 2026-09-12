@@ -5,15 +5,15 @@ export type RuntimeRunItemKind =
   | "observation"
   | "state_transition"
   | "pending_transition"
+  | "retry_transition"
   | "cancellation_transition"
-  | "verification_feedback"
   | "controller_feedback"
   | "completion_acceptance"
   | "suspension_transition"
   | "settlement_cause"
   | "terminal_transition";
 
-export type RuntimeTerminalStatus = "succeeded" | "stopped" | "failed" | "cancelled";
+export type RuntimeTerminalStatus = "completed" | "failed" | "cancelled";
 
 export interface RunStartedRuntimeEventPayload {
   readonly status: "running";
@@ -101,7 +101,6 @@ export interface RunDescendantSettledRuntimeEventPayload
   readonly expectationUnmetCount: number;
   readonly evidenceCount: number;
   readonly artifactCount: number;
-  readonly verificationStatus: string;
   readonly effectStatus: string;
   readonly uncertaintyCount: number;
   readonly controllerTurns: number;
@@ -159,7 +158,7 @@ export interface ContextProjectionCompletedRuntimeEventPayload {
 
 interface TerminalRuntimeEventPayload<TStatus extends RuntimeTerminalStatus> {
   readonly status: TStatus;
-  readonly code: TStatus extends "succeeded" ? null : string;
+  readonly code: TStatus extends "completed" ? null : string;
   readonly durationMs: number;
   readonly itemCount: number;
   readonly evidenceCount: number;
@@ -167,8 +166,7 @@ interface TerminalRuntimeEventPayload<TStatus extends RuntimeTerminalStatus> {
   readonly errorCodes: readonly string[];
 }
 
-export type RunCompletedRuntimeEventPayload = TerminalRuntimeEventPayload<"succeeded">;
-export type RunStoppedRuntimeEventPayload = TerminalRuntimeEventPayload<"stopped">;
+export type RunCompletedRuntimeEventPayload = TerminalRuntimeEventPayload<"completed">;
 export type RunFailedRuntimeEventPayload = TerminalRuntimeEventPayload<"failed">;
 export type RunCancelledRuntimeEventPayload = TerminalRuntimeEventPayload<"cancelled">;
 
@@ -197,7 +195,7 @@ export interface ControllerFinishedRuntimeEventPayload {
   readonly iteration: number;
   readonly status: "decided" | "failed" | "interrupted";
   readonly code: string | null;
-  readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | "propose_stop" | null;
+  readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | null;
 }
 
 export interface ToolInputRejectedRuntimeEventPayload {
@@ -257,37 +255,6 @@ export interface InteractionSettledRuntimeEventPayload {
   readonly terminalRecordId: string;
 }
 
-export interface VerificationCheckStartedRuntimeEventPayload {
-  readonly snapshotRevision: number;
-  readonly attemptId: string;
-  readonly requirementId: string;
-  readonly origin: "controller" | "trusted_automatic" | "trusted_workflow" | "owner_request";
-}
-
-export interface VerificationCheckFinishedRuntimeEventPayload {
-  readonly snapshotRevision: number;
-  readonly attemptId: string;
-  readonly status: "invalid" | "unavailable" | "denied" | "cancelled" | "timed_out" | "failed" | "partial" | "completed";
-  readonly code: string | null;
-  readonly durationMs: number;
-  readonly coverageRatio: number;
-}
-
-export interface VerificationAssessmentCommittedRuntimeEventPayload {
-  readonly snapshotRevision: number;
-  readonly requirementId: string;
-  readonly assessmentId: string;
-  readonly verdict: "satisfied" | "violated" | "inconclusive";
-}
-
-export interface VerificationGateEvaluatedRuntimeEventPayload {
-  readonly snapshotRevision: number;
-  readonly gateId: string;
-  readonly status: "completion_eligible" | "blocked_unassessed" | "blocked_pending" | "blocked_stale" | "blocked_violated" | "blocked_inconclusive" | "invalid" | "failed";
-  readonly disposition: "continue" | "wait" | "block" | "fail" | null;
-  readonly reasonCodes: readonly string[];
-}
-
 export interface RuntimeEventPayloadMap {
   readonly "run.started": RunStartedRuntimeEventPayload;
   readonly "run.item.appended": RunItemAppendedRuntimeEventPayload;
@@ -298,7 +265,6 @@ export interface RuntimeEventPayloadMap {
   readonly "context.transition.committed": ContextTransitionCommittedRuntimeEventPayload;
   readonly "context.projection.completed": ContextProjectionCompletedRuntimeEventPayload;
   readonly "run.completed": RunCompletedRuntimeEventPayload;
-  readonly "run.stopped": RunStoppedRuntimeEventPayload;
   readonly "run.failed": RunFailedRuntimeEventPayload;
   readonly "run.cancelled": RunCancelledRuntimeEventPayload;
   readonly "controller.started": ControllerStartedRuntimeEventPayload;
@@ -309,10 +275,6 @@ export interface RuntimeEventPayloadMap {
   readonly "operation.finished": OperationFinishedRuntimeEventPayload;
   readonly "interaction.opened": InteractionOpenedRuntimeEventPayload;
   readonly "interaction.settled": InteractionSettledRuntimeEventPayload;
-  readonly "verification.check.started": VerificationCheckStartedRuntimeEventPayload;
-  readonly "verification.check.finished": VerificationCheckFinishedRuntimeEventPayload;
-  readonly "verification.assessment.committed": VerificationAssessmentCommittedRuntimeEventPayload;
-  readonly "verification.gate.evaluated": VerificationGateEvaluatedRuntimeEventPayload;
 }
 
 export type RuntimeEventName = keyof RuntimeEventPayloadMap;

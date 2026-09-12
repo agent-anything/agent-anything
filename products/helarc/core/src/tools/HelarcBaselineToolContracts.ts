@@ -306,16 +306,14 @@ const ASK_USER_QUESTION = contract({
   },
 });
 
-const DELEGATION_TERMINAL_OUTPUT = objectSchema(["agent_id", "status", "summary", "stop_reason", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
+const DELEGATION_TERMINAL_OUTPUT = objectSchema(["agent_id", "status", "summary", "artifact_refs", "effect_status", "uncertainty", "failure_code"], {
   agent_id: { anyOf: [{ type: "string", minLength: 1, maxLength: 1_024 }, { type: "null" }] },
-  status: { enum: ["succeeded", "stopped", "failed", "cancelled"] },
+  status: { enum: ["completed", "failed", "cancelled"] },
   summary: { type: "string", maxLength: 64_000 },
-  stop_reason: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
   artifact_refs: {
     type: "array",
     items: { type: "string", minLength: 1, maxLength: 1_024 },
   },
-  verification_status: { type: "string" },
   effect_status: { type: "string" },
   uncertainty: {
     type: "array",
@@ -381,16 +379,6 @@ const SHELL_INPUT = objectSchema(["command"], {
   description: { type: "string", minLength: 1, maxLength: 1_000 },
   timeout_ms: POSITIVE_INTEGER,
   run_in_background: { type: "boolean" },
-  verification_claim: {
-    type: "string",
-    enum: [
-      "tests",
-      "static_analysis",
-      "runtime_verification",
-      "security_scan",
-      "performance_benchmark",
-    ],
-  },
 });
 
 const SHELL_STREAM_OUTPUT = objectSchema(

@@ -7,6 +7,7 @@ import type {
   RunTraceObserver,
   RuntimeEventPublisher,
 } from "@agent-anything/observability";
+import type { ExecutionFlowOccurrenceRef } from "@agent-anything/observability/execution-flow";
 import {
   createRunResult,
   createRunCancellationController,
@@ -73,11 +74,6 @@ export class Runner {
   constructor(dependencies: RunnerDependencies) {
     if (!dependencies.controller || typeof dependencies.controller.next !== "function") {
       throw new TypeError("Runner requires a Controller.");
-    }
-    if (!dependencies.verification ||
-        typeof dependencies.verification.executionFactory?.create !== "function" ||
-        typeof dependencies.verification.completionGate?.evaluate !== "function") {
-      throw new TypeError("Runner requires explicit Verification execution and Completion Gate dependencies.");
     }
     const now = dependencies.now ?? (() => new Date().toISOString());
     const contextProjection = snapshotRunnerContextProjection(
@@ -162,7 +158,8 @@ export class Runner {
       configuredPublishers,
       configuredObservers,
       options.actionExecutionObserver,
-    );
+      options.executionFlow,
+    ).handle;
   }
 
   run<TOutput>(
@@ -337,7 +334,7 @@ export class Runner {
           childRunId,
           startedAt: launchStartedAt,
         }));
-        const handle = this.startPreparedRun(
+        const { handle, getTerminalFlowOccurrence } = this.startPreparedRun(
           childRunId,
           agent,
           runInput,
@@ -355,6 +352,7 @@ export class Runner {
           runtimeEventPublishers,
           runTraceObservers,
           actionExecutionObserver,
+          input.executionFlow,
         );
         const resourceSettlement = handle.wait().then(() => {
           const settlement = tree.getResourceSettlement(childRunId);
@@ -367,6 +365,7 @@ export class Runner {
           status: "started" as const,
           relation: reservation.relation,
           handle,
+          getTerminalFlowOccurrence,
           resourceSettlement,
           reservedTreeRevision: reservation.treeRevision,
           treeRevision: tree.getSnapshot().revision,
@@ -405,7 +404,11 @@ export class Runner {
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
-  ): RunHandle<TOutput> {
+    executionFlow?: RunInvocationOptions["executionFlow"],
+  ): {
+    readonly handle: RunHandle<TOutput>;
+    readonly getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null;
+  } {
     if (this.activeRunIds.has(runId)) {
       throw new TypeError(`Runner-created runId '${runId}' is already active.`);
     }
@@ -487,12 +490,14 @@ export class Runner {
         tree.updateLifecycle(runId, update.status);
         handle.publish(update, tree.getSnapshot());
       },
+      executionFlow,
     );
     handle.bindInteractionSubmission((submission) =>
       execution.submitInteraction(submission)
     );
     handle.bindSteering((steering) => execution.submitSteering(steering));
     handle.bindResume((resume) => execution.submitResume(resume));
+    handle.bindSuspend((suspend) => execution.submitSuspend(suspend));
     handle.bindDescendantSteering((route) =>
       execution.submitDescendantSteering(route)
     );
@@ -506,7 +511,10 @@ export class Runner {
       unsubscribeTree = tree.subscribe((snapshot) => handle.publishRunTree(snapshot));
     }
     handle.start(() => execution.run());
-    return handle;
+    return {
+      handle,
+      getTerminalFlowOccurrence: () => execution.getTerminalFlowOccurrence(),
+    };
   }
 }
 

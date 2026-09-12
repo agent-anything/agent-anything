@@ -55,10 +55,8 @@ function snapshotContract(
   switch (eventName) {
     case "run.started":
       return runLifecycleContract(source, target, payload, runId, "started", "succeeded");
-    case "run.succeeded":
-      return runLifecycleContract(source, target, payload, runId, "succeeded", "succeeded");
-    case "run.stopped":
-      return runLifecycleContract(source, target, payload, runId, "stopped", "succeeded");
+    case "run.completed":
+      return runLifecycleContract(source, target, payload, runId, "completed", "succeeded");
     case "run.failed":
       return runLifecycleContract(source, target, payload, runId, "failed", "failed");
     case "run.cancelled":
@@ -194,7 +192,7 @@ function runLifecycleContract(
   target: RecordValue,
   payload: RecordValue,
   runId: string,
-  status: "started" | "succeeded" | "stopped" | "failed" | "cancelled",
+  status: "started" | "completed" | "failed" | "cancelled",
   outcome: AuditOutcome,
 ): RecordValue {
   const targetSnapshot = Object.freeze({
@@ -375,8 +373,7 @@ function nullableLiteral<T extends string | number>(
 
 const auditRecordNames = Object.freeze([
   "run.started",
-  "run.succeeded",
-  "run.stopped",
+  "run.completed",
   "run.failed",
   "run.cancelled",
   "approval.requested",

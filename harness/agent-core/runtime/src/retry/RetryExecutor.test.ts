@@ -84,6 +84,25 @@ describe("RetryExecutor", () => {
     expect(harness.waitedDelays).toEqual([100]);
   });
 
+  it("keeps delayed Provider recovery bounded within the same operation and cumulative accounting", async () => {
+    const harness = createHarness();
+    const input = harness.input({ maxRetries: 0 });
+    let calls = 0;
+    const result = await harness.executor.execute({
+      ...input,
+      policy: {...input.policy, exhaustion: {kind: "retry_after_delay", delayMs: 500, maxAdditionalAttempts: 2}},
+    }, async ({attempt}) => {
+      expect(attempt.operationId).toBe("retry_001");
+      calls += 1;
+      return {kind: "failed", error: retryableError()};
+    });
+    expect(calls).toBe(3);
+    expect(harness.waitedDelays).toEqual([500, 500]);
+    expect(result).toMatchObject({kind: "budget_exhausted", exhaustion: {progress: {completedAttempts: 3, totalRetryDelayMs: 1000}}});
+    expect(harness.events.filter(event => event.type === "retry_scheduled").map(event => event.delaySource))
+      .toEqual(["delayed_recovery", "delayed_recovery"]);
+  });
+
   it("returns non-retryable and policy-disabled failures after one attempt", async () => {
     for (const input of [
       { error: { ...retryableError(), disposition: "non_retryable" as const } },

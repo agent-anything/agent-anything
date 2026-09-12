@@ -93,7 +93,7 @@ describe("Helarc work context domain", () => {
     });
   });
 
-  it("round-trips a stopped Run without a Failure or a resume requirement", () => {
+  it("round-trips a completed Run without a Failure or a resume requirement", () => {
     const original = record();
     const binding = { id: "binding-1", revision: `sha256:${"0".repeat(64)}` };
     original.runs[0] = {
@@ -103,8 +103,8 @@ describe("Helarc work context domain", () => {
         host: {
           runId: "harness-run-1",
           taskId: "task-1",
-          status: "stopped",
-          code: "stop_accepted",
+          status: "completed",
+          code: "completion_accepted",
           completedAt: NOW,
           durationMs: 0,
           itemCount: 3,
@@ -124,9 +124,9 @@ describe("Helarc work context domain", () => {
     const normalized = normalizeHelarcThreadRecord(JSON.parse(JSON.stringify(original)));
     expect(normalized.ok).toBe(true);
     if (!normalized.ok) throw new Error(normalized.error.message);
-    expect(deriveHelarcPersistedRunStatus(normalized.record.runs[0]!)).toBe("stopped");
+    expect(deriveHelarcPersistedRunStatus(normalized.record.runs[0]!)).toBe("completed");
     expect(normalized.record.runs[0]!.terminal!.host).toMatchObject({
-      status: "stopped", code: "stop_accepted", failure: null, cancellation: null,
+      status: "completed", code: "completion_accepted", failure: null, cancellation: null,
     });
   });
 
@@ -170,13 +170,13 @@ describe("Helarc work context domain", () => {
       ...artifact(),
       completeness: "unknown",
       integrity: { status: "unverified" },
-      limitations: ["Verification was not evaluated."],
+      limitations: ["Command output was truncated."],
     })).toMatchObject({
       ok: true,
       artifact: {
         completeness: "unknown",
         integrity: { status: "unverified" },
-        limitations: ["Verification was not evaluated."],
+        limitations: ["Command output was truncated."],
       },
     });
   });

@@ -8,6 +8,19 @@ interface PendingRunSubjectBase {
 
 export type PendingRunSubject =
   | (PendingRunSubjectBase & {
+      readonly kind: "retry_wait";
+      readonly waitId: string;
+      readonly generation: number;
+      readonly invocationId: string;
+      readonly operationId: string;
+      readonly budgetId: string;
+      readonly precedingAttemptId: string;
+      readonly nextAttemptNumber: number;
+      readonly nextAttemptAt: string;
+      readonly deadlineAt: string;
+      readonly policy: import("../retry/RetryPolicy.js").RetryPolicy<string>;
+    })
+  | (PendingRunSubjectBase & {
       readonly kind: "interaction";
       readonly interaction: PendingInteractionRef;
     })
@@ -20,13 +33,6 @@ export type PendingRunSubject =
       readonly kind: "descendant_run";
       readonly relationId: string;
       readonly childRunId: string;
-    })
-  | (PendingRunSubjectBase & {
-      readonly kind: "verification_check";
-      readonly attemptId: string;
-      readonly attemptOrdinal: number;
-      readonly requirementId: string;
-      readonly requirementRevision: string;
     });
 
 export interface PendingRunSubjectProjection {
@@ -41,6 +47,10 @@ export interface PendingRunSubjectProjection {
 export function projectPendingRunSubject(
   pending: PendingRunSubject,
 ): PendingRunSubjectProjection {
+  if (pending.kind === "retry_wait") return Object.freeze({
+    kind: pending.kind, branchId: pending.branchId, required: pending.required,
+    owner: "agent-runtime", subjectId: pending.waitId, revision: String(pending.generation),
+  });
   if (pending.kind === "interaction") {
     return Object.freeze({
       kind: pending.kind,
@@ -61,23 +71,13 @@ export function projectPendingRunSubject(
       revision: String(pending.openedInRunRevision),
     });
   }
-  if (pending.kind === "descendant_run") {
-    return Object.freeze({
+  return Object.freeze({
       kind: pending.kind,
       branchId: pending.branchId,
       required: pending.required,
       owner: "agent-runtime",
       subjectId: pending.childRunId,
       revision: String(pending.openedInRunRevision),
-    });
-  }
-  return Object.freeze({
-    kind: pending.kind,
-    branchId: pending.branchId,
-    required: pending.required,
-    owner: "verification",
-    subjectId: pending.attemptId,
-    revision: String(pending.attemptOrdinal),
   });
 }
 
@@ -86,8 +86,7 @@ export function deriveActiveRunStatus(input: {
   readonly progressableBranchIds: readonly string[];
 }): "running" | "waiting" {
   const progressable = new Set(input.progressableBranchIds);
-  return input.pending.some((item) => item.required) &&
-      !input.pending.some((item) => progressable.has(item.branchId))
+  return input.pending.some((item) => item.required) && progressable.size === 0
     ? "waiting"
     : "running";
 }

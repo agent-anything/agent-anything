@@ -1,3 +1,7 @@
+import { RetryInvocationInvalidatedError } from "../retry/RetryWaitControl.js";
+import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
+import { MODEL_TURN_EXECUTION_FLOW } from "./ModelTurnExecutionFlow.js";
+import { MODEL_CONTEXT_EXECUTION_FLOW } from "./ModelContextExecutionFlow.js";
 import type {
   ModelCallRef,
   ModelAssistantContentBlock,
@@ -62,6 +66,7 @@ export type BuildProviderRequest<TOutput = unknown> = (
 export type ParseProviderResponse<TOutput = unknown> = (
   response: ProviderResponse,
   input: ControllerInput<TOutput>,
+  executionFlow?: ExecutionFlowContext,
 ) => ControllerDecision<TOutput> | Promise<ControllerDecision<TOutput>>;
 
 export type ControllerFailureCode =
@@ -209,28 +214,37 @@ export class ProviderBackedController<TOutput = unknown>
     controllerInput: ControllerInput<TOutput>,
     callContext: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>> {
+    const flow = new ExecutionFlowPath(MODEL_TURN_EXECUTION_FLOW, callContext.executionFlow ?? {}, controllerInput.runId, []);
+    try {
     throwIfCancelled(callContext);
     const decision = this.input.responseProtocol.kind === "native_tool_turn"
-      ? await this.executeNativeToolTurn(controllerInput, callContext)
-      : await this.executeStructuredOutput(controllerInput, callContext);
+      ? await this.executeNativeToolTurn(controllerInput, callContext, flow)
+      : await this.executeStructuredOutput(controllerInput, callContext, flow);
     throwIfCancelled(callContext);
+    flow.close("returned");
     return decision;
+    } catch (error) { flow.close(callContext.cancellation.signal.aborted ? "cancelled" : error instanceof RetryInvocationInvalidatedError ? "interrupted" : "failed"); throw error; }
   }
 
   private async executeNativeToolTurn(
     controllerInput: ControllerInput<TOutput>,
     callContext: ControllerCallContext,
+    flow: ExecutionFlowPath,
   ): Promise<ControllerDecision<TOutput>> {
+    const build = flow.advance("build", {controllerRequestId: controllerInput.toolExposure.controllerRequestId});
     const request = await this.buildRequest(controllerInput, Object.freeze({
+      executionFlow: flow.callContext,
       attemptNumber: 1,
       correction: null,
       target: this.input.provider.modelContext.target,
       requestedOutput: this.input.provider.modelContext.requestedOutput,
     }));
+    build.check("request_contract", "passed", {requestId: request.requestId, compositionId: request.composition.id});
+    flow.advance("send", {requestId: request.requestId});
     const response = await this.sendRequest(
       request,
       controllerInput,
-      callContext,
+      {...callContext, executionFlow: flow.callContext},
       () => 1,
     );
     if (response.kind !== "native_tool_turn") {
@@ -238,8 +252,10 @@ export class ProviderBackedController<TOutput = unknown>
         "Provider returned a response kind that does not match native Tool interaction.",
       );
     }
-    const parsed = await this.parseResponse(response, controllerInput);
+    const parse = flow.advance("parse");
+    const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
     const decision = validateControllerDecision(parsed, controllerInput);
+    parse.check("decision_contract", "passed", {kind: decision.kind});
     assertProviderBackedDecisionProvenance(
       decision,
       controllerInput.toolExposure.controllerRequestId,
@@ -250,6 +266,7 @@ export class ProviderBackedController<TOutput = unknown>
   private async executeStructuredOutput(
     controllerInput: ControllerInput<TOutput>,
     callContext: ControllerCallContext,
+    flow: ExecutionFlowPath,
   ): Promise<ControllerDecision<TOutput>> {
     const operation = createStructuredOutputRetryOperation(
       controllerInput,
@@ -272,6 +289,8 @@ export class ProviderBackedController<TOutput = unknown>
           classifier: { classify: classifyStructuredOutputAttemptFailure },
           cancellation: callContext.cancellation,
           events: callContext.retry.events,
+          waitControl: callContext.retry.waitControl,
+          executionFlow: callContext.executionFlow,
         },
         async (attempt) => {
           const interruptedBeforeBuild = structuredOutputInterruption(
@@ -283,7 +302,9 @@ export class ProviderBackedController<TOutput = unknown>
             return interruptedBeforeBuild;
           }
 
+          const build = flow.advance("build", {attemptNumber: attempt.attempt.attemptNumber});
           const buildContext = Object.freeze({
+            executionFlow: flow.callContext,
             attemptNumber: attempt.attempt.attemptNumber,
             correction,
             target: this.input.provider.modelContext.target,
@@ -292,6 +313,7 @@ export class ProviderBackedController<TOutput = unknown>
           let request: ProviderRequest;
           try {
             request = await this.buildRequest(controllerInput, buildContext);
+            build.check("request_contract", "passed", {requestId: request.requestId, compositionId: request.composition.id});
           } catch (error) {
             return terminalStructuredOutputFailure(error);
           }
@@ -307,10 +329,11 @@ export class ProviderBackedController<TOutput = unknown>
 
           let response: ProviderResponse;
           try {
+            flow.advance("send", {requestId: request.requestId});
             response = await this.sendRequest(
               request,
               controllerInput,
-              callContext,
+              {...callContext, executionFlow: flow.callContext},
               () => {
                 providerRequestNumber += 1;
                 return providerRequestNumber;
@@ -326,6 +349,7 @@ export class ProviderBackedController<TOutput = unknown>
                 ),
               };
             }
+            if (error instanceof RetryInvocationInvalidatedError) throw error;
             return terminalStructuredOutputFailure(error);
           }
 
@@ -340,8 +364,10 @@ export class ProviderBackedController<TOutput = unknown>
 
           try {
             this.assertOutputLength(response);
-            const parsed = await this.parseResponse(response, controllerInput);
+            const parse = flow.advance("parse");
+            const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
             const decision = validateControllerDecision(parsed, controllerInput);
+            parse.check("decision_contract", "passed", {kind: decision.kind});
             assertProviderBackedDecisionProvenance(
               decision,
               controllerInput.toolExposure.controllerRequestId,
@@ -383,6 +409,7 @@ export class ProviderBackedController<TOutput = unknown>
         },
       );
     } catch (error) {
+      if (error instanceof RetryInvocationInvalidatedError) throw error;
       throw createControllerError(
         "model",
         "model_output_invalid",
@@ -479,6 +506,7 @@ export class ProviderBackedController<TOutput = unknown>
       request,
       callContext,
       modelInputRecoveryAttempt,
+      controllerInput.runId,
     );
     request = assessedRequest;
     const preparation = await this.continuation.prepare({
@@ -590,7 +618,24 @@ export class ProviderBackedController<TOutput = unknown>
     request: ProviderRequest,
     callContext: ControllerCallContext,
     recoveryAttempt: number,
+    runId: string,
   ): Promise<ProviderRequest> {
+    const flow = new ExecutionFlowPath(MODEL_CONTEXT_EXECUTION_FLOW, callContext.executionFlow ?? {}, runId,
+      [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
+    try {
+      const result = await this.assessModelContextRequest(request, callContext, recoveryAttempt, flow);
+      flow.close("returned");
+      return result;
+    } catch (error) { flow.close(callContext.cancellation.signal.aborted ? "cancelled" : "failed"); throw error; }
+  }
+
+  private async assessModelContextRequest(
+    request: ProviderRequest,
+    callContext: ControllerCallContext,
+    recoveryAttempt: number,
+    flow: ExecutionFlowPath,
+  ): Promise<ProviderRequest> {
+    const measurementStep = flow.advance("measure", {recoveryAttempt});
     const measuredAt = this.input.retryClock.now().toISOString();
     const modelContext = this.input.provider.modelContext;
     const measurement = modelContext.measure(request.composition, measuredAt);
@@ -604,13 +649,19 @@ export class ProviderBackedController<TOutput = unknown>
       revision: "agent-runtime.model-context-assessment.v1",
     });
     const assessedRequest = withModelContextAssessment(request, assessment);
+    measurementStep.check("capacity", assessment.disposition === "unresolved" ? "not_evaluated" : assessment.disposition.endsWith("overflow") ? "not_satisfied" : "passed",
+      {assessmentId: assessment.id, disposition: assessment.disposition, effectiveInputBudget: assessment.effectiveInputBudget});
     if (assessment.disposition !== "proven_overflow" &&
         assessment.disposition !== "estimated_overflow") {
+      flow.advance("result", {disposition: assessment.disposition}).check("proven_overflow", "passed");
       return assessedRequest;
     }
 
     const capability = this.modelInputRecovery.capability;
     const shouldRecover = assessment.disposition === "proven_overflow" || capability.supported;
+    const recoveryStep = flow.advance("recovery", {recoveryAttempt});
+    recoveryStep.check("recovery_capability", shouldRecover && capability.supported && recoveryAttempt < capability.maximumAttempts ? "passed" : "not_applicable",
+      {supported: capability.supported, maximumAttempts: capability.supported ? capability.maximumAttempts : 0});
     if (shouldRecover && capability.supported && recoveryAttempt < capability.maximumAttempts) {
       const recovered = await this.recoverModelInput(
         assessedRequest,
@@ -619,11 +670,15 @@ export class ProviderBackedController<TOutput = unknown>
         recoveryAttempt + 1,
         Object.freeze({ kind: "local_assessment" as const }),
       );
+      recoveryStep.check("recovery_result", recovered === null ? "not_satisfied" : "passed");
       if (recovered !== null) {
-        return this.prepareModelContextRequest(recovered, callContext, recoveryAttempt + 1);
+        const result = await this.prepareModelContextRequest(recovered, {...callContext, executionFlow: flow.callContext}, recoveryAttempt + 1, flow.runId);
+        flow.advance("result", {disposition: result.modelContext.assessment?.disposition ?? null});
+        return result;
       }
     }
 
+    flow.advance("result", {disposition: assessment.disposition}).check("proven_overflow", assessment.disposition === "proven_overflow" ? "not_satisfied" : "passed");
     if (assessment.disposition === "proven_overflow") {
       throw createControllerError(
         "model",
@@ -757,9 +812,11 @@ export class ProviderBackedController<TOutput = unknown>
           budgetId,
           priorProgress: { completedAttempts: 0, totalRetryDelayMs: 0 },
           policy: callContext.retry.providerRequest,
+          executionFlow: callContext.executionFlow,
           classifier: { classify: classifyProviderAttemptFailure },
           cancellation: callContext.cancellation,
           events: callContext.retry.events,
+          waitControl: callContext.retry.waitControl,
         },
         async (attempt) => {
           const providerResult = await this.input.provider.send(
@@ -775,6 +832,7 @@ export class ProviderBackedController<TOutput = unknown>
         },
       );
     } catch (error) {
+      if (error instanceof RetryInvocationInvalidatedError) throw error;
       if (callContext.cancellation.signal.aborted) {
         throw providerCancellationUnconfirmedError(
           "Provider request did not confirm the active Run cancellation.",
@@ -949,9 +1007,10 @@ export class ProviderBackedController<TOutput = unknown>
   private async parseResponse(
     response: ProviderResponse,
     input: ControllerInput<TOutput>,
+    executionFlow?: ExecutionFlowContext,
   ): Promise<ControllerDecision<TOutput>> {
     try {
-      return await this.input.parseResponse(response, input);
+      return await this.input.parseResponse(response, input, executionFlow);
     } catch (error) {
       if (error instanceof ControllerError || error instanceof StructuredOutputError) {
         throw error;
@@ -1014,16 +1073,6 @@ export function validateControllerDecision<TOutput>(
       return Object.freeze({
         kind: "advance",
         candidates: validateCandidates(candidate.candidates, modelCalls),
-        modelItems,
-      });
-
-    case "propose_stop":
-      if (modelCalls.size > 1) {
-        throw decisionContractError("controller_stop_model_calls_invalid");
-      }
-      return Object.freeze({
-        kind: "propose_stop",
-        reason: nonEmptyDecisionText(candidate.reason),
         modelItems,
       });
 
@@ -1763,7 +1812,7 @@ function createStructuredOutputRetryOperation<TOutput>(
   deadlineAt: string,
   clock: RetryClock,
 ): RetryOperation {
-  const controllerRequestId = `${input.runId}:controller:${input.iteration}`;
+  const controllerRequestId = input.toolExposure.controllerRequestId;
   return Object.freeze({
     operationId: `${controllerRequestId}:structured-output:1`,
     owner: "structured_output",
@@ -1784,7 +1833,7 @@ function createProviderRetryOperation<TOutput>(
   providerRequestNumber: number,
   clock: RetryClock,
 ): RetryOperation {
-  const controllerRequestId = `${input.runId}:controller:${input.iteration}`;
+  const controllerRequestId = input.toolExposure.controllerRequestId;
   return Object.freeze({
     operationId: `${controllerRequestId}:provider-request:${providerRequestNumber}`,
     owner: "provider_request",

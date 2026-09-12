@@ -5,7 +5,7 @@ import type { InspectionReadResult, InspectionViewQuery } from "@agent-anything/
 import { inspectionQuery, openInspectorSession } from "./InspectorClient.js";
 
 export const areas = ["Definitions", "Runs", "Model Interaction", "Execution", "Comparison"];
-export const views: Record<string, InspectionViewQuery> = { Records: "list_records", Hierarchy: "get_hierarchy", Lifecycle: "get_lifecycle", "Data Flow": "get_data_flow", Scheduling: "get_scheduling", Dependencies: "get_dependencies", Timeline: "get_timeline", Telemetry: "get_telemetry" };
+export const views: Record<string, InspectionViewQuery | "get_execution_flow"> = { Records: "list_records", "Execution Flow": "get_execution_flow", Hierarchy: "get_hierarchy", Lifecycle: "get_lifecycle", "Data Flow": "get_data_flow", Scheduling: "get_scheduling", Dependencies: "get_dependencies", Timeline: "get_timeline", Telemetry: "get_telemetry" };
 export interface InspectionBundle {
   snapshot: InspectionReadResult;
   inventory: InspectionReadResult;
@@ -66,7 +66,10 @@ export function useInspectionSnapshot() {
       const recordId = params.get("record");
       const detail = recordId ? await inspectionQuery({ ...scope, kind: "get_record", recordId }, abort.signal)
         : selected ? await inspectionQuery({ ...scope, kind: "get_subject", subject: selected }, abort.signal) : null;
-      const result = await inspectionQuery({ ...scope, kind: views[view]!, subject: view === "Timeline" ? undefined : selected ?? undefined, runId: view === "Timeline" ? selected?.runId ?? undefined : undefined, limit: 500 }, abort.signal);
+      const runId = selected?.kind === "run" ? selected.id : selected?.runId;
+      const result = await inspectionQuery(view === "Execution Flow"
+        ? runId ? { ...scope, kind: "get_execution_flow", runId, limit: 100 } : { ...scope, kind: "list_records", limit: 1 }
+        : { ...scope, kind: views[view] as InspectionViewQuery, subject: view === "Timeline" ? undefined : selected ?? undefined, runId: view === "Timeline" ? selected?.runId ?? undefined : undefined, limit: 500 }, abort.signal);
       if (active !== generation.current) return;
       // Publish one coherent snapshot only after every active view succeeds.
       setBundle({ snapshot, inventory, view: result, selected: detail?.records[0] ?? null });
@@ -86,7 +89,11 @@ export function useInspectionSnapshot() {
     for (const [name, value] of Object.entries(values)) { if (value === null) next.delete(name); else next.set(name, value); }
     setParams(next);
   }
-  function choose(subject: InspectionSubjectRef) { navigate({ subject: JSON.stringify(subject), record: null }); }
+  function choose(subject: InspectionSubjectRef) {
+    navigate({ subject: JSON.stringify(subject), record: null,
+      ...(subject.runId !== selected?.runId ? {flowRun:null,flowInvocation:null,flowOccurrence:null,flowStep:null} : {}),
+    });
+  }
   function showRecord(record: InspectionRecord) { navigate({ subject: JSON.stringify(record.subject), record: record.id }); }
   async function findRecord(recordId: string) {
     if (!bundle?.snapshot.selection) return;
@@ -102,7 +109,7 @@ export function useInspectionSnapshot() {
     pagePending.current = true; setPaging(true);
     const active = generation.current;
     try {
-      const page = await inspectionQuery({ ...bundle.snapshot.selection, ...(target === "inventory" ? inventoryFilter : { kind: views[view]!, subject: view === "Timeline" ? undefined : selected ?? undefined, runId: view === "Timeline" ? selected?.runId ?? undefined : undefined }), after: Number(bundle[target].next), limit: 500 });
+      const page = await inspectionQuery({ ...bundle.snapshot.selection, ...(target === "inventory" ? inventoryFilter : { kind: views[view] as InspectionViewQuery, subject: view === "Timeline" ? undefined : selected ?? undefined, runId: view === "Timeline" ? selected?.runId ?? undefined : undefined }), after: Number(bundle[target].next), limit: 500 });
       if (active === generation.current) setBundle((current) => current ? { ...current, [target]: target === "view" && view === "Timeline" ? page : { ...page, records: [...new Map([...current[target].records, ...page.records].map((record) => [record.id, record])).values()], telemetry: [...current[target].telemetry, ...page.telemetry] } } : current);
     } catch (failure) { if (active === generation.current) setError((failure as Error).message); }
     finally { pagePending.current = false; setPaging(false); }

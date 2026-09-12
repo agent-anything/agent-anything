@@ -182,13 +182,12 @@ function terminalUpdate(
 ): RunExecutionUpdate<{ summary: string }> {
   return {
     runRevision: 1,
-    status: "succeeded",
+    status: "completed",
     lastRunItemSequence: 0,
     instructionBinding: null,
     plan: null,
     suspension: null,
     retry: null,
-    verification: null,
       pendingInteractions: [],
       activeDelegations: [],
       continuationTargets: [],
@@ -216,7 +215,7 @@ function succeededResult() {
     finalInstructionBinding: instructionBinding,
     startedAt: NOW,
     settlement: {
-      status: "succeeded",
+      status: "completed",
       completedAt: LATER,
       cause: cause.ref,
       output: { summary: "done" },

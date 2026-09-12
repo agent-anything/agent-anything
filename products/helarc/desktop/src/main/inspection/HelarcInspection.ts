@@ -3,6 +3,7 @@ import { InspectionRecorder } from "@agent-anything/inspection/recording";
 import { RunInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectionAdapter, DefinitionInspectionAdapter, RunExecutionInspectionAdapter, RuntimeEventInspectionAdapter, ActionExecutionInspectionAdapter, RunTraceInspectionAdapter } from "@agent-anything/inspection/adapters";
 import { snapshotHelarcInspectionSettings, type HelarcInspectionSettings, type HelarcInspectionSettingsSnapshot } from "../../shared/HelarcInspectionSettings.js";
 import { SerializedAtomicFile } from "../persistence/SerializedAtomicFile.js";
+import { ExecutionFlowInspectionAdapter } from "@agent-anything/inspection/adapters";
 
 const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: true, provider: true, execution: true });
 
@@ -15,6 +16,7 @@ export class HelarcInspection {
   readonly runtimeEvents: RuntimeEventInspectionAdapter | undefined;
   readonly actionObserver: ActionExecutionInspectionAdapter | undefined;
   readonly traceObserver: RunTraceInspectionAdapter | undefined;
+  readonly executionFlow: import("@agent-anything/observability/execution-flow").ExecutionFlowContext | undefined;
   private constructor(private readonly file: SerializedAtomicFile, private settings: HelarcInspectionSettings, readonly recorder: InspectionRecorder | null, private readonly failure: string | null) {
     this.runObserver = recorder ? new RunInspectionAdapter(recorder) : undefined;
     this.transcriptObserver = recorder ? new RunTranscriptInspectionAdapter(recorder) : undefined;
@@ -24,6 +26,7 @@ export class HelarcInspection {
     this.runtimeEvents = recorder ? new RuntimeEventInspectionAdapter(recorder) : undefined;
     this.actionObserver = recorder ? new ActionExecutionInspectionAdapter(recorder) : undefined;
     this.traceObserver = recorder ? new RunTraceInspectionAdapter(recorder) : undefined;
+    this.executionFlow = recorder ? {observer: new ExecutionFlowInspectionAdapter(recorder)} : undefined;
   }
   static async create(settingsPath: string, root?: string): Promise<HelarcInspection> {
     const file = new SerializedAtomicFile(settingsPath);

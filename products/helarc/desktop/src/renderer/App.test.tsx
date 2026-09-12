@@ -231,8 +231,8 @@ describe("Helarc workbench shell", () => {
             suspension: {
               id: "suspension-1",
               revision: "suspension-1-v1",
-              code: "completion_gate_feedback_exhausted",
-              reason: "Completion evidence is still unavailable.",
+              code: "run_suspension_requested",
+              reason: "Host paused this Run for updated direction.",
               runRevision: 6,
               suspendedAt: "2026-07-05T01:00:01.000Z",
             },
@@ -256,7 +256,7 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Created by action-1");
     expect(html).toContain("Concurrent request 1 of 2");
     expect(html).toContain("Concurrent request 2 of 2");
-    expect(html).toContain("Suspended at revision 6: Completion evidence is still unavailable.");
+    expect(html).toContain("Suspended at revision 6: Host paused this Run for updated direction.");
     expect(html).toContain("steer / resume / cancel; result transfer pending");
     expect(html).toContain("Resume descendant run");
     expect(html).toContain("cancelling");
@@ -407,8 +407,7 @@ describe("Helarc workbench shell", () => {
   });
 
   it.each([
-    ["completed", "Run completed", "succeeded"],
-    ["stopped", "Run stopped", "stopped"],
+    ["completed", "Run completed", "completed"],
     ["failed", "Run failed", "failed"],
     ["cancelled", "Run cancelled", "cancelled"],
   ] as const)("renders terminal %s output", (status, title, runtimeStatus) => {
@@ -428,8 +427,6 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain(runtimeStatus);
     expect(html).toContain("Terminal summary");
     expect(html).toContain("Unisolated");
-    expect(html).toContain("Verification");
-    expect(html).toContain("Not required");
     expect(html).toContain("Event summary");
   });
 
@@ -512,8 +509,8 @@ function unconfiguredSnapshot(): HelarcMainSnapshot {
 }
 
 function runProjection(input: {
-  status?: "running" | "completed" | "stopped" | "failed" | "cancelled";
-  runtimeStatus?: "succeeded" | "stopped" | "failed" | "cancelled";
+  status?: "running" | "completed" | "failed" | "cancelled";
+  runtimeStatus?: "completed" | "failed" | "cancelled";
   activity?: ReturnType<typeof event>[];
   runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
   activeDelegations?: NonNullable<HelarcMainSnapshot["run"]>["host"]["activeDelegations"];
@@ -522,7 +519,7 @@ function runProjection(input: {
   >["code"];
 } = {}): NonNullable<HelarcMainSnapshot["run"]> {
   const status = input.status ?? "running";
-  const runtimeStatus = input.runtimeStatus ?? "succeeded";
+  const runtimeStatus = input.runtimeStatus ?? "completed";
   const activity = input.activity ?? [];
   const terminal = status !== "running";
   const code = input.terminalCode ?? (status === "completed"
@@ -543,7 +540,6 @@ function runProjection(input: {
       runTree: input.runTree ?? rootRunTree(),
       activeDelegations: input.activeDelegations ?? [],
       continuationTargets: [],
-      verification: null,
       pendingInteractions: [],
       terminal: terminal
         ? {
@@ -562,17 +558,6 @@ function runProjection(input: {
         ? {
             status: status === "completed" ? "completed" : status,
             qualification,
-            verification: {
-              status: "not_required",
-              snapshotRevision: 1,
-              counts: [],
-              activeChecks: 0,
-              gateStatus: "completion_eligible",
-              waiting: false,
-              recoveryNeeded: false,
-              safeReasons: [],
-              updatedAt: "2026-07-05T01:00:01.000Z",
-            },
             output: {
               taskId: "task-1",
               workspace: {

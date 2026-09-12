@@ -1,30 +1,3 @@
 export { createControllerTurnTraceOperationId, RUN_TRACE_SCHEMA_VERSION } from "./RunTrace.js";
-export type {
-  CommittedRunItemTraceProjection,
-  CompleteRunTraceInput,
-  ContextProjectionTraceRecord,
-  ControllerTurnTraceAttributes,
-  CreateRunTraceAssemblerInput,
-  InteractionTraceAttributes,
-  OperationTraceAttributes,
-  RunTrace,
-  RunTraceObserver,
-  RunTraceSpanIdentityFactory,
-  RunTraceSpanIdentityInput,
-  RunTraceStatus,
-  RuntimeRunTraceAttributes,
-  VerificationTraceRecord,
-  TerminalRunResultTraceProjection,
-  TraceAttributeMap,
-  TraceAttributesFor,
-  TraceIssue,
-  TraceIssueCode,
-  TraceLink,
-  TraceLinkKind,
-  TraceOperationFor,
-  TraceOwner,
-  TraceSpan,
-  TraceSpanEnvelope,
-  TraceSpanStatus,
-} from "./RunTrace.js";
+export type { CommittedRunItemTraceProjection, CompleteRunTraceInput, ContextProjectionTraceRecord, ControllerTurnTraceAttributes, CreateRunTraceAssemblerInput, InteractionTraceAttributes, OperationTraceAttributes, RunTrace, RunTraceObserver, RunTraceSpanIdentityFactory, RunTraceSpanIdentityInput, RunTraceStatus, RuntimeRunTraceAttributes, TerminalRunResultTraceProjection, TraceAttributeMap, TraceAttributesFor, TraceIssue, TraceIssueCode, TraceLink, TraceLinkKind, TraceOperationFor, TraceOwner, TraceSpan, TraceSpanEnvelope, TraceSpanStatus } from "./RunTrace.js";
 export { RunTraceAssembler } from "./RunTraceAssembler.js";

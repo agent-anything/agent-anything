@@ -55,7 +55,6 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         expectationUnmetCount: nonNegativeInteger(payload.expectationUnmetCount, "run.descendant.settled.expectationUnmetCount"),
         evidenceCount: nonNegativeInteger(payload.evidenceCount, "run.descendant.settled.evidenceCount"),
         artifactCount: nonNegativeInteger(payload.artifactCount, "run.descendant.settled.artifactCount"),
-        verificationStatus: token(payload.verificationStatus, "run.descendant.settled.verificationStatus"),
         effectStatus: token(payload.effectStatus, "run.descendant.settled.effectStatus"),
         uncertaintyCount: nonNegativeInteger(payload.uncertaintyCount, "run.descendant.settled.uncertaintyCount"),
         controllerTurns: nonNegativeInteger(payload.controllerTurns, "run.descendant.settled.controllerTurns"),
@@ -80,7 +79,6 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       }) as RuntimeEventPayloadMap[TName];
     case "context.projection.completed":
       return contextProjectionCompleted(payload) as unknown as RuntimeEventPayloadMap[TName];
-    case "run.stopped":
     case "run.completed":
     case "run.failed":
     case "run.cancelled":
@@ -108,7 +106,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         iteration: positive(payload.iteration, "controller.finished.iteration"),
         status: oneOf(payload.status, ["decided", "failed", "interrupted"] as const, "controller.finished.status"),
         code: nullableToken(payload.code, "controller.finished.code"),
-        decisionKind: payload.decisionKind === null ? null : oneOf(payload.decisionKind, ["advance", "continue_with_feedback", "propose_completion", "propose_stop"] as const, "controller.finished.decisionKind"),
+        decisionKind: payload.decisionKind === null ? null : oneOf(payload.decisionKind, ["advance", "continue_with_feedback", "propose_completion"] as const, "controller.finished.decisionKind"),
       }) as RuntimeEventPayloadMap[TName];
     case "tool.input.rejected":
       return freeze({
@@ -162,42 +160,11 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         code: nullableToken(payload.code, "interaction.settled.code"),
         terminalRecordId: token(payload.terminalRecordId, "interaction.settled.terminalRecordId"),
       }) as RuntimeEventPayloadMap[TName];
-    case "verification.check.started":
-      return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.check.started.snapshotRevision"),
-        attemptId: token(payload.attemptId, "verification.check.started.attemptId"),
-        requirementId: token(payload.requirementId, "verification.check.started.requirementId"),
-        origin: oneOf(payload.origin, ["controller", "trusted_automatic", "trusted_workflow", "owner_request"] as const, "verification.check.started.origin"),
-      }) as RuntimeEventPayloadMap[TName];
-    case "verification.check.finished":
-      return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.check.finished.snapshotRevision"),
-        attemptId: token(payload.attemptId, "verification.check.finished.attemptId"),
-        status: oneOf(payload.status, ["invalid", "unavailable", "denied", "cancelled", "timed_out", "failed", "partial", "completed"] as const, "verification.check.finished.status"),
-        code: nullableToken(payload.code, "verification.check.finished.code"),
-        durationMs: nonNegative(payload.durationMs, "verification.check.finished.durationMs"),
-        coverageRatio: ratio(payload.coverageRatio, "verification.check.finished.coverageRatio"),
-      }) as RuntimeEventPayloadMap[TName];
-    case "verification.assessment.committed":
-      return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.assessment.committed.snapshotRevision"),
-        requirementId: token(payload.requirementId, "verification.assessment.committed.requirementId"),
-        assessmentId: token(payload.assessmentId, "verification.assessment.committed.assessmentId"),
-        verdict: oneOf(payload.verdict, ["satisfied", "violated", "inconclusive"] as const, "verification.assessment.committed.verdict"),
-      }) as RuntimeEventPayloadMap[TName];
-    case "verification.gate.evaluated":
-      return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.gate.evaluated.snapshotRevision"),
-        gateId: token(payload.gateId, "verification.gate.evaluated.gateId"),
-        status: oneOf(payload.status, ["completion_eligible", "blocked_unassessed", "blocked_pending", "blocked_stale", "blocked_violated", "blocked_inconclusive", "invalid", "failed"] as const, "verification.gate.evaluated.status"),
-        disposition: payload.disposition === null ? null : oneOf(payload.disposition, ["continue", "wait", "block", "fail"] as const, "verification.gate.evaluated.disposition"),
-        reasonCodes: tokenArray(payload.reasonCodes, "verification.gate.evaluated.reasonCodes"),
-      }) as RuntimeEventPayloadMap[TName];
   }
 }
 
-const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "controller_feedback", "completion_acceptance", "suspension_transition", "settlement_cause", "terminal_transition"];
-const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "stopped", "failed", "cancelled"];
+const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "retry_transition", "cancellation_transition", "controller_feedback", "completion_acceptance", "suspension_transition", "settlement_cause", "terminal_transition"];
+const terminalStatuses: readonly RuntimeTerminalStatus[] = ["completed", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];
@@ -277,12 +244,12 @@ function descendantDispatch(
 }
 
 function terminal(name: RuntimeEventName, input: Record<string, unknown>): Readonly<Record<string, unknown>> {
-  const expected = name === "run.completed" ? "succeeded" : name.slice(4) as RuntimeTerminalStatus;
+  const expected = name === "run.completed" ? "completed" : name.slice(4) as RuntimeTerminalStatus;
   const status = oneOf(input.status, terminalStatuses, `${name}.status`);
   if (status !== expected) throw new TypeError(`${name}.status must be ${expected}.`);
   return freeze({
     status,
-    code: status === "succeeded" ? exact(input.code, null, `${name}.code`) : token(input.code, `${name}.code`),
+    code: status === "completed" ? exact(input.code, null, `${name}.code`) : token(input.code, `${name}.code`),
     durationMs: nonNegative(input.durationMs, `${name}.durationMs`),
     itemCount: nonNegative(input.itemCount, `${name}.itemCount`),
     evidenceCount: nonNegative(input.evidenceCount, `${name}.evidenceCount`),

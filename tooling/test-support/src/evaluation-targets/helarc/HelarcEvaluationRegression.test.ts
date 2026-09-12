@@ -1,4 +1,5 @@
 import { HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE, HELARC_CALL_ADMISSION_SCHEDULING_BASELINE_ACCEPTANCE } from "./baseline/HelarcCallAdmissionSchedulingBaseline.js";
+import { HELARC_NORMAL_COMPLETION_ACCEPTED_BASELINE, HELARC_NORMAL_COMPLETION_BASELINE_ACCEPTANCE } from "./baseline/HelarcNormalCompletionBaseline.js";
 import { describe, expect, it } from "vitest";
 import { HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE, HELARC_CHILD_REPORT_TRANSFER_BASELINE_ACCEPTANCE } from "./baseline/HelarcChildReportTransferBaseline.js";
 import { HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE, HELARC_NORMAL_STOP_SETTLEMENT_BASELINE_ACCEPTANCE } from "./baseline/HelarcNormalStopSettlementBaseline.js";
@@ -97,7 +98,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the call admission scheduling successor", async () => {
+  it("preserves accepted history and proves the normal completion successor", async () => {
     const baselines = [
       HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
       HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -122,15 +123,17 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       HELARC_RUN_LIFECYCLE_SETTLEMENT_ACCEPTED_BASELINE,
       HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE,
       HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE,
+      HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE,
+      HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE,
     ];
     const historyBefore = baselines.map((baseline) => JSON.stringify(baseline));
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE,
+      HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE,
+      HELARC_NORMAL_COMPLETION_ACCEPTED_BASELINE,
       candidate,
     );
 
@@ -150,19 +153,20 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
     expect(baselines.map((baseline) => JSON.stringify(baseline))).toEqual(historyBefore);
     expect(candidate.report.ref)
-      .toEqual(HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_NORMAL_COMPLETION_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.ref)
-      .toEqual(HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_NORMAL_COMPLETION_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_NORMAL_COMPLETION_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
     expect(HELARC_CALL_ADMISSION_SCHEDULING_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE.reportRef);
     expect(Object.isFrozen(HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE)).toBe(true);
+    expect(HELARC_NORMAL_COMPLETION_BASELINE_ACCEPTANCE.predecessorReportRef).toEqual(HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE.reportRef);
     expect(HELARC_NORMAL_STOP_SETTLEMENT_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_DESCENDANT_SUSPENSION_PROGRESSION_ACCEPTED_BASELINE.reportRef);
     expect(HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE.predecessorReportRef)
@@ -249,7 +253,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     const candidate = await runDelegationTransferDeterministicEvaluation();
     const accepted = HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE.delegationTransfer;
     expect(candidate).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v6",
+      revision: "delegation-transfer-deterministic-evaluation-v7",
       metrics: {
         objectiveFidelityRate: 1,
         unnecessaryDelegationCount: 0,
@@ -260,8 +264,8 @@ describe("Helarc accepted Evaluation baseline succession", () => {
         toolCallCount: 2,
         humanInteractionEvents: 0,
         modelTurnCount: 8,
-        latencyMs: 289,
-        terminalOutcome: "succeeded",
+        latencyMs: 237,
+        terminalOutcome: "completed",
       },
       invariants: {
         exactLifecycleCorrelation: true,
@@ -278,7 +282,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toBe("delegation-transfer-deterministic-evaluation-v1");
     expect(accepted.metrics.latencyMs).toBe(283);
     expect(accepted.metrics.modelTurnCount).toBe(5);
-    expect(candidate.metrics.latencyMs).toBe(289);
+    expect(candidate.metrics.latencyMs).toBe(237);
     expect(candidate.digest).not.toBe(accepted.reportDigest);
     expect(HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef);

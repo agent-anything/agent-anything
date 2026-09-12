@@ -14,7 +14,7 @@ describe("TelemetryPort", () => {
       id: "telemetry_001",
       runId: "run_001",
       taskId: "task_001",
-      eventName: "runner.run.succeeded",
+      eventName: "runner.run.completed",
       timestamp: "2026-06-12T00:00:00.000Z",
       durationMs: 42,
       counters: {
@@ -24,11 +24,11 @@ describe("TelemetryPort", () => {
         undeclaredCounter: 99,
       },
       dimensions: {
-        status: "succeeded",
+        status: "completed",
         agentId: "agent_001",
         rawPrompt: "must-not-cross",
       },
-    } as unknown as CreateTelemetryRecordInput<"runner.run.succeeded">;
+    } as unknown as CreateTelemetryRecordInput<"runner.run.completed">;
 
     const record = createTelemetryRecord(input);
 
@@ -37,7 +37,7 @@ describe("TelemetryPort", () => {
       id: "telemetry_001",
       runId: "run_001",
       taskId: "task_001",
-      eventName: "runner.run.succeeded",
+      eventName: "runner.run.completed",
       timestamp: "2026-06-12T00:00:00.000Z",
       durationMs: 42,
       counters: {
@@ -46,7 +46,7 @@ describe("TelemetryPort", () => {
         items: 5,
       },
       dimensions: {
-        status: "succeeded",
+        status: "completed",
         agentId: "agent_001",
       },
     });

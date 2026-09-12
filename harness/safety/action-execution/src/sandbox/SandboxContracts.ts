@@ -1,4 +1,5 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import type { ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import type { ActionAttemptRef } from "@agent-anything/canonical-action/subject";
 import type { ActionExecutorDescriptor } from "@agent-anything/canonical-action/registration";
 import type { PreparedActionInvocation } from "@agent-anything/canonical-action/subject";
@@ -37,6 +38,7 @@ export interface SandboxPolicyEnvelope {
 }
 
 export interface SandboxExecutionRequest {
+  readonly executionFlow?: ExecutionFlowContext;
   readonly attempt: SandboxAttempt;
   readonly policy: SandboxPolicyEnvelope;
   readonly executor: ActionExecutorDescriptor;

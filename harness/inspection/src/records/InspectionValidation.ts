@@ -1,7 +1,8 @@
 import type { InspectionJson, InspectionRecordInput, InspectionSubjectRef } from "./InspectionRecord.js";
+import { validateExecutionFlowDefinition, type ExecutionFlowDefinition } from "@agent-anything/observability/execution-flow";
 
-const kinds = new Set(["run", "turn", "request", "provider-attempt", "call", "operation", "action", "attempt", "control", "definition", "artifact", "context", "contribution", "hook", "event"]);
-const relationKinds = ["contains", "descendant", "binding", "materializes", "trigger", "produces", "transforms", "delivers", "includes", "omits", "prerequisite", "retry", "settles", "cause"];
+const kinds = new Set(["run", "turn", "request", "provider-attempt", "call", "operation", "action", "attempt", "control", "definition", "artifact", "context", "contribution", "hook", "event", "flow-definition", "flow-invocation", "flow-step"]);
+const relationKinds = ["contains", "descendant", "binding", "materializes", "trigger", "produces", "transforms", "delivers", "includes", "omits", "prerequisite", "retry", "settles", "cause", "next", "call", "return", "spawn", "join", "resume"];
 type Check = (value: unknown) => boolean;
 const text: Check = (value) => typeof value === "string" && value.length <= 4096;
 const identity: Check = (value) => typeof value === "string" && value.length > 0 && value.length <= 512;
@@ -15,6 +16,11 @@ function shape(fields: Record<string, Check>): Check {
     Object.keys(value).length === Object.keys(fields).length && Object.entries(fields).every(([key, check]) => check((value as Record<string, unknown>)[key]));
 }
 const payloads: Record<string, Record<string, Check>> = {
+  flow_definition: { definition: (value) => { try { validateExecutionFlowDefinition(value as ExecutionFlowDefinition); return true; } catch { return false; } } },
+  flow_invocation: { observation: flowObservation("invocation_entered", "invocation_exited") },
+  flow_step: { observation: flowObservation("step_entered", "step_exited") },
+  flow_constraint: { observation: flowObservation("constraint") },
+  flow_link: { observation: flowObservation("link") },
   definition: { definitionKind: oneOf("tool", "agent", "provider", "instructions", "hook"), name: text, revision: identity, enabled: nullable(bool) },
   snapshot: { status: identity, revision: integer, agentId: nullable(identity), parentRunId: nullable(identity), taskId: nullable(identity) },
   lifecycle: { revision: identity, states: array(identity), transitions: array(shape({ id: identity, from: identity, to: identity, trigger: text })) },
@@ -30,6 +36,33 @@ const payloads: Record<string, Record<string, Check>> = {
   event: { name: text, sequence: nullable(integer), code: nullable(identity) },
   interval: { phase: oneOf("started", "settled"), activity: oneOf("run", "controller", "provider", "operation", "action", "attempt", "wait"), status: nullable(identity), clock: identity },
 };
+
+function flowObservation(...types: string[]): Check {
+  const ref = shape({owner: identity, id: identity, revision: identity, contentDigest: identity});
+  const occurrence = shape({owner: identity, runId: identity, invocationId: identity, stepExecutionId: nullable(identity)});
+  const basis: Check = value => value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length <= 64 && Object.values(value).every(item => item === null || typeof item === "boolean" || (typeof item === "number" && Number.isFinite(item)) || text(item));
+  const subject: Check = value => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    const fields = value as Record<string, unknown>;
+    return Object.keys(fields).every(key => ["owner", "kind", "id", "revision", "contentId", "runId"].includes(key)) && identity(fields.owner) && identity(fields.kind) && identity(fields.id) && nullable(identity)(fields.revision) && (fields.contentId === undefined || identity(fields.contentId)) && (fields.runId === undefined || nullable(identity)(fields.runId));
+  };
+  const disposition = oneOf("returned", "yielded", "failed", "cancelled", "interrupted");
+  return value => {
+    if (value === null || typeof value !== "object") return false;
+    const record = value as Record<string, unknown>;
+    const common = {kind: oneOf(...types), definition: ref, runId: identity, invocationId: identity, sequence: integer, occurredAt: (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time))};
+    const extra: Record<string, Record<string, Check>> = {
+      invocation_entered: {caller: nullable(occurrence), subjects: array(subject)},
+      invocation_exited: {exit: nullable(occurrence), disposition, subjects: array(subject)},
+      step_entered: {stepId: identity, stepExecutionId: identity, inputs: array(subject), basis},
+      step_exited: {stepId: identity, stepExecutionId: identity, disposition, branch: nullable(text), outputs: array(subject), basis},
+      constraint: {stepId: identity, stepExecutionId: identity, checkId: identity, disposition: oneOf("passed", "not_satisfied", "not_applicable", "not_evaluated", "error"), configuration: nullable(subject), basis},
+      link: {from: occurrence, to: occurrence, relation: oneOf("next", "call", "return", "spawn", "join", "resume"), transitionId: nullable(identity), establishedBy: nullable(subject)},
+    };
+    return types.includes(String(record.kind)) && shape({...common, ...extra[String(record.kind)]})(record);
+  };
+}
 
 export function snapshotInspectionJson(value: unknown, maxBytes = 64 * 1024): InspectionJson {
   let size = 0;

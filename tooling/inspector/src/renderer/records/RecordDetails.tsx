@@ -20,6 +20,11 @@ export function payloadSummary(payload: InspectionPayload): string {
     case "response": return payload.status;
     case "interval": return payload.activity + " / " + payload.phase;
     case "lifecycle": return payload.states.length + " states";
+    case "flow_definition": return payload.definition.label + " / " + payload.definition.revision;
+    case "flow_invocation": return payload.observation.definition.id + " / " + payload.observation.kind;
+    case "flow_step": return payload.observation.stepId + " / " + payload.observation.kind;
+    case "flow_constraint": return payload.observation.checkId + " / " + payload.observation.disposition;
+    case "flow_link": return payload.observation.relation + (payload.observation.transitionId ? " / " + payload.observation.transitionId : "");
   }
 }
 

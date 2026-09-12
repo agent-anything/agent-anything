@@ -41,13 +41,6 @@ export function projectDelegationRunAuthority(
         enforcement: config.actionExecution.enforcement,
         metadata: config.actionExecution.metadata,
       };
-  const verificationAllowed = [
-    `${config.verification.profile.ref.owner}/${config.verification.profile.ref.kind}/${config.verification.profile.ref.id}@${config.verification.profile.ref.revision}`,
-    `specification:${config.verification.profile.specification.id}@${config.verification.profile.specification.revision}`,
-  ];
-  const verificationRequired = config.verification.profile.requirements.map(
-    ({ ref }) => `${ref.id}@${ref.revision}`,
-  );
   return deepFreeze([
     { kind: "workspace", allowed: workspace, required: [] },
     { kind: "tool", allowed: tools, required: [] },
@@ -88,11 +81,6 @@ export function projectDelegationRunAuthority(
       required: actionProjection === null
         ? []
         : [`enforcement:${actionProjection.enforcement}`],
-    },
-    {
-      kind: "verification",
-      allowed: verificationAllowed,
-      required: verificationRequired,
     },
     {
       kind: "disclosure",
@@ -207,7 +195,6 @@ export function deriveDelegatedRunConfig(input: {
     permissions,
     tools,
     actionExecution: input.parent.actionExecution,
-    verification: input.parent.verification,
     limits: Object.freeze({
       ...input.parent.limits,
       maxIterations: Math.min(

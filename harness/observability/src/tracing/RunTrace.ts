@@ -56,17 +56,6 @@ export interface RuntimeRunTraceAttributes {
   readonly errorCodes: readonly string[];
   readonly contextTransitions: readonly ContextTransitionTraceRecord[];
   readonly contextProjections: readonly ContextProjectionTraceRecord[];
-  readonly verification: readonly VerificationTraceRecord[];
-}
-
-export interface VerificationTraceRecord {
-  readonly event: "check_started" | "check_finished" | "assessment_committed" | "gate_evaluated";
-  readonly snapshotRevision: number;
-  readonly subjectId: string;
-  readonly status: string | null;
-  readonly code: string | null;
-  readonly durationMs: number | null;
-  readonly coverageRatio: number | null;
 }
 
 export interface ContextTransitionTraceRecord {
@@ -87,7 +76,7 @@ export type ContextProjectionTraceRecord = ContextProjectionCompletedRuntimeEven
 export interface ControllerTurnTraceAttributes {
   readonly turnId: string;
   readonly iteration: number;
-  readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | "propose_stop" | null;
+  readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | null;
   readonly code: string | null;
   readonly toolExposure: ControllerToolExposureTraceRecord | null;
 }

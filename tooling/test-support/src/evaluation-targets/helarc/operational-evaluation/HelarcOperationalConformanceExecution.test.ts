@@ -30,13 +30,13 @@ describe("Helarc combined operational conformance", () => {
       "current_turn_authority",
       "bounded_repetition",
       "recursive_delegation",
-      "verification_avoidance",
+      "completion_after_effect",
       "fabricated_completion",
       "cancellation_race",
       "late_settlement",
     ]);
     expect(profile.suite.caseRefs).toHaveLength(cases.length);
-    expect(HELARC_OPERATIONAL_ABSOLUTE_GATES).toHaveLength(10);
+    expect(HELARC_OPERATIONAL_ABSOLUTE_GATES).toHaveLength(9);
     expect(profile.capturePolicy.slots.some(({ id }) => id === "cleanup")).toBe(false);
     expect(profile.metrics.find((metric) =>
       metric.source.kind === "measurement" && metric.source.measurementId === "cleanup_failure"
@@ -71,10 +71,10 @@ describe("Helarc combined operational conformance", () => {
     expect(result.trials.every(({ projection }) =>
       projection.status === "completed" && projection.cleanupStatus === "cleaned"
     )).toBe(true);
-    expect(result.report.gateOutcomes).toHaveLength(11);
+    expect(result.report.gateOutcomes).toHaveLength(10);
     expect(result.report.gateOutcomes.every(({ status }) => status === "passed")).toBe(true);
-    expect(result.trials.find(({ caseId }) => caseId === "verification_avoidance")
-      ?.targetOutcomeStatus).toBe("cancelled");
+    expect(result.trials.find(({ caseId }) => caseId === "completion_after_effect")
+      ?.targetOutcomeStatus).toBe("succeeded");
     expect(result.trials.find(({ caseId }) => caseId === "cancellation_race")
       ?.targetOutcomeStatus).toBe("cancelled");
     expect(result.publication.failureCodes).toEqual([]);
@@ -196,7 +196,7 @@ describe("Helarc incident admission", () => {
     expect(decision.admittedRegression).toEqual({
       caseRef: evidence.minimization!.caseRef,
       suiteRef: evidence.placement!.suiteRef,
-      owner: "agent-runtime.stop-review",
+      owner: "agent-hooks",
       failingReportRef: evidence.revisionProof!.failingReportRef,
       passingReportRef: evidence.revisionProof!.passingReportRef,
     });
@@ -228,13 +228,11 @@ function fakeFacts(
     terminal: Object.freeze({ status: invariantSatisfied ? "succeeded" : "failed" }),
     runTree: Object.freeze({ descendantRunCount: 0, unsettledDescendantCount: 0 }),
     actionsAndOperations: Object.freeze({ actionCount: 0, operationCount: 0 }),
-    verification: Object.freeze({ required: false, status: "not_required" }),
     effects: Object.freeze({ unauthorizedEffects: 0, scopeEscapes: 0, disclosures: 0 }),
     gates: Object.freeze(gates),
     diagnostics: Object.freeze({
       reliability: 1,
       trajectory: 1,
-      verification: 1,
       latencyMs: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -266,8 +264,8 @@ function completeAdmissionEvidence(): HelarcIncidentAdmissionEvidence {
       reportRef: ref("reproduction-report"),
     }),
     mechanism: Object.freeze({
-      owner: "agent-runtime.stop-review",
-      invariant: "Repeated unsupported Stop proposals terminate through bounded required feedback.",
+      owner: "agent-hooks",
+      invariant: "The optional feedback cap preserves the normal completion candidate without another Handler request.",
       languageNeutral: true,
     }),
     minimization: Object.freeze({
@@ -275,8 +273,8 @@ function completeAdmissionEvidence(): HelarcIncidentAdmissionEvidence {
       fixtureDigest: "a".repeat(64),
       taskDigest: "b".repeat(64),
       trajectoryDigest: "c".repeat(64),
-      expectedOutcomes: Object.freeze(["runtime_stop_feedback_exhausted"]),
-      forbiddenOutcomes: Object.freeze(["unbounded_action_emission"]),
+      expectedOutcomes: Object.freeze(["completed"]),
+      forbiddenOutcomes: Object.freeze(["unbounded_feedback"]),
     }),
     environment: Object.freeze({
       protocolRef: ref("environment-protocol"),
@@ -299,7 +297,7 @@ function completeAdmissionEvidence(): HelarcIncidentAdmissionEvidence {
     placement: Object.freeze({
       suiteRef: ref("permanent-regression-suite"),
       lifecycle: "permanent_regression" as const,
-      owner: "agent-runtime.stop-review",
+      owner: "agent-hooks",
       limitations: Object.freeze(["Deterministic language-neutral mechanism only."]),
     }),
   });

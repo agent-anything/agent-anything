@@ -513,16 +513,14 @@ export class RunTreeExecution {
 
   settleRun(
     runId: string,
-    status: Extract<RunLifecycleStatus, "succeeded" | "stopped" | "failed" | "cancelled">,
+    status: Extract<RunLifecycleStatus, "completed" | "failed" | "cancelled">,
     terminal: RunTreeTerminalProjection,
     completedAt: string,
   ): void {
     assertDateTime(completedAt, "completedAt");
     const projectedTerminal = snapshotRunTreeTerminalProjection(terminal);
-    const expectedCauseKind = status === "succeeded"
+    const expectedCauseKind = status === "completed"
       ? "completion"
-      : status === "stopped"
-        ? "stop"
       : status === "failed"
         ? "failure"
         : "cancellation";
@@ -825,7 +823,7 @@ function sameLineage(left: RunLineage, right: RunLineage): boolean {
 }
 
 function isTerminal(status: RunLifecycleStatus): boolean {
-  return status === "succeeded" || status === "stopped" || status === "failed" || status === "cancelled";
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 export function projectRunTreeTerminal(
@@ -854,7 +852,7 @@ function snapshotRunTreeTerminalProjection(
   assertToken(input.sourceOwner, "terminal.sourceOwner");
   assertToken(input.sourceKind, "terminal.sourceKind");
   assertToken(input.sourceId, "terminal.sourceId");
-  if (!["completion", "stop", "failure", "cancellation"].includes(input.causeKind)) {
+  if (!["completion", "failure", "cancellation"].includes(input.causeKind)) {
     throw new TypeError("Run Tree terminal cause kind is unsupported.");
   }
   return Object.freeze({ ...input });

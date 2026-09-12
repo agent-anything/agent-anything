@@ -5,9 +5,7 @@ import {
   type ModelCallableDefinition,
 } from "@agent-anything/model-interaction";
 
-export const HELARC_STOP_REASON_MAX_LENGTH = 4_096;
-
-export type HelarcControllerControlName = "update_plan" | "stop";
+export type HelarcControllerControlName = "update_plan";
 
 export interface HelarcControllerControlGuidanceEntry {
   readonly name: HelarcControllerControlName;
@@ -22,10 +20,6 @@ export interface HelarcControllerControlGuidance {
 
 const ENTRIES = Object.freeze([
   Object.freeze({
-    name: "stop" as const,
-    modelDescription: "Stop the current Run without claiming successful completion when no safe useful continuation remains, required information or authority is unavailable, an explicit user instruction requires stopping, or continuing would be misleading. Supply one concise reason that states the actual blocker or stop basis. Call stop by itself: it cannot be combined with Tools or update_plan in the same Model Turn. Do not use stop for ordinary Tool failures that can be diagnosed or corrected, for completed work, or as a substitute for a user-facing completion response.",
-  }),
-  Object.freeze({
     name: "update_plan" as const,
     modelDescription: "Create or replace the current Run Plan when an explicit multi-step representation materially improves coordination, progress tracking, or recovery. A Plan is optional and may be created or revised at any turn; do not create one for a simple direct task. Every call replaces the complete visible Plan, so retain still-relevant steps, mark established work completed, keep future work pending, and use at most one in_progress step. The Plan records intended progression but grants no Tool, Permission, or execution authority and does not prove that a step succeeded.",
   }),
@@ -39,27 +33,10 @@ export function createHelarcControllerControlDefinitions(
 ): readonly ModelCallableDefinition[] {
   assertPlanLimits(limits);
   const byName = new Map(guidance.entries.map((entry) => [entry.name, entry]));
-  if (byName.size !== 2 || !byName.has("stop") || !byName.has("update_plan")) {
-    throw new TypeError("Helarc Controller Control Guidance must completely define update_plan and stop.");
+  if (byName.size !== 1 || !byName.has("update_plan")) {
+    throw new TypeError("Helarc Controller Control Guidance must completely define update_plan.");
   }
   return snapshotModelCallableDefinitions([
-    {
-      name: "stop",
-      description: byName.get("stop")!.modelDescription,
-      inputSchema: {
-        type: "object",
-        properties: {
-          reason: {
-            type: "string",
-            minLength: 1,
-            maxLength: HELARC_STOP_REASON_MAX_LENGTH,
-            description: "Concise truthful reason why this Run cannot or should not continue. It is a stop basis, not a success summary.",
-          },
-        },
-        required: ["reason"],
-        additionalProperties: false,
-      },
-    },
     {
       name: "update_plan",
       description: byName.get("update_plan")!.modelDescription,

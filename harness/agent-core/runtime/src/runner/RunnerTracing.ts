@@ -59,7 +59,7 @@ export function completeRunnerTrace(
         runId: result.runId,
         taskId: result.taskId,
         status: result.status,
-        code: result.status === "succeeded"
+        code: result.status === "completed"
           ? null
           : runSettlementCauseCode(result.cause),
         itemCount: result.items.length,

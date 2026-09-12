@@ -40,6 +40,12 @@ initial code-agent desktop stage.
 - Independent Inspection records owner facts, protected content and local OTel
   traces/logs in SQLite. Agent Inspector provides linked historical views without
   becoming part of the execution path.
+- Normal Run termination is `completed`; it does not assert Task success.
+  Provider Retry waits, explicit suspension/resume, failure and cancellation
+  retain separate, attributable lifecycle facts.
+- Inspector's Execution Flow view follows captured Core Loop, supporting and
+  Product paths, including repeated steps, actual checks and cross-owner calls.
+  Recording is continuous; the UI reads a committed snapshot on manual refresh.
 
 ## Products
 
@@ -97,7 +103,6 @@ agent-anything/
     operation-composition/ Explicit composite workflows and prerequisites
     interaction/        User interaction protocols and coordination
     agent-hooks/        Optional Agent lifecycle handlers
-    verification/       Check execution, evidence and completion policy
     evaluation/         Deterministic evaluation definitions and results
     safety/
       governance/       Policy and managed constraint contracts
@@ -110,7 +115,7 @@ agent-anything/
       remote/           Protocol-neutral remote Tool and Action adaptation
       enterprise-storage/ Enterprise persistence adapters
       providers/        Ollama and OpenAI-compatible HTTP adapters
-    observability/      Events, Audit, Telemetry, tracing, and redaction
+    observability/      Events, Audit, Telemetry, execution flows and tracing
     inspection/         Optional recording, SQLite, local OTel and read queries
     host/               Product-neutral Host composition and Run control
   products/
@@ -272,6 +277,10 @@ data flow, scheduling, explicit dependencies and recorded inputs/outputs/events.
 Recording is continuous; viewing uses committed snapshots and manual Refresh.
 There is no live-update or execution-control API.
 
+Execution Flow adds captured Core Loop, supporting-capability and Helarc
+definitions, repeated step occurrences, checks, and exact call/return/Child
+relationships. Select a Run to investigate its recorded path.
+
 Helarc Settings controls capture. Fresh Desktop settings enable structural
 facts, definitions, Agent content, Provider bodies and execution I/O. Each class
 can be disabled independently; saved settings take precedence over defaults.
@@ -279,6 +288,12 @@ On Windows, recordings are under `%LOCALAPPDATA%/AgentAnything/inspection` and
 survive Helarc's `clean:user-data`. Capture failures cannot change Run results.
 Known sensitive fields are removed, but captured free text may still contain
 secrets. Missing or uncaptured facts remain unknown.
+
+The current source/dataset format is version 2. To reset an incompatible
+prerelease source, stop its Helarc process and the Inspector, then remove only
+that source's `inspection/sources/<sourceId>` directory and relaunch both.
+This intentionally discards that source's old recordings; clearing Helarc
+user data alone does not reset Inspection. There is no automatic migration.
 
 See [Inspector](tooling/inspector/README.md) for views, access, limits and cleanup,
 and [Inspection](harness/inspection/README.md) for recording/query ownership.

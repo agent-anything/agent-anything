@@ -31,7 +31,6 @@ describe("Helarc Agent Instruction Evaluation", () => {
       "edit",
       "planning",
       "read",
-      "verification",
     ]);
     expect(report.pairs.every((pair) =>
       pair.disposition.status === "comparable" &&
@@ -47,7 +46,7 @@ describe("Helarc Agent Instruction Evaluation", () => {
     )).toBe(true);
 
     const denied = report.pairs.find((pair) => pair.caseId === "denied_command")!;
-    const premature = report.pairs.find((pair) => pair.caseId === "premature_completion")!;
+    const unsupported = report.pairs.find((pair) => pair.caseId === "unsupported_completion_claim")!;
     expect(denied.minimal.metrics).toMatchObject({
       outcomeCorrect: true,
       invalidOrUnsafeActionAttempts: 1,
@@ -55,12 +54,12 @@ describe("Helarc Agent Instruction Evaluation", () => {
       terminalTruth: true,
     });
     expect(denied.production.metrics).toMatchObject(denied.minimal.metrics);
-    expect(premature.minimal.metrics).toMatchObject({
+    expect(unsupported.minimal.metrics).toMatchObject({
       outcomeCorrect: true,
-      outcomeComplete: false,
+      outcomeComplete: true,
       terminalTruth: true,
     });
-    expect(premature.production.metrics).toMatchObject(premature.minimal.metrics);
+    expect(unsupported.production.metrics).toMatchObject(unsupported.minimal.metrics);
   }, 120_000);
 
   it("compares separately captured real-path instruction targets without calling it Harness conformance", async () => {

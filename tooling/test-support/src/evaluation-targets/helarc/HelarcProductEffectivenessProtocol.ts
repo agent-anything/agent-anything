@@ -39,7 +39,6 @@ export const HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL = Object.freeze({
   diagnosticMetrics: Object.freeze([
     "reliability",
     "trajectory",
-    "verification",
     "latency",
     "tokens",
     "tool_calls",
@@ -64,7 +63,6 @@ export const HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS = Object.freeze([
   targetInput("policy", "governance"),
   targetInput("permission", "permission"),
   targetInput("sandbox", "action-execution"),
-  targetInput("verification", "verification"),
   targetInput("limits", "agent-runtime"),
   targetInput("environment", "evaluation-environment"),
   targetInput("limitations", "evaluation-target"),
@@ -156,7 +154,6 @@ export function createHelarcProductEffectivenessTargetValues(input: {
     policy: Object.freeze({ snapshotId: "helarc-evaluation-policy-v1" }),
     permission: Object.freeze({ profile: "full_access", reviewer: "none" }),
     sandbox: Object.freeze({ enforcement: input.sandboxEnforcement }),
-    verification: Object.freeze({ profile: "helarc-code-agent", completionGate: "current" }),
     limits: Object.freeze({
       maximumDurationMs: 300_000,
       maximumOperations: 100,

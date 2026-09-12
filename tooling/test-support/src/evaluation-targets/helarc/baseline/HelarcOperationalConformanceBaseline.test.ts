@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HELARC_NORMAL_COMPLETION_OPERATIONAL_ACCEPTED_BASELINE, HELARC_NORMAL_COMPLETION_OPERATIONAL_BASELINE_ACCEPTANCE, verifyHelarcNormalCompletionOperationalAcceptedBaseline } from "./HelarcNormalCompletionOperationalBaseline.js";
 import {
   HELARC_NORMAL_STOP_OPERATIONAL_ACCEPTED_BASELINE,
   HELARC_NORMAL_STOP_OPERATIONAL_BASELINE_ACCEPTANCE,
@@ -28,7 +29,7 @@ import {
 } from "./HelarcRunLifecycleSettlementOperationalBaseline.js";
 
 describe("Helarc operational conformance Baseline", () => {
-  it("preserves earlier Reports while accepting only the exact normal-stop v4 Report", async () => {
+  it("preserves earlier Reports while accepting only the exact normal-completion Report", async () => {
     const predecessorBefore = JSON.stringify(HELARC_OPERATIONAL_CONFORMANCE_ACCEPTED_BASELINE);
     const runStopPredecessorBefore = JSON.stringify(HELARC_RUN_STOP_OPERATIONAL_ACCEPTED_BASELINE);
     const lifecyclePredecessorBefore = JSON.stringify(HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_ACCEPTED_BASELINE);
@@ -40,15 +41,17 @@ describe("Helarc operational conformance Baseline", () => {
       .toThrow("does not match the accepted Baseline");
     expect(() => verifyHelarcRunLifecycleSettlementOperationalAcceptedBaseline(candidate))
       .toThrow("does not match the accepted Baseline");
-    expect(verifyHelarcNormalStopOperationalAcceptedBaseline(candidate))
-      .toBe(HELARC_NORMAL_STOP_OPERATIONAL_ACCEPTED_BASELINE);
-    expect(HELARC_NORMAL_STOP_OPERATIONAL_ACCEPTED_BASELINE).toMatchObject({
+    expect(() => verifyHelarcNormalStopOperationalAcceptedBaseline(candidate)).toThrow("does not match the accepted Baseline");
+    expect(verifyHelarcNormalCompletionOperationalAcceptedBaseline(candidate))
+      .toBe(HELARC_NORMAL_COMPLETION_OPERATIONAL_ACCEPTED_BASELINE);
+    expect(HELARC_NORMAL_COMPLETION_OPERATIONAL_BASELINE_ACCEPTANCE.predecessorAcceptanceRef).toEqual(HELARC_NORMAL_STOP_OPERATIONAL_ACCEPTED_BASELINE.acceptanceRef);
+    expect(HELARC_NORMAL_COMPLETION_OPERATIONAL_ACCEPTED_BASELINE).toMatchObject({
       status: "passed",
       trialCount: 7,
       completedTrialCount: 7,
-      metricCount: 21,
-      gateCount: 11,
-      passedGateCount: 11,
+      metricCount: 19,
+      gateCount: 10,
+      passedGateCount: 10,
     });
     expect(HELARC_OPERATIONAL_CONFORMANCE_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_VERIFICATION_GUIDED_COMPLETION_ACCEPTED_BASELINE.acceptanceRef);
@@ -76,7 +79,7 @@ describe("Helarc operational conformance Baseline", () => {
       digest: "0".repeat(64),
     };
 
-    expect(() => verifyHelarcNormalStopOperationalAcceptedBaseline(changed))
+    expect(() => verifyHelarcNormalCompletionOperationalAcceptedBaseline(changed))
       .toThrow("does not match the accepted Baseline");
   }, 180_000);
 });

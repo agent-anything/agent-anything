@@ -6,6 +6,7 @@ import { validateInspectionCapturePolicy } from "../content/index.js";
 import { InspectionDatabase, inspectionSourceBytes, retireInspectionDatasets } from "../storage/index.js";
 import { InspectionTelemetry } from "../telemetry/index.js";
 import type { RecorderCommand, RecorderReply } from "./InspectionRecorderProtocol.js";
+import { INSPECTION_FORMAT_VERSION } from "../records/index.js";
 
 const port = parentPort!;
 const send = (reply: RecorderReply) => port.postMessage(reply);
@@ -55,7 +56,7 @@ try {
   sourceSizeCheckedAt = Date.now();
   policyPath = containedInspectionPath(workerData.root, "sources", source.sourceId, "read-policy.json");
   atomicInspectionJson(policyPath, validateInspectionCapturePolicy(workerData.policy));
-  manifest = { formatVersion: 1, sourceId: source.sourceId, datasetId: randomUUID(), producerInstanceId: randomUUID(), createdAt: new Date().toISOString(), status: "open" };
+  manifest = { formatVersion: INSPECTION_FORMAT_VERSION, sourceId: source.sourceId, datasetId: randomUUID(), producerInstanceId: randomUUID(), createdAt: new Date().toISOString(), status: "open" };
   directory = datasetDirectory(workerData.root, source.sourceId, manifest.datasetId);
   db = new InspectionDatabase(directory, manifest);
   atomicInspectionJson(join(directory, "manifest.json"), manifest);
@@ -74,6 +75,8 @@ port.on("message", (message: RecorderCommand) => {
     if (failed) return;
     try {
       if (message.kind === "batch") {
+        const committedRecords: Parameters<InspectionTelemetry["accept"]>[0][] = [];
+        db.writeBatch(() => {
         for (const offer of message.offers) {
           const bytes = offer.bytes + offer.contents.reduce((sum, content) => sum + content.descriptor.retainedBytes, 0);
           checkStorageBudget(bytes + offer.bytes * 3 + 8192);
@@ -82,18 +85,22 @@ port.on("message", (message: RecorderCommand) => {
             if (!committed.duplicate) {
               cachedSourceBytes += bytes + offer.bytes * 3 + 8192;
               retainedBytes += offer.contents.reduce((sum, content) => sum + content.descriptor.retainedBytes, 0);
-              telemetry.accept(committed.record);
+              committedRecords.push(committed.record);
             }
           } catch (error) {
-            if (error instanceof Error && error.message === "inspection_record_conflict") {
+            if (error instanceof Error && (error.message === "inspection_record_conflict" || error.message.startsWith("inspection_flow_"))) {
               writerRejected++;
               const coverage = db.snapshot();
-              db.updateCoverage({ limitations: [...new Set([...coverage.limitations, "conflicting_record_identity"])] });
+              db.updateCoverage({ limitations: [...new Set([...coverage.limitations, error.message === "inspection_record_conflict" ? "conflicting_record_identity" : error.message])] });
             } else throw error;
           }
         }
         updateHealth(message.dropped, message.rejected);
-        await telemetry.flush(writeTelemetry);
+        });
+        for (const record of committedRecords) telemetry.accept(record);
+        const exported: Parameters<typeof writeTelemetry>[0][] = [];
+        await telemetry.flush(record => exported.push(record));
+        db.writeBatch(() => { for (const record of exported) writeTelemetry(record); });
         send({ kind: "ack", coverage: db.snapshot() });
       } else {
         if (message.close) await telemetry.close(writeTelemetry);

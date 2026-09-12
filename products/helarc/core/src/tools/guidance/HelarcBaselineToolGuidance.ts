@@ -222,7 +222,6 @@ function shellGuidance(
       "/properties/description": "Optional concise explanation of the command's intended effect for progress and review surfaces.",
       "/properties/run_in_background": "Set true only when the command should continue asynchronously. A background result means started, not completed.",
       "/properties/timeout_ms": "Optional positive execution timeout in milliseconds. Omit it for the Host default; the Host enforces its maximum.",
-      "/properties/verification_claim": "Optional exact claim that this command is intended to verify: tests, static_analysis, runtime_verification, security_scan, or performance_benchmark. Use it only when the command result can support that claim.",
     }),
   });
 }

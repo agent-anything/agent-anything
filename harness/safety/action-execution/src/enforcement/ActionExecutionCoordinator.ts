@@ -1,4 +1,6 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
+import { ACTION_EXECUTION_FLOW } from "./ActionExecutionFlow.js";
 import type { ResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
 import type {
   ActionPolicyAssessment,
@@ -107,6 +109,7 @@ export interface ActionRetryDecisionPort {
 }
 
 export interface ActionExecutionRequest<TRequest = unknown> {
+  readonly executionFlow?: ExecutionFlowContext;
   readonly action: CanonicalActionRef;
   readonly parentRunAction: RunActionRef | null;
   readonly runId: string;
@@ -234,9 +237,24 @@ export class ActionExecutionCoordinator {
   async execute<TRequest, TOutput>(
     request: ActionExecutionRequest<TRequest>,
   ): Promise<ActionExecutionResult<TOutput>> {
+    const flow = new ExecutionFlowPath(ACTION_EXECUTION_FLOW, request.executionFlow ?? {}, request.runId, [{owner:"action-execution",kind:"action",id:request.action.id,revision:null}]);
+    try {
+      const result = await this.executeWithFlow<TRequest,TOutput>(request, flow);
+      flow.advance("settlement", {status:result.status === "settled" ? result.settlement.status : result.status});
+      flow.close(result.status === "pending_interaction" ? "yielded" : result.settlement.status === "failed" ? "failed" : "returned");
+      return result;
+    } catch (error) { flow.close(request.interruption.signal.aborted ? "cancelled" : "failed"); throw error; }
+  }
+
+  private async executeWithFlow<TRequest, TOutput>(
+    request: ActionExecutionRequest<TRequest>,
+    flow: ExecutionFlowPath,
+  ): Promise<ActionExecutionResult<TOutput>> {
+    const preparationStep = flow.advance("prepare", {actionId: request.action.id, enforcement: request.enforcement});
     const ledger = new CanonicalActionLedger(request.action, request.parentRunAction);
     await ledger.transition({ expectedRevision: 0, kind: "begin_preparation" });
     const captured = this.adapters.find(request.binding.actionAdapterId);
+    preparationStep.check("adapter", captured !== undefined && bindingMatches(captured.registration, request.binding) ? "passed" : "not_satisfied");
     if (captured === undefined || !bindingMatches(captured.registration, request.binding)) {
       return this.settleWithoutSubject<TOutput>(
         ledger,
@@ -259,6 +277,7 @@ export class ActionExecutionCoordinator {
       now: this.now,
     });
     if (preparedResult.status !== "prepared") {
+      preparationStep.check("prepared_subject", "not_satisfied", {status:preparedResult.status});
       return this.settleWithoutSubject<TOutput>(
         ledger,
         request,
@@ -269,6 +288,7 @@ export class ActionExecutionCoordinator {
     }
     const prepared = preparedResult.prepared;
     assertPreparedCoherence(request, captured.registration, prepared);
+    preparationStep.check("prepared_subject", "passed", {actionId:prepared.subject.ref.action.id, revision:prepared.subject.ref.revision});
     const fingerprint = await actionFingerprint(prepared.subject);
     const requirement = prepared.approval === null
       ? null
@@ -292,11 +312,13 @@ export class ActionExecutionCoordinator {
     this.notify(Object.freeze({ kind: "prepared", runId: request.runId,
       actionId: request.action.id, parentRunAction: request.parentRunAction,
       subject: prepared.subject, occurredAt: null }));
+    const policyStep = flow.advance("policy", {policySnapshotId:request.policyContext.policySnapshotId});
     const policy = await this.dependencies.policy.evaluate({
       checkId: this.id("policy"),
       subject: prepared.subject,
       context: request.policyContext,
     });
+    policyStep.check("policy", ["denied","failed","interrupted"].includes(policy.status) ? "not_satisfied" : "passed", {status:policy.status,checkId:policy.checkId});
     this.notify(Object.freeze({ kind: "assessment", runId: request.runId,
       actionId: request.action.id, policyStatus: policy.status, permissionStatus: null, occurredAt: null }));
     if (policy.status === "denied" || policy.status === "failed" || policy.status === "interrupted") {
@@ -314,6 +336,7 @@ export class ActionExecutionCoordinator {
     const reviewCauses = policy.status === "review_required"
       ? Object.freeze(["governance_review" as const])
       : Object.freeze([]);
+    let permissionStep = flow.advance("permission");
     let permission = await this.dependencies.permission.assess({
       assessmentId: this.id("permission"),
       actionFingerprint: fingerprint,
@@ -326,6 +349,8 @@ export class ActionExecutionCoordinator {
     this.notify(Object.freeze({ kind: "assessment", runId: request.runId,
       actionId: request.action.id, policyStatus: policy.status, permissionStatus: permission.status, occurredAt: null }));
     if (permission.status === "approval_required") {
+      permissionStep.check("permission", "not_satisfied", {status:permission.status});
+      const approvalStep = flow.advance("approval");
       if (this.dependencies.approval === null) {
         await ledger.transition({
           expectedRevision: ledger.getSnapshot().revision,
@@ -349,6 +374,7 @@ export class ActionExecutionCoordinator {
         assessment: permission,
         interruption: request.interruption,
       });
+      approvalStep.check("approval", approval.status === "applied" ? "passed" : "not_satisfied", {status:approval.status});
       if (approval.status !== "applied") {
         return this.settlePrepared<TOutput>(
           ledger,
@@ -372,6 +398,7 @@ export class ActionExecutionCoordinator {
         expectedRevision: ledger.getSnapshot().revision,
         kind: "begin_assessment",
       });
+      permissionStep = flow.advance("permission", {reassessment:true});
       permission = await this.dependencies.permission.assess({
         assessmentId: this.id("permission-reassessment"),
         actionFingerprint: fingerprint,
@@ -384,6 +411,7 @@ export class ActionExecutionCoordinator {
       this.notify(Object.freeze({ kind: "assessment", runId: request.runId,
         actionId: request.action.id, policyStatus: policy.status, permissionStatus: permission.status, occurredAt: null }));
     }
+    permissionStep.check("permission", permission.status === "authorized" ? "passed" : "not_satisfied", {status:permission.status});
     if (permission.status !== "authorized") {
       const permissionCode = permission.status === "approval_required"
         ? "permission_reassessment_not_authorized"
@@ -431,6 +459,7 @@ export class ActionExecutionCoordinator {
       expectedRevision: ledger.getSnapshot().revision,
       kind: "begin_revalidation",
     });
+    const revalidationStep = flow.advance("revalidate");
     const revalidation = await captured.adapter.revalidate(
       prepared,
       prepared.assertions,
@@ -446,6 +475,7 @@ export class ActionExecutionCoordinator {
         now: this.now,
       },
     );
+    revalidationStep.check("baseline", revalidation.status === "valid" ? "passed" : "not_satisfied", {status:revalidation.status});
     if (revalidation.status !== "valid") {
       return this.settlePrepared<TOutput>(
         ledger,
@@ -507,6 +537,7 @@ export class ActionExecutionCoordinator {
     }
 
     const dispatchPlanFingerprint = this.id("dispatch-plan");
+    flow.advance("record", {dispatchPlanFingerprint});
     await this.dependencies.records.recordPreEffect({
       subject: prepared.subject,
       policy,
@@ -520,6 +551,7 @@ export class ActionExecutionCoordinator {
     let sandbox: SandboxExecutionResult;
     let activeDispatchPlanFingerprint = dispatchPlanFingerprint;
     while (true) {
+      const dispatchStep = flow.advance("sandbox", {executorId:captured.registration.executor.id});
       await ledger.claimDispatch({
         expectedRevision: ledger.getSnapshot().revision,
         claimId: this.id("dispatch-claim"),
@@ -583,7 +615,10 @@ export class ActionExecutionCoordinator {
           "action_authority_basis_stale",
         );
       }
+      dispatchStep.check("progression_basis", "passed");
+      dispatchStep.check("authority_basis", "passed", {authorityRevision:authorityBasis.authorityRevision});
       sandbox = await this.dependencies.sandbox.execute({
+        executionFlow: flow.callContext,
         attempt: sandboxAttempt,
         policy: sandboxPolicy,
         executor: captured.registration.executor,
@@ -597,6 +632,7 @@ export class ActionExecutionCoordinator {
         occurredAt: sandbox.status === "settled" ? sandbox.enforcementEvidence.settledAt : null }));
       const remainingAttempts = request.maxAttempts - attempt.ordinal;
       if (remainingAttempts < 1 || !canConsiderRetry(sandbox)) break;
+      const retryStep = flow.advance("retry", {remainingAttempts});
       const decision = await this.dependencies.retry.decide({
         subject: prepared.subject,
         attempt,
@@ -605,6 +641,7 @@ export class ActionExecutionCoordinator {
       });
       if (decision.status !== "retry") break;
       assertReplayBasis(prepared.subject, decision.replayBasis);
+      retryStep.check("replay_basis", "passed", {decisionRecordId:decision.decisionRecordId});
       if (!Number.isSafeInteger(decision.delayMs) || decision.delayMs < 0) {
         throw new TypeError("Action Retry delay must be a non-negative integer.");
       }
@@ -612,6 +649,7 @@ export class ActionExecutionCoordinator {
         expectedRevision: ledger.getSnapshot().revision,
         kind: "begin_retry_delay",
       });
+      flow.advance("retry_wait", {delayMs:decision.delayMs});
       const wait = await this.dependencies.retry.wait({
         delayMs: decision.delayMs,
         interruption: request.interruption,
@@ -631,6 +669,7 @@ export class ActionExecutionCoordinator {
         expectedRevision: ledger.getSnapshot().revision,
         kind: "begin_revalidation",
       });
+      const retryValidationStep = flow.advance("revalidate");
       const retryRevalidation = await captured.adapter.revalidate(prepared, prepared.assertions, {
         action: request.action,
         parentRunAction: request.parentRunAction,
@@ -642,6 +681,7 @@ export class ActionExecutionCoordinator {
         interruption: request.interruption,
         now: this.now,
       });
+      retryValidationStep.check("baseline", retryRevalidation.status === "valid" ? "passed" : "not_satisfied", {status:retryRevalidation.status});
       if (retryRevalidation.status !== "valid") {
         return this.settlePrepared<TOutput>(
           ledger,
@@ -654,6 +694,7 @@ export class ActionExecutionCoordinator {
         );
       }
       activeDispatchPlanFingerprint = `${decision.decisionRecordId}:${this.id("dispatch-plan")}`;
+      flow.advance("record", {dispatchPlanFingerprint:activeDispatchPlanFingerprint});
       await this.dependencies.records.recordPreEffect({
         subject: prepared.subject,
         policy,

@@ -11,8 +11,6 @@ import type { PlanLimits } from "../plan/index.js";
 import type { RetryPolicy } from "../retry/index.js";
 import type { CancellationLimits, RunCancellationController } from "../run/index.js";
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
-import type { CompletionGateConfiguration } from "@agent-anything/verification/completion";
-import type { VerificationProfile } from "@agent-anything/verification/definition";
 import type { RunTreeResourceEnvelope } from "./RunTreeResourceAccount.js";
 import type { RunTreeApprovalLimits } from "./RunTreeApprovalAccount.js";
 
@@ -25,9 +23,6 @@ export interface RunLimits {
   readonly maxDurationMs: number;
   readonly maxPendingInteractions: number;
   readonly plan: PlanLimits;
-  readonly completionGate: {
-    readonly maxFeedbackRounds: number;
-  };
 }
 
 export interface RunTreeLimits {
@@ -55,18 +50,12 @@ export interface RunActionExecutionConfig {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export interface RunVerificationConfig {
-  readonly profile: VerificationProfile;
-  readonly completion: CompletionGateConfiguration;
-}
-
 export interface RunConfig {
   readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
   readonly permissions: ResolvedRunPermissionConfig;
   readonly tools: ToolSelectionRevision;
   readonly actionExecution: RunActionExecutionConfig | null;
-  readonly verification: RunVerificationConfig;
   readonly limits: RunLimits;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;

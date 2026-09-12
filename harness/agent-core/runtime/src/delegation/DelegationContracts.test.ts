@@ -46,14 +46,14 @@ describe("delegation authority", () => {
   it("intersects allowed authority, unions required constraints, and uses the earliest deadline", () => {
     const authority = authorityDerivation();
     const tool = authority.effective.find((dimension) => dimension.kind === "tool")!;
-    const verification = authority.effective.find(
-      (dimension) => dimension.kind === "verification",
+    const sandbox = authority.effective.find(
+      (dimension) => dimension.kind === "sandbox",
     )!;
 
     expect(tool.allowed).toEqual(["tool:read"]);
-    expect(verification.required).toEqual([
-      "verification:parent",
-      "verification:root",
+    expect(sandbox.required).toEqual([
+      "sandbox:parent",
+      "sandbox:root",
     ]);
     expect(authority.deadlineAt).toBe("2026-08-25T00:06:00.000Z");
     expect(Object.isFrozen(authority.sources)).toBe(true);
@@ -209,13 +209,6 @@ describe("delegation result", () => {
         ["artifact-1"],
       ),
       narrative: "Useful child findings.",
-      verification: {
-        status: "satisfied",
-        snapshotRevision: "verification-v1",
-        mandatoryTotal: 1,
-        mandatorySatisfied: 1,
-        limitationCodes: [],
-      },
       effects: noEffects(),
       usage: usage(),
       limitDisposition: withinLimits(),
@@ -223,11 +216,10 @@ describe("delegation result", () => {
     });
 
     expect(result.terminal).toMatchObject({
-      status: "succeeded",
+      status: "completed",
       code: "completion_accepted",
       failureKind: null,
       cancellationOrigin: null,
-      stopReason: null,
     });
     expect(result.narrative?.trust).toBe("attributed_model_output");
     expect(result.evidence.refs).toEqual(["evidence-1"]);
@@ -247,13 +239,6 @@ describe("delegation result", () => {
       correlation: childCorrelation(accepted),
       childResult: failedChildResult("run-child"),
       narrative: "Some work may still be useful.",
-      verification: {
-        status: "unavailable",
-        snapshotRevision: null,
-        mandatoryTotal: 1,
-        mandatorySatisfied: 0,
-        limitationCodes: ["child_failed"],
-      },
       effects: {
         status: "unknown",
         attempted: 1,
@@ -268,26 +253,23 @@ describe("delegation result", () => {
 
     expect(result.terminal.status).toBe("failed");
     expect(result.terminal.failureKind).toBe("runtime");
-    expect(result.terminal.stopReason).toBeNull();
     expect(result.narrative?.text).toContain("useful");
     expect(result.uncertainty).toContain("effects_unknown");
-    expect(result.uncertainty).toContain("verification_unavailable");
     expect(result.expectationCoverage.find(({ form }) => form === "evidence")?.disposition)
       .toBe("failed");
   });
 
   it.each(["Useful child findings.", null])(
-    "preserves accepted stop reason separately from narrative %j",
+    "preserves normal settlement separately from attributed narrative %j",
     (narrative) => {
       const accepted = request();
-      const childResult = stoppedChildResult("run-child");
+      const childResult = succeededChildResult("run-child", null);
       const result = createDelegationResult({
-        resultId: "result-stopped",
+        resultId: "result-completed",
         request: accepted,
         correlation: childCorrelation(accepted),
         childResult,
         narrative,
-        verification: noVerification(),
         effects: noEffects(),
         usage: usage(),
         limitDisposition: withinLimits(),
@@ -295,9 +277,8 @@ describe("delegation result", () => {
       });
       expect(childResult.finalOutput).toBeNull();
       expect(result.terminal).toMatchObject({
-        status: "stopped",
-        code: "stop_accepted",
-        stopReason: "No further work.",
+        status: "completed",
+        code: "completion_accepted",
         failureKind: null,
         cancellationOrigin: null,
       });
@@ -307,11 +288,7 @@ describe("delegation result", () => {
       expect(snapshotDelegationResult(JSON.parse(JSON.stringify(result)))).toEqual(result);
       expect(() => snapshotDelegationResult({
         ...result,
-        terminal: { ...result.terminal, stopReason: null },
-      })).toThrow(/stop reason is inconsistent/);
-      expect(() => snapshotDelegationResult({
-        ...result,
-        terminal: { ...result.terminal, stopReason: "Tampered reason." },
+        terminal: { ...result.terminal, status: "failed" },
       })).toThrow();
     },
   );
@@ -324,7 +301,6 @@ describe("delegation result", () => {
       correlation: childCorrelation(accepted),
       childResult: succeededChildResult("run-other", { summary: "done" }),
       narrative: null,
-      verification: noVerification(),
       effects: noEffects(),
       usage: usage(),
       limitDisposition: withinLimits(),
@@ -422,7 +398,6 @@ function preparation(overrides: {
       requirements: [
         { form: "narrative", required: true, maxItems: 1 },
         { form: "evidence", required: false, maxItems: 8 },
-        { form: "verification", required: false, maxItems: 1 },
         { form: "effects", required: true, maxItems: 1 },
       ],
       maxNarrativeCharacters: 8_192,
@@ -577,7 +552,6 @@ function authorityDimensions(
     "permission",
     "action_execution",
     "sandbox",
-    "verification",
     "disclosure",
     "resource",
   ] as const;
@@ -588,8 +562,8 @@ function authorityDimensions(
       : kind === "tool"
         ? ["tool:read"]
         : [`${kind}:bounded`],
-    required: kind === "verification" && ["root", "parent"].includes(role)
-      ? [`verification:${role}`]
+    required: kind === "sandbox" && ["root", "parent"].includes(role)
+      ? [`sandbox:${role}`]
       : [],
   }));
 }
@@ -632,7 +606,7 @@ function succeededChildResult(
   return createRunResult({
     ...childResultIdentity(runId),
     settlement: {
-      status: "succeeded",
+      status: "completed",
       completedAt: "2026-08-25T00:02:00.000Z",
       cause: cause.ref,
       output,
@@ -664,29 +638,6 @@ function failedChildResult(runId: string) {
     ...childResultIdentity(runId),
     settlement: {
       status: "failed",
-      completedAt: "2026-08-25T00:02:00.000Z",
-      cause: cause.ref,
-    },
-    cause,
-    settlementCauses: [cause],
-  });
-}
-
-function stoppedChildResult(runId: string) {
-  const cause: Extract<RunSettlementCauseRecord, { kind: "stop" }> = {
-    ref: causeRef(runId),
-    kind: "stop",
-    code: "stop_accepted",
-    reason: "No further work.",
-    source: causeSource(runId, "run_stop_acceptance"),
-    underlying: [],
-    omittedUnderlyingCount: 0,
-    recordedAt: "2026-08-25T00:02:00.000Z",
-  };
-  return createRunResult({
-    ...childResultIdentity(runId),
-    settlement: {
-      status: "stopped",
       completedAt: "2026-08-25T00:02:00.000Z",
       cause: cause.ref,
     },
@@ -764,15 +715,5 @@ function noEffects() {
     settled: 0,
     uncertain: 0,
     settlementRefs: [],
-  } as const;
-}
-
-function noVerification() {
-  return {
-    status: "not_required",
-    snapshotRevision: null,
-    mandatoryTotal: 0,
-    mandatorySatisfied: 0,
-    limitationCodes: [],
   } as const;
 }

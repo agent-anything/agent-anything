@@ -20,7 +20,6 @@ import type {
   RunSettlementCauseRecord,
 } from "./RunSettlement.js";
 import type { RunResumeRequest, RunSuspension } from "./RunSuspension.js";
-import type { VerificationRunnerProjection } from "@agent-anything/verification/projection";
 import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolBindingUnavailableReason } from "@agent-anything/tools/selection";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
@@ -64,7 +63,7 @@ export type RunItemPayload<TOutput = unknown> =
       readonly kind: "controller_turn";
       readonly turn: ControllerTurnRef;
       readonly status: "decided" | "failed" | "interrupted";
-      readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | "propose_stop" | null;
+      readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | null;
       readonly instructionBinding: AgentInstructionBindingRef;
       readonly toolExposure: ControllerToolExposureRecord;
       readonly modelItems: readonly ControllerModelItem[];
@@ -99,11 +98,12 @@ export type RunItemPayload<TOutput = unknown> =
       readonly pending: PendingRunSubject;
       readonly recordRef: string | null;
     }
-  | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
   | {
-      readonly kind: "verification_feedback";
-      readonly verification: VerificationRunnerProjection;
+      readonly kind: "retry_transition";
+      readonly transition: "ready";
+      readonly pending: Extract<PendingRunSubject, { readonly kind: "retry_wait" }>;
     }
+  | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
   | { readonly kind: "controller_feedback"; readonly feedback: ControllerFeedback }
   | {
       readonly kind: "completion_acceptance";

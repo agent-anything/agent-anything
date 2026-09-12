@@ -298,18 +298,6 @@ export function createControllerFeedbackContextAdmissionProfile(owner: string): 
   });
 }
 
-export function createVerificationContextAdmissionProfile(): ContextAdmissionProfile {
-  return admissionProfile({
-    owner: "verification",
-    sourceKinds: ["current_snapshot"],
-    audiences: ["model"],
-    retention: ["current"],
-    instructionRoles: ["data"],
-    necessities: ["mandatory", "optional"],
-    maximumPrecedence: 90,
-  });
-}
-
 function admissionProfile(input: {
   readonly owner: string;
   readonly sourceKinds: readonly string[];

@@ -119,7 +119,6 @@ export type HelarcMainSnapshotStatus =
   | "cancelling"
   | "waiting_for_approval"
   | "completed"
-  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -287,8 +286,7 @@ export type HelarcRunTreeNodeStatusSnapshot =
   | "waiting"
   | "suspended"
   | "cancelling"
-  | "succeeded"
-  | "stopped"
+  | "completed"
   | "failed"
   | "cancelled";
 
@@ -311,7 +309,7 @@ export interface HelarcRunTreeNodeSnapshot {
   readonly terminal: {
     readonly causeId: string;
     readonly causeRevision: string;
-    readonly causeKind: "completion" | "stop" | "failure" | "cancellation";
+    readonly causeKind: "completion" | "failure" | "cancellation";
     readonly code: string;
     readonly sourceOwner: string;
     readonly sourceKind: string;
@@ -432,55 +430,6 @@ export interface HelarcModelContinuationSnapshot {
   readonly occurredAt: string;
 }
 
-export type HelarcVerificationStateSnapshot =
-  | "unassessed"
-  | "pending"
-  | "satisfied"
-  | "violated"
-  | "inconclusive"
-  | "stale";
-
-export type HelarcVerificationGateStatusSnapshot =
-  | "completion_eligible"
-  | "blocked_unassessed"
-  | "blocked_pending"
-  | "blocked_stale"
-  | "blocked_violated"
-  | "blocked_inconclusive"
-  | "invalid"
-  | "failed";
-
-export interface HelarcHostVerificationSnapshot {
-  readonly snapshotRevision: number;
-  readonly counts: readonly {
-    readonly state: HelarcVerificationStateSnapshot;
-    readonly count: number;
-  }[];
-  readonly activeChecks: number;
-  readonly gateStatus: HelarcVerificationGateStatusSnapshot | null;
-  readonly waiting: boolean;
-  readonly recoveryNeeded: boolean;
-  readonly safeReasons: readonly string[];
-  readonly updatedAt: string;
-}
-
-export interface HelarcProductVerificationSnapshot {
-  readonly status:
-    | "not_required"
-    | "pending"
-    | "satisfied"
-    | "attention_required"
-    | "unavailable";
-  readonly snapshotRevision: number | null;
-  readonly counts: HelarcHostVerificationSnapshot["counts"];
-  readonly activeChecks: number;
-  readonly gateStatus: HelarcVerificationGateStatusSnapshot | null;
-  readonly waiting: boolean;
-  readonly recoveryNeeded: boolean;
-  readonly safeReasons: readonly string[];
-  readonly updatedAt: string | null;
-}
-
 export interface HelarcModelUseSnapshot {
   readonly providerKind: string;
   readonly modelId: string;
@@ -523,9 +472,8 @@ export interface HelarcInstructionBindingSnapshot {
 }
 
 export interface HelarcRunProductResultSnapshot {
-  readonly status: "completed" | "stopped" | "rejected" | "failed" | "cancelled";
+  readonly status: "completed" | "rejected" | "failed" | "cancelled";
   readonly qualification: HelarcModelUseSnapshot;
-  readonly verification: HelarcProductVerificationSnapshot;
   readonly output: {
     readonly taskId: string;
     readonly workspace: {
@@ -533,7 +481,7 @@ export interface HelarcRunProductResultSnapshot {
       readonly additionalIds: readonly string[];
     };
     readonly agentSummary: string | null;
-    readonly runtimeStatus: "succeeded" | "stopped" | "failed" | "cancelled";
+    readonly runtimeStatus: "completed" | "failed" | "cancelled";
     readonly enforcement: {
       readonly selected: "managed" | "external" | "disabled";
       readonly status:
@@ -571,10 +519,9 @@ export interface HelarcRunSnapshot {
     readonly runTree: HelarcRunTreeSnapshot;
     readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
     readonly continuationTargets: readonly HelarcDescendantContinuationTargetSnapshot[];
-    readonly verification: HelarcHostVerificationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
-      readonly status: "completed" | "stopped" | "failed" | "cancelled";
+      readonly status: "completed" | "failed" | "cancelled";
       readonly code: string;
       readonly completedAt: string;
     } | null;
@@ -611,7 +558,6 @@ export type HelarcArtifactSnapshotKind =
   | "trace-projection"
   | "tool-output-summary"
   | "evidence-bundle"
-  | "verification-report"
   | "evaluation-report"
   | "engineering-review"
   | "error-report";
@@ -638,7 +584,6 @@ export interface HelarcActiveThreadSnapshot {
 export type HelarcThreadRunStatus =
   | "inactive"
   | "completed"
-  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -1002,14 +947,12 @@ export interface HelarcHostRunStatusSnapshot {
     | "suspended"
     | "cancelling"
     | "completed"
-    | "stopped"
     | "failed"
     | "cancelled";
   readonly startedAt: string;
   readonly runTree: HelarcRunTreeSnapshot;
   readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
   readonly continuationTargets: readonly HelarcDescendantContinuationTargetSnapshot[];
-  readonly verification: HelarcHostVerificationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
   readonly terminal: HelarcRunSnapshot["host"]["terminal"];
 }

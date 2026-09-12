@@ -6,7 +6,6 @@ export interface ParsedCommandInput {
   readonly timeoutMs: number;
   readonly description: string | null;
   readonly runInBackground: boolean;
-  readonly verificationClaim: string | null;
 }
 
 export class CommandInputError extends Error {
@@ -48,10 +47,6 @@ export function parseCommandInput(
       "Description is empty or exceeds the configured character limit.",
     );
   }
-  const verificationClaim = optionalString(value.verification_claim, "verification_claim") ?? null;
-  if (verificationClaim !== null && (verificationClaim.trim().length === 0 || verificationClaim.length > limits.maxVerificationClaimChars)) {
-    throw new CommandInputError("command_verification_claim_limit_exceeded", "Verification claim is empty or exceeds the configured character limit.");
-  }
   if (value.run_in_background !== undefined && typeof value.run_in_background !== "boolean") {
     throw invalidInput("run_in_background must be a boolean.");
   }
@@ -61,7 +56,6 @@ export function parseCommandInput(
     timeoutMs: readTimeout(value.timeout_ms, limits),
     description,
     runInBackground: value.run_in_background === true,
-    verificationClaim,
   };
 }
 

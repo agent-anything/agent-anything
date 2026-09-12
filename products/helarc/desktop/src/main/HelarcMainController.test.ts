@@ -281,7 +281,7 @@ describe("HelarcMainController", () => {
           result: {
             output: {
               agentSummary: "No changes needed.",
-              runtimeStatus: "succeeded",
+              runtimeStatus: "completed",
               safeErrors: [],
             },
           },
@@ -459,7 +459,7 @@ describe("HelarcMainController", () => {
       },
       run: {
         display: { status: "completed" },
-        product: { result: { output: { runtimeStatus: "succeeded" } } },
+        product: { result: { output: { runtimeStatus: "completed" } } },
         host: {
           status: "completed",
           terminal: {
@@ -660,7 +660,7 @@ describe("HelarcMainController", () => {
             product: {
               status: "completed",
               output: {
-                runtimeStatus: "succeeded",
+                runtimeStatus: "completed",
                 agentSummary: "No changes needed.",
               },
             },
@@ -821,15 +821,15 @@ describe("HelarcMainController", () => {
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
         {
-          kind: "stop",
-          reason: "Permission was denied.",
+          kind: "completion",
+          summary: "Permission was denied.",
         },
       ]),
     });
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForPendingApproval(controller);
-    const stopped = waitForProductResult(controller, "stopped");
+    const stopped = waitForProductResult(controller, "completed");
     const result = await controller.startRun({
       taskText: "Run command",
       target: { kind: "new_thread" },
@@ -930,10 +930,10 @@ describe("HelarcMainController", () => {
 
     const stoppedSnapshot = await stopped;
     expect(stoppedSnapshot).toMatchObject({
-      status: "stopped",
+      status: "completed",
       run: {
-        display: { status: "stopped", statusSource: "host" },
-        host: { status: "stopped", terminal: { status: "stopped", code: "stop_accepted", failure: null } },
+        display: { status: "completed", statusSource: "host" },
+        host: { status: "completed", terminal: { status: "completed", code: "completion_accepted", failure: null } },
       },
     });
     expect(JSON.stringify(stoppedSnapshot.activeThread)).not.toContain("pendingApproval");
@@ -1854,7 +1854,6 @@ function desktopCallableName(
   output: Readonly<Record<string, unknown>>,
 ): string {
   if (output.kind === "plan_update") return "update_plan";
-  if (output.kind === "stop") return "stop";
   if (output.kind !== "tool_call" || typeof output.toolName !== "string") {
     return "unknown_scripted_callable";
   }
@@ -1875,9 +1874,6 @@ function desktopCallableInput(
       ...(typeof output.explanation === "string" ? { explanation: output.explanation } : {}),
       plan: output.plan,
     });
-  }
-  if (output.kind === "stop") {
-    return Object.freeze({ reason: String(output.reason) });
   }
   return snapshotDesktopObject(output.input);
 }

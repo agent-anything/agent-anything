@@ -26,11 +26,6 @@ export type AgentTerminalCandidate<TOutput = unknown> =
       readonly ref: AgentDecisionCandidateRef;
       readonly kind: "complete";
       readonly output: TOutput;
-    }
-  | {
-      readonly ref: AgentDecisionCandidateRef;
-      readonly kind: "stop";
-      readonly reason: string;
     };
 
 export interface AgentStopEvent<TOutput = unknown> {
@@ -45,7 +40,6 @@ export interface AgentStopEvent<TOutput = unknown> {
   readonly candidate: AgentTerminalCandidate<TOutput>;
   readonly interaction: ModelInteractionProjection;
   readonly plan: ControllerInput<TOutput>["plan"];
-  readonly verification: ControllerInput<TOutput>["verification"];
   readonly pending: ControllerInput<TOutput>["pending"];
   readonly emittedAt: string;
 }
@@ -77,7 +71,7 @@ export function createAgentStopEvent<TOutput>(input: {
   readonly sequence: number;
   readonly runKind: "root" | "descendant";
   readonly controllerInput: ControllerInput<TOutput>;
-  readonly decision: Extract<ControllerDecision<TOutput>, { readonly kind: "propose_completion" | "propose_stop" }>;
+  readonly decision: Extract<ControllerDecision<TOutput>, { readonly kind: "propose_completion" }>;
   readonly emittedAt: string;
 }): AgentStopEvent<TOutput> {
   const run = Object.freeze({ id: token(input.controllerInput.runId, "AgentStopEvent.runId") });
@@ -85,13 +79,11 @@ export function createAgentStopEvent<TOutput>(input: {
     input.controllerInput.contextManifest.requestId,
     "AgentStopEvent.controllerRequestId",
   );
-  const candidateKind = input.decision.kind === "propose_completion" ? "complete" : "stop";
+  const candidateKind = "complete";
   const eventId = `${requestId}:agent-stop:${input.sequence}`;
   const revision = `${input.controllerInput.contextManifest.projectionId}:${candidateKind}:${input.sequence}`;
   const candidateRef = Object.freeze({ id: `${eventId}:candidate`, revision });
-  const candidate: AgentTerminalCandidate<TOutput> = input.decision.kind === "propose_completion"
-    ? Object.freeze({ ref: candidateRef, kind: "complete" as const, output: input.decision.output })
-    : Object.freeze({ ref: candidateRef, kind: "stop" as const, reason: input.decision.reason });
+  const candidate: AgentTerminalCandidate<TOutput> = Object.freeze({ ref: candidateRef, kind: "complete" as const, output: input.decision.output });
   return deepFreeze({
     ref: { run, id: eventId, sequence: positive(input.sequence, "AgentStopEvent.sequence"), revision },
     point: "Stop" as const,
@@ -104,7 +96,6 @@ export function createAgentStopEvent<TOutput>(input: {
     candidate,
     interaction: input.controllerInput.interaction,
     plan: input.controllerInput.plan,
-    verification: input.controllerInput.verification,
     pending: input.controllerInput.pending,
     emittedAt: dateTime(input.emittedAt, "AgentStopEvent.emittedAt"),
   });

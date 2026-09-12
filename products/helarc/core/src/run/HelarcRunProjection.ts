@@ -73,7 +73,6 @@ export type HelarcRunDisplayStatus =
   | "waiting_for_approval"
   | "cancelling"
   | "completed"
-  | "stopped"
   | "rejected"
   | "failed"
   | "cancelled";
@@ -228,7 +227,7 @@ export function deriveHelarcRunDisplayProjection(
 ): HelarcRunDisplayProjection {
   assertProjectionPair(host, product);
 
-  if (host.status === "failed" || host.status === "cancelled" || host.status === "stopped") {
+  if (host.status === "failed" || host.status === "cancelled") {
     return display(host.status, true, "host");
   }
   if (host.status === "completed") {
@@ -357,7 +356,7 @@ function snapshotContinuationProjection(
 function snapshotProductResult(result: HelarcProductResult): HelarcProductResult {
   if (
     result === null || typeof result !== "object" ||
-    (result.status !== "completed" && result.status !== "stopped" && result.status !== "rejected" &&
+    (result.status !== "completed" && result.status !== "rejected" &&
       result.status !== "failed" && result.status !== "cancelled") ||
     result.output === null || typeof result.output !== "object"
   ) {
@@ -390,17 +389,6 @@ function snapshotProductResult(result: HelarcProductResult): HelarcProductResult
     interactions: Object.freeze(result.interactions.map((interaction) =>
       Object.freeze({ ...interaction })
     )),
-    verification: Object.freeze({
-      status: result.verification.status,
-      snapshotRevision: result.verification.snapshotRevision,
-      counts: Object.freeze(result.verification.counts.map((entry) => Object.freeze({ ...entry }))),
-      activeChecks: result.verification.activeChecks,
-      gateStatus: result.verification.gateStatus,
-      waiting: result.verification.waiting,
-      recoveryNeeded: result.verification.recoveryNeeded,
-      safeReasons: Object.freeze([...result.verification.safeReasons]),
-      updatedAt: result.verification.updatedAt,
-    }),
     uncertainty: Object.freeze([...result.uncertainty]),
     residualRisk: Object.freeze([...result.residualRisk]),
     incompleteWork: Object.freeze([...result.incompleteWork]),

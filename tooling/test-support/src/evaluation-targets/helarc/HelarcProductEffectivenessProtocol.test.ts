@@ -61,7 +61,7 @@ describe("Helarc Product-effectiveness Evaluation protocol", () => {
       "unauthorized_effect",
     );
     expect(HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL.diagnosticMetrics).toEqual(
-      expect.arrayContaining(["trajectory", "verification", "human_interaction"]),
+      expect.arrayContaining(["trajectory", "human_interaction"]),
     );
   });
 });
@@ -92,7 +92,6 @@ function targetValues(targetName: "codex" | "helarc"): HelarcProductEffectivenes
     policy: { revision: "policy-1" },
     permission: { preset: "ask" },
     sandbox: { enforcement: "disabled" },
-    verification: { revision: "verification-1" },
     limits: { maximumDurationMs: 300_000, maximumOperations: 100 },
     environment: { fixture: "repository-fixture-1" },
     limitations: { items: [] },

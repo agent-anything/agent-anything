@@ -1,11 +1,13 @@
-export const INSPECTION_FORMAT_VERSION = 1 as const;
+import type { ExecutionFlowDefinition, ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
+
+export const INSPECTION_FORMAT_VERSION = 2 as const;
 
 export type InspectionJson = null | boolean | number | string |
   readonly InspectionJson[] | { readonly [key: string]: InspectionJson };
 export type InspectionContentClass = "definition" | "agent" | "provider" | "execution";
 export type InspectionSubjectKind = "run" | "turn" | "request" | "provider-attempt" |
   "call" | "operation" | "action" | "attempt" | "control" | "definition" |
-  "artifact" | "context" | "contribution" | "hook" | "event";
+  "artifact" | "context" | "contribution" | "hook" | "event" | "flow-definition" | "flow-invocation" | "flow-step";
 
 export interface InspectionSubjectRef {
   readonly sourceId: string;
@@ -26,7 +28,7 @@ export interface InspectionContentLocation {
 
 export type InspectionRelationKind = "contains" | "descendant" | "binding" |
   "materializes" | "trigger" | "produces" | "transforms" | "delivers" |
-  "includes" | "omits" | "prerequisite" | "retry" | "settles" | "cause";
+  "includes" | "omits" | "prerequisite" | "retry" | "settles" | "cause" | "next" | "call" | "return" | "spawn" | "join" | "resume";
 
 export interface InspectionLink {
   readonly id: string;
@@ -47,6 +49,11 @@ export interface InspectionLifecycleDefinition {
 }
 
 export interface InspectionPayloadMap {
+  flow_definition: {readonly definition: ExecutionFlowDefinition};
+  flow_invocation: {readonly observation: Extract<ExecutionFlowObservation, {kind: "invocation_entered" | "invocation_exited"}>};
+  flow_step: {readonly observation: Extract<ExecutionFlowObservation, {kind: "step_entered" | "step_exited"}>};
+  flow_constraint: {readonly observation: Extract<ExecutionFlowObservation, {kind: "constraint"}>};
+  flow_link: {readonly observation: Extract<ExecutionFlowObservation, {kind: "link"}>};
   definition: { readonly definitionKind: "tool" | "agent" | "provider" | "instructions" | "hook";
     readonly name: string; readonly revision: string; readonly enabled: boolean | null };
   snapshot: { readonly status: string; readonly revision: number; readonly agentId: string | null;

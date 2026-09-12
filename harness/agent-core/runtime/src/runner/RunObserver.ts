@@ -26,10 +26,10 @@ export interface RunObserver {
 }
 
 export const RUN_LIFECYCLE_DESCRIPTION = Object.freeze({
-  revision: "run-state-writer.v1",
-  states: Object.freeze(["initializing", "running", "waiting", "suspended", "cancelling", "succeeded", "stopped", "failed", "cancelled"]),
+  revision: "run-state-writer.v2",
+  states: Object.freeze(["initializing", "running", "waiting", "suspended", "cancelling", "completed", "failed", "cancelled"]),
   transitions: Object.freeze(["initializing", "running", "waiting", "suspended", "cancelling"].flatMap((from) =>
-    ["running", "waiting", "suspended", "cancelling", "succeeded", "stopped", "failed", "cancelled"].filter((to) => to !== from).map((to) => Object.freeze({ id: `${from}:${to}`, from, to, trigger: "committed Run State mutation" })))),
+    ["running", "waiting", "suspended", "cancelling", "completed", "failed", "cancelled"].filter((to) => to !== from).map((to) => Object.freeze({ id: `${from}:${to}`, from, to, trigger: "committed Run State mutation" })))),
 });
 
 export function publishRunTransition(observer: RunObserver | undefined, observation: RunTransitionObservation): void {

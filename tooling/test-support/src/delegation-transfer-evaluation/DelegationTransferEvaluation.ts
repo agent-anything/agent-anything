@@ -34,7 +34,7 @@ export interface DelegationTransferMetrics {
   readonly modelTurnCount: number;
   readonly latencyMs: number;
   readonly humanInteractionEvents: number;
-  readonly terminalOutcome: "succeeded" | "stopped" | "blocked" | "failed" | "cancelled";
+  readonly terminalOutcome: "completed" | "failed" | "cancelled";
 }
 
 export interface DelegationTransferInvariantSummary {
@@ -47,7 +47,7 @@ export interface DelegationTransferInvariantSummary {
 }
 
 export interface DelegationTransferEvaluationReport {
-  readonly revision: "delegation-transfer-deterministic-evaluation-v6";
+  readonly revision: "delegation-transfer-deterministic-evaluation-v7";
   readonly metrics: DelegationTransferMetrics;
   readonly invariants: DelegationTransferInvariantSummary;
   readonly descendantRunCount: number;
@@ -92,7 +92,7 @@ export async function runDelegationTransferDeterministicEvaluation(): Promise<
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
   const materialized = deepFreeze({
-    revision: "delegation-transfer-deterministic-evaluation-v6" as const,
+    revision: "delegation-transfer-deterministic-evaluation-v7" as const,
     metrics,
     invariants,
     descendantRunCount: started.length,
@@ -258,7 +258,7 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
     semanticDriftCount: drifted,
     resultAttributionRate: ratio(attributed, settled.length),
     effectTruthRate: ratio(truthfulEffects, settled.length),
-    completionRate: material.runResult.status === "succeeded" && material.product.status === "completed"
+    completionRate: material.runResult.status === "completed" && material.product.status === "completed"
       ? 1
       : 0,
     toolCallCount,
@@ -315,7 +315,7 @@ function projectInvariants(
     ),
     resultsAttributed: metrics.resultAttributionRate === 1,
     effectsTruthful: metrics.effectTruthRate === 1,
-    terminalTruthPreserved: metrics.terminalOutcome === "succeeded" && metrics.completionRate === 1,
+    terminalTruthPreserved: metrics.terminalOutcome === "completed" && metrics.completionRate === 1,
   });
 }
 

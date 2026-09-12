@@ -6,7 +6,7 @@ describe("Helarc Instruction settings", () => {
   it("keeps complete defaults and snapshots retained disabled text without mutation", () => {
     const draft = structuredClone(createDefaultHelarcInstructionSettings());
     expect(draft.agent).toHaveLength(9);
-    expect(draft.protocol).toHaveLength(4);
+    expect(draft.protocol).toHaveLength(3);
     expect(draft.delegated).toHaveLength(1);
     expect(draft.stop).toHaveLength(1);
     const settings = snapshotHelarcInstructionSettings({ ...draft, agent: draft.agent.map((section) => ({ ...section, enabled: false })) });

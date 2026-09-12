@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 
 describe("Host RuntimeEvent projection", () => {
-  it("projects stopped as a terminal lifecycle fact without exposing the stop reason", () => {
+  it("projects normal completion without exposing arbitrary model text", () => {
     const event = {
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
       id: "event-stop",
@@ -14,21 +14,21 @@ describe("Host RuntimeEvent projection", () => {
       taskId: "task-1",
       lineage: { kind: "root", root: { id: "run-1" }, depth: 0 },
       sequence: 3,
-      name: "run.stopped",
+      name: "run.completed",
       occurredAt: "2026-09-05T00:00:00.000Z",
       payload: {
-        status: "stopped",
+        status: "completed",
         causeId: "cause-1",
         causeRevision: "3",
-        code: "stop_accepted",
+        code: "run_completed",
         errorCodes: [],
         output: null,
         reason: "Unrestricted model text",
       },
     } as unknown as RuntimeEvent;
     expect(projectRuntimeEventForHost(event).payload).toMatchObject({
-      status: "stopped",
-      code: "stop_accepted",
+      status: "completed",
+      code: "run_completed",
     });
     expect(projectRuntimeEventForHost(event).payload).not.toHaveProperty("reason");
   });
@@ -214,42 +214,6 @@ describe("Host RuntimeEvent projection", () => {
     expect(projected.payload).not.toHaveProperty("records");
   });
 
-  it("keeps only safe Verification correlation and excludes detailed evidence", () => {
-    const event = Object.freeze({
-      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
-      id: "event-4",
-      runId: "run-1",
-      taskId: "task-1",
-      lineage: Object.freeze({ kind: "root", root: Object.freeze({ id: "run-1" }), depth: 0 }),
-      sequence: 4,
-      name: "verification.check.finished",
-      occurredAt: "2026-08-03T00:00:00.000Z",
-      payload: Object.freeze({
-        snapshotRevision: 7,
-        attemptId: "attempt-1",
-        status: "completed",
-        code: null,
-        durationMs: 25,
-        coverageRatio: 1,
-        rawEvidence: { command: "secret command", output: "private output" },
-        findings: [{ claim: "private finding" }],
-      }),
-    }) as unknown as RuntimeEvent;
-
-    const projected = projectRuntimeEventForHost(event);
-
-    expect(projected.payload).toEqual({
-      snapshotRevision: 7,
-      attemptId: "attempt-1",
-      status: "completed",
-      code: null,
-      durationMs: 25,
-      coverageRatio: 1,
-    });
-    expect(projected.payload).not.toHaveProperty("rawEvidence");
-    expect(projected.payload).not.toHaveProperty("findings");
-  });
-
   it("copies descendant lineage and only the bounded relation lifecycle fields", () => {
     const event = Object.freeze({
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
@@ -298,7 +262,6 @@ describe("Host RuntimeEvent projection", () => {
         expectationUnmetCount: 1,
         evidenceCount: 2,
         artifactCount: 1,
-        verificationStatus: "satisfied",
         effectStatus: "known",
         uncertaintyCount: 0,
         controllerTurns: 4,
@@ -341,7 +304,6 @@ describe("Host RuntimeEvent projection", () => {
       expectationUnmetCount: 1,
       evidenceCount: 2,
       artifactCount: 1,
-      verificationStatus: "satisfied",
       effectStatus: "known",
       uncertaintyCount: 0,
       controllerTurns: 4,

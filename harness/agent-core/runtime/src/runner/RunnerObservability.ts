@@ -18,7 +18,7 @@ import {
 } from "./RunnerRecordingGate.js";
 
 export interface RecordRunnerLifecycleInput {
-  readonly phase: "started" | "succeeded" | "stopped" | "failed" | "cancelled";
+  readonly phase: "started" | "completed" | "failed" | "cancelled";
   readonly runId: string;
   readonly taskId: string;
   readonly agentId: string;
@@ -165,21 +165,13 @@ function createRunnerLifecycleAuditRecord(input: RecordRunnerLifecycleInput) {
         outcome: "succeeded",
         payload: { ...payload, status: "started" },
       });
-    case "succeeded":
+    case "completed":
       return createAuditRecord({
         ...base,
-        eventName: "run.succeeded",
-        action: "runner.succeeded",
+        eventName: "run.completed",
+        action: "runner.completed",
         outcome: "succeeded",
-        payload: { ...payload, status: "succeeded" },
-      });
-    case "stopped":
-      return createAuditRecord({
-        ...base,
-        eventName: "run.stopped",
-        action: "runner.stopped",
-        outcome: "succeeded",
-        payload: { ...payload, status: "stopped" },
+        payload: { ...payload, status: "completed" },
       });
     case "failed":
       return createAuditRecord({
@@ -222,23 +214,17 @@ function createRunnerLifecycleTelemetryRecord(
         eventName: "runner.run.started",
         dimensions: { status: "started", agentId: input.agentId },
       });
-    case "succeeded":
+    case "completed":
       return createTelemetryRecord({
         ...base,
-        eventName: "runner.run.succeeded",
-        dimensions: { status: "succeeded", agentId: input.agentId },
+        eventName: "runner.run.completed",
+        dimensions: { status: "completed", agentId: input.agentId },
       });
     case "failed":
       return createTelemetryRecord({
         ...base,
         eventName: "runner.run.failed",
         dimensions: { status: "failed", agentId: input.agentId },
-      });
-    case "stopped":
-      return createTelemetryRecord({
-        ...base,
-        eventName: "runner.run.stopped",
-        dimensions: { status: "stopped", agentId: input.agentId },
       });
     case "cancelled":
       return createTelemetryRecord({

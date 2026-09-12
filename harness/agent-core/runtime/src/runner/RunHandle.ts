@@ -16,9 +16,9 @@ import type {
   RunSteeringSubmissionReceipt,
 } from "../run/index.js";
 import type { RunSuspension } from "../run/index.js";
+import type { RunSuspendRequestInput, RunSuspendReceipt } from "../run/RunSuspension.js";
 import type { PlanProjection } from "../plan/index.js";
 import type { RetryEvent } from "../retry/index.js";
-import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 import type {
   DelegationResumeReceipt,
@@ -67,7 +67,6 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly plan: PlanProjection | null;
   readonly suspension: RunSuspension | null;
   readonly retry: RunRetryProjection | null;
-  readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly activeDelegations: readonly ActiveDelegationProjection[];
   readonly continuationTargets: readonly DescendantContinuationTargetProjection[];
@@ -84,6 +83,7 @@ export interface RunHandle<TOutput = unknown> {
   getSnapshot(): RunOperationSnapshot<TOutput>;
   subscribe(listener: RunOperationListener<TOutput>): () => void;
   cancel(input: RunCancellationRequestInput): RunCancellationReceipt;
+  suspend(input: RunSuspendRequestInput): RunSuspendReceipt;
   resume(input: RunResumeRequestInput): RunResumeReceipt;
   steer(input: RunSteeringInput): RunSteeringSubmissionReceipt;
   steerDescendant(input: DelegationSteeringRoute): DelegationSteeringReceipt;
@@ -101,7 +101,6 @@ export interface RunExecutionUpdate<TOutput> {
   readonly plan: PlanProjection | null;
   readonly suspension: RunSuspension | null;
   readonly retry: RunRetryProjection | null;
-  readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly activeDelegations: readonly ActiveDelegationProjection[];
   readonly continuationTargets: readonly DescendantContinuationTargetProjection[];
@@ -119,6 +118,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private submitInteractionImpl: ((input: InteractionSubmissionInput) => InteractionSubmissionOutcome) | null = null;
   private steerImpl: ((input: RunSteeringInput) => RunSteeringSubmissionReceipt) | null = null;
   private resumeImpl: ((input: RunResumeRequestInput) => RunResumeReceipt) | null = null;
+  private suspendImpl: ((input: RunSuspendRequestInput) => RunSuspendReceipt) | null = null;
   private steerDescendantImpl:
     ((input: DelegationSteeringRoute) => DelegationSteeringReceipt) | null = null;
   private resumeDescendantImpl:
@@ -142,7 +142,6 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       plan: null,
       suspension: null,
       retry: null,
-      verification: null,
       pendingInteractions: Object.freeze([]),
       activeDelegations: Object.freeze([]),
       continuationTargets: Object.freeze([]),
@@ -183,7 +182,6 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       plan: update.plan,
       suspension: update.suspension,
       retry: update.retry,
-      verification: update.verification,
       pendingInteractions: update.pendingInteractions,
       activeDelegations: update.activeDelegations,
       continuationTargets: update.continuationTargets,
@@ -240,6 +238,19 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       status: "run_settled" as const,
       request: receipt.request,
     });
+  }
+
+  bindSuspend(suspend: (input: RunSuspendRequestInput) => RunSuspendReceipt): void {
+    if (this.suspendImpl !== null) throw new TypeError("Run suspension is already bound.");
+    this.suspendImpl = suspend;
+  }
+
+  suspend(input: RunSuspendRequestInput): RunSuspendReceipt {
+    if (this.snapshot.result !== null || this.suspendImpl === null) return Object.freeze({
+      status: "rejected", code: this.snapshot.result !== null ? "run_settled" : "run_not_started",
+      requestId: typeof input?.id === "string" ? input.id : "", currentRunRevision: this.snapshot.runRevision,
+    });
+    return this.suspendImpl(input);
   }
 
   bindResume(resume: (input: RunResumeRequestInput) => RunResumeReceipt): void {
@@ -369,7 +380,6 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         plan: this.snapshot.plan,
         suspension: null,
         retry: this.snapshot.retry,
-        verification: this.snapshot.verification,
         pendingInteractions: Object.freeze([]),
         activeDelegations: Object.freeze([]),
         continuationTargets: this.snapshot.continuationTargets,
@@ -397,7 +407,7 @@ function rejectedSteering(
 
 function terminalStatus<TOutput>(
   result: RunResult<TOutput>,
-): Extract<RunLifecycleStatus, "succeeded" | "stopped" | "failed" | "cancelled"> {
+): Extract<RunLifecycleStatus, "completed" | "failed" | "cancelled"> {
   return result.status;
 }
 

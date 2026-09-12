@@ -82,11 +82,11 @@ test("execution dependencies are exact and owner-directed", () => {
   );
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/operation-composition"),
-    ["@agent-anything/agent-core", "@agent-anything/operation-catalog"],
+    ["@agent-anything/agent-core", "@agent-anything/observability", "@agent-anything/operation-catalog"],
   );
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/agent-hooks"),
-    ["@agent-anything/agent-core", "@agent-anything/agent-runtime"],
+    ["@agent-anything/agent-core", "@agent-anything/agent-runtime", "@agent-anything/observability"],
   );
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/provider-integrations"),

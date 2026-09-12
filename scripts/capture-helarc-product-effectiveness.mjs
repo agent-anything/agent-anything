@@ -179,7 +179,6 @@ function packageRevisions(sourceRevision, sourceTreeDigest) {
     "@agent-anything/model-interaction",
     "@agent-anything/test-support",
     "@agent-anything/tools",
-    "@agent-anything/verification",
   ].map((name) => [name, revision])));
 }
 

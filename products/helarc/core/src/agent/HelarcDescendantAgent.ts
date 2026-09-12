@@ -150,7 +150,6 @@ export function createHelarcDescendantAgentContribution(
                   Object.freeze({ form: "narrative" as const, required: true, maxItems: 1 }),
                   Object.freeze({ form: "evidence" as const, required: false, maxItems: 64 }),
                   Object.freeze({ form: "artifacts" as const, required: false, maxItems: 64 }),
-                  Object.freeze({ form: "verification" as const, required: false, maxItems: 1 }),
                   Object.freeze({ form: "effects" as const, required: false, maxItems: 64 }),
                 ]),
                 maxNarrativeCharacters: 16_000,
@@ -214,7 +213,7 @@ export function createHelarcDescendantAgentContribution(
         project(
           input: Parameters<RunnerDelegationComposition["narrativeProjection"]["project"]>[0],
         ) {
-          if (input.childResult.status === "succeeded") {
+          if (input.childResult.status === "completed") {
             return isHelarcOutput(input.childResult.finalOutput)
               ? input.childResult.finalOutput.summary
               : null;
@@ -291,9 +290,7 @@ function projectDescendantResult(
     agent_id: input.continuation?.id ?? null,
     status: result.terminal.status,
     summary: result.narrative?.text ?? "",
-    stop_reason: result.terminal.stopReason,
     artifact_refs: artifacts,
-    verification_status: result.verification.status,
     effect_status: result.effects.status,
     uncertainty: result.uncertainty,
     failure_code: result.terminal.status === "failed" ? result.terminal.code : null,
@@ -304,10 +301,7 @@ function projectDescendantResult(
   const uncertain = result.effects.status === "partial" ||
     result.effects.status === "unknown" ||
     result.limitDisposition.status === "exhausted";
-  if (result.terminal.status === "stopped") {
-    return Object.freeze({ status: "succeeded" as const, output, failure: null });
-  }
-  if (result.terminal.status === "succeeded" && !requiredMissing && !uncertain) {
+  if (result.terminal.status === "completed" && !requiredMissing && !uncertain) {
     return Object.freeze({
       status: "succeeded" as const,
       output,
@@ -315,7 +309,7 @@ function projectDescendantResult(
     });
   }
   if (
-    result.terminal.status === "succeeded" ||
+    result.terminal.status === "completed" ||
     output.summary.length > 0 ||
     output.artifact_refs.length > 0
   ) {

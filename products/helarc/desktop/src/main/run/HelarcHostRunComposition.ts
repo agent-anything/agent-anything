@@ -17,7 +17,6 @@ import {
   type RunTreeLimits,
 } from "@agent-anything/agent-runtime/runner";
 import type { RunTranscriptPort } from "@agent-anything/agent-runtime/transcript";
-import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
   createCanonicalActorIdentity,
@@ -63,7 +62,6 @@ import {
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
-import { bindHelarcVerificationCompletionGate } from "@agent-anything/helarc/verification";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-local-environment/command";
 import {
   createHelarcLocalCommandActionCapability,
@@ -96,7 +94,6 @@ const DEFAULT_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxDurationMs: HELARC_RUN_MAX_DURATION_MS,
   maxPendingInteractions: 8,
   plan: Object.freeze({ maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 }),
-  completionGate: Object.freeze({ maxFeedbackRounds: 2 }),
 });
 const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxIterations: 256,
@@ -105,7 +102,6 @@ const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxDurationMs: 2 * 60 * 60_000,
   maxPendingInteractions: 32,
   plan: Object.freeze({ maxSteps: 64, maxStepLength: 2_000, maxExplanationLength: 8_000 }),
-  completionGate: Object.freeze({ maxFeedbackRounds: 8 }),
 });
 const DEFAULT_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
   maxTotalDescendantRuns: 8,
@@ -118,9 +114,8 @@ const HARD_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
   maxDescendantDepth: 8,
 });
 
-export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan" | "completionGate">> & {
+export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
   readonly plan?: Partial<RunLimits["plan"]>;
-  readonly completionGate?: Partial<RunLimits["completionGate"]>;
 };
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
@@ -258,6 +253,7 @@ export async function prepareHelarcHostRun(
     provider: input.provider,
     providerProfile: input.providerProfile,
     qualificationCatalog: input.qualificationCatalog,
+    executionFlow: input.inspection?.executionFlow,
     instructionTarget: "production",
     instructionSettings,
     modelContinuationStore: input.modelContinuationStore,
@@ -337,6 +333,7 @@ export async function prepareHelarcHostRun(
     runTraceObserver: input.inspection?.traceObserver,
     runTranscriptObserver: input.inspection?.transcriptObserver,
     executionObserver: input.inspection?.executionObserver,
+    executionFlow: input.inspection?.executionFlow,
     controller: product.controller,
     contextProjection,
     operations: {
@@ -360,10 +357,6 @@ export async function prepareHelarcHostRun(
       },
       delegation: product.delegation,
     },
-    verification: bindHelarcVerificationCompletionGate(
-      product.verification,
-      new CurrentVerificationCompletionGate(now),
-    ),
     interactions: product.interactions,
     runtimeEventPublisher: productRuntimeEventPublisher,
     runTranscriptPort: input.runTranscriptPort,
@@ -399,10 +392,6 @@ export async function prepareHelarcHostRun(
         securityContext,
         enforcement,
         metadata: runMetadata,
-      },
-      verification: {
-        profile: product.verification.profile,
-        completion: createHelarcVerificationCompletionConfig(),
       },
       limits: runLimits,
       runTreeLimits,
@@ -483,7 +472,6 @@ export async function prepareHelarcHostRun(
           const productResult = product.projectResult(
             outcome.runResult,
             enforcement,
-            activeRun.getProjection().verification,
           );
           return Object.freeze({
             kind: "run_result",
@@ -497,21 +485,6 @@ export async function prepareHelarcHostRun(
         }),
       });
     },
-  });
-}
-
-function createHelarcVerificationCompletionConfig() {
-  const owner = (id: string) => Object.freeze({
-    owner: "helarc",
-    kind: "verification",
-    id,
-    revision: "1",
-  });
-  return Object.freeze({
-    policy: owner("current-verification-gate"),
-    outputContract: owner("agent-output-contract"),
-    conditions: Object.freeze([]),
-    maximumDurationMs: 5_000,
   });
 }
 
@@ -621,9 +594,8 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
     ...DEFAULT_HELARC_RUN_LIMITS,
     ...input,
     plan: { ...DEFAULT_HELARC_RUN_LIMITS.plan, ...input?.plan },
-    completionGate: { ...DEFAULT_HELARC_RUN_LIMITS.completionGate, ...input?.completionGate },
   };
-  const fields: Array<keyof Omit<RunLimits, "plan" | "completionGate">> = [
+  const fields: Array<keyof Omit<RunLimits, "plan">> = [
     "maxIterations", "maxActions", "maxConsecutiveActionFailures", "maxDurationMs",
     "maxPendingInteractions",
   ];
@@ -637,15 +609,9 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
       throw new TypeError(`Helarc Plan limit '${field}' is outside the admitted range.`);
     }
   }
-  if (!Number.isSafeInteger(value.completionGate.maxFeedbackRounds) ||
-      value.completionGate.maxFeedbackRounds < 0 ||
-      value.completionGate.maxFeedbackRounds > HARD_HELARC_RUN_LIMITS.completionGate.maxFeedbackRounds) {
-    throw new TypeError("Helarc Completion Gate feedback limit is outside the admitted range.");
-  }
   return Object.freeze({
     ...value,
     plan: Object.freeze(value.plan),
-    completionGate: Object.freeze(value.completionGate),
   });
 }
 

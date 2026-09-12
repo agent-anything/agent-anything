@@ -41,9 +41,9 @@ describe("Helarc deterministic Evaluation target", () => {
       "malformed_output_retry",
       "multi_file_mutation",
       "ordinary_shell_verification",
-      "premature_completion",
       "search",
-      "stale_evidence",
+      "unsupported_completion_claim",
+      "write_and_complete",
     ]);
     const external = adaptHelarcExternalBenchmarkManifest({
       benchmarkRef: { id: "benchmark.reference", revision: "r1" },
@@ -89,7 +89,7 @@ describe("Helarc deterministic Evaluation target", () => {
       !item.outcomeGradePassed ||
       !item.safetyGradePassed)).toEqual([]);
     expect(denied).toHaveLength(2);
-    expect(denied.every((item) => item.targetOutcomeStatus === "stopped")).toBe(true);
+    expect(denied.every((item) => item.targetOutcomeStatus === "succeeded")).toBe(true);
     expect(malformed).toHaveLength(2);
     expect(malformed.every((item) => item.targetOutcomeStatus === "succeeded")).toBe(true);
     expect(baselineCandidate.report.gateOutcomes.map((gate) => gate.status)).toEqual([
@@ -114,44 +114,18 @@ describe("Helarc deterministic Evaluation target", () => {
     });
   }, 120_000);
 
-  it("calibrates ordinary-operation Verification, recovery, freshness, and completion", async () => {
+  it("keeps external workspace oracles separate from normal Run completion", async () => {
     const corpus = createHelarcEvaluationCorpus();
-    const expectations = [
-      ["ordinary_shell_verification", "succeeded", "satisfied", "completion_eligible"],
-      ["failed_check_recovery", "succeeded", "satisfied", "completion_eligible"],
-      ["multi_file_mutation", "succeeded", "satisfied", "completion_eligible"],
-      ["stale_evidence", "cancelled", "violated", "blocked_violated"],
-      ["premature_completion", "cancelled", "violated", "blocked_violated"],
-    ] as const;
-
-    const outcomes = await Promise.all(expectations.map(async ([scenario]) =>
-      invokeCase(corpus, requireCase(corpus, scenario))));
-
-    for (const [index, [, outcomeStatus, requirementState, gateStatus]] of expectations.entries()) {
-      const outcome = outcomes[index];
-      if (outcome === undefined) throw new TypeError("Missing Verification Evaluation outcome.");
-      const verificationSummary = outcome.capture.capture.slots.find(
-        (slot) => slot.slotId === "verification-summary",
-      );
-      expect(outcome.observation.outcome.status).toBe(outcomeStatus);
-      expect(verificationSummary).toMatchObject({
-        owner: "verification",
-        required: true,
-        status: "captured",
-        content: {
-          kind: "inline",
-          value: {
-            requirements: expect.arrayContaining([
-              expect.objectContaining({ state: requirementState }),
-            ]),
-            attempts: expect.any(Array),
-            results: expect.any(Array),
-            assessments: expect.any(Array),
-            gate: { status: gateStatus },
-          },
-        },
-      });
+    const checked = await invokeCase(corpus, requireCase(corpus, "ordinary_shell_verification"));
+    const unsupported = await invokeCase(corpus, requireCase(corpus, "unsupported_completion_claim"));
+    for (const outcome of [checked, unsupported]) {
+      expect(outcome.observation.outcome.status).toBe("succeeded");
+      expect(outcome.capture.capture.slots.some(slot=>slot.owner === "verification")).toBe(false);
+      expect(outcome.capture.capture.slots.find(slot=>slot.slotId === "workspace-after")).toMatchObject({status:"captured"});
     }
+    const after = unsupported.capture.capture.slots.find(slot=>slot.slotId === "workspace-after");
+    expect(JSON.stringify(after)).not.toContain("required.txt");
+    expect(unsupported.observation.outcome).toMatchObject({data:{runtimeStatus:"completed"}});
   }, 120_000);
 
   it("proves a recursive Helarc Agent chain through Runtime, Host, and Product projections", async () => {
@@ -197,14 +171,14 @@ describe("Helarc deterministic Evaluation target", () => {
     });
 
     expect(material.runResult.status, JSON.stringify(material.runResult, null, 2))
-      .toBe("succeeded");
+      .toBe("completed");
     expect(material.hostProjection.runTree).toMatchObject({
       totalDescendantRuns: 2,
       activeDescendantRuns: 0,
       nodes: [
-        { depth: 0, status: "succeeded" },
-        { depth: 1, status: "succeeded" },
-        { depth: 2, status: "succeeded" },
+        { depth: 0, status: "completed" },
+        { depth: 1, status: "completed" },
+        { depth: 2, status: "completed" },
       ],
     });
 
@@ -290,9 +264,9 @@ describe("Helarc deterministic Evaluation target", () => {
       denied.observation.outcome,
       JSON.stringify(denied.observation, null, 2),
     ).toMatchObject({
-      status: "stopped",
+      status: "succeeded",
       owner: "helarc.product",
-      code: "stop_accepted",
+      code: null,
       data: {
         enforcementStatus: "denied",
       },
@@ -302,28 +276,7 @@ describe("Helarc deterministic Evaluation target", () => {
       owner: "provider",
       code: "provider_request_failed",
     });
-    const verificationSummary = completed.capture.capture.slots.find(
-      (slot) => slot.slotId === "verification-summary",
-    );
-    expect(verificationSummary).toMatchObject({
-      owner: "verification",
-      required: true,
-      status: "captured",
-      content: {
-        kind: "inline",
-        value: {
-          requirements: expect.any(Array),
-          attempts: expect.any(Array),
-          results: expect.any(Array),
-          assessments: expect.any(Array),
-          gate: { status: "completion_eligible" },
-        },
-      },
-    });
-    const serializedVerification = JSON.stringify(verificationSummary);
-    expect(serializedVerification).not.toContain("rootPath");
-    expect(serializedVerification).not.toContain("rawEvidence");
-    expect(serializedVerification).not.toContain("commandLine");
+    expect(completed.capture.capture.slots.some(slot=>slot.owner === "verification")).toBe(false);
     const serialized = JSON.stringify(providerFailure);
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("agent-anything-helarc-eval-");

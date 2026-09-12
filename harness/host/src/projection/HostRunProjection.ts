@@ -22,7 +22,6 @@ import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
 import type { RunLifecycleStatus } from "@agent-anything/agent-core/run";
-import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type {
   AgentInstructionBindingProjection,
   AgentInstructionBindingRef,
@@ -35,7 +34,6 @@ export type HostRunProjectionStatus =
   | "suspended"
   | "cancelling"
   | "completed"
-  | "stopped"
   | "failed"
   | "cancelled";
 
@@ -114,7 +112,7 @@ export interface HostRunTreeNodeProjection {
   readonly terminal: Readonly<{
     readonly causeId: string;
     readonly causeRevision: string;
-    readonly causeKind: "completion" | "stop" | "failure" | "cancellation";
+    readonly causeKind: "completion" | "failure" | "cancellation";
     readonly code: string;
     readonly sourceOwner: string;
     readonly sourceKind: string;
@@ -239,7 +237,7 @@ export interface HostTerminalFailureProjection {
 export interface HostTerminalRunProjection {
   readonly runId: string;
   readonly taskId: string;
-  readonly status: "completed" | "stopped" | "failed" | "cancelled";
+  readonly status: "completed" | "failed" | "cancelled";
   readonly code: string;
   readonly completedAt: string;
   readonly durationMs: number | null;
@@ -278,7 +276,6 @@ export interface HostRunProjection {
   readonly activeDelegations: readonly HostActiveDelegationProjection[];
   readonly continuationTargets: readonly HostContinuationTargetProjection[];
   readonly retry: HostRetryProjection | null;
-  readonly verification: VerificationHostProjection | null;
   readonly cancellation: HostCancellationProjection | null;
   readonly enforcement: HostEnforcementProjection;
   readonly terminal: HostTerminalRunProjection | null;
@@ -409,7 +406,6 @@ export function createHostRunProjection(
     activeDelegations: Object.freeze([]),
     continuationTargets: Object.freeze([]),
     retry: null,
-    verification: null,
     cancellation: null,
     enforcement: Object.freeze({
       selected: input.enforcement,
@@ -502,7 +498,7 @@ export function createHostTerminalRunProjection<TOutput>(
   return Object.freeze({
     runId: input.runResult.runId,
     taskId: input.runResult.taskId,
-    status: input.runResult.status === "succeeded" ? "completed" : input.runResult.status,
+    status: input.runResult.status === "completed" ? "completed" : input.runResult.status,
     code: runSettlementCauseCode(input.runResult.cause),
     completedAt,
     durationMs: readNonNegativeNumber(input.runResult.metadata.durationMs),

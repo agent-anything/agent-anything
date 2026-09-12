@@ -32,11 +32,7 @@ import {
   type RunConfig,
   type RunnerOperationComposition,
 } from "@agent-anything/agent-runtime/runner";
-import {
-  createTestContextProjection,
-  createTestVerificationExecutionFactory,
-} from "@agent-anything/test-support";
-import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
+import {createTestContextProjection} from "@agent-anything/test-support";
 import { createHostRunManager } from "./HostRunManager.js";
 
 interface TestOutput {
@@ -54,7 +50,7 @@ describe("Runner and generic Host conformance", () => {
       runId: "run-host-conformance",
       terminal: { status: "completed", code: "completion_accepted" },
       runResult: {
-        status: "succeeded",
+        status: "completed",
         finalOutput: { summary: "Done" },
         startingAgent: { id: "agent-1", revision: "1" },
         finalActiveAgent: { id: "agent-1", revision: "1" },
@@ -121,7 +117,6 @@ function createManager(controller: Controller<TestOutput>) {
     controller,
     contextProjection: createTestContextProjection(),
     operations: emptyOperations(),
-    verification: createTestVerificationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     createRunId: () => "run-host-conformance",
     now: () => NOW,
@@ -234,7 +229,6 @@ function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/age
     permissions: permissionConfig(),
     tools,
     actionExecution: null,
-    verification: createTestVerificationConfig(),
     limits: {
       maxIterations: 4,
       maxActions: 4,
@@ -245,9 +239,6 @@ function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/age
         maxSteps: 4,
         maxStepLength: 100,
         maxExplanationLength: 200,
-      },
-      completionGate: {
-        maxFeedbackRounds: 2,
       },
     },
     runTreeLimits: {
@@ -286,40 +277,6 @@ function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/age
     },
     metadata: {},
   };
-}
-
-function createTestVerificationComposition() {
-  return Object.freeze({
-    executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
-    completionGate: new CurrentVerificationCompletionGate(() => NOW),
-    preparation: null,
-    settledOperationResults: null,
-    checkResults: null,
-  });
-}
-
-function createTestVerificationConfig(): RunConfig["verification"] {
-  const owner = (id: string) => Object.freeze({
-    owner: "host-conformance",
-    kind: "verification",
-    id,
-    revision: "1",
-  });
-  return Object.freeze({
-    profile: Object.freeze({
-      ref: owner("empty-profile"),
-      specification: Object.freeze({ id: "empty-specification", revision: "1" }),
-      source: Object.freeze({ ...owner("profile-source"), sourceKind: "run_invocation" as const }),
-      admittedBy: owner("profile-admission"),
-      requirements: Object.freeze([]),
-    }),
-    completion: Object.freeze({
-      policy: owner("current-verification-gate"),
-      outputContract: owner("test-output-contract"),
-      conditions: Object.freeze([]),
-      maximumDurationMs: 1_000,
-    }),
-  });
 }
 
 function permissionConfig(): ResolvedRunPermissionConfig {

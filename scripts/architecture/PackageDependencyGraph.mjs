@@ -263,7 +263,7 @@ function walk(directory, result) {
 
 function isDevelopmentSource(file) {
   const normalized = file.replaceAll("\\", "/");
-  return /\.(test|spec)\.(c|m)?[jt]sx?$/.test(normalized) ||
+  return /\.(test|spec|pw)\.(c|m)?[jt]sx?$/.test(normalized) ||
     normalized.includes("/src/testing/");
 }
 

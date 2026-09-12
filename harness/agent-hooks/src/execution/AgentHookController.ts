@@ -5,6 +5,8 @@ import type {
   ControllerInput,
 } from "@agent-anything/agent-runtime/controller";
 import type { AgentHookComposition } from "../composition/index.js";
+import { ExecutionFlowPath } from "@agent-anything/observability/execution-flow";
+import { AGENT_HOOK_EXECUTION_FLOW } from "./AgentHookExecutionFlow.js";
 import { createAgentStopEvent, createAgentStopFailureEvent } from "../events/index.js";
 import {
   AgentHookExecutionStore,
@@ -43,11 +45,27 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
     input: ControllerInput<TOutput>,
     context: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>> {
-    let decision: ControllerDecision<TOutput>;
+    const flow = new ExecutionFlowPath(AGENT_HOOK_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId, []);
     try {
-      decision = await this.input.controller.next(input, context);
+      const decision = await this.nextWithFlow(input, context, flow);
+      flow.advance("result", {decision:decision.kind});
+      flow.close("returned");
+      return decision;
+    } catch (error) { flow.close(context.cancellation.signal.aborted ? "cancelled" : "failed"); throw error; }
+  }
+
+  private async nextWithFlow(
+    input: ControllerInput<TOutput>,
+    context: ControllerCallContext,
+    flow: ExecutionFlowPath,
+  ): Promise<ControllerDecision<TOutput>> {
+    let decision: ControllerDecision<TOutput>;
+    flow.advance("controller");
+    try {
+      decision = await this.input.controller.next(input, {...context, executionFlow:flow.callContext});
     } catch (error) {
       if (this.input.composition !== undefined) {
+        flow.advance("failure", {registeredCount:this.input.composition.registrations.length});
         const event = createAgentStopFailureEvent({
           sequence: this.nextSequence(input.runId),
           runKind: this.runKind(input.runId),
@@ -56,6 +74,7 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
           emittedAt: this.now(),
         });
         await dispatchAgentStopFailureHooks({
+          executionFlow: flow.callContext,
           composition: this.input.composition,
           event,
           interruption: interruptionContext(context),
@@ -67,12 +86,23 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
       throw error;
     }
 
-    if (decision.kind !== "propose_completion" && decision.kind !== "propose_stop") {
+    const candidateStep = flow.advance("candidate", {decision:decision.kind});
+    candidateStep.check("normal_completion", decision.kind === "propose_completion" ? "passed" : "not_applicable");
+    if (decision.kind !== "propose_completion") {
       this.continuationCounts.delete(input.runId);
       return decision;
     }
+    candidateStep.check("registered_handlers", this.input.composition?.registrations.length ? "passed" : "not_applicable", {registeredCount:this.input.composition?.registrations.length ?? 0});
     if (this.input.composition === undefined || this.input.composition.registrations.length === 0) {
       this.continuationCounts.delete(input.runId);
+      return decision;
+    }
+
+    candidateStep.check("continuation_allowance", (this.continuationCounts.get(input.runId) ?? 0) >= this.maxConsecutiveContinuations ? "not_satisfied" : "passed", {used:this.continuationCounts.get(input.runId) ?? 0, maximum:this.maxConsecutiveContinuations});
+    if ((this.continuationCounts.get(input.runId) ?? 0) >= this.maxConsecutiveContinuations) {
+      this.store.recordDisposition({runId: input.runId, controllerRequestId: input.toolExposure.controllerRequestId,
+        disposition: "continuation_limit_reached", feedbackCount: this.continuationCounts.get(input.runId) ?? 0,
+        recordedAt: this.now()});
       return decision;
     }
 
@@ -83,7 +113,9 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
       decision,
       emittedAt: this.now(),
     });
+    flow.advance("handlers", {eventId:event.ref.id});
     const result = await dispatchAgentStopHooks({
+      executionFlow: flow.callContext,
       composition: this.input.composition,
       event,
       interruption: interruptionContext(context),
@@ -97,14 +129,6 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
     }
     const count = (this.continuationCounts.get(input.runId) ?? 0) + 1;
     this.continuationCounts.set(input.runId, count);
-    if (count > this.maxConsecutiveContinuations) {
-      this.continuationCounts.delete(input.runId);
-      return Object.freeze({
-        kind: "propose_stop" as const,
-        reason: "Agent Stop continuation limit exhausted.",
-        modelItems: decision.modelItems,
-      });
-    }
     return Object.freeze({
       kind: "continue_with_feedback" as const,
       feedback: Object.freeze({

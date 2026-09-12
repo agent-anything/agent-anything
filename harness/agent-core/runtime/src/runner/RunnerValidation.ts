@@ -23,8 +23,6 @@ import type {
 } from "./RunConfig.js";
 import { snapshotRunTreeResourceEnvelope } from "./RunTreeResourceAccount.js";
 import { snapshotRunTreeApprovalLimits } from "./RunTreeApprovalAccount.js";
-import { snapshotCompletionGateConfiguration } from "@agent-anything/verification/completion";
-import { snapshotVerificationProfile } from "@agent-anything/verification/definition";
 
 export { snapshotAgent, snapshotRunInput };
 
@@ -66,10 +64,6 @@ export function snapshotRunConfig(
     }
     const tools = snapshotToolSelectionRevision(config.tools);
     const actionExecution = snapshotActionExecution(config.actionExecution);
-    const verification = Object.freeze({
-      profile: snapshotVerificationProfile(config.verification.profile),
-      completion: snapshotCompletionGateConfiguration(config.verification.completion),
-    });
     if (
       actionExecution !== null &&
       actionExecution.securityContext.environment.environmentId !==
@@ -125,7 +119,6 @@ export function snapshotRunConfig(
         permissions,
         tools,
         actionExecution,
-        verification,
         limits,
         audit: config.audit,
         telemetry: config.telemetry,
@@ -234,12 +227,6 @@ function snapshotLimits(input: RunConfig["limits"]): RunConfig["limits"] {
       "RunLimits.maxPendingInteractions",
     ),
     plan: Object.freeze({ ...input.plan }),
-    completionGate: Object.freeze({
-      maxFeedbackRounds: nonNegativeInteger(
-        input.completionGate.maxFeedbackRounds,
-        "RunLimits.completionGate.maxFeedbackRounds",
-      ),
-    }),
   });
   assertValidPlanLimits(limits.plan);
   return limits;

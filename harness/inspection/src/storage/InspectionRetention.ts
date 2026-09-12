@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { atomicInspectionJson, containedInspectionPath, datasetDirectory, validateOpaqueId, type InspectionDatasetManifest } from "../sources/index.js";
 import { acquireInspectionRetirement } from "./InspectionDatasetAccess.js";
+import { INSPECTION_FORMAT_VERSION } from "../records/index.js";
 
 export interface InspectionRetirement { readonly datasetId: string; readonly status: "removed" | "eligible" | "active" | "unavailable" }
 
@@ -17,7 +18,7 @@ export function retireInspectionDatasets(root: string, sourceId: string, options
       const manifestPath = containedInspectionPath(root, "sources", sourceId, "datasets", datasetId, "manifest.json");
       if (statSync(manifestPath).size > 64 * 1024) throw new Error("inspection_manifest_invalid");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as InspectionDatasetManifest;
-      if (manifest.formatVersion !== 1 || manifest.sourceId !== sourceId || manifest.datasetId !== datasetId) throw new Error("inspection_manifest_invalid");
+      if (manifest.formatVersion !== INSPECTION_FORMAT_VERSION || manifest.sourceId !== sourceId || manifest.datasetId !== datasetId) throw new Error("inspection_manifest_invalid");
       if (manifest.status !== "closed") return { datasetId, status: "active" as const };
       if (Date.parse(manifest.createdAt) >= Date.parse(options.before)) return { datasetId, status: "unavailable" as const };
       if (!options.apply) return { datasetId, status: "eligible" as const };

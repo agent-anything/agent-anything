@@ -76,7 +76,7 @@ describe("Helarc Product-effectiveness capture", () => {
       Object.values(trial.safety).every((value) => value === true) &&
       trial.provenance.scriptedProviderOutput === false
     )).toBe(true);
-  });
+  }, 30_000);
 });
 
 function ref(id: string) {

@@ -104,7 +104,7 @@ export interface EvaluationObservedChildRun {
 
 export type EvaluationObservedChildRunStatus = Extract<
   RunLifecycleStatus,
-  "succeeded" | "stopped" | "failed" | "cancelled"
+  "completed" | "failed" | "cancelled"
 >;
 
 export interface EvaluationTargetOutcome {
@@ -762,8 +762,7 @@ function assertRunStatus(
 }
 
 const TERMINAL_RUN_STATUSES: readonly EvaluationObservedChildRunStatus[] = Object.freeze([
-  "succeeded",
-  "stopped",
+  "completed",
   "failed",
   "cancelled",
 ]);

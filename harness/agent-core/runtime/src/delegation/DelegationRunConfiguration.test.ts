@@ -24,7 +24,6 @@ describe("delegated Run authority", () => {
     "tool",
     "permission",
     "action_execution",
-    "verification",
     "disclosure",
   ] as const)("rejects widening the %s dimension", (kind) => {
     const ceiling = authorityDimensions();
@@ -60,7 +59,6 @@ function authorityDimensions(): readonly DelegationAuthorityDimensionInput[] {
     dimension("tool", ["tool-a"]),
     dimension("permission", ["permission-a"], ["approval-required"]),
     dimension("action_execution", ["executor-a"]),
-    dimension("verification", ["verification-a"]),
     dimension("disclosure", ["model", "runtime"], ["source-explicit"]),
   ]);
 }

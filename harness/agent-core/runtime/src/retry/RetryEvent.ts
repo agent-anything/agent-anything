@@ -181,7 +181,8 @@ export function snapshotRetryEvent(event: RetryEvent, runId: string): RetryEvent
       assertNonNegativeInteger(event.delayMs, "RetryEvent.delayMs");
       if (
         event.delaySource !== "calculated_backoff" &&
-        event.delaySource !== "trusted_server_delay"
+        event.delaySource !== "trusted_server_delay" &&
+        event.delaySource !== "delayed_recovery"
       ) {
         throw new TypeError("RetryEvent.delaySource is unsupported.");
       }

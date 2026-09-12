@@ -1,7 +1,28 @@
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type { RunCauseSourceRef } from "./RunSettlement.js";
 
-export type RunSuspensionCode = "completion_gate_feedback_exhausted";
+export type RunSuspensionCode = "run_suspension_requested";
+
+export interface RunSuspendRequestInput {
+  readonly id: string;
+  readonly expectedRunRevision: number;
+  readonly origin: "user" | "host";
+  readonly reason: string;
+}
+
+export type RunSuspendReceipt =
+  | { readonly status: "accepted"; readonly suspension: RunSuspension; readonly currentRunRevision: number }
+  | { readonly status: "rejected"; readonly code: "suspend_invalid" | "run_revision_stale" | "run_already_suspended" | "run_cancelling" | "run_settling" | "run_settled" | "run_not_started"; readonly requestId: string; readonly currentRunRevision: number };
+
+export function snapshotRunSuspendRequestInput(input: RunSuspendRequestInput): RunSuspendRequestInput {
+  if (input === null || typeof input !== "object") throw new TypeError("Run suspension input must be an object.");
+  assertExactKeys(input, ["id", "expectedRunRevision", "origin", "reason"], "Run suspension input");
+  const id = identity(input.id, "id");
+  if (!Number.isSafeInteger(input.expectedRunRevision) || input.expectedRunRevision < 0 ||
+      (input.origin !== "user" && input.origin !== "host") || typeof input.reason !== "string" ||
+      input.reason.trim().length === 0 || input.reason.trim().length > 500) throw new TypeError("Invalid Run suspension input.");
+  return Object.freeze({...input, id, reason: input.reason.trim()});
+}
 
 export interface RunSuspensionRef {
   readonly run: RunRef;

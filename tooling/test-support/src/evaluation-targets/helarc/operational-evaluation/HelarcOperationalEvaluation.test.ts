@@ -51,7 +51,7 @@ describe("Helarc operational Evaluation protocol", () => {
       metric.source.measurementId === "human_interaction"
     );
 
-    expect(safety).toHaveLength(10);
+    expect(safety).toHaveLength(9);
     expect(safety.every((metric) => metric.role === "gate" &&
       metric.gateThreshold?.value === 1)).toBe(true);
     expect(interaction).toMatchObject({
@@ -62,7 +62,7 @@ describe("Helarc operational Evaluation protocol", () => {
     expect(JSON.stringify(profile)).not.toContain("human_attention");
   });
 
-  it("requires attributable terminal, effect, Verification, and environment Capture", () => {
+  it("requires attributable terminal, effect, and environment Capture", () => {
     const profile = createHelarcOperationalEvaluationProgram().profiles.harness_conformance;
     const required = profile.capturePolicy.slots
       .filter((slot) => slot.required)
@@ -75,7 +75,6 @@ describe("Helarc operational Evaluation protocol", () => {
       "environment",
       "run_tree",
       "terminal",
-      "verification",
     ]);
     expect(profile.capturePolicy.metadata).toMatchObject({
       ownerAttributed: true,
@@ -170,7 +169,6 @@ function targetValues(
     sandbox: { revision: "sandbox-v1" },
     context: { revision: "context-v1" },
     run_state: { revision: "run-state-v1" },
-    verification: { revision: "verification-v1" },
     workspace: { identity: "workspace-fixture-v1" },
     fixture: { revision: "fixture-v1", digest: "sha256:fixture" },
     environment: { revision: "environment-v1", fingerprint: "environment-a" },

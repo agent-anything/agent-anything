@@ -22,8 +22,7 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
   "run.descendant.settled": [
     ...descendantFields(),
     "status", "code", "resultId", "resultRevision",
-    "expectationPresentCount", "expectationUnmetCount", "evidenceCount", "artifactCount",
-    "verificationStatus", "effectStatus", "uncertaintyCount", "controllerTurns", "actions",
+    "expectationPresentCount", "expectationUnmetCount", "evidenceCount", "artifactCount", "effectStatus", "uncertaintyCount", "controllerTurns", "actions",
     "modelUsageStatus", "limitStatus", "exhaustedLimit",
   ],
   "context.transition.committed": [
@@ -65,7 +64,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
   ],
   "run.completed": terminalFields(),
-  "run.stopped": terminalFields(),
   "run.failed": terminalFields(),
   "run.cancelled": terminalFields(),
   "controller.started": ["turnId", "iteration"],
@@ -131,18 +129,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "lifecycle",
     "code",
     "terminalRecordId",
-  ],
-  "verification.check.started": [
-    "snapshotRevision", "attemptId", "requirementId", "origin",
-  ],
-  "verification.check.finished": [
-    "snapshotRevision", "attemptId", "status", "code", "durationMs", "coverageRatio",
-  ],
-  "verification.assessment.committed": [
-    "snapshotRevision", "requirementId", "assessmentId", "verdict",
-  ],
-  "verification.gate.evaluated": [
-    "snapshotRevision", "gateId", "status", "disposition", "reasonCodes",
   ],
 };
 

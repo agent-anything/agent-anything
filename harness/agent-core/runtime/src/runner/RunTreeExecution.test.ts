@@ -20,7 +20,7 @@ describe("RunTreeExecution", () => {
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child-active", 2))
       .toEqual({ status: "rejected", code: "descendant_run_active_limit_exceeded", treeRevision: 1 });
     tree.settleResources("run-child-1");
-    tree.settleRun("run-child-1", "succeeded", terminal("succeeded"), "2026-08-23T00:00:10.000Z");
+    tree.settleRun("run-child-1", "completed", terminal("completed"), "2026-08-23T00:00:10.000Z");
     tree.settleDescendantTransfer("run-child-1", "settled");
 
     const second = reserve(tree, tree.rootLineage, "run-root", "run-child-2", 3);
@@ -182,8 +182,8 @@ describe("RunTreeExecution", () => {
       .toThrow("before child allocations");
     expect(() => tree.settleRun(
       "run-root",
-      "succeeded",
-      terminal("succeeded"),
+      "completed",
+      terminal("completed"),
       "2026-08-23T00:00:01.000Z",
     )).toThrow("resource account");
   });
@@ -265,16 +265,16 @@ describe("RunTreeExecution", () => {
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child", 1).status)
       .toBe("accepted");
     expect(() => tree.settleRun(
-      "run-child", "succeeded", terminal("succeeded"), "2026-08-23T00:00:01.000Z",
+      "run-child", "completed", terminal("completed"), "2026-08-23T00:00:01.000Z",
     )).toThrow("resource account");
     tree.settleResources("run-child");
-    tree.settleRun("run-child", "succeeded", terminal("succeeded"), "2026-08-23T00:00:01.000Z");
+    tree.settleRun("run-child", "completed", terminal("completed"), "2026-08-23T00:00:01.000Z");
     tree.settleResources("run-root");
     expect(() => tree.settleRun(
-      "run-root", "succeeded", terminal("succeeded"), "2026-08-23T00:00:02.000Z",
+      "run-root", "completed", terminal("completed"), "2026-08-23T00:00:02.000Z",
     )).toThrow("descendant obligations remain");
     tree.settleDescendantTransfer("run-child", "unknown");
-    tree.settleRun("run-root", "succeeded", terminal("succeeded"), "2026-08-23T00:00:02.000Z");
+    tree.settleRun("run-root", "completed", terminal("completed"), "2026-08-23T00:00:02.000Z");
     expect(tree.getSnapshot().settlement).toMatchObject({
       complete: true,
       unsettledDescendantRuns: 0,
@@ -467,8 +467,8 @@ function cancellation(runId: string) {
   });
 }
 
-function terminal(status: "succeeded" | "failed" | "cancelled") {
-  const causeKind = status === "succeeded"
+function terminal(status: "completed" | "failed" | "cancelled") {
+  const causeKind = status === "completed"
     ? "completion" as const
     : status === "failed"
       ? "failure" as const
@@ -477,7 +477,7 @@ function terminal(status: "succeeded" | "failed" | "cancelled") {
     causeId: `cause-${status}`,
     causeRevision: "1",
     causeKind,
-    code: status === "succeeded"
+    code: status === "completed"
       ? "completion_accepted"
       : status === "failed"
         ? "runtime_execution_failed"

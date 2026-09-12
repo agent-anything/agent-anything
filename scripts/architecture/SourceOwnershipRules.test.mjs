@@ -25,7 +25,7 @@ test("accepts current owner-directed source forms", () => {
       text: "export interface CatalogRealizationRecord {}",
     },
     {
-      sourcePath: "products/helarc/core/src/verification/HelarcVerificationComposition.ts",
+      sourcePath: "products/helarc/core/src/composition/HelarcProductComposition.ts",
       text: [
         'import type { CompositeDefinition } from "@agent-anything/operation-composition/definition";',
         'import type { CodeSourcePort } from "@agent-anything/helarc-code-agent/source";',
@@ -263,46 +263,6 @@ test("rejects opaque Provider continuation in canonical Context, Run, and Produc
   }
 });
 
-test("rejects detailed Verification authority in bounded state and consumer surfaces", () => {
-  for (const sourcePath of [
-    "harness/agent-core/contracts/src/run/RunState.ts",
-    "harness/context/src/projection/ContextProjection.ts",
-    "harness/host/src/projection/HostRunProjection.ts",
-    "harness/observability/src/projection/RunTraceProjection.ts",
-    "products/helarc/core/src/result/HelarcProductResult.ts",
-    "products/helarc/desktop/src/shared/HelarcMainSnapshot.ts",
-  ]) {
-    const violations = evaluateSourceOwnershipRules({
-      sourcePath,
-      text: "readonly verification: VerificationLedgerSnapshot;",
-    });
-    assert.deepEqual(
-      violations.map(({ rule }) => rule),
-      ["verification_detailed_state_leakage"],
-    );
-  }
-});
-
-test("rejects physical execution and semantic processor dependencies in Verification owners", () => {
-  const physical = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/core/src/verification/PhysicalVerification.ts",
-    text: 'import { executor } from "@agent-anything/helarc-local-environment/command";',
-  });
-  const semantic = evaluateSourceOwnershipRules({
-    sourcePath: "harness/verification/src/execution/LanguageVerification.ts",
-    text: 'import { parse } from "@vendor/tree-sitter-typescript";',
-  });
-
-  assert.deepEqual(
-    physical.map(({ rule }) => rule),
-    ["product_verification_physical_execution_dependency"],
-  );
-  assert.deepEqual(
-    semantic.map(({ rule }) => rule),
-    ["verification_semantic_processor_dependency"],
-  );
-});
-
 test("requires current Runner continuation and descendant progression semantics", () => {
   const violations = evaluateSourceOwnershipRules({
     sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
@@ -329,18 +289,6 @@ test("rejects optional Agent Hook ownership in Agent Core Runtime", () => {
   assert.deepEqual(
     violations.map(({ rule }) => rule),
     ["runtime_agent_hook_ownership"],
-  );
-});
-
-test("rejects production no-check Verification factories", () => {
-  const violations = evaluateSourceOwnershipRules({
-    sourcePath: "harness/verification/src/execution/NoCheckFactory.ts",
-    text: "export function createNoCheckVerificationExecutionFactory() {}",
-  });
-
-  assert.deepEqual(
-    violations.map(({ rule }) => rule),
-    ["production_verification_bypass"],
   );
 });
 

@@ -45,10 +45,8 @@ function snapshotMeasurements(
   switch (eventName) {
     case "runner.run.started":
       return runLifecycleMeasurements(source, counters, dimensions, "started");
-    case "runner.run.succeeded":
-      return runLifecycleMeasurements(source, counters, dimensions, "succeeded");
-    case "runner.run.stopped":
-      return runLifecycleMeasurements(source, counters, dimensions, "stopped");
+    case "runner.run.completed":
+      return runLifecycleMeasurements(source, counters, dimensions, "completed");
     case "runner.run.failed":
       return runLifecycleMeasurements(source, counters, dimensions, "failed");
     case "runner.run.cancelled":
@@ -144,7 +142,7 @@ function runLifecycleMeasurements(
   source: RecordValue,
   counters: RecordValue,
   dimensions: RecordValue,
-  status: "started" | "succeeded" | "stopped" | "failed" | "cancelled",
+  status: "started" | "completed" | "failed" | "cancelled",
 ): RecordValue {
   return Object.freeze({
     durationMs: nonNegativeNumber(source.durationMs, "TelemetryRecord.durationMs"),
@@ -227,8 +225,7 @@ function nullableLiteral<T extends string | number>(
 
 const telemetryRecordNames = Object.freeze([
   "runner.run.started",
-  "runner.run.succeeded",
-  "runner.run.stopped",
+  "runner.run.completed",
   "runner.run.failed",
   "runner.run.cancelled",
   "runner.approval.resolved",

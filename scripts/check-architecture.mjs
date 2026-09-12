@@ -98,19 +98,6 @@ const focusedPublicSubpaths = new Map([
     ]),
   ],
   [
-    "@agent-anything/verification",
-    new Set([
-      "@agent-anything/verification/assessment",
-      "@agent-anything/verification/completion",
-      "@agent-anything/verification/definition",
-      "@agent-anything/verification/evidence",
-      "@agent-anything/verification/execution",
-      "@agent-anything/verification/persistence",
-      "@agent-anything/verification/projection",
-      "@agent-anything/verification/subject",
-    ]),
-  ],
-  [
     "@agent-anything/operation-catalog",
     new Set([
       "@agent-anything/operation-catalog/identity",
@@ -228,7 +215,6 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/helarc/task-fulfillment",
       "@agent-anything/helarc/thread",
       "@agent-anything/helarc/tools",
-      "@agent-anything/helarc/verification",
       "@agent-anything/helarc/work-context",
     ]),
   ],
@@ -237,7 +223,6 @@ const focusedPublicSubpaths = new Map([
     new Set([
       "@agent-anything/helarc-code-agent/file-operation",
       "@agent-anything/helarc-code-agent/source",
-      "@agent-anything/helarc-code-agent/verification",
       "@agent-anything/helarc-code-agent/workspace",
     ]),
   ],
@@ -608,16 +593,6 @@ function checkArchitectureSource(file, text, isTestOnly) {
     rel === "products/helarc/desktop/src/main/thread/HelarcThreadStore.ts"
   ) {
     report("removed_history_path", { file, message: "Restores a removed legacy history source path." });
-  }
-  if (
-    rel.startsWith("harness/verification/src/") &&
-    /\/src\/(?:internal|common|shared)\//.test(rel)
-  ) {
-    report("verification_ambiguous_source_owner", {
-      file,
-      owner,
-      message: "Verification source must belong to one of its eight explicit Contract families.",
-    });
   }
   if (
     rel.startsWith("products/helarc/") &&
@@ -1117,7 +1092,6 @@ function checkExecutionSourceTopology() {
         "task-fulfillment",
         "thread",
         "tools",
-        "verification",
         "work-context",
       ],
       forbiddenPaths: ["src/review"],
@@ -1128,7 +1102,6 @@ function checkExecutionSourceTopology() {
         "PublicApi.test.ts",
         "file-operation",
         "source",
-        "verification",
         "workspace",
       ],
       forbiddenPaths: [
@@ -1430,7 +1403,7 @@ function owningPackage(file) {
 }
 
 function isTestFile(file) {
-  return /\.(test|spec)\.(c|m)?tsx?$/.test(file);
+  return /\.(test|spec|pw)\.(c|m)?tsx?$/.test(file);
 }
 
 function readJson(file) {

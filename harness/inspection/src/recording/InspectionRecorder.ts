@@ -2,7 +2,8 @@ import { Worker } from "node:worker_threads";
 import { createHash, randomUUID } from "node:crypto";
 import { DEFAULT_INSPECTION_CAPTURE_POLICY, captureClassEnabled, redactInspectionContent, validateInspectionCapturePolicy, type InspectionCapturePolicy } from "../content/index.js";
 import { atomicInspectionJson, containedInspectionPath, defaultInspectionRoot, type InspectionDatasetManifest, type InspectionSource } from "../sources/index.js";
-import { snapshotInspectionJson, validateInspectionInput, type InspectionRecord, type InspectionRecordInput, type InspectionSubjectRef, type InspectionCoverage } from "../records/index.js";
+import type { InspectionRecord, InspectionRecordInput, InspectionSubjectRef, InspectionCoverage } from "../records/index.js";
+import { snapshotInspectionJson, validateInspectionInput } from "../records/InspectionValidation.js";
 import type { InspectionContentWrite } from "../storage/index.js";
 import type { InspectionOffer, RecorderCommand, RecorderReply } from "./InspectionRecorderProtocol.js";
 
@@ -149,11 +150,14 @@ export class InspectionRecorder {
     const deadline = Date.now() + 2000;
     this.dispatch();
     while ((this.queue.length || this.inFlight) && !this.failure && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
-    if (this.queue.length || this.inFlight) this.fail("inspection_flush_timeout");
+    if (this.queue.length || this.inFlight) {
+      if (!close) return;
+      this.fail("inspection_flush_timeout");
+    }
     if (!this.failure) {
       const id = ++this.requestId;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { this.completions.delete(id); this.fail("inspection_flush_timeout"); resolve(); }, Math.max(1, deadline - Date.now()));
+        const timer = setTimeout(() => { this.completions.delete(id); if (close) this.fail("inspection_flush_timeout"); resolve(); }, Math.max(1, deadline - Date.now()));
         this.completions.set(id, () => { clearTimeout(timer); resolve(); });
         this.post({ kind: "flush", id, close, dropped: this.dropped, rejected: this.rejected });
       });

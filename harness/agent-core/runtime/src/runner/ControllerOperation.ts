@@ -106,12 +106,6 @@ export function prepareControllerOperation<TOutput>(
     }),
     plan: input.state.plan === null ? null : projectPlan(input.state.plan),
     planLimits: input.config.limits.plan,
-    verification: Object.freeze({
-      snapshot: Object.freeze({ ...input.state.verification.snapshot }),
-      gate: input.state.verification.gate === null
-        ? null
-        : Object.freeze({ ...input.state.verification.gate }),
-    }),
     permission: projectPermissionContext(
       input.config.permissions,
       input.state.permission,
@@ -159,12 +153,16 @@ export function executeControllerOperation<TOutput>(input: {
   readonly prepared: PreparedControllerOperation<TOutput>;
   readonly config: ResolvedRunConfig;
   readonly retryEvents: RetryEventSink;
+  readonly retryWaitControl: import("../retry/RetryWaitControl.js").RetryWaitControl;
+  readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
 }): Promise<ControllerDecision<TOutput>> {
   return input.dependencies.controller.next(
     input.prepared.input,
     Object.freeze({
+      executionFlow: input.executionFlow,
       cancellation: input.config.cancellation.context,
       retry: Object.freeze({
+        waitControl: input.retryWaitControl,
         providerRequest: input.config.retry.providerRequest,
         structuredOutput: input.config.retry.structuredOutput,
         deadlineAt: input.prepared.deadlineAt,

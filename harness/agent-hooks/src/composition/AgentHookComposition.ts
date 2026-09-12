@@ -32,6 +32,7 @@ export interface AgentStopHandler {
   handle(
     event: AgentStopEvent,
     interruption: InvocationInterruptionContext,
+    executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext,
   ): Promise<AgentStopHandlerResult> | AgentStopHandlerResult;
 }
 
@@ -39,6 +40,7 @@ export interface AgentStopObserver {
   observe(
     event: AgentStopEvent,
     interruption: InvocationInterruptionContext,
+    executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext,
   ): Promise<void> | void;
 }
 
@@ -46,6 +48,7 @@ export interface AgentStopFailureObserver {
   observe(
     event: AgentStopFailureEvent,
     interruption: InvocationInterruptionContext,
+    executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext,
   ): Promise<void> | void;
 }
 

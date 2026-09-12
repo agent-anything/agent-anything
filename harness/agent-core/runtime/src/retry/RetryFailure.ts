@@ -42,7 +42,7 @@ export type RetryDecision =
 
 export interface RetryDelay {
   readonly delayMs: number;
-  readonly source: "calculated_backoff" | "trusted_server_delay";
+  readonly source: "calculated_backoff" | "trusted_server_delay" | "delayed_recovery";
   readonly scheduledAt: string;
   readonly nextAttemptAt: string;
 }

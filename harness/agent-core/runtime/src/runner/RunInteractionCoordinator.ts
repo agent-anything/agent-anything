@@ -18,6 +18,8 @@ import type {
 import { snapshotSafeInteractionEnvelope } from "@agent-anything/interaction/protocol";
 import type { InteractionTerminalRecord } from "@agent-anything/interaction/records";
 import type { OperationCorrelation } from "@agent-anything/operation-catalog/identity";
+import { ExecutionFlowPath, type ExecutionFlowContext, type ExecutionFlowStep } from "@agent-anything/observability/execution-flow";
+import { INTERACTION_EXECUTION_FLOW } from "./InteractionExecutionFlow.js";
 
 export type RuntimeInteractionSettlement =
   | {
@@ -35,6 +37,7 @@ export type RuntimeInteractionSettlement =
     };
 
 export interface OpenRuntimeInteractionInput {
+  readonly executionFlow?: ExecutionFlowContext;
   readonly requestId: string;
   readonly protocol: InteractionProtocolRef;
   readonly subject: unknown;
@@ -63,6 +66,8 @@ export type OpenRuntimeInteractionResult =
     };
 
 interface ActiveInteraction {
+  readonly flow: ExecutionFlowPath;
+  readonly submissionStep: ExecutionFlowStep;
   readonly protocol: CapturedInteractionProtocol;
   readonly request: InteractionRequest<string, unknown, unknown>;
   readonly execution: InteractionExecution;
@@ -95,7 +100,7 @@ export interface RunInteractionCoordinatorDependencies {
   readonly localProtocols?: readonly CapturedInteractionProtocol[];
   readonly now: () => string;
   readonly createId: (kind: "interaction_submission_receipt" | "interaction_resolution" | "interaction_application", sequence: number) => string;
-  readonly onOpened: (pending: PendingInteractionRef) => void;
+  readonly onOpened: (pending: PendingInteractionRef, parentRunAction: RunActionRef | null) => void;
   readonly onSettled: (
     pending: PendingInteractionRef,
     terminal: InteractionTerminalRecord,
@@ -134,12 +139,22 @@ export class RunInteractionCoordinator {
   }
 
   open(input: OpenRuntimeInteractionInput): OpenRuntimeInteractionResult {
+    const flow = new ExecutionFlowPath(INTERACTION_EXECUTION_FLOW, input.executionFlow ?? {}, this.dependencies.runId,
+      [{owner: "interaction", kind: "interaction", id: input.requestId, revision: String(input.requestVersion)}]);
+    const step = flow.advance("open", {protocolOwner: input.protocol.owner, protocolKind: input.protocol.kind});
+    const reject = (result: OpenRuntimeInteractionResult): OpenRuntimeInteractionResult => {
+      flow.advance("settle", {status: result.status});
+      flow.close("returned");
+      return result;
+    };
+    step.check("run_open", this.settled ? "not_satisfied" : "passed");
     if (this.settled) {
-      return unavailable("interaction_run_settled", "The Run no longer accepts interactions.");
+      return reject(unavailable("interaction_run_settled", "The Run no longer accepts interactions."));
     }
     const protocol = this.resolveProtocol(input.protocol);
+    step.check("protocol", protocol === undefined ? "not_satisfied" : "passed");
     if (protocol === undefined) {
-      return unavailable("interaction_protocol_unavailable", "The Interaction protocol revision is not registered.");
+      return reject(unavailable("interaction_protocol_unavailable", "The Interaction protocol revision is not registered."));
     }
     try {
       const request = protocol.createRequest({
@@ -154,8 +169,9 @@ export class RunInteractionCoordinator {
         createdAt: input.createdAt,
       });
       const key = requestKey(request.ref);
+      step.check("unique_request", this.active.has(key) ? "not_satisfied" : "passed");
       if (this.active.has(key)) {
-        return invalid("interaction_request_duplicate", "The exact Interaction request is already pending.");
+        return reject(invalid("interaction_request_duplicate", "The exact Interaction request is already pending."));
       }
       const execution = InteractionExecution.create({
         request: request.ref,
@@ -173,6 +189,8 @@ export class RunInteractionCoordinator {
         expiresAt: request.expiresAt,
       }, snapshotUnknown);
       const active: ActiveInteraction = {
+        flow,
+        submissionStep: flow.advance("wait", {blockingScope: input.blockingScope, expiresAt: input.expiresAt}),
         protocol,
         request,
         execution,
@@ -194,13 +212,13 @@ export class RunInteractionCoordinator {
           });
         }, Math.min(delay, 2_147_483_647));
       }
-      this.dependencies.onOpened(pending);
+      this.dependencies.onOpened(pending, input.parentRunAction);
       return Object.freeze({ status: "opened" as const, pending, envelope, completion });
     } catch (error) {
-      return invalid(
+      return reject(invalid(
         "interaction_request_invalid",
         error instanceof Error ? error.message : "The Interaction request is invalid.",
-      );
+      ));
     }
   }
 
@@ -225,6 +243,8 @@ export class RunInteractionCoordinator {
       receiptId: this.dependencies.createId("interaction_submission_receipt", this.nextReceipt++),
       recordedAt: input.receivedAt,
     });
+    active.submissionStep.check("submission_receipt", commit.status === "rejected" ? "not_satisfied" : "passed",
+      {status: commit.status, submissionId: input.submissionId});
     if (commit.status === "rejected") {
       const code = commit.code === "stale_revision"
         ? "interaction_version_stale"
@@ -338,8 +358,10 @@ export class RunInteractionCoordinator {
 
   private async resolveSubmission(active: ActiveInteraction, input: InteractionSubmissionInput): Promise<void> {
     if (!this.active.has(requestKey(input.request))) return;
+    const step = active.flow.advance("resolve", {submissionId: input.submissionId});
     try {
       const submission = active.protocol.validateSubmission(active.request, input.payload);
+      step.check("submission_contract", "passed");
       const resolutionValue = active.protocol.resolve({
         request: active.request,
         submissionId: input.submissionId,
@@ -352,6 +374,7 @@ export class RunInteractionCoordinator {
         resolutionId: this.dependencies.createId("interaction_resolution", this.nextResolution++),
         resolutionRevision: String(input.request.requestVersion),
       });
+      active.flow.advance("apply", {resolutionId: resolution.resolutionId});
       const applicationValue = await active.protocol.apply({
         request: active.request,
         resolution: resolutionValue,
@@ -426,6 +449,9 @@ export class RunInteractionCoordinator {
       terminal,
     });
     if (commit.status === "rejected") return;
+    active.flow.advance("settle", {status: settlement.status, owner: active.request.ref.protocol.owner})
+      .check("terminal_commit", "passed");
+    active.flow.close(settlement.status === "failed" ? "failed" : settlement.status === "cancelled" ? "cancelled" : "returned");
     const key = requestKey(active.pending.request);
     this.active.delete(key);
     this.revision += 1;

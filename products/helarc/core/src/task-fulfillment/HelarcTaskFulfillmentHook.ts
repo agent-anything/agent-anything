@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
+import { HELARC_STOP_EXECUTION_FLOW } from "./HelarcStopExecutionFlow.js";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
   createAgentHookComposition,
@@ -97,13 +99,27 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
   async handle(
     event: AgentStopEvent,
     interruptionContext: InvocationInterruptionContext,
+    executionFlow?: ExecutionFlowContext,
   ): Promise<AgentStopHandlerResult> {
-    if (this.instructions.length === 0 || event.candidate.kind === "stop") {
+    const flow = new ExecutionFlowPath(HELARC_STOP_EXECUTION_FLOW, executionFlow ?? {}, event.run.id, []);
+    try {
+      const result = await this.handleWithFlow(event, interruptionContext, flow);
+      flow.advance("decision", {disposition:result.disposition});
+      flow.close("returned");
+      return result;
+    } catch (error) { flow.close("failed"); throw error; }
+  }
+
+  private async handleWithFlow(event: AgentStopEvent, interruptionContext: InvocationInterruptionContext, flow: ExecutionFlowPath): Promise<AgentStopHandlerResult> {
+    flow.advance("instructions").check("effective_instructions", this.instructions.length ? "passed" : "not_applicable", {characterCount:this.instructions.length, assessmentEnabled:this.instructions.length > 0});
+    if (this.instructions.length === 0) {
       return Object.freeze({ disposition: "allow" as const });
     }
     readHelarcTaskObjective(event);
     const request = buildRequest(this.provider, event, this.instructions);
+    flow.advance("request", {providerId:this.provider.descriptor.id}, [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
     const result = await this.provider.send(request, interruptionContext);
+    flow.advance("assessment", {providerOutcome:result.kind});
     const candidate = parseProviderResult(result);
     const assessment = createAssessment(event, candidate, this.now());
     this.assessments.push(assessment);
@@ -174,7 +190,6 @@ function buildRequest(provider: Provider, event: AgentStopEvent, instructions: s
     completionBasis: Object.freeze({
       candidate: event.candidate.ref,
       plan: event.plan,
-      verification: event.verification,
       pending: event.pending,
     }),
   });

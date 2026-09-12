@@ -58,7 +58,24 @@ export class InspectionTelemetry {
       const runKey = `${record.subject.sourceId}:${record.subject.datasetId}:${record.subject.runId ?? record.subject.id}`;
       const runContext = this.runs.get(runKey);
       const context = runContext ? trace.setSpanContext(ROOT_CONTEXT, runContext) : ROOT_CONTEXT;
-      if (record.payload.kind === "interval" && record.occurredAt !== null) {
+      if (record.payload.kind === "flow_invocation" && record.occurredAt !== null) {
+        const fact = record.payload.observation;
+        const flowKey = `flow:${fact.invocationId}`;
+        if (fact.kind === "invocation_entered") {
+          if (this.open.has(flowKey) || this.open.size >= 2048) { this.dropped++; return; }
+          const caller = fact.caller ? this.open.get(`flow:${fact.caller.invocationId}`)?.span.spanContext() : undefined;
+          const parent = caller ? trace.setSpanContext(ROOT_CONTEXT, caller) : context;
+          const span = this.traces.getTracer("inspection.native", "2").startSpan(`${fact.definition.owner}.${fact.definition.id}`, {startTime: new Date(record.occurredAt), attributes: {...attributes, "inspection.flow_invocation_id": fact.invocationId, "inspection.flow_revision": fact.definition.revision}}, parent);
+          this.open.set(flowKey, {span, record});
+        } else {
+          const active = this.open.get(flowKey);
+          if (!active) { this.dropped++; return; }
+          active.span.setAttributes({...attributes, "inspection.start_record_id": active.record.id, "inspection.native_disposition": fact.disposition});
+          if (fact.disposition === "failed") active.span.setStatus({code: SpanStatusCode.ERROR});
+          active.span.end(new Date(record.occurredAt));
+          this.open.delete(flowKey);
+        }
+      } else if (record.payload.kind === "interval" && record.occurredAt !== null) {
         const intervalKey = `${key}:${record.payload.activity}`;
         if (record.payload.phase === "started") {
           if (this.open.has(intervalKey) || this.open.size >= 2048) { this.dropped++; return; }

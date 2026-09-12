@@ -35,7 +35,7 @@ describe("Helarc descendant Agent contribution", () => {
     expect(result.preparation.task.metadata.description).toBe(description);
   });
 
-  it.each(["succeeded", "stopped"] as const)("projects a %s Child result without inventing a Tool failure", (status) => {
+  it.each(["completed"] as const)("projects a %s Child result without inventing a Tool failure", (status) => {
     const agent = createHelarcDelegatedWorkerAgent({
       providerId: "test-provider",
       modelId: "test-model",
@@ -51,12 +51,10 @@ describe("Helarc descendant Agent contribution", () => {
         correlation: { child: { run: { id: "child-run-1" } } },
         terminal: {
           status,
-          code: status === "stopped" ? "stop_accepted" : "completion_accepted",
-          stopReason: status === "stopped" ? "No further work." : null,
+          code: "completion_accepted",
         },
         narrative: { text: "Child result." },
         artifacts: { refs: [] },
-        verification: { status: "satisfied" },
         effects: { status: "none" },
         uncertainty: [],
         expectationCoverage: [],
@@ -72,7 +70,6 @@ describe("Helarc descendant Agent contribution", () => {
         failure_code: null,
         agent_id: "agent-continuation-1",
         summary: "Child result.",
-        stop_reason: status === "stopped" ? "No further work." : null,
       },
     });
     expect(outcome.failure).toBeNull();
@@ -80,7 +77,7 @@ describe("Helarc descendant Agent contribution", () => {
     expect(outcome.output).not.toHaveProperty("child_run_id");
   });
 
-  it.each(["stopped", "failed", "cancelled"] as const)(
+  it.each(["failed", "cancelled"] as const)(
     "retains all text blocks of the latest report turn for a %s Child",
     (status) => {
       expect(projectNarrative(status, [
@@ -91,20 +88,20 @@ describe("Helarc descendant Agent contribution", () => {
     },
   );
 
-  it("does not substitute a stopped Child's reason for absent narrative", () => {
-    expect(projectNarrative("stopped", [["  "], []])).toBeNull();
+  it("does not substitute a failed Child's cause for absent narrative", () => {
+    expect(projectNarrative("failed", [["  "], []])).toBeNull();
   });
 
   it("marks a bounded report as truncated", () => {
-    const text = projectNarrative("stopped", [["x".repeat(16_001)]]);
+    const text = projectNarrative("failed", [["x".repeat(16_001)]]);
     expect(text).toHaveLength(16_000);
     expect(text).toMatch(/\[Child report truncated\.\]$/u);
-    expect(projectNarrative("stopped", [["x".repeat(16_000)]]))
+    expect(projectNarrative("failed", [["x".repeat(16_000)]]))
       .toBe("x".repeat(16_000));
   });
 
-  it("keeps a succeeded Child's final output as its narrative", () => {
-    expect(projectNarrative("succeeded", [["Earlier report."]], { kind: "complete", summary: "Final report." }))
+  it("keeps a completed Child's final output as its narrative", () => {
+    expect(projectNarrative("completed", [["Earlier report."]], { kind: "complete", summary: "Final report." }))
       .toBe("Final report.");
   });
 });
@@ -157,7 +154,7 @@ function prepareDelegation(input: unknown) {
 }
 
 function projectNarrative(
-  status: "succeeded" | "stopped" | "failed" | "cancelled",
+  status: "completed" | "failed" | "cancelled",
   turns: readonly (readonly string[])[],
   finalOutput: unknown = null,
 ) {
@@ -167,7 +164,6 @@ function projectNarrative(
     childResult: {
       status,
       finalOutput,
-      cause: { kind: "stop", reason: "No further work." },
       items: turns.map((texts) => ({
         payload: {
           kind: "controller_turn",

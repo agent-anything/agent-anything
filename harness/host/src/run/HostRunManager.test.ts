@@ -209,7 +209,6 @@ function createFakeHandle(runId: string) {
     pendingInteractions: [],
     activeDelegations: [],
     continuationTargets: [],
-    verification: null,
     runTree: rootTree(runId),
     result: null,
   };
@@ -297,7 +296,7 @@ function createFakeHandle(runId: string) {
       snapshot = Object.freeze({
         ...snapshot,
         sequence: snapshot.sequence + 1,
-        status: "succeeded",
+        status: "completed",
         pendingInteractions: [],
         result: value,
       });
@@ -406,7 +405,7 @@ function succeededResult() {
     finalInstructionBinding: instructionBindingRef("run-1"),
     startedAt: NOW,
     settlement: Object.freeze({
-      status: "succeeded" as const,
+      status: "completed" as const,
       completedAt: LATER,
       cause: cause.ref,
       output: Object.freeze({ summary: "done" }),

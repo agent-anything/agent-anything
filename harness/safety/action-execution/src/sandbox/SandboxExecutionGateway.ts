@@ -1,4 +1,6 @@
 import type { ActionAttemptRef } from "@agent-anything/canonical-action/subject";
+import { ExecutionFlowPath } from "@agent-anything/observability/execution-flow";
+import { SANDBOX_EXECUTION_FLOW } from "./SandboxExecutionFlow.js";
 import type {
   ActionExecutorDescriptor,
 } from "@agent-anything/canonical-action/registration";
@@ -58,7 +60,20 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
   }
 
   async execute(request: SandboxExecutionRequest): Promise<SandboxExecutionResult> {
+    const flow = new ExecutionFlowPath(SANDBOX_EXECUTION_FLOW, request.executionFlow ?? {}, request.attempt.runId,
+      [{owner:"action-execution",kind:"attempt",id:`${request.attempt.action.id}:${request.attempt.id}`,revision:null}]);
+    try {
+      const result = await this.executeWithFlow(request, flow);
+      flow.advance("result", {status:result.status, code:result.status === "sandbox_unavailable" ? result.code : null});
+      flow.close(result.status === "sandbox_unavailable" ? "failed" : "returned");
+      return result;
+    } catch (error) { flow.close("failed"); throw error; }
+  }
+
+  private async executeWithFlow(request: SandboxExecutionRequest, flow: ExecutionFlowPath): Promise<SandboxExecutionResult> {
+    const qualification = flow.advance("qualify");
     const attemptKey = actionAttemptKey(request.attempt);
+    qualification.check("unique_attempt", this.attempts.has(attemptKey) ? "not_satisfied" : "passed");
     if (this.attempts.has(attemptKey)) {
       return unavailable(
         request,
@@ -68,6 +83,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       );
     }
     const executor = this.executors.get(executorKey(request.executor));
+    qualification.check("executor", executor !== undefined && sameExecutor(executor.descriptor, request.executor) ? "passed" : "not_satisfied");
     if (executor === undefined || !sameExecutor(executor.descriptor, request.executor)) {
       return unavailable(
         request,
@@ -77,12 +93,15 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       );
     }
     const validation = validateRequest(request);
+    qualification.check("request", validation === null ? "passed" : "not_satisfied", {code:validation});
     if (validation !== null) {
       return unavailable(request, "capability_check", validation, "none");
     }
     const provider = request.policy.enforcement === "disabled"
       ? null
       : this.providers.get(request.policy.enforcement);
+    qualification.check("provider", request.policy.enforcement === "disabled" ? "not_applicable" : provider === undefined ? "not_satisfied" : "passed",
+      {enforcement:request.policy.enforcement,policyId:request.policy.policyId});
     if (request.policy.enforcement !== "disabled" && provider === undefined) {
       return unavailable(
         request,
@@ -99,10 +118,14 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
     this.attempts.set(attemptKey, active);
 
     try {
+      const enforcement = flow.advance("enforcement", {enforcement:request.policy.enforcement});
       if (request.policy.enforcement === "disabled") {
-        return await this.executeUnisolated(request, executor);
+        enforcement.check("supported_policy", "not_applicable", {isolation:"unisolated"});
+        return await this.executeUnisolated(request, executor, flow);
       }
-      if (!providerSupports(provider!, request)) {
+      const supported = providerSupports(provider!, request);
+      enforcement.check("supported_policy", supported ? "passed" : "not_satisfied");
+      if (!supported) {
         return unavailable(
           request,
           "capability_check",
@@ -112,6 +135,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       }
       let result;
       try {
+        flow.advance("dispatch", {executorId:request.executor.id, enforcement:request.policy.enforcement});
         result = await provider!.execute(request);
       } catch {
         return unavailable(
@@ -130,7 +154,9 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
         );
       }
       const invalid = validateProviderSettlement(request, result.enforcementEvidence);
-      if (invalid !== null || !validateOutcome(result.outcome, executor, request)) {
+      const valid = invalid === null && validateOutcome(result.outcome, executor, request);
+      flow.advance("validate").check("physical_outcome", valid ? "passed" : "not_satisfied", {code:invalid});
+      if (!valid) {
         return unavailable(
           request,
           "settlement",
@@ -177,7 +203,9 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
   private async executeUnisolated(
     request: SandboxExecutionRequest,
     executor: ActionExecutor,
+    flow: ExecutionFlowPath,
   ): Promise<SandboxExecutionResult> {
+    const secrets = flow.advance("secrets", {referenceCount:request.invocation.secretReferences.length});
     let resolvedSecrets: readonly ResolvedActionSecret[] = [];
     if (request.invocation.secretReferences.length > 0) {
       if (this.input.secretResolver === undefined) {
@@ -202,6 +230,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
         );
       }
       if (!sameSecretReferences(request.invocation.secretReferences, resolvedSecrets)) {
+        secrets.check("secret_references", "not_satisfied");
         return unavailable(
           request,
           "setup",
@@ -210,6 +239,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
         );
       }
     }
+    secrets.check("secret_references", request.invocation.secretReferences.length === 0 ? "not_applicable" : "passed");
 
     let outcome: PhysicalAttemptOutcome;
     try {
@@ -222,6 +252,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
         dispatchPermit: createActionExecutorDispatchPermit(),
       });
       assertActionExecutorDispatchContext(context);
+      flow.advance("dispatch", {executorId:request.executor.id,enforcement:"disabled"});
       outcome = await executor.execute(request.invocation, context);
     } catch {
       return unavailable(
@@ -231,7 +262,9 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
         "unknown",
       );
     }
-    if (!validateOutcome(outcome, executor, request)) {
+    const valid = validateOutcome(outcome, executor, request);
+    flow.advance("validate").check("physical_outcome", valid ? "passed" : "not_satisfied");
+    if (!valid) {
       return unavailable(
         request,
         "settlement",

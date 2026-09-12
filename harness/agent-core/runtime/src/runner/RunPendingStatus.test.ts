@@ -8,7 +8,7 @@ describe("pending bookkeeping", () => {
     openedInRunRevision: id, relationId: `relation-${id}`, childRunId: `child-${id}`,
   }));
 
-  it.each(["suspended", "cancelling", "stopped", "succeeded", "failed", "cancelled"] as const)(
+  it.each(["suspended", "cancelling", "completed", "failed", "cancelled"] as const)(
     "does not release %s when Child results remove pending obligations", (status) => {
       for (const count of [2, 1, 0]) {
         expect(deriveRunStatusAfterPendingChange(status, children.slice(0, count))).toBe(status);
@@ -19,5 +19,6 @@ describe("pending bookkeeping", () => {
   it("derives waiting and running only for a progressing Run", () => {
     expect(deriveRunStatusAfterPendingChange("running", children)).toBe("waiting");
     expect(deriveRunStatusAfterPendingChange("waiting", [])).toBe("running");
+    expect(deriveRunStatusAfterPendingChange("waiting", children, ["independent-controller"])).toBe("running");
   });
 });
