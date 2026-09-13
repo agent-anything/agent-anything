@@ -4,18 +4,16 @@ import { fileURLToPath } from "node:url";
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const rendererUrl = process.env.HELARC_RENDERER_DEV_SERVER_URL ?? "http://127.0.0.1:5173/";
-const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const useShell = process.platform === "win32";
+const pnpmRunner = join(appRoot, "../../../scripts/run-pnpm.mjs");
 let shuttingDown = false;
 
 const vite = spawn(
-  pnpm,
-  ["exec", "vite", "--host", "127.0.0.1", "--port", "5173", "--strictPort"],
+  process.execPath,
+  [pnpmRunner, "exec", "vite", "--host", "127.0.0.1", "--port", "5173", "--strictPort"],
   {
     cwd: appRoot,
     stdio: "inherit",
     env: process.env,
-    shell: useShell,
   },
 );
 
@@ -35,12 +33,11 @@ try {
 }
 
 const electron = spawn(
-  pnpm,
-  ["exec", "electron", "."],
+  process.execPath,
+  [pnpmRunner, "exec", "electron", "."],
   {
     cwd: appRoot,
     stdio: "inherit",
-    shell: useShell,
     env: {
       ...process.env,
       HELARC_RENDERER_DEV_SERVER_URL: rendererUrl,

@@ -209,7 +209,16 @@ commits:
 pnpm run test:conformance
 ```
 
-Build all workspace packages:
+Root commands own cross-package build orchestration. Each workspace package's
+`build` compiles only that package; it assumes dependency artifacts are already
+available. Root product build commands select the product and its complete
+workspace dependency graph so pnpm builds dependencies before their consumers.
+Typechecking against source exports does not produce the JavaScript artifacts
+required by runtime imports.
+Nested pnpm commands use `scripts/run-pnpm.mjs` to retain the active package
+manager entry instead of resolving a potentially different pnpm from `PATH`.
+
+Build all workspace packages from clean output:
 
 ```powershell
 pnpm build
@@ -222,17 +231,22 @@ Integration, and Helarc ESM entry points, including removed and private paths:
 pnpm run api:check
 ```
 
-Run the Helarc desktop app after building:
+Build Helarc Desktop and all its workspace dependencies, then start the app:
 
 ```powershell
-pnpm --filter @agent-anything/helarc-desktop build
-pnpm --filter @agent-anything/helarc-desktop start
+pnpm helarc:build
+pnpm helarc:start
 ```
 
-Run the Helarc desktop development flow:
+`helarc:start` launches the existing build without rebuilding. Direct package
+commands such as `pnpm --filter @agent-anything/helarc-desktop build` remain
+package-local and require the dependencies to have been built already.
+
+Build Helarc's workspace dependencies, compile the desktop main/preload code,
+and start the Vite/Electron development flow:
 
 ```powershell
-pnpm --filter @agent-anything/helarc-desktop dev:electron
+pnpm helarc:dev
 ```
 
 Delete all local Helarc desktop user data before starting against the current
@@ -244,10 +258,11 @@ directory:
 pnpm --filter @agent-anything/helarc-desktop clean:user-data
 ```
 
-Check Helarc desktop packaging readiness:
+Build Helarc and its workspace dependencies, then check desktop packaging
+readiness. The desktop package's `package:check` only validates existing output:
 
 ```powershell
-pnpm --filter @agent-anything/helarc-desktop run package:check
+pnpm helarc:package:check
 ```
 
 ## Provider Configuration
@@ -316,5 +331,5 @@ pnpm run typecheck
 pnpm run test
 pnpm run build
 pnpm run api:check
-pnpm --filter @agent-anything/helarc-desktop run package:check
+pnpm helarc:package:check
 ```

@@ -4,6 +4,10 @@
   "description": "A TypeScript Agent Harness for building tool-using AI agent products with structured tasks, permissions, evidence, and runtime output.",
   "scripts": {
     "runtime:check": "node scripts/check-runtime.mjs",
+    "helarc:build": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/helarc-desktop... build",
+    "helarc:start": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/helarc-desktop start",
+    "helarc:dev": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter \"@agent-anything/helarc-desktop^...\" build && node scripts/run-pnpm.mjs --filter @agent-anything/helarc-desktop dev:electron",
+    "helarc:package:check": "node scripts/run-pnpm.mjs run helarc:build && node scripts/run-pnpm.mjs --filter @agent-anything/helarc-desktop run package:check",
     "inspector:build": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/inspector... build",
     "inspector:start": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/inspector start",
     "inspector:maintenance": "node scripts/check-runtime.mjs && node tooling/inspector/dist/launcher/maintenance.js",
