@@ -8,13 +8,14 @@ import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import JsonWorker from "monaco-editor/language/json/json.worker?worker";
 import { jsonDefaults } from "monaco-editor/languages/features/json/register";
 import { formatRecordedContent, formatRecordedJson } from "./formatRecordedContent.js";
+import { locateJsonPointer } from "./ContentLocation.js";
 
 (globalThis as typeof globalThis & { MonacoEnvironment?: unknown }).MonacoEnvironment = { getWorker: (_id: string, label: string) => label === "json" ? new JsonWorker() : new EditorWorker() };
 jsonDefaults.setDiagnosticsOptions({ validate: false, enableSchemaRequest: false });
 
 type Presentation = { text: string; compare: string | undefined; language: string };
 
-export function ContentViewer({ text, compare, language = "plaintext" }: { text: string; compare?: string; language?: string }) {
+export function ContentViewer({ text, compare, language = "plaintext", jsonPointer }: { text: string; compare?: string; language?: string; jsonPointer?: string }) {
   const container = useRef<HTMLDivElement>(null);
   const defaults = useMemo<Presentation>(() => ({
     text: formatRecordedContent(text, language),
@@ -25,6 +26,7 @@ export function ContentViewer({ text, compare, language = "plaintext" }: { text:
   // A presentation choice belongs to this content, not the next opened record.
   const current = choice?.source === defaults ? choice : null;
   const displayed = current?.value ?? defaults;
+  const location = useMemo(() => jsonPointer === undefined ? null : locateJsonPointer(displayed.text, jsonPointer), [displayed.text, jsonPointer]);
 
   function formatJson() {
     const formatted = formatRecordedJson(text);
@@ -58,14 +60,20 @@ export function ContentViewer({ text, compare, language = "plaintext" }: { text:
       return () => { editor.dispose(); original.dispose(); model.dispose(); };
     }
     const editor = monaco.editor.create(container.current, { ...options, model });
+    if (location) {
+      const start = model.getPositionAt(location.offset); const end = model.getPositionAt(location.offset + location.length);
+      const range = new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column);
+      editor.setSelection(range); editor.revealRangeInCenter(range);
+    }
     return () => { editor.dispose(); model.dispose(); };
-  }, [displayed.text, displayed.compare, displayed.language]);
+  }, [displayed.text, displayed.compare, displayed.language, location]);
   return <div className="content-viewer">
     <div className="content-presentation-toolbar" role="toolbar" aria-label="Content presentation">
       <Tooltip title="Format JSON"><Button size="small" aria-label="Format JSON" icon={<CodeOutlined />} onClick={formatJson} /></Tooltip>
       <Tooltip title="Show original recorded text"><Button size="small" aria-label="Original" icon={<UndoOutlined />} onClick={showOriginal} /></Tooltip>
     </div>
     {current?.error && <Alert type="warning" showIcon title={current.error} />}
+    {jsonPointer !== undefined && !location && <Alert type="warning" title="Recorded JSON location is not available in the loaded content." />}
     <div className="content-editor" ref={container} aria-label={compare === undefined ? "Recorded content" : "Content comparison"} />
   </div>;
 }

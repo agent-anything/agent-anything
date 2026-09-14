@@ -186,6 +186,42 @@ describe("Helarc Host Run composition", () => {
       expect(execution.records.flatMap(record=>record.payload.kind === "flow_invocation" ? [record.payload.observation.definition.id] : [])).toEqual(expect.arrayContaining([
         "run-execution", "model-call-execution", "model-turn", "model-context-admission", "result-delivery",
       ]));
+      const core = execution.records.find(record => record.payload.kind === "flow_invocation" && record.payload.observation.definition.id === "run-execution")!;
+      const coreScope = {...scope, runId: recorded.result.runResult.runId, invocationId: core.subject.id};
+      const occurrences = (await queries.query({...coreScope, kind: "list_flow_occurrences", limit: 500})).records;
+      for (const record of occurrences) {
+        const detail = await queries.query({...coreScope, kind: "get_flow_occurrence", occurrenceId: record.subject.id});
+        expect(detail.flow?.occurrence?.status).toBe("closed");
+        expect(detail.flow?.occurrence?.checks.every(check => check.availability === "recorded")).toBe(true);
+        expect(detail.flow?.occurrence?.references.every(reference => reference.availability === "present" || reference.availability === "observed_later")).toBe(true);
+        if (record.payload.kind === "flow_step" && ["initialize", "controller", "decision", "admission", "dispatch", "join"].includes(record.payload.observation.stepId)) {
+          expect(detail.flow?.occurrence?.references.some(reference => reference.role === "input")).toBe(true);
+        }
+        if (record.payload.kind === "flow_step" && record.payload.observation.stepId === "controller") {
+          expect(detail.flow?.occurrence?.references.find(reference => reference.role === "output")?.contents[0]?.availability).toBe("present");
+        }
+      }
+      const supportingFlows = new Set(["agent-stop-dispatch", "model-turn", "model-input-composition", "model-context-admission", "model-response-interpretation", "retry-execution", "result-delivery"]);
+      for (const invocation of execution.records.filter(record => record.payload.kind === "flow_invocation" && supportingFlows.has(record.payload.observation.definition.id))) {
+        const invocationScope = {...scope, runId: recorded.result.runResult.runId, invocationId: invocation.subject.id};
+        const steps = (await queries.query({...invocationScope, kind: "list_flow_occurrences", limit: 500})).records;
+        let inputs = 0; let outputs = 0;
+        for (const step of steps) {
+          const detail = await queries.query({...invocationScope, kind: "get_flow_occurrence", occurrenceId: step.subject.id});
+          const occurrence = detail.flow!.occurrence!;
+          expect(occurrence.status).toBe("closed");
+          expect(occurrence.checks.every(check => check.availability === "recorded"), JSON.stringify(occurrence.checks)).toBe(true);
+          expect(occurrence.references.every(ref => ["present", "observed_later"].includes(ref.availability)), JSON.stringify(occurrence.references)).toBe(true);
+          inputs += occurrence.references.filter(ref => ref.role === "input").length;
+          outputs += occurrence.references.filter(ref => ref.role === "output" && ref.contents.some(content => content.availability === "present")).length;
+        }
+        expect(inputs, invocation.subject.id).toBeGreaterThan(0);
+        expect(outputs, invocation.subject.id).toBeGreaterThan(0);
+      }
+      const material = (await queries.query({...scope, kind: "list_records", recordKind: "event", limit: 500})).records;
+      for (const name of ["Run input", "Run configuration", "controller.decision", "operation.request", "operation.binding", "operation.result"]) {
+        expect(material.find(record => record.payload.kind === "event" && record.payload.name === name)?.contents[0]?.availability, name).toBe("present");
+      }
       const nativeRefs = execution.records.flatMap((record) => record.links.flatMap((link) => [link.from, link.to]))
         .filter((ref) => ref.kind === "request" || ref.kind === "operation");
       expect(nativeRefs.map((ref) => ref.kind)).toEqual(expect.arrayContaining(["request", "operation"]));
@@ -204,7 +240,7 @@ describe("Helarc Host Run composition", () => {
       if (!relative(tmpdir(), directory).startsWith("helarc-inspection-run-")) throw new Error("Invalid test cleanup target");
       await rm(directory, { recursive: true });
     }
-  }, 20_000);
+  }, 60_000);
   it("binds instruction settings before asynchronous preparation and allows a Run with no system instructions", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-instructions-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);

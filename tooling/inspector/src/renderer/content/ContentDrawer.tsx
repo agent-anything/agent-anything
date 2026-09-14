@@ -3,10 +3,11 @@ import { Alert, Button, Drawer, Empty, Spin, Tag, Tooltip } from "antd";
 import { CopyOutlined, DownloadOutlined, SwapOutlined } from "@ant-design/icons";
 import type { InspectionReadResult, InspectionSelection } from "@agent-anything/inspection/query";
 import { inspectionQuery } from "../query-client/InspectorClient.js";
+import type { ContentTarget } from "./ContentLocation.js";
 const ContentViewer = lazy(async () => ({ default: (await import("./ContentViewer.js")).ContentViewer }));
 type Content = NonNullable<InspectionReadResult["content"]>;
 
-export function ContentDrawer({ id, scope, onClose }: { id: string | null; scope: InspectionSelection | null; onClose: () => void }) {
+export function ContentDrawer({ id, scope, onClose, location }: { id: string | null; scope: InspectionSelection | null; onClose: () => void; location?: ContentTarget | null }) {
   const [content, setContent] = useState<Content | null>(null);
   const [baseline, setBaseline] = useState<{ id: string; scope: InspectionSelection; name: string } | null>(null);
   const [compare, setCompare] = useState<string | undefined>();
@@ -59,13 +60,14 @@ export function ContentDrawer({ id, scope, onClose }: { id: string | null; scope
   }
   return <Drawer title={content?.descriptor.name ?? "Recorded content"} open={id !== null} onClose={onClose} size="large" destroyOnHidden>
     {error && <Alert type="error" title={error} />}
+    {location && <div className="coverage-note break-id">{location.stage}{location.jsonPointer !== undefined && <> / JSON pointer: <code>{location.jsonPointer || "/ (root)"}</code></>}{location.recordId && <> / Record: {location.recordId}</>}</div>}
     {content ? <><div className="content-metadata"><Tag>{content.descriptor.availability}</Tag><Tag>{content.descriptor.class}</Tag><span>{content.descriptor.retainedBytes} bytes</span>
       {content.descriptor.redacted && <Tag color="warning">Redacted fields</Tag>}{content.descriptor.truncated && <Tag color="warning">Truncated</Tag>}
       <Tooltip title="Copy loaded range"><Button aria-label="Copy loaded range" icon={<CopyOutlined />} disabled={busy || content.descriptor.availability !== "present"} onClick={() => { void operate("copy"); }} /></Tooltip>
       <Tooltip title="Download retained content"><Button aria-label="Download retained content" icon={<DownloadOutlined />} disabled={busy || content.descriptor.availability !== "present"} onClick={() => { void operate("download"); }} /></Tooltip>
       <Tooltip title="Set content comparison baseline"><Button aria-label="Set content comparison baseline" icon={<SwapOutlined />} disabled={!scope || content.descriptor.availability !== "present"} onClick={() => { if (scope) setBaseline({ id: content.descriptor.id, scope, name: content.descriptor.name }); }} /></Tooltip>
     </div>{baseline && <div className="coverage-note">Baseline: {baseline.name} @ {baseline.scope.watermark}{compare !== undefined ? " / first recorded range" : ""}</div>}
-    {content.descriptor.availability === "present" ? <><Suspense fallback={<Spin />}><ContentViewer text={content.text} compare={compare} language={content.descriptor.mediaType === "application/json" ? "json" : "plaintext"} /></Suspense>
+    {content.descriptor.availability === "present" ? <><Suspense fallback={<Spin />}><ContentViewer text={content.text} compare={compare} jsonPointer={location?.jsonPointer} language={content.descriptor.mediaType === "application/json" ? "json" : "plaintext"} /></Suspense>
       {content.nextOffset !== null && <div className="view-toolbar"><span>Loaded {content.nextOffset} / {content.descriptor.retainedBytes} bytes</span><Button loading={busy} onClick={() => { void operate("more"); }}>Load next recorded range</Button></div>}</>
       : <Empty description={content.descriptor.availability === "not_captured" ? "Content was not captured for this record" : content.descriptor.unavailableReason ?? "Recorded content unavailable"} />}</> : loaded || error ? <Empty description="Recorded content unavailable" /> : <Spin />}
   </Drawer>;

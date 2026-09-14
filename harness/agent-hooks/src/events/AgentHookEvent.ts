@@ -76,7 +76,7 @@ export function createAgentStopEvent<TOutput>(input: {
 }): AgentStopEvent<TOutput> {
   const run = Object.freeze({ id: token(input.controllerInput.runId, "AgentStopEvent.runId") });
   const requestId = token(
-    input.controllerInput.contextManifest.requestId,
+    input.controllerInput.toolExposure.controllerRequestId,
     "AgentStopEvent.controllerRequestId",
   );
   const candidateKind = "complete";
@@ -110,7 +110,7 @@ export function createAgentStopFailureEvent<TOutput>(input: {
 }): AgentStopFailureEvent {
   const run = Object.freeze({ id: token(input.controllerInput.runId, "AgentStopFailureEvent.runId") });
   const requestId = token(
-    input.controllerInput.contextManifest.requestId,
+    input.controllerInput.toolExposure.controllerRequestId,
     "AgentStopFailureEvent.controllerRequestId",
   );
   const eventId = `${requestId}:agent-stop-failure:${input.sequence}`;

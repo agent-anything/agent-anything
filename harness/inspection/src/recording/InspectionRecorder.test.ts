@@ -9,7 +9,7 @@ import { snapshotInspectionJson } from "../records/InspectionValidation.js";
 import { retireInspectionDatasets } from "../../dist/storage/index.js";
 import { datasetDirectory } from "../sources/index.js";
 import { acquireInspectionReadLease } from "../storage/InspectionDatasetAccess.js";
-import { RunExecutionInspectionAdapter, RunTranscriptInspectionAdapter } from "../../dist/adapters/index.js";
+import { RunExecutionInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectionAdapter } from "../../dist/adapters/index.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -23,6 +23,54 @@ async function setup(rich = false) {
   return { directory, recorder, query, subject, selection: { sourceId: subject.sourceId, datasetId: subject.datasetId } };
 }
 describe("Inspection recording", () => {
+  it.each([0, 1])("records Model Turn provenance with %i calls and keeps logical Retry Attempts distinct from HTTP Attempts", async (callCount) => {
+    const {recorder, query, selection} = await setup(true);
+    const execution = new RunExecutionInspectionAdapter(recorder);
+    const provider = new ProviderInspectionAdapter(recorder);
+    const now = "2026-09-14T00:00:00Z";
+    const call = {id: "call-id", turnId: "model-turn", providerRequestId: "provider-request", controllerRequestId: "controller-request", contentBlockOrdinal: 0};
+    execution.observe({kind: "tool_exposure", runId: "run-1", occurredAt: now, turnId: "controller-turn", selected: [], exposure: {exposedTools: [], omissions: []}, proof: {controllerRequestId: call.controllerRequestId}} as never);
+    const exchange = {attemptId: "http-attempt", requestId: call.providerRequestId, runId: "run-1", controllerRequestId: call.controllerRequestId, providerId: "test", model: "test", occurredAt: now, endpoint: "http://localhost/api/chat", httpStatus: 200, encodedBytes: 100, code: null, status: "succeeded", result: null, body: null, contentUnavailable: false};
+    const section = {id: "task-section", role: "user", source: {owner: "agent-core", id: "task", revision: "1"}, content: {kind: "text", text: "Inspect the workspace."}};
+    provider.observe({...exchange, stage: "request", request: {requestId: call.providerRequestId, purpose: "controller", instructions: {content: []}, messages: [{role: "user", content: [{kind: "text", text: section.content.text}]}], composition: {id: "composition", sections: [section], lineage: {}}, interaction: {kind: "native_tool_turn", callables: []}}} as never);
+    provider.observe({...exchange, stage: "settled", result: {kind: "succeeded", response: {kind: "native_tool_turn", turn: {turnId: "model-turn", usage: null, finish: {kind: "normal"}, assistant: {content: callCount ? [{kind: "model_tool_call", call: {modelCallRef: call}}] : [{kind: "text", text: "Done"}]}}}}} as never);
+    if (callCount) execution.observe({kind: "scheduling", runId: "run-1", occurredAt: now, call, position: 0, disposition: "queued", rule: "decision_source_order", groupId: null, reason: null} as never);
+    execution.observe({kind: "retry_event", runId: "run-1", occurredAt: now, event: {type: "retry_attempt_started", runId: "run-1", owner: "provider_request", operationId: "retry-operation", attemptId: "logical-attempt", occurredAt: now}} as never);
+    await recorder.flush();
+    const scope = (await query.query({kind: "get_snapshot", ...selection})).selection!;
+    const records = (await query.query({...scope, kind: "list_records", limit: 100})).records;
+    const modelTurn = records.filter(record => record.subject.id === "model-turn");
+    expect(modelTurn.flatMap(record => record.links)).toEqual(expect.arrayContaining([
+      expect.objectContaining({kind: "materializes", from: expect.objectContaining({id: "controller-request"}), to: expect.objectContaining({id: "model-turn"})}),
+      expect.objectContaining({kind: "produces", from: expect.objectContaining({id: "provider-request"}), to: expect.objectContaining({id: "model-turn"})}),
+    ]));
+    expect(records.filter(record => record.subject.kind === "provider-attempt").map(record => record.subject.id)).toEqual(["http-attempt", "http-attempt"]);
+    expect(records.find(record => record.subject.id === "logical-attempt")?.subject).toMatchObject({owner: "retry", kind: "attempt"});
+    expect(records.find(record => record.subject.id === "retry-operation")?.subject).toMatchObject({owner: "retry", kind: "operation"});
+    expect(records.find(record => record.subject.id === "controller-request")).toBeDefined();
+    expect(recorder.health().rejected).toBe(0);
+  });
+  it("keeps revision-bound Run state, plan and feedback source identities and bodies separate", async () => {
+    const {recorder, query, selection} = await setup(true);
+    const adapter = new RunExecutionInspectionAdapter(recorder);
+    const now = "2026-09-14T00:00:00Z";
+    for (const revision of ["1", "2"]) {
+      const sources = ["run_state", "run_plan", "controller_feedback"].map(kind => ({owner: kind === "controller_feedback" ? "agent-hooks" : "agent-runtime", kind, id: "same-id", revision, observedAt: now}));
+      for (const source of sources) adapter.observe({kind: "context_source", runId: "run-1", occurredAt: now, source, value: {kind: source.kind, revision}});
+      adapter.observe({kind: "context_committed", runId: "run-1", occurredAt: now, context: {ref: {id: "context", version: Number(revision)}, items: sources.map(source => ({lifecycle: {kind: "active"}, contribution: {ref: {id: source.kind, revision}, source}}))}} as never);
+    }
+    await recorder.flush();
+    const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
+    const records = (await query.query({...scope, kind: "list_records", limit: 100})).records;
+    const sourceRecords = records.filter(record => record.payload.kind === "event" && record.payload.name.startsWith("context.source."));
+    expect(sourceRecords).toHaveLength(6);
+    expect(new Set(sourceRecords.map(record => JSON.stringify(record.subject))).size).toBe(6);
+    for (const record of sourceRecords) {
+      expect(record.contents[0]?.availability).toBe("present");
+      expect(records.flatMap(item => item.links).some(link => link.kind === "produces" && JSON.stringify(link.from) === JSON.stringify(record.subject))).toBe(true);
+    }
+    expect(recorder.health().rejected).toBe(0);
+  });
   it("shares source identity across producers and defers retirement while a reader holds a lease", async () => {
     const { directory, recorder, selection } = await setup();
     const other = await InspectionRecorder.create({ root: directory, application: "test", name: "Test" });
@@ -69,7 +117,7 @@ describe("Inspection recording", () => {
     await expect(cancelled).rejects.toThrow("inspection_query_cancelled");
     const snapshot = (await second).selection!;
     const first = await query.query({ kind: "get_telemetry", ...snapshot, limit: 2 });
-    const next = await query.query({ kind: "get_telemetry", ...snapshot, limit: 2, after: Number(first.next) });
+    const next = await query.query({ kind: "get_telemetry", ...snapshot, limit: 2, after: String(first.next) });
     expect(first.telemetry).toHaveLength(2); expect(next.telemetry).toHaveLength(2);
     expect(next.telemetry[0]).not.toEqual(first.telemetry[0]);
     expect((await query.query({ kind: "list_records", ...snapshot })).records).toHaveLength(6);
@@ -87,7 +135,7 @@ describe("Inspection recording", () => {
     const latest = (await query.query({ kind: "get_snapshot", ...selection })).selection!;
     expect((await query.query({ kind: "get_snapshot", ...first })).selection).toEqual(first);
     expect((await query.query({ kind: "get_scheduling", ...latest, subject })).records.map((record) => record.id)).toEqual(["queued"]);
-    expect((await query.query({ kind: "get_timeline", ...latest })).limitations).toContain("interval_start_not_in_snapshot_page");
+    expect((await query.query({ kind: "get_timeline", ...latest })).limitations).toContain("interval_start_not_observed");
     expect((await query.query({ kind: "get_record", ...first, recordId: "queued" })).records).toEqual([]);
   });
   it("uses actual Run span contexts for descendants and retains state across later events", async () => {
@@ -111,14 +159,16 @@ describe("Inspection recording", () => {
     expect(descendant.value.context.traceId).not.toBe(parent.value.context.traceId);
   });
 
-  it("joins raw Child result, delivered observation, Context admission and projection without inventing dependencies", async () => {
+  it.each(["descendant_run", "descendant_result_transfer"])("joins raw Child result through %s, Context admission and projection without inventing dependencies", async (kind) => {
     const { recorder, query, selection } = await setup(true);
     const execution = new RunExecutionInspectionAdapter(recorder);
     const transcript = new RunTranscriptInspectionAdapter(recorder);
     const now = "2026-09-09T00:00:00Z";
-    const projected = { ref: { id: "delegation-result", revision: "1" }, output: { answer: "child result" } };
+    const projected = { ref: { id: "delegation-result", revision: "1" }, correlation: {relation: {ref: {id: "relation"}}}, output: { answer: "child result" } };
     execution.observe({ kind: "descendant_result", runId: "run-1", occurredAt: now, parentRunActionId: "action", raw: { runId: "child", output: "raw" }, projected } as never);
-    const observation = { id: "observation", owner: "agent-runtime", runId: "run-1", runAction: { id: "action" }, createdAt: now, payload: { kind: "descendant_result_transfer", result: projected, output: "delivered" } };
+    const observation = { id: "observation", owner: "agent-runtime", runId: "run-1", runAction: { id: "action" }, createdAt: now,
+      lowerRefs: [{owner: "agent-runtime", kind: "delegation_result", id: projected.ref.id, revision: projected.ref.revision}],
+      payload: { kind, ...(kind === "descendant_result_transfer" ? {result: projected} : {childRunId: "child"}), output: "delivered" } };
     transcript.observe({ runId: "run-1", sequence: 1, item: { ref: { id: "item", sequence: 1 }, createdAt: now, payload: { kind: "observation", observation } } } as never);
     const context = { ref: { id: "context", runId: "run-1", version: 1 }, createdAt: now, items: [{ ref: { id: "context-item" }, lifecycle: { kind: "active" }, contribution: { ref: { id: "contribution", revision: "1" }, source: { owner: "agent-runtime", kind: "run_observation", id: "observation", revision: "1" }, payload: { kind: "text", text: "delivered" } } }] };
     execution.observe({ kind: "context_committed", runId: "run-1", occurredAt: now, context } as never);
@@ -131,6 +181,11 @@ describe("Inspection recording", () => {
     const flow = (await query.query({ kind: "get_data_flow", ...snapshot })).graph!;
     expect(flow.links.map((link) => link.kind)).toEqual(expect.arrayContaining(["transforms", "delivers", "produces", "includes"]));
     expect(flow.links.some((link) => link.targetLocation?.jsonPointer === "/blocks/0")).toBe(true);
+    const delivered = flow.links.find(link => link.kind === "delivers")!;
+    expect(delivered.from).toMatchObject({owner: "agent-runtime", id: "delegation-result", revision: "1"});
+    const manifest = await query.query({kind: "get_subject", ...snapshot, subject: recorder.ref("context", "context", "manifest", "run-1")});
+    const manifestLocation = manifest.records[0]!.links.find(link => link.sourceLocation)?.sourceLocation!;
+    expect((await query.query({kind: "get_content", ...snapshot, contentId: manifestLocation.contentId!})).content?.text).toContain('"projectionId":"projection"');
     expect((await query.query({ kind: "get_dependencies", ...snapshot })).graph?.links).toHaveLength(0);
     expect(recorder.health().rejected).toBe(0);
   });

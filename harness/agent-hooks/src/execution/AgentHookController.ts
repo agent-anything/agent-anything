@@ -48,7 +48,7 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
     const flow = new ExecutionFlowPath(AGENT_HOOK_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId, []);
     try {
       const decision = await this.nextWithFlow(input, context, flow);
-      flow.advance("result", {decision:decision.kind});
+      flow.advance("result", {decision:decision.kind}).output(flow.material("Hook-adjusted Controller decision", "returned", decision));
       flow.close("returned");
       return decision;
     } catch (error) { flow.close(context.cancellation.signal.aborted ? "cancelled" : "failed"); throw error; }
@@ -60,7 +60,7 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
     flow: ExecutionFlowPath,
   ): Promise<ControllerDecision<TOutput>> {
     let decision: ControllerDecision<TOutput>;
-    flow.advance("controller");
+    const controllerStep = flow.advance("controller", {}, [{owner: "runtime", kind: "request", id: input.toolExposure.controllerRequestId, revision: null}]);
     try {
       decision = await this.input.controller.next(input, {...context, executionFlow:flow.callContext});
     } catch (error) {
@@ -73,6 +73,7 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
           error,
           emittedAt: this.now(),
         });
+        flow.current?.output(flow.material("Agent StopFailure event", "emitted", event));
         await dispatchAgentStopFailureHooks({
           executionFlow: flow.callContext,
           composition: this.input.composition,
@@ -86,14 +87,19 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
       throw error;
     }
 
-    const candidateStep = flow.advance("candidate", {decision:decision.kind});
+    const decisionRef = flow.material("Controller candidate", "received", decision);
+    controllerStep.output(decisionRef);
+    const candidateStep = flow.advance("candidate", {decision:decision.kind}, [decisionRef]);
     candidateStep.check("normal_completion", decision.kind === "propose_completion" ? "passed" : "not_applicable");
     if (decision.kind !== "propose_completion") {
+      candidateStep.check("registered_handlers", "not_applicable", {reason: "not_a_completion_candidate"});
+      candidateStep.check("continuation_allowance", "not_applicable", {reason: "not_a_completion_candidate"});
       this.continuationCounts.delete(input.runId);
       return decision;
     }
     candidateStep.check("registered_handlers", this.input.composition?.registrations.length ? "passed" : "not_applicable", {registeredCount:this.input.composition?.registrations.length ?? 0});
     if (this.input.composition === undefined || this.input.composition.registrations.length === 0) {
+      candidateStep.check("continuation_allowance", "not_applicable", {reason: "no_registered_handlers"});
       this.continuationCounts.delete(input.runId);
       return decision;
     }
@@ -113,7 +119,9 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
       decision,
       emittedAt: this.now(),
     });
-    flow.advance("handlers", {eventId:event.ref.id});
+    const eventRef = flow.material("Agent Stop event", "emitted", event);
+    candidateStep.output(eventRef);
+    const handlersStep = flow.advance("handlers", {eventId:event.ref.id}, [eventRef]);
     const result = await dispatchAgentStopHooks({
       executionFlow: flow.callContext,
       composition: this.input.composition,
@@ -123,6 +131,7 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
       store: this.store,
       now: this.now,
     });
+    handlersStep.output(flow.material("Stop dispatch result", "settled", result));
     if (result.disposition === "allow") {
       this.continuationCounts.delete(input.runId);
       return decision;

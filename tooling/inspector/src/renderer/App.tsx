@@ -1,13 +1,20 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { Alert, Button, Empty, Input, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from "antd";
+import { Alert, Button, Checkbox, Dropdown, Empty, Input, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, ReloadOutlined, SearchOutlined, SwapOutlined, CloseOutlined } from "@ant-design/icons";
 import { inspectionSubjectKey, type InspectionRecord, type InspectionLink } from "@agent-anything/inspection/records";
 import type { InspectionSelection } from "@agent-anything/inspection/query";
-import { areas, views, useInspectionSnapshot } from "./query-client/useInspectionSnapshot.js";
+import { areas, areaViews, useInspectionSnapshot } from "./query-client/useInspectionSnapshot.js";
 import { RecordDetails, payloadSummary } from "./records/RecordDetails.js";
 import { ContentDrawer } from "./content/ContentDrawer.js";
+import type { ContentTarget } from "./content/ContentLocation.js";
+import { RecordedFactDrawer } from "./records/RecordedFactDrawer.js";
+import { RunTree } from "./runs/RunTree.js";
+import { RunOverview } from "./runs/RunOverview.js";
+import { ObjectSummaries } from "./records/ObjectSummaries.js";
+import { readContentTarget } from "./navigation/InspectionLocation.js";
 
 const RelationGraph = lazy(async () => ({ default: (await import("./graph/RelationGraph.js")).RelationGraph }));
+const DataFlowView = lazy(async () => ({ default: (await import("./data-flow/DataFlowView.js")).DataFlowView }));
 const ExecutionTimeline = lazy(async () => ({ default: (await import("./timeline/ExecutionTimeline.js")).ExecutionTimeline }));
 const ContentViewer = lazy(async () => ({ default: (await import("./content/ContentViewer.js")).ContentViewer }));
 const LifecycleView = lazy(async () => ({ default: (await import("./runs/LifecycleView.js")).LifecycleView }));
@@ -16,13 +23,19 @@ const label = (record: InspectionRecord) => record.payload.kind === "definition"
 
 export function App() {
   const state = useInspectionSnapshot();
-  const { params, setParams, sourceId, datasetId, area, view, selected, sources, datasets, datasetNext, loadDatasets, paging, bundle, loading, error, setError, navigate, choose, showRecord, findRecord, loadMore, refresh } = state;
+  const { params, setParams, sourceId, datasetId, area, view, runId, includeDescendants, selected, sources, datasets, datasetNext, loadDatasets, paging, bundle, loading, error, setError, navigate, choose, selectRun, showRecord, loadMore, refresh } = state;
   const [search, setSearch] = useState("");
   const [selectedLink, setSelectedLink] = useState<InspectionLink | null>(null);
-  const [contentId, setContentId] = useState<string | null>(null);
+  const content = readContentTarget(params.get("content"));
+  const setContent = (value:ContentTarget|null) => navigate({content:value ? JSON.stringify(value):null});
+  const factId = params.get("fact");
+  const setFactId = (id:string|null) => navigate({fact:id});
+  const setContentId = (id: string | null) => setContent(id ? {id} : null);
+  const openHistory = (subject: NonNullable<typeof selected>) => {navigate({view:"Records",subject:JSON.stringify(subject),record:null,fact:null,content:null});};
   const [comparison, setComparison] = useState<{ record: InspectionRecord; selection: InspectionSelection } | null>(null);
   const selectionKey = selected ? inspectionSubjectKey(selected) : "";
-  useEffect(() => { setSelectedLink(null); setContentId(null); }, [bundle]);
+  useEffect(() => { setSelectedLink(null); }, [sourceId, datasetId, bundle?.snapshot.selection?.watermark]);
+  useEffect(() => setSelectedLink(null), [view, area, selectionKey]);
   const inventory = bundle?.inventory.records.filter((record) => `${label(record)} ${record.subject.owner} ${record.subject.kind}`.toLowerCase().includes(search.toLowerCase())) ?? [];
   const records = bundle?.view.records ?? [];
   const detail = bundle?.selected ?? null;
@@ -30,6 +43,10 @@ export function App() {
   const coverage = bundle?.snapshot.coverage;
   const selectionRef = loading && detail ? detail.subject : selected;
   const selectionRecord = detail && selectionRef && inspectionSubjectKey(detail.subject) === inspectionSubjectKey(selectionRef) ? detail : null;
+  const hasTree = area !== "Definitions";
+  const sideDetail = view !== "Data Flow" && (area === "Definitions" || area === "Comparison" || view === "Records" || !!selectedLink);
+  const availableViews = areaViews[area]!;
+  const mainViews = area === "Runs" ? availableViews.slice(0,5) : availableViews;
   const visibleSelection = !selected || inventory.some((record) => inspectionSubjectKey(record.subject) === selectionKey);
   const recordColumns = [
     { title: "Seq", dataIndex: "commitSequence", width: 65 },
@@ -54,7 +71,7 @@ export function App() {
     </> : <span>No recording selected</span>}</div>
     {error && <Alert className="query-alert" type="error" closable onClose={() => setError(null)} title={error} />}
     <nav className="area-tabs"><Tabs activeKey={area} onChange={(value) => navigate({ area: value })} items={areas.map((key) => ({ key, label: key }))} /></nav>
-    {!datasetId ? <main className="empty-workspace"><Empty description={sources.length ? "Select a source and recording" : "No recorded sources"} /></main> : <main className={`workspace${view === "Execution Flow" ? " workspace-flow" : ""}`}>
+    {!datasetId ? <main className="empty-workspace"><Empty description={sources.length ? "Select a source and recording" : "No recorded sources"} /></main> : <main className={`workspace${!sideDetail ? " workspace-flow" : ""}`}>
       <aside className="object-pane">
         <Input aria-label="Search objects" prefix={<SearchOutlined />} placeholder="Search loaded objects" value={search} onChange={(event) => setSearch(event.target.value)} />
         {selected && selectionRef && <div className="object-selection" role="group" aria-label="Selected object">
@@ -65,37 +82,42 @@ export function App() {
           </div>
           <span className="object-selection-kind">{selectionRef.kind}</span>
         </div>}
-        <div className="object-list">{inventory.map((record) => <button key={record.id} className={`object-row ${inspectionSubjectKey(record.subject) === selectionKey ? "selected" : ""}`} onClick={() => choose(record.subject)}>
+        <div className="object-list">{hasTree ? <RunTree records={bundle?.inventory.records ?? []} selected={runId} search={search} onSelect={selectRun} /> : <>{inventory.map((record) => <button key={record.id} className={`object-row ${inspectionSubjectKey(record.subject) === selectionKey ? "selected" : ""}`} onClick={() => choose(record.subject)}>
           <span className="object-kind">{record.subject.kind}</span><strong title={label(record)}>{label(record)}</strong><small>{record.subject.owner}{record.payload.kind === "snapshot" ? ` / ${record.payload.status}` : ""}</small>
-        </button>)}{inventory.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No objects in this scope" />}</div>
+        </button>)}{inventory.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No objects in this scope" />}</>}</div>
         {bundle?.inventory.next !== null && bundle && <Button size="small" disabled={loading || paging} onClick={() => { void loadMore("inventory"); }}>Load more objects</Button>}
       </aside>
       <section className="investigation" data-view={bundle?.view.kind} data-watermark={bundle?.snapshot.selection?.watermark}>
-        {!visibleSelection && !loading && <div className="coverage-note">Selected object is outside the loaded catalog or current filter.</div>}
+        {!visibleSelection && !hasTree && !loading && <div className="coverage-note">Selected object is outside the loaded catalog or current filter.</div>}
         <Suspense fallback={<div className="view-loading"><Spin /></div>}>
           {area === "Comparison" ? <div className="comparison-view"><div className="view-toolbar">
             <Button icon={<SwapOutlined />} disabled={!detail || loading} onClick={() => { if (detail && bundle?.snapshot.selection) setComparison({ record: detail, selection: bundle.snapshot.selection }); }}>Pin selection</Button>
             <span>{comparison ? `Baseline: ${comparison.record.subject.id} @ ${comparison.selection.watermark}` : "No baseline selected"}</span>
           </div>{detail && comparison ? <ContentViewer text={JSON.stringify(detail, null, 2)} compare={JSON.stringify(comparison.record, null, 2)} language="json" /> : <Empty description="Pin a baseline, then select another object" />}</div> : <>
-            <Tabs className="view-tabs" activeKey={view} onChange={(value) => navigate({ view: value })} items={Object.keys(views).map((key) => ({ key, label: key }))} />
-            <div className="view-content">{view === "Execution Flow" ? bundle?.snapshot.selection && selected?.runId ? <ExecutionFlowView key={`${sourceId}:${datasetId}:${selected.runId}`} scope={bundle.snapshot.selection} runId={selected.runId} paused={loading} params={params} navigate={navigate} onContent={setContentId} onSubject={(subject) => navigate({view: "Records", subject: JSON.stringify(subject), record: null})} /> : <Empty description="Select a Run to inspect its execution flow" />
+            <div className="investigation-scope">{hasTree && <><span title={runId}>{runId ? `Run ${runId.slice(0,16)}` : "All Runs"}</span>{runId && <Checkbox checked={includeDescendants} onChange={event=>navigate({descendants:event.target.checked?"true":null})}>Include descendants</Checkbox>}</>}</div>
+            <Tabs className="view-tabs" activeKey={view} onChange={(value) => navigate({ view: value })} items={[...mainViews,...(mainViews.includes(view)?[]:[view])].map((key) => ({ key, label: key }))} tabBarExtraContent={area === "Runs" ? <Dropdown menu={{items:availableViews.slice(5).map(key=>({key,label:key})),onClick:({key})=>navigate({view:key})}}><Button type="text">More views</Button></Dropdown>:undefined} />
+            <div className="view-content">{view === "Overview" ? <RunOverview summary={bundle?.inventory.summaries?.find(item=>item.subject.id===runId)} onRecord={setFactId} onContent={setContentId} onView={value=>navigate({view:value,subject:JSON.stringify(bundle?.inventory.records.find(record=>record.subject.id===runId)?.subject ?? selected)})}/>
+              : view === "Requests" || view === "Calls" || view === "Scheduling" ? <ObjectSummaries kind={view} summaries={bundle?.view.summaries ?? []} onRecord={setFactId} onContent={setContentId} onHistory={openHistory}/>
+              : view === "Execution Flow" ? bundle?.snapshot.selection && runId ? <ExecutionFlowView key={`${sourceId}:${datasetId}:${runId}`} scope={bundle.snapshot.selection} runId={runId} paused={loading} params={params} navigate={navigate} onContent={setContentId} onRecord={setFactId} onSubject={openHistory} /> : <Empty description="Select a Run to inspect its execution flow" />
+              : view === "Data Flow" && graph ? <DataFlowView key={`${sourceId}:${datasetId}:${bundle?.snapshot.selection?.watermark}:${selectionKey}:${runId}:${includeDescendants}`} graph={graph} selected={selected?.kind === "run" && params.get("dataFocus") !== "true" ? null : selected} runId={runId} onFocus={subject=>navigate({subject:JSON.stringify(subject),record:null,dataFocus:"true"})} onReset={()=>navigate({subject:null,record:null,dataFocus:null})} onRecord={setFactId} onContent={setContent} />
               : graph ? graph.nodes.length ? <RelationGraph graph={graph} selected={selected} onSelect={choose} onLink={(id) => setSelectedLink(graph.links.find((link) => link.id === id) ?? null)} /> : <Empty description="No recorded relations in this scope" />
-              : view === "Timeline" ? bundle?.view.intervals.length ? <ExecutionTimeline intervals={bundle.view.intervals} onSelect={choose} /> : <Empty description="No execution intervals recorded" />
-              : view === "Lifecycle" ? selected ? <LifecycleView records={records} onRecord={showRecord} /> : <Empty description="Select an object to inspect its lifecycle" />
+              : view === "Timeline" ? bundle?.view.intervals.length ? <ExecutionTimeline scopeKey={[sourceId,datasetId,runId,includeDescendants].join(":")} intervals={bundle.view.intervals} runRecords={bundle.inventory.records} onRecord={setFactId} /> : <Empty description="No execution intervals recorded" />
+              : view === "Lifecycle" ? selected ? <LifecycleView records={records} relatedRecords={bundle?.view.relatedRecords} onRecord={record=>setFactId(record.id)} /> : <Empty description="Select an object to inspect its lifecycle" />
               : view === "Telemetry" ? <ContentViewer text={JSON.stringify(bundle?.view.telemetry ?? [], null, 2)} language="json" />
               : <><Table className="records-table" size="small" rowKey="id" columns={recordColumns} dataSource={[...records]} pagination={{ pageSize: 25, showSizeChanger: false }} scroll={{ x: 650 }} rowClassName={(record) => record.id === params.get("record") ? "record-selected" : ""} onRow={(record) => ({ onClick: () => showRecord(record) })} />
                 </>}
-              {view !== "Execution Flow" && bundle?.view.next !== null && bundle && <Button disabled={loading || paging} onClick={() => { void loadMore("view"); }}>{view === "Timeline" ? "Next interval page" : "Load more records"}</Button>}
+              {view !== "Execution Flow" && bundle?.view.next !== null && bundle && <Button disabled={loading || paging} onClick={() => { void loadMore("view"); }}>{view === "Timeline" ? "Load more intervals" : "Load more records"}</Button>}
             </div>
           </>}
         </Suspense>
         {bundle?.view.limitations.length ? <div className="coverage-note">{bundle.view.limitations.join(" / ")}</div> : null}
         {coverage?.limitations.length ? <div className="coverage-note">{coverage.limitations.join(" / ")}</div> : null}
       </section>
-      {view !== "Execution Flow" && <aside className="detail-pane"><h2>{selectedLink ? "Recorded relation" : "Object detail"}</h2>
-        <RecordDetails record={detail} link={selectedLink} onSubject={choose} onRecord={(id) => { void findRecord(id); }} onContent={setContentId} />
+      {sideDetail && <aside className="detail-pane"><h2>{selectedLink ? "Recorded relation" : "Object detail"}</h2>
+        <RecordDetails record={detail} link={selectedLink} onSubject={choose} onRecord={setFactId} onContent={setContentId} onLocation={setContent} />
       </aside>}
     </main>}
-    <ContentDrawer id={contentId} scope={bundle?.snapshot.selection ?? null} onClose={() => setContentId(null)} />
+    <RecordedFactDrawer recordId={factId} scope={bundle?.snapshot.selection ?? null} onClose={()=>setFactId(null)} onContent={setContentId} onRecord={setFactId} onLocation={setContent} onHistory={openHistory}/>
+    <ContentDrawer id={content?.id ?? null} location={content} scope={bundle?.snapshot.selection ?? null} onClose={() => setContent(null)} />
   </div>;
 }

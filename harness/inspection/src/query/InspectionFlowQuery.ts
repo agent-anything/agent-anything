@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { inspectionSubjectKey, type InspectionRecord } from "../records/index.js";
 import type { InspectionDatabase } from "../storage/index.js";
 import type { InspectionFlowQuery, InspectionReadResult } from "./InspectionQuery.js";
+import { readFlowOccurrence } from "./InspectionFlowOccurrenceQuery.js";
 
 const kinds = ["get_execution_flow", "list_flow_occurrences", "get_flow_occurrence"];
 export function validateFlowQueryFields(value: Record<string, unknown>): void {
@@ -37,7 +38,7 @@ export function executeFlowQuery(db: InspectionDatabase, query: InspectionFlowQu
   const records: InspectionRecord[] = [];
   for (const record of page.slice(0, limit)) {
     bytes += Buffer.byteLength(JSON.stringify(record));
-    if (bytes > 1024 * 1024) break;
+    if (bytes > 256 * 1024) break;
     records.push(record);
   }
   const more = records.length < page.length;
@@ -50,9 +51,39 @@ export function executeFlowQuery(db: InspectionDatabase, query: InspectionFlowQu
   const links = selected ? db.relations(query.watermark, inspectionSubjectKey(selected.subject), ["next", "call", "return", "spawn", "join", "resume"], 0, 257) : [];
   const limitations = [...(query.invocationId && !definition ? [captured ? "flow_definition_mismatch" : "flow_definition_not_observed"] : []), ...(links.length > 256 ? ["flow_links_limited"] : []), ...(!records.length && !query.cursor ? ["flow_records_not_observed"] : [])];
   if (query.kind === "get_execution_flow" && query.invocationId) records.push(...db.flowRecords({...filter, eventKind: "invocation_exited", limit: 1}));
+  const detail = query.kind === "get_flow_occurrence" ? readFlowOccurrence(db, query, definition) : null;
+  const closed = query.invocationId ? db.flowRecords({...filter,eventKind:"invocation_exited",limit:1}).length > 0 : false;
+  const occurrences = query.kind === "list_flow_occurrences" ? records.map(entry => {
+    const facts = db.flowRecords({...filter, occurrenceId: entry.subject.id, limit: 501});
+    const exit = facts.find(record => record.payload.kind === "flow_step" && record.payload.observation.kind === "step_exited") ?? null;
+    const outcome = exit?.payload.kind === "flow_step" && exit.payload.observation.kind === "step_exited" ? exit.payload.observation : null;
+    const duration = entry.occurredAt && exit?.occurredAt ? Date.parse(exit.occurredAt) - Date.parse(entry.occurredAt) : null;
+    if (facts.length > 500) limitations.push("flow_occurrence_summary_limited");
+    return {entry, exit, disposition: outcome?.disposition ?? (closed ? "exit_not_observed" : "open"), branch: outcome?.branch ?? null,
+      durationMs: duration !== null && duration >= 0 ? duration : null,
+      checkCount: facts.filter(record => record.payload.kind === "flow_constraint").length,
+      issueCount: facts.filter(record => record.payload.kind === "flow_constraint" && record.payload.observation.disposition === "not_satisfied").length};
+  }) : [];
+  const relatedRecords = [...new Set(links.slice(0, 256).flatMap(link => [inspectionSubjectKey(link.from), inspectionSubjectKey(link.to)]))]
+    .flatMap(key => {const record = db.latest(key, query.watermark); return record ? [record] : [];});
+  const ancestry: InspectionRecord[] = [];
+  let child = first;
+  const seen = new Set<string>();
+  while (child && ancestry.length < 32) {
+    const key = inspectionSubjectKey(child.subject);
+    if (seen.has(key)) {limitations.push("flow_ancestry_cycle"); break;}
+    seen.add(key);
+    const callers = db.relations(query.watermark, key, ["call"], 0, 257).filter(link => inspectionSubjectKey(link.to) === key);
+    if (callers.length !== 1) {if (callers.length > 1) limitations.push("flow_caller_ambiguous"); break;}
+    const caller = db.latest(inspectionSubjectKey(callers[0]!.from), query.watermark);
+    if (!caller || caller.payload.kind !== "flow_step") break;
+    ancestry.push(caller);
+    child = db.flowRecords({watermark:query.watermark,runId:caller.payload.observation.runId,invocationId:caller.payload.observation.invocationId,eventKind:"invocation_entered",limit:1})[0] ?? null;
+  }
+  if (ancestry.length === 32) limitations.push("flow_ancestry_limited");
   return {
-    ...base, records, limitations,
+    ...base, records, limitations: [...new Set([...limitations, ...detail?.limitations ?? []])],
     next: more && pageEnd !== undefined ? Buffer.from(JSON.stringify({scope: scope(query), after: pageEnd})).toString("base64url") : null,
-    flow: {definition, steps: query.invocationId ? db.flowStatistics(query.invocationId, query.watermark) : [], transitions: query.invocationId ? db.flowTransitions(query.invocationId, query.watermark) : [], links: links.slice(0, 256)},
+    flow: {definition, steps: query.invocationId ? db.flowStatistics(query.invocationId, query.watermark) : [], transitions: query.invocationId ? db.flowTransitions(query.invocationId, query.watermark) : [], links: links.slice(0, 256), occurrence: detail?.occurrence ?? null, occurrences, relatedRecords, ancestry},
   };
 }

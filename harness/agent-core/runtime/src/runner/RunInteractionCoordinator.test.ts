@@ -5,6 +5,7 @@ import {
   type InteractionRequestRef,
 } from "@agent-anything/interaction/protocol";
 import { describe, expect, it } from "vitest";
+import type { ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 import {
   RunInteractionCoordinator,
   type OpenRuntimeInteractionInput,
@@ -13,6 +14,22 @@ import {
 const NOW = "2026-08-14T00:00:00.000Z";
 
 describe("RunInteractionCoordinator adverse conformance", () => {
+  it("distinguishes no submission from an accepted submission cancelled before resolution", async () => {
+    for (const received of [false, true]) {
+      const facts: ExecutionFlowObservation[] = [];
+      const fixture = createFixture();
+      const opened = fixture.coordinator.open(openInput({executionFlow: {observer: {observe: fact => {facts.push(fact);}}}}));
+      if (opened.status !== "opened") throw new Error("Expected opened interaction");
+      if (received) fixture.coordinator.submit(submission({request: opened.pending.request, submissionId: "accepted"}));
+      fixture.coordinator.cancelAll("cancel");
+      expect((await opened.completion).status).toBe("cancelled");
+      const receipts = facts.filter(fact => fact.kind === "constraint" && fact.checkId === "submission_receipt");
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]).toMatchObject({disposition: received ? "passed" : "not_evaluated"});
+      expect(facts.some(fact => fact.kind === "material" && fact.name === "Interaction settlement")).toBe(true);
+      expect(facts.some(fact => fact.kind === "material" && fact.name === "Interaction submission receipt")).toBe(received);
+    }
+  });
   it("rejects stale, wrong-subject, duplicate-conflicting, and late submissions", async () => {
     const fixture = createFixture();
     expect(fixture.coordinator.getAvailabilitySnapshot(

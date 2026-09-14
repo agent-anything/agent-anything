@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
 import {
@@ -24,10 +25,26 @@ import {
 } from "../registration/ActionAdapter.js";
 import {
   ActionExecutionCoordinator,
+  type ActionExecutionNotification,
   type ActionExecutionCoordinatorDependencies,
 } from "./ActionExecutionCoordinator.js";
 
 describe("ActionExecutionCoordinator", () => {
+  it("records authority revalidation once without extra authority checks or execution", async () => {
+    for (const stale of [false, true]) {
+      let checks = 0;
+      const fixture = createFixture({authorityCurrent: () => ++checks === 1 || !stale});
+      const facts: ExecutionFlowObservation[] = [];
+      const result = await fixture.coordinator.execute({...fixture.request, executionFlow: {observer: {observe: fact => {facts.push(fact);}}}});
+      expect(result).toMatchObject({status: "settled", settlement: {status: stale ? "invalidated" : "succeeded"}});
+      const observed = facts.filter(fact => fact.kind === "constraint" && fact.stepId === "revalidate" && fact.checkId === "authority");
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({disposition: stale ? "not_satisfied" : "passed", basis: {authorityRevision: "authority-revision-1"}});
+      expect(checks).toBe(stale ? 2 : 3);
+      expect(facts.some(fact => fact.kind === "material" && fact.name === "Action execution result")).toBe(true);
+      expect(fixture.order.includes("executor.execute")).toBe(!stale);
+    }
+  });
   it("owns the canonical prepare-assess-revalidate-dispatch-settle sequence", async () => {
     const fixture = createFixture();
 
@@ -62,6 +79,10 @@ describe("ActionExecutionCoordinator", () => {
     expect(result.settlement.attempts).toHaveLength(1);
     expect(result.settlement.subject).not.toBeNull();
     expect(Object.isFrozen(result.settlement)).toBe(true);
+    const assessments = fixture.notifications.filter(value => value.kind === "assessment");
+    expect(assessments).toHaveLength(2);
+    expect(assessments[0]).toMatchObject({occurredAt: NOW, policy: {status: "allowed", recordId: "policy-record-1", revision: "policy-1"}, permission: null});
+    expect(assessments[1]).toMatchObject({occurredAt: NOW, permission: {status: "authorized", recordId: "permission-record-1", revision: "authority-1"}});
   });
 
   it("stops at Governance denial before Permission, revalidation, and dispatch", async () => {
@@ -274,6 +295,7 @@ interface FixtureOptions {
 
 function createFixture(options: FixtureOptions = {}) {
   const order: string[] = [];
+  const notifications: ActionExecutionNotification[] = [];
   const operation = {
     operation: { namespace: "code", name: "read-file" },
     revision: "1",
@@ -514,6 +536,7 @@ function createFixture(options: FixtureOptions = {}) {
     decisionRecordId: "retry-decision-1",
   }));
   const dependencies: ActionExecutionCoordinatorDependencies = {
+    observer: {observe: value => {notifications.push(value);}},
     registrations,
     adapters: [{ adapter }],
     policy,
@@ -549,6 +572,7 @@ function createFixture(options: FixtureOptions = {}) {
   const interruption = createInterruption();
   return {
     order,
+    notifications,
     retryDecide,
     coordinator: new ActionExecutionCoordinator(dependencies),
     request: {

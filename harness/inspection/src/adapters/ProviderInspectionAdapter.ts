@@ -67,10 +67,20 @@ export class ProviderInspectionAdapter implements ProviderObserver {
         const usage = providerResponseUsage(response);
         const turn = response.kind === "native_tool_turn" ? response.turn : null;
         recorder.offer({ id: `${id}:response`, subject: request, occurredAt: value.occurredAt, payload: { kind: "response", status: "succeeded", finishReason: turn?.finish.kind ?? null, callCount: turn?.assistant.content.filter((block) => block.kind === "model_tool_call").length ?? 0, inputTokens: usage?.inputTokens ?? null, outputTokens: usage?.outputTokens ?? null }, links: [inspectionLink("produces", attempt, request)] });
-        if (turn) for (const block of turn.assistant.content) {
-          if (block.kind !== "model_tool_call") continue;
-          const call = recorder.ref("runtime", "call", block.call.modelCallRef.id, value.runId);
-          recorder.offer({ subject: call, occurredAt: value.occurredAt, payload: { kind: "event", name: "model.call", sequence: null, code: null }, links: [inspectionLink("produces", request, call)], contents: [{ name: "Model call", stage: "decoded", class: "provider", mediaType: "application/json", value: block.call as unknown as InspectionJson }] });
+        if (turn) {
+          const modelTurn = recorder.ref("runtime", "turn", turn.turnId, value.runId);
+          recorder.offer({ subject: modelTurn, occurredAt: value.occurredAt,
+            payload: { kind: "event", name: "model_turn.decoded", sequence: null, code: null },
+            links: [inspectionLink("produces", request, modelTurn), inspectionLink("produces", attempt, modelTurn, {
+              targetLocation: {contentId: inspectionContentId(id), partId: null, jsonPointer: "/response/turn", stage: "normalized"},
+            }), ...(run ? [inspectionLink("contains", run, modelTurn)] : []),
+            ...(value.controllerRequestId ? [inspectionLink("materializes", recorder.ref("runtime", "request", value.controllerRequestId, value.runId), modelTurn)] : [])],
+          });
+          for (const block of turn.assistant.content) {
+            if (block.kind !== "model_tool_call") continue;
+            const call = recorder.ref("runtime", "call", block.call.modelCallRef.id, value.runId);
+            recorder.offer({ subject: call, occurredAt: value.occurredAt, payload: { kind: "event", name: "model.call", sequence: null, code: null }, links: [inspectionLink("produces", request, call), inspectionLink("contains", modelTurn, call)], contents: [{ name: "Model call", stage: "decoded", class: "provider", mediaType: "application/json", value: block.call as unknown as InspectionJson }] });
+          }
         }
       }
     } else {

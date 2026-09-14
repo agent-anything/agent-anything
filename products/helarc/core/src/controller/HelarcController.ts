@@ -56,11 +56,15 @@ export function buildHelarcProviderRequest(
 ): ProviderRequest {
   const flow = new ExecutionFlowPath(HELARC_REQUEST_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId);
   try {
-    const step = flow.advance("compose", {agentId:input.agent.id, instructionBlocks:input.agent.instructions.blocks.length, unsettledCalls:input.interaction.unsettledCalls.length});
+    const step = flow.advance("compose", {agentId:input.agent.id, instructionBlocks:input.agent.instructions.blocks.length, unsettledCalls:input.interaction.unsettledCalls.length},
+      [{owner: "runtime", kind: "request", id: input.toolExposure.controllerRequestId, revision: null}]);
     const request = buildRequest(input, context, protocol, qualification);
     step.check("instruction_binding", "passed", {bindingId:input.instructionBinding.ref.id});
     step.check("settled_interaction", "passed");
-    flow.advance("request", {compositionId:request.composition.id}, [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
+    const compositionRef = flow.material("Model input composition", "composed", request.composition, "provider");
+    step.output(compositionRef);
+    flow.advance("request", {compositionId:request.composition.id}, [compositionRef])
+      .output({owner:"model-interaction",kind:"request",id:request.requestId,revision:null});
     flow.close("returned");
     return request;
   } catch (error) { flow.close("failed"); throw error; }
@@ -208,10 +212,13 @@ export function parseHelarcProviderResponse(
   executionFlow?: ExecutionFlowContext,
 ): ControllerDecision<HelarcAgentOutput> {
   const flow = new ExecutionFlowPath(HELARC_RESPONSE_EXECUTION_FLOW, executionFlow ?? {}, input.runId);
-  flow.advance("interpret", {controllerRequestId:input.toolExposure.controllerRequestId, responseKind:response.kind});
+  const interpretation = flow.advance("interpret", {controllerRequestId:input.toolExposure.controllerRequestId, responseKind:response.kind},
+    [flow.material("Response to interpret", "received", response, "provider")]);
   try {
     const decision = interpretResponse(response, input, protocol, qualification);
-    flow.advance("decision", {kind:decision.kind, candidates:decision.kind === "advance" ? decision.candidates.length : 0});
+    const decisionRef = flow.material("Interpreted Controller decision", "interpreted", decision);
+    interpretation.output(decisionRef);
+    flow.advance("decision", {kind:decision.kind, candidates:decision.kind === "advance" ? decision.candidates.length : 0}, [decisionRef]).output(decisionRef);
     flow.close("returned");
     return decision;
   } catch (error) { flow.close("failed"); throw error; }

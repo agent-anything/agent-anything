@@ -16,6 +16,7 @@ import {
 } from "../composition/index.js";
 import { AgentHookController } from "./AgentHookController.js";
 import { AgentHookExecutionStore } from "./AgentHookExecution.js";
+import type { ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 
 const NOW = "2026-09-04T00:00:00.000Z";
 
@@ -46,6 +47,30 @@ class FakeController implements Controller<TestOutput> {
 }
 
 describe("AgentHookController", () => {
+  it("binds Stop and StopFailure to Controller requests rather than Context projection requests", async () => {
+    const stop = vi.fn((_event: Parameters<AgentStopHandler["handle"]>[0]) => ({disposition: "allow" as const}));
+    const failure = vi.fn();
+    const input = controllerInput();
+    expect(input.toolExposure.controllerRequestId).not.toBe(input.contextManifest.requestId);
+    const normal = new AgentHookController({controller: new FakeController(() => complete("Done")), composition: stopComposition([handler("stop", stop)]), rootRunId: "run-1", now: () => NOW});
+    await normal.next(input, callContext());
+    expect(stop.mock.calls[0]?.[0]).toMatchObject({controllerRequestId: input.toolExposure.controllerRequestId});
+    const failed = new AgentHookController({controller: new FakeController(() => {throw new Error("Failed");}), composition: stopFailureComposition(failure), rootRunId: "run-1", now: () => NOW});
+    await expect(failed.next(input, callContext())).rejects.toThrow("Failed");
+    expect(failure.mock.calls[0]?.[0]).toMatchObject({controllerRequestId: input.toolExposure.controllerRequestId});
+  });
+  it("records candidate short circuits and Handler material without adding Hook execution", async () => {
+    for (const decision of [complete("Done"), {kind: "advance" as const, candidates: [], modelItems: []}]) {
+      const facts: ExecutionFlowObservation[] = [];
+      const controller = new AgentHookController({controller: new FakeController(() => decision), rootRunId: "run-1"});
+      expect(await controller.next(controllerInput(), {...callContext(), executionFlow: {observer: {observe: fact => {facts.push(fact);}}}})).toBe(decision);
+      const checks = facts.filter(fact => fact.kind === "constraint" && fact.stepId === "candidate");
+      expect(checks.map(check => check.checkId)).toEqual(["normal_completion", "registered_handlers", "continuation_allowance"]);
+      expect(checks[2]?.disposition).toBe("not_applicable");
+      expect(facts.some(fact => fact.kind === "material" && fact.name === "Hook-adjusted Controller decision")).toBe(true);
+      expect(controller.store.getProjection().invocationCount).toBe(0);
+    }
+  });
   it("preserves a normal completion after one actionable continuation and a later allow", async () => {
     let calls = 0;
     const decision = complete("No useful work remains.");
@@ -318,7 +343,7 @@ function controllerInput(iteration = 1): ControllerInput<TestOutput> {
       metadata: {},
     },
     contextManifest: {
-      requestId: `controller-request-${iteration}`,
+      requestId: `context-projection-request-${iteration}`,
       projectionId: `projection-${iteration}`,
     },
     toolExposure: { controllerRequestId: `controller-request-${iteration}` },

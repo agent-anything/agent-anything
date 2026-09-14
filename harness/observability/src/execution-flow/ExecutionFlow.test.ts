@@ -3,6 +3,44 @@ import { createExecutionFlowDefinition, validateExecutionFlowDefinition, Executi
 
 const definition = createExecutionFlowDefinition({owner:"test",id:"loop",revision:"1",label:"Test Loop",description:"Deterministic observation fixture",steps:[{id:"work",kind:"entry",label:"Work",checks:["ready"]},{id:"done",kind:"exit",label:"Done",checks:[]}],transitions:[{id:"repeat",from:"work",to:"work",label:"Continue"},{id:"finish",from:"work",to:"done",label:"Finish"}],entryStepIds:["work"],exitStepIds:["done"]});
 describe("Execution flow observation", () => {
+  it("publishes detached, occurrence-local material without affecting owner values", () => {
+    const facts: ExecutionFlowObservation[] = [];
+    const flow = new ExecutionFlowPath(definition, {observer: {observe: fact => {facts.push(fact);}}}, "run");
+    const value = {result: {count: 1}};
+    const input = flow.material("Input", "received", value);
+    flow.advance("work", {}, [input]);
+    const output = flow.material("Result", "produced", value, "execution");
+    flow.current!.output(output);
+    value.result.count = 2;
+    flow.close("returned");
+    expect(input.id).not.toBe(output.id);
+    expect(facts.filter(fact => fact.kind === "material")).toMatchObject([
+      {subject: input, value: {result: {count: 1}}, contentClass: "agent"},
+      {subject: output, value: {result: {count: 1}}, contentClass: "execution"},
+    ]);
+    expect(Object.isFrozen(value.result)).toBe(false);
+    const unserializable = {toJSON() {throw new Error("Cannot serialize");}};
+    expect(() => flow.material("Invalid", "received", unserializable)).not.toThrow();
+    const disabled = new ExecutionFlowPath(definition, {}, "run");
+    expect(() => disabled.material("Disabled", "received", unserializable)).not.toThrow();
+    const observed = new ExecutionFlowPath(definition, {observer: {observe() {throw new Error("Observer failed");}}}, "run");
+    expect(() => observed.material("Failure", "received", value)).not.toThrow();
+    expect(() => observed.material("Serialization failure", "received", unserializable)).not.toThrow();
+  });
+  it("captures outputs at publication time without closing the step or mutating owner data", () => {
+    const facts: ExecutionFlowObservation[] = [];
+    const flow = new ExecutionFlowPath(definition, {observer: {observe: value => {facts.push(value);}}}, "run");
+    const first = flow.advance("work");
+    const output = {owner: "test", kind: "contribution", id: "result", revision: "1"};
+    first.output(output);
+    output.id = "changed";
+    expect(facts.some(fact => fact.kind === "step_exited")).toBe(false);
+    flow.advance("done");
+    first.output({ ...output, id: "too-late" });
+    flow.close("returned");
+    expect(facts.find(fact => fact.kind === "step_exited" && fact.stepId === "work")).toMatchObject({outputs: [{...output, id: "result"}]});
+    expect(facts.some(fact => fact.kind === "constraint")).toBe(false);
+  });
   it("retains exact repeat occurrences, caller identity, checks and immutable facts", () => {
     const facts: ExecutionFlowObservation[] = [];
     const root = new ExecutionFlowPath(definition,{observer:{observe:fact => {facts.push(fact);}}},"run");

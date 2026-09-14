@@ -49,7 +49,7 @@ export class RetryExecutor {
     const flow = new ExecutionFlowPath(RETRY_EXECUTION_FLOW, input.executionFlow ?? {}, input.operation.runId, []);
     try {
       const result = await this.executeWithFlow(input, executeAttempt, flow);
-      flow.advance("settled", {outcome: result.kind});
+      flow.advance("settled", {outcome: result.kind}).output(flow.material("Retry execution result", "settled", result, input.operation.owner === "approvals_reviewer" ? "execution" : "provider"));
       flow.close(result.kind === "succeeded" ? "returned" : result.kind === "cancelled" ? "cancelled" : "failed");
       return result;
     } catch (error) { flow.close(error instanceof RetryInvocationInvalidatedError ? "interrupted" : "failed"); throw error; }
@@ -64,6 +64,8 @@ export class RetryExecutor {
   ): Promise<RetryExecutionResult<TResult, RetryFailure<TCategory>, TError>> {
     const operation = snapshotRetryOperation(input.operation);
     const policy = snapshotRetryPolicy(input.policy);
+    const materialClass = operation.owner === "approvals_reviewer" ? "execution" : "provider";
+    const retryInputRef = flow.material("Retry operation and policy", "received", {operation, policy, budgetId: input.budgetId, priorProgress: input.priorProgress}, materialClass);
     const progress = snapshotProgress(input.priorProgress);
     assertNonEmpty(input.budgetId, "RetryExecutionInput.budgetId");
     if (input.cancellation.runId !== operation.runId) {
@@ -132,7 +134,7 @@ export class RetryExecutor {
         throw new TypeError(`Retry attempt id ${attempt.attemptId} is duplicated.`);
       }
       attemptIds.add(attempt.attemptId);
-      const attemptStep = flow.advance("attempt", {attemptId: attempt.attemptId, operationId: operation.operationId, attemptNumber, budgetAttemptNumber, initialMaximum: maxBudgetAttempts, maximumAttempts, deadlineAt: operation.deadlineAt ?? null}, operation.owner === "provider_request" ? [{owner: "provider",kind:"provider-attempt",id:attempt.attemptId,revision:null}] : []);
+      const attemptStep = flow.advance("attempt", {attemptId: attempt.attemptId, operationId: operation.operationId, attemptNumber, budgetAttemptNumber, initialMaximum: maxBudgetAttempts, maximumAttempts, deadlineAt: operation.deadlineAt ?? null}, [retryInputRef, {owner: "retry",kind:"attempt",id:attempt.attemptId,revision:null}]);
       attemptStep.check("cancellation", "passed");
       attemptStep.check("deadline", "passed");
 
@@ -157,6 +159,8 @@ export class RetryExecutor {
       }
 
       completedAttempts = attemptNumber;
+      const attemptResultRef = flow.material("Retry attempt result", "returned", attemptResult, materialClass);
+      attemptStep.output(attemptResultRef);
       const finishedAt = now(this.dependencies);
       const durationMs = Math.max(0, finishedAt.getTime() - Date.parse(attempt.startedAt));
 
@@ -195,9 +199,10 @@ export class RetryExecutor {
       }
 
       const classification = input.classifier.classify(attemptResult.error);
-      const classificationStep = flow.advance("classify");
+      const classificationStep = flow.advance("classify", {}, [attemptResultRef]);
       classificationStep.check("failure_classification", "passed", {disposition: classification.disposition});
       const failure = snapshotClassification(classification);
+      classificationStep.output(flow.material("Retry failure classification", "classified", failure, materialClass));
       lastFailure = failure;
 
       if (classification.disposition === "deadline_exceeded") {

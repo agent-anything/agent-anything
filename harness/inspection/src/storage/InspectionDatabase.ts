@@ -221,13 +221,56 @@ export class InspectionDatabase {
     })();
   }
 
-  records(input: { watermark: number; after?: number; limit?: number; runId?: string; owner?: string; kind?: string; subjectKey?: string; subjectKind?: string }): InspectionRecord[] {
+  records(input: { watermark: number; after?: number; limit?: number; runId?: string; runIds?: readonly string[]; owner?: string; kind?: string; subjectKey?: string; subjectKind?: string; intervalStarts?: boolean }): InspectionRecord[] {
     const clauses = ["sequence <= ?", "sequence > ?"];
     const values: (string | number)[] = [input.watermark, input.after ?? 0];
     for (const [column, value] of [["run_id", input.runId], ["owner", input.owner], ["kind", input.kind], ["subject_key", input.subjectKey], ["subject_kind", input.subjectKind]]) {
       if (value !== undefined) { clauses.push(`${column} = ?`); values.push(value); }
     }
+    if (input.runIds) { clauses.push(`run_id IN (${input.runIds.map(() => "?").join(",") || "NULL"})`); values.push(...input.runIds); }
+    if (input.intervalStarts) clauses.push("kind='interval' AND json_extract(value,'$.payload.phase')='started'");
     return (this.db.prepare(`SELECT value FROM records WHERE ${clauses.join(" AND ")} ORDER BY sequence LIMIT ?`).all(...values, Math.min(input.limit ?? 100, 501)) as Row[]).map((row) => JSON.parse(String(row.value)));
+  }
+
+  subjectFacts(keys: readonly string[], watermark: number): InspectionRecord[] {
+    if (!keys.length) return [];
+    if (keys.length > 500) throw new Error("inspection_query_invalid");
+    const rows = this.db.prepare(`WITH snapshots AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY subject_key,kind ORDER BY sequence) first_kind,
+        ROW_NUMBER() OVER (PARTITION BY subject_key,kind ORDER BY sequence DESC) last_kind
+      FROM records WHERE sequence<=? AND subject_key IN (${keys.map(() => "?").join(",")})
+    ), ranked AS (
+      SELECT value, sequence, ROW_NUMBER() OVER (PARTITION BY subject_key ORDER BY sequence) n,
+        COUNT(*) OVER (PARTITION BY subject_key) total
+      FROM snapshots WHERE subject_kind<>'run' OR kind<>'snapshot' OR first_kind=1 OR last_kind=1
+    ) SELECT value FROM ranked WHERE n<=32 OR n>total-33 ORDER BY sequence`).all(watermark, ...keys) as Row[];
+    return rows.map(row => JSON.parse(String(row.value)));
+  }
+
+  intervalEnds(start: InspectionRecord, watermark: number): InspectionRecord[] {
+    if (start.payload.kind !== "interval") return [];
+    const rows = this.db.prepare(`SELECT value FROM records WHERE subject_key=? AND sequence>? AND sequence<=? AND kind='interval'
+      AND json_extract(value,'$.payload.activity')=? AND json_extract(value,'$.payload.clock')=? ORDER BY sequence LIMIT 2`)
+      .all(inspectionSubjectKey(start.subject), start.commitSequence, watermark, start.payload.activity, start.payload.clock) as Row[];
+    return rows.map(row => JSON.parse(String(row.value)));
+  }
+
+  hasUnpairedIntervalEnd(watermark: number, runIds?: readonly string[], subjectKey?: string): boolean {
+    const clauses=["sequence<=?","kind='interval'"];const args:(string|number)[]=[watermark];
+    if(runIds) {clauses.push(`run_id IN (${runIds.map(()=>"?").join(",") || "NULL"})`);args.push(...runIds);}
+    if(subjectKey) {clauses.push("subject_key=?");args.push(subjectKey);}
+    const row=this.db.prepare(`WITH intervals AS (
+      SELECT json_extract(value,'$.payload.phase') phase,
+        LAG(json_extract(value,'$.payload.phase')) OVER (PARTITION BY subject_key,json_extract(value,'$.payload.activity'),json_extract(value,'$.payload.clock') ORDER BY sequence) previous
+      FROM records WHERE ${clauses.join(" AND ")}
+    ) SELECT 1 FROM intervals WHERE phase='settled' AND (previous IS NULL OR previous<>'started') LIMIT 1`).get(...args);
+    return row!==undefined;
+  }
+
+  clockHorizon(clock: string, watermark: number): string | null {
+    const row = this.db.prepare("SELECT MAX(occurred_at) time FROM records WHERE sequence<=? AND kind='interval' AND json_extract(value,'$.payload.clock')=?")
+      .get(watermark, clock) as Row;
+    return row.time === null ? null : String(row.time);
   }
 
   record(id: string, watermark: number): InspectionRecord | null {
@@ -242,16 +285,28 @@ export class InspectionDatabase {
     return row ? JSON.parse(String(row.value)) : null;
   }
 
-  subjects(watermark: number, kind?: string, after = 0, limit = 100): InspectionRecord[] {
-    const payload = kind === "run" ? "AND kind='snapshot'" : kind === "definition" ? "AND kind='definition'" : "";
-    return (this.db.prepare(`SELECT r.value FROM records r JOIN (SELECT subject_key, MAX(sequence) sequence FROM records WHERE sequence<=? ${kind ? "AND subject_kind=?" : ""} ${payload} GROUP BY subject_key) latest ON r.sequence=latest.sequence WHERE r.sequence>? ORDER BY r.sequence LIMIT ?`).all(...(kind ? [watermark, kind, after, limit] : [watermark, after, limit])) as Row[]).map((row) => JSON.parse(String(row.value)));
+  material(subjectKey: string, watermark: number): InspectionRecord | null {
+    const row = this.db.prepare("SELECT value FROM records WHERE subject_key=? AND sequence<=? AND json_array_length(value,'$.contents')>0 ORDER BY sequence DESC LIMIT 1")
+      .get(subjectKey, watermark) as Row | undefined;
+    return row ? JSON.parse(String(row.value)) : null;
   }
 
-  relations(watermark: number, subjectKey: string | null, kinds: readonly string[] = [], after = 0, limit = 500): import("../records/index.js").InspectionLink[] {
+  subjects(watermark: number, kind?: string, after = 0, limit = 100, runIds?: readonly string[]): InspectionRecord[] {
+    const payload = kind === "run" ? "AND kind='snapshot'" : kind === "definition" ? "AND kind='definition'" : kind === "request" ? "AND kind='request'" : "";
+    const filter = runIds ? `AND run_id IN (${runIds.map(() => "?").join(",") || "NULL"})` : "";
+    return (this.db.prepare(`SELECT r.value FROM records r JOIN (SELECT subject_key, MAX(sequence) sequence FROM records WHERE sequence<=? ${kind ? "AND subject_kind=?" : ""} ${payload} ${filter} GROUP BY subject_key) latest ON r.sequence=latest.sequence WHERE r.sequence>? ORDER BY r.sequence LIMIT ?`).all(watermark, ...(kind ? [kind] : []), ...(runIds ?? []), after, Math.min(limit, 501)) as Row[]).map((row) => JSON.parse(String(row.value)));
+  }
+
+  relations(watermark: number, subjectKey: string | null, kinds: readonly string[] = [], after = 0, limit = 500, runIds?: readonly string[]): import("../records/index.js").InspectionLink[] {
     const clauses = ["sequence<=?", "sequence>?"];
     const args: (string | number)[] = [watermark, after];
     if (subjectKey !== null) { clauses.push("(from_key=? OR to_key=?)"); args.push(subjectKey, subjectKey); }
     if (kinds.length > 0) { clauses.push(`kind IN (${kinds.map(() => "?").join(",")})`); args.push(...kinds); }
+    if (runIds) {
+      const placeholders = runIds.map(() => "?").join(",") || "NULL";
+      clauses.push(`(json_extract(value,'$.from.runId') IN (${placeholders}) OR json_extract(value,'$.to.runId') IN (${placeholders}))`);
+      args.push(...runIds,...runIds);
+    }
     return (this.db.prepare(`SELECT value FROM relations WHERE ${clauses.join(" AND ")} ORDER BY sequence, id LIMIT ?`).all(...args, limit) as Row[]).map((row) => JSON.parse(String(row.value)));
   }
 
@@ -276,11 +331,12 @@ export class InspectionDatabase {
     return { descriptor, text: bytes.subarray(offset, end).toString("utf8"), offset, nextOffset: end < bytes.length ? end : null };
   }
 
-  telemetry(watermark: number, subjectKey: string | null, limit = 100, after = 0): { kind: string; sequence: number; recordId: unknown; subjectKey: unknown; value: unknown }[] {
+  telemetry(watermark: number, subjectKey: string | null, limit = 100, after = 0, runIds?: readonly string[]): { kind: string; sequence: number; recordId: unknown; subjectKey: unknown; value: unknown }[] {
     const values: { kind: string; sequence: number; recordId: unknown; subjectKey: unknown; value: unknown }[] = [];
     for (const kind of ["span", "log"] as const) {
       const table = kind === "span" ? "telemetry_spans" : "telemetry_logs";
-      const rows = this.db.prepare(`SELECT t.value, c.record_id, c.subject_key, t.sequence FROM ${table} t JOIN telemetry_correlations c ON c.id=t.id WHERE t.sequence<=? AND t.sequence>? ${subjectKey ? "AND c.subject_key=?" : ""} ORDER BY t.sequence LIMIT ?`).all(...(subjectKey ? [watermark, after, subjectKey, limit] : [watermark, after, limit])) as Row[];
+      const runFilter = runIds ? `AND EXISTS (SELECT 1 FROM records r WHERE r.sequence<=? AND r.subject_key=c.subject_key AND r.run_id IN (${runIds.map(()=>"?").join(",") || "NULL"}))` : "";
+      const rows = this.db.prepare(`SELECT t.value, c.record_id, c.subject_key, t.sequence FROM ${table} t JOIN telemetry_correlations c ON c.id=t.id WHERE t.sequence<=? AND t.sequence>? ${subjectKey ? "AND c.subject_key=?" : ""} ${runFilter} ORDER BY t.sequence LIMIT ?`).all(watermark, after, ...(subjectKey ? [subjectKey] : []), ...(runIds ? [watermark,...runIds] : []), limit) as Row[];
       values.push(...rows.map((row) => ({ kind, sequence: Number(row.sequence), recordId: row.record_id, subjectKey: row.subject_key, value: JSON.parse(String(row.value)) })));
     }
     return values.sort((left, right) => left.sequence - right.sequence).slice(0, limit);

@@ -1,7 +1,13 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { startInspectorServer } from "../dist/server/InspectorServer.js";
 import { createTestRecording } from "./recording.js";
+
+async function openView(page: Page, name: string) {
+  const tab = page.getByRole("tab", {name, exact:true});
+  if (await tab.count()) await tab.click();
+  else {await page.getByRole("button",{name:"More views",exact:true}).click();await page.getByRole("menuitem",{name,exact:true}).click();}
+}
 
 test("object catalog scrolls to its last entry without hiding navigation controls", async ({ page }, testInfo) => {
   const recording = await createTestRecording();
@@ -27,8 +33,7 @@ test("object catalog scrolls to its last entry without hiding navigation control
       expect(dimensions.height).toBeGreaterThan(0);
       expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.height);
       expect(dimensions.bottom).toBeLessThanOrEqual(viewport.height + 1);
-      await list.hover();
-      await page.mouse.wheel(0, 100000);
+      await page.locator(".object-row").filter({hasText:"Tool 099"}).scrollIntoViewIfNeeded();
       await expect(page.locator(".object-row").filter({ hasText: "Tool 099" })).toBeInViewport();
       await expect(page.getByRole("textbox", { name: "Search objects", exact: true })).toBeInViewport();
       await expect(page.getByRole("button", { name: "Clear object selection", exact: true })).toBeInViewport();
@@ -37,8 +42,7 @@ test("object catalog scrolls to its last entry without hiding navigation control
     }
     await page.getByRole("button", { name: "Load more objects", exact: true }).click();
     await expect(page.locator(".object-row")).toHaveCount(101);
-    await list.hover();
-    await page.mouse.wheel(0, 100000);
+    await page.locator(".object-row").filter({hasText:"Tool 100"}).scrollIntoViewIfNeeded();
     await expect(page.locator(".object-row").filter({ hasText: "Tool 100" })).toBeInViewport();
   } finally { await server.close(); await recording.close(); }
 });
@@ -79,8 +83,8 @@ test("selected definition stays in object navigation with its clear action", asy
     await expect(drawer.locator(".view-lines")).toContainText('"inputSchema"');
     await page.screenshot({ path: testInfo.outputPath("tool-contract-formatted.png"), fullPage: true });
     await drawer.getByRole("button", { name: "Close", exact: true }).click();
-    await page.getByRole("tab", { name: "Timeline", exact: true }).click();
-    await expect(page.locator(".vis-timeline")).toBeVisible();
+    await page.getByRole("tab", { name: "Data Flow", exact: true }).click();
+    await expect(page.locator(".react-flow__node")).toHaveCount(1);
     await expect(selection).toContainText("Read");
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(selection.getByRole("button", { name: "Clear object selection", exact: true })).toBeVisible();
@@ -141,6 +145,7 @@ test("shared content viewer manually formats text as JSON and restores the recor
     url.searchParams.set("source", recording.sourceId);
     url.searchParams.set("dataset", recording.datasetId);
     url.searchParams.set("record", "manual-format-record");
+    url.searchParams.set("view", "Records");
     await page.goto(url.toString());
     await page.locator(".content-row").filter({ hasText: "Encoded request body" }).click();
     const drawer = page.getByRole("dialog", { name: "Encoded request body", exact: true });
@@ -204,20 +209,20 @@ test("independent recorded-data investigation with local workers and manual refr
     await page.getByText("Component qualification", { exact: true }).click();
     await page.getByRole("combobox", { name: "Recording", exact: true }).click();
     await page.locator(".ant-select-item-option").filter({ hasText: "open" }).click();
-    await expect(page.locator(".object-row").filter({ hasText: "root-run" })).toBeVisible();
-    await page.getByRole("tab", { name: "Hierarchy", exact: true }).click();
+    await expect(page.locator(".run-tree-label").filter({ hasText: "root-run" })).toBeVisible();
+    await openView(page, "Hierarchy");
     await expect(page.locator(".react-flow__node")).toHaveCount(4);
     await page.getByRole("button", { name: "Auto layout", exact: true }).click();
     await expect(page.locator('.graph-surface[data-layout="ready"]')).toBeVisible();
     await expect(page.getByText("Layout timed out")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("hierarchy-desktop.png"), fullPage: true });
-    await page.locator(".object-row").filter({ hasText: "root-run" }).click();
+    await page.locator(".run-tree-label").filter({ hasText: "root-run" }).click();
     await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
     await expect(page.locator(".lifecycle-map .react-flow__node")).toHaveCount(4);
     await expect(page.getByText("pending_opened", { exact: true })).toBeVisible();
     await page.getByRole("tab", { name: "Timeline", exact: true }).click();
     await expect(page.locator(".vis-timeline")).toBeVisible();
-    await page.getByRole("tab", { name: "Records", exact: true }).click();
+    await openView(page, "Records");
     await expect(page.locator('.investigation[data-view="list_records"]')).toBeVisible();
     await expect(page.locator(".monaco-editor").first()).toBeVisible();
     await expect(page.locator(".object-selection .ant-spin")).toHaveCount(0);
@@ -239,7 +244,7 @@ test("nested groups, evidence edges, exact record history and watermark refresh"
     await page.getByText("Component qualification", { exact: true }).click();
     await page.getByRole("combobox", { name: "Recording", exact: true }).click();
     await page.locator(".ant-select-item-option").filter({ hasText: "open" }).click();
-    await page.getByRole("tab", { name: "Hierarchy", exact: true }).click();
+    await openView(page, "Hierarchy");
     await expect(page.locator('.graph-surface[data-layout="ready"]')).toBeVisible();
     await expect(page.locator(".react-flow__node")).toHaveCount(6);
     await page.getByRole("button", { name: "Collapse child-investigation", exact: true }).click();
@@ -252,6 +257,13 @@ test("nested groups, evidence edges, exact record history and watermark refresh"
     await page.screenshot({ path: testInfo.outputPath("data-flow-desktop.png"), fullPage: true });
     const paths = await page.locator(".react-flow__edge-path").evaluateAll((items) => items.map((item) => item.getAttribute("d")));
     expect(new Set(paths).size).toBe(paths.length);
+    await expect(page.locator(".react-flow__node")).toHaveCount(2);
+    await page.locator(".react-flow__edge-textwrapper").filter({hasText:"3 relations"}).click();
+    const relationDrawer = page.getByRole("dialog", {name:"Recorded relation",exact:true});
+    await expect(relationDrawer).toBeVisible();
+    await expect(relationDrawer.getByRole("combobox", {name:"Recorded link",exact:true})).toBeVisible();
+    await expect(relationDrawer.getByRole("button", {name:"Open establishing record",exact:true})).toBeVisible();
+    await relationDrawer.getByRole("button", {name:"Close",exact:true}).click();
     const graphNode = page.locator(".react-flow__node").filter({ hasText: "parent-request" }).first();
     const before = await graphNode.boundingBox();
     await page.mouse.move(before!.x + 40, before!.y + 35); await page.mouse.down(); await page.mouse.move(before!.x + 85, before!.y + 70, { steps: 5 }); await page.mouse.up();
@@ -259,7 +271,7 @@ test("nested groups, evidence edges, exact record history and watermark refresh"
     await expect(page.locator('.graph-surface[data-layout="ready"]')).toBeVisible();
     const clear = page.getByRole("button", { name: "Clear object selection", exact: true });
     if (await clear.count()) await clear.click();
-    await page.getByRole("tab", { name: "Records", exact: true }).click();
+    await openView(page, "Records");
     await expect(page.locator('.investigation[data-view="list_records"]')).toBeVisible();
     const transition = page.locator(".records-table .ant-table-row").filter({ hasText: "running -> waiting" });
     await transition.click();
@@ -267,7 +279,7 @@ test("nested groups, evidence edges, exact record history and watermark refresh"
     const recordUrl = page.url();
     await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
     await expect(page.locator('.investigation[data-view="get_lifecycle"]')).toBeVisible();
-    await expect(page.locator(".detail-pane")).toContainText("running -> waiting");
+    await expect(page.locator(".lifecycle-view")).toContainText("pending_opened");
     await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(page).toHaveURL(recordUrl);
     const oldWatermark = new URL(page.url()).searchParams.get("watermark");
@@ -297,11 +309,12 @@ test("bounded larger recording keeps graph and scheduling views navigable", asyn
     await expect(page.locator('.graph-surface[data-layout="ready"]')).toBeVisible();
     await expect(page.locator(".react-flow__node")).toHaveCount(64);
     await page.screenshot({ path: testInfo.outputPath("bounded-hierarchy.png"), fullPage: true });
-    await page.locator(".object-row").filter({ hasText: "root-run" }).click();
-    await page.getByRole("tab", { name: "Scheduling", exact: true }).click();
-    await expect(page.locator(".records-table")).toContainText("bounded-call-0");
+    await page.locator(".run-tree-label").filter({ hasText: "root-run" }).click();
+    await openView(page, "Scheduling");
+    await expect(page.locator(".summary-table")).toContainText("call");
+    await expect(page.locator(".summary-table")).toContainText("dispatched");
     await page.getByRole("tab", { name: "Timeline", exact: true }).click();
-    await expect(page.locator(".vis-labelset .vis-label")).toHaveCount(61);
+    await expect(page.locator(".vis-labelset .vis-label")).toHaveCount(3);
     expect(errors).toEqual([]);
   } finally { await server.close(); await recording.close(); }
 });

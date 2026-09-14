@@ -23,6 +23,97 @@ async function setup() {
 }
 
 describe("Recorded execution flow queries",()=>{
+  it("persists owner-local material under content policy with exact input/output references", async () => {
+    const {adapter, query, snapshot} = await setup();
+    const flow = new ExecutionFlowPath(definition, {observer: adapter}, "run");
+    const source = {answer: 42};
+    const input = flow.material("Owner input", "received", source);
+    const step = flow.advance("work", {}, [input]);
+    step.check("ready", "passed");
+    const output = flow.material("Owner output", "produced", {answer: 84}, "execution");
+    step.output(output);
+    source.answer = -1;
+    flow.advance("finish"); flow.close("returned");
+    const scope = await snapshot();
+    const detail = await query.query({...scope, kind: "get_flow_occurrence", runId: "run", invocationId: flow.ref.invocationId, occurrenceId: step.ref.stepExecutionId!});
+    const refs = detail.flow!.occurrence!.references;
+    expect(refs).toHaveLength(2);
+    expect(refs.every(ref => ref.availability === "present")).toBe(true);
+    for (const ref of refs) {
+      const subject = {...scope, owner: "test", kind: "contribution" as const, id: ref.role === "input" ? input.id : output.id, runId: "run", revision: "1"};
+      const records = await query.query({...scope, kind: "get_subject", subject});
+      expect(records.records[0]?.contents[0]).toMatchObject({class: ref.role === "input" ? "agent" : "execution", availability: "not_captured"});
+    }
+  });
+  it("distinguishes pending checks, explicit short circuits and missing closed-step facts", async () => {
+    const {adapter, query, snapshot} = await setup();
+    const flow = new ExecutionFlowPath(definition, {observer: adapter}, "run");
+    const first = flow.advance("work");
+    const selection = {kind: "get_flow_occurrence" as const, runId: "run", invocationId: flow.ref.invocationId, occurrenceId: first.ref.stepExecutionId!};
+    const open = await query.query({...await snapshot(), ...selection});
+    expect(open.flow?.occurrence).toMatchObject({status: "open", checks: [{id: "ready", availability: "pending", recordIds: []}]});
+    flow.advance("work").check("ready", "not_evaluated", {reason: "cancelled_before_check"});
+    flow.advance("finish"); flow.close("cancelled");
+    const closed = await query.query({...await snapshot(), ...selection, limit: 1});
+    expect(closed.flow?.occurrence).toMatchObject({status: "closed", checks: [{id: "ready", availability: "not_observed", recordIds: []}]});
+    expect(closed.limitations).toContain("flow_check_not_observed");
+    // Reading a limited page must not change occurrence-level coverage.
+    expect(closed.flow?.occurrence).toEqual((await query.query({...await snapshot(), ...selection})).flow?.occurrence);
+    const skipped = (await query.query({...await snapshot(), kind: "list_flow_occurrences", runId: "run", invocationId: flow.ref.invocationId})).records[1]!;
+    const detail = await query.query({...await snapshot(), ...selection, occurrenceId: skipped.subject.id});
+    expect(detail.flow?.occurrence?.checks[0]?.availability).toBe("recorded");
+    expect(detail.limitations).not.toContain("flow_check_not_observed");
+  });
+  it("resolves versioned forward references, preserves unversioned use-time state and exposes unmapped refs", async () => {
+    const {adapter, recorder, query, snapshot} = await setup();
+    const source = recorder.ref("test", "context", "context", "run");
+    const offer = (id: string) => recorder.offer({id, subject: source, occurredAt: null, payload: {kind: "event", name: id, sequence: null, code: null}});
+    offer("before");
+    const flow = new ExecutionFlowPath(definition, {observer: adapter}, "run");
+    const ref = {owner: "test", kind: "contribution", id: "output", revision: "1"};
+    const step = flow.advance("work", {}, [
+      {owner: "test", kind: "context", id: "context", revision: null},
+      {owner: "retry", kind: "attempt", id: "late-attempt", revision: null},
+    ]);
+    step.check("ready", "passed", {required: 1, available: 2}, ref);
+    step.output(ref, {owner: "test", kind: "unsupported-domain-kind", id: "unknown", revision: null});
+    flow.advance("finish"); flow.close("returned");
+    const old = await snapshot();
+    offer("later");
+    recorder.offer({id: "late-attempt-record", subject: recorder.ref("retry", "attempt", "late-attempt", "run"), occurredAt: null,
+      payload: {kind: "event", name: "retry_attempt_started", sequence: null, code: null}});
+    recorder.offer({id: "output-record", subject: recorder.ref(ref.owner, "contribution", ref.id, "run", ref.revision), occurredAt: null,
+      payload: {kind: "event", name: "produced", sequence: null, code: null},
+      contents: [{name: "Result", class: "definition", stage: "produced", mediaType: "application/json", value: {answer: 42}}]});
+    recorder.offer({id: "output-linked", subject: recorder.ref(ref.owner, "contribution", ref.id, "run", ref.revision), occurredAt: null,
+      payload: {kind: "event", name: "linked-after-material", sequence: null, code: null}});
+    const current = await snapshot();
+    const selection = {kind: "get_flow_occurrence" as const, runId: "run", invocationId: flow.ref.invocationId, occurrenceId: step.ref.stepExecutionId!};
+    const before = await query.query({...old, ...selection});
+    const after = await query.query({...current, ...selection});
+    expect(before.flow?.occurrence?.references.find(item => item.role === "output")?.availability).toBe("not_observed");
+    expect(after.flow?.occurrence?.references).toEqual(expect.arrayContaining([
+      expect.objectContaining({role: "input", availability: "present", recordId: "before"}),
+      expect.objectContaining({role: "input", availability: "observed_later", recordId: "late-attempt-record"}),
+      expect.objectContaining({role: "output", availability: "present", recordId: "output-record"}),
+      expect.objectContaining({role: "configuration", availability: "present", recordId: "output-record"}),
+      expect.objectContaining({role: "output", availability: "unmapped", recordId: null}),
+    ]));
+    expect(after.limitations).toContain("flow_reference_unmapped");
+    expect(after.limitations).toContain("flow_reference_only_observed_later");
+    const diagnostic = await query.query({...current, kind: "list_records", recordKind: "event"});
+    expect(diagnostic.records.some(record => record.payload.kind === "event" && record.payload.code === "inspection_flow_reference_unmapped")).toBe(true);
+    expect((await query.query({...old, ...selection})).flow?.occurrence).toEqual(before.flow?.occurrence);
+  });
+  it("does not label an unclosed step active after its invocation has ended", async () => {
+    const {adapter, query, snapshot} = await setup();
+    const flow = new ExecutionFlowPath(definition, {observer: adapter}, "run");
+    const step = flow.enter("work");
+    flow.close("failed");
+    const detail = await query.query({...await snapshot(), kind: "get_flow_occurrence", runId: "run", invocationId: flow.ref.invocationId, occurrenceId: step.ref.stepExecutionId!});
+    expect(detail.flow?.occurrence?.status).toBe("incomplete");
+    expect(detail.limitations).toContain("flow_exit_not_observed");
+  });
   it("keeps open occurrences and exact call/return links at their capture watermark",async()=>{
     const {adapter,query,snapshot}=await setup();
     const root=new ExecutionFlowPath(definition,{observer:adapter},"run");

@@ -15,7 +15,7 @@ export class ActionExecutionInspectionAdapter implements ActionExecutionObserver
         contents: [{ name: "Prepared subject", stage: "prepared_subject", class: "execution", mediaType: "application/json", value: value.subject as unknown as InspectionJson }],
       });
     } else if (value.kind === "assessment") {
-      r.offer({ subject: action, occurredAt: null, payload: { kind: "execution", phase: value.permissionStatus === "approval_required" ? "pending" : "started", executionKind: "assessment", status: value.permissionStatus ?? value.policyStatus, code: null, effectCertainty: null }, contents: [{ name: "Assessment disposition", stage: "assessed", class: "execution", mediaType: "application/json", value }] });
+      r.offer({ subject: action, occurredAt: value.occurredAt, payload: { kind: "execution", phase: value.permissionStatus === "approval_required" ? "pending" : "started", executionKind: "assessment", status: value.permissionStatus ?? value.policyStatus, code: null, effectCertainty: null }, contents: [{ name: "Assessment disposition", stage: "assessed", class: "execution", mediaType: "application/json", value: value as unknown as InspectionJson }] });
     } else if (value.kind === "settled") {
       r.offer({ subject: action, occurredAt: value.occurredAt, payload: { kind: "execution", phase: "settled", executionKind: "action", status: value.status, code: value.causeRef, effectCertainty: null }, contents: [{ name: "Action settlement", stage: "settled", class: "execution", mediaType: "application/json", value }] });
     } else {

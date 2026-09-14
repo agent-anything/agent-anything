@@ -3,7 +3,7 @@ import { Button, Table, Empty, Switch } from "antd";
 import { ReactFlow, Background, Controls, MarkerType, type Node, type Edge } from "@xyflow/react";
 import type { InspectionRecord } from "@agent-anything/inspection/records";
 
-export function LifecycleView({ records, onRecord }: { records: readonly InspectionRecord[]; onRecord: (record: InspectionRecord) => void }) {
+export function LifecycleView({ records, relatedRecords = [], onRecord }: { records: readonly InspectionRecord[]; relatedRecords?: readonly InspectionRecord[]; onRecord: (record: InspectionRecord) => void }) {
   const [showDefinition, setShowDefinition] = useState(false);
   const [route, setRoute] = useState<string | null>(null);
   const definition = [...records].reverse().find((record) => record.payload.kind === "lifecycle");
@@ -37,6 +37,10 @@ export function LifecycleView({ records, onRecord }: { records: readonly Inspect
       { title: "From", render: (_value, record) => record.payload.kind === "transition" ? record.payload.from ?? "Not observed" : "" },
       { title: "To", render: (_value, record) => record.payload.kind === "transition" ? record.payload.to : "" },
       { title: "Trigger", render: (_value, record) => record.payload.kind === "transition" ? record.payload.reasonCode ?? record.payload.transitionId ?? "Not recorded" : "" },
+      { title: "Trigger record", render: (_value, record) => record.links.filter(link=>link.kind === "trigger").map(link=>{
+        const trigger = relatedRecords.find(item=>item.subject.id === link.from.id && item.subject.owner === link.from.owner && item.subject.revision === link.from.revision);
+        return trigger ? <Button key={link.id} type="link" onClick={event=>{event.stopPropagation();onRecord(trigger);}}>{trigger.payload.kind === "event" ? trigger.payload.name : trigger.subject.kind} / #{trigger.commitSequence}</Button> : <span key={link.id}>Not observed</span>;
+      }) },
     ]} />
   </div>;
 }

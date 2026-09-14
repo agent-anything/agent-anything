@@ -1059,7 +1059,12 @@ export class RunExecution<TOutput> {
   }
 
   async run(): Promise<RunResult<TOutput>> {
-    const initialization = this.flow.enter("initialize", {agentId: this.activeAgent.id, revision: this.writer.getSnapshot().revision});
+    publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "run_input", runId: this.runId, occurredAt: this.startedAt, input: this.input,
+      configuration: {limits: this.config.limits, cancellationLimits: this.config.cancellationLimits, audit: this.config.audit, telemetry: this.config.telemetry}});
+    const configurationRef = {owner: "runtime", kind: "contribution", id: `${this.runId}:configuration`, revision: "1"};
+    const initialization = this.flow.enter("initialize", {agentId: this.activeAgent.id, revision: this.writer.getSnapshot().revision}, [
+      {owner: "runtime", kind: "contribution", id: `${this.runId}:input`, revision: "1"}, configurationRef,
+    ]);
     this.interruptionCoordinator.start();
     try {
       const initialContext = this.delegationRequest === null
@@ -1114,6 +1119,7 @@ export class RunExecution<TOutput> {
       }, this.startedAt);
       this.runStartedEventEmitted = true;
       initialization.check("initial_context", "passed", {contextId: this.writer.getSnapshot().context.ref.id});
+      initialization.output({owner:"context",kind:"context",id:this.writer.getSnapshot().context.ref.id,revision:String(this.writer.getSnapshot().context.ref.version)});
       this.emitCommittedContextTransition(this.writer.getSnapshot().context);
       this.emitCommittedRunItems(this.writer.getSnapshot());
       const startFailures = await this.recordLifecycle("started");
@@ -1135,36 +1141,51 @@ export class RunExecution<TOutput> {
         this.drainInteractionSettlements();
         controls.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
         if (this.config.cancellation.context.request !== null) {
+          for (const check of ["resource_account", "deadline", "numeric_limits"]) controls.check(check, "not_evaluated", {reason: "cancellation_requested"});
           return await this.settle({ status: "cancelled" });
         }
         if (this.resourceFailure !== null) {
           controls.check("resource_account", "not_satisfied", {dimension: this.resourceFailure.dimension});
+          for (const check of ["deadline", "numeric_limits"]) controls.check(check, "not_evaluated", {reason: "resource_failure"});
           return await this.settleResourceFailure(this.resourceFailure);
         }
+        controls.check("resource_account", "passed", {failurePresent: false});
         this.drainSteering("apply");
         const deadline = evaluateRunDeadline({
           deadlineAt: this.writer.getSnapshot().deadlineAt,
           now: this.now(),
         });
-        controls.check("deadline", deadline === null ? "passed" : "not_satisfied", {deadlineAt: this.writer.getSnapshot().deadlineAt});
-        if (deadline !== null) return await this.settleLimitViolation(deadline);
+        controls.check("deadline", deadline === null ? "passed" : "not_satisfied", {deadlineAt: this.writer.getSnapshot().deadlineAt}, configurationRef);
+        if (deadline !== null) {
+          controls.check("numeric_limits", "not_evaluated", {reason: "deadline_exceeded"});
+          return await this.settleLimitViolation(deadline);
+        }
 
         const numericLimit = evaluateRunNumericLimits({
           counters: this.writer.getSnapshot().counters,
           limits: this.config.limits,
         });
-        controls.check("numeric_limits", numericLimit === null ? "passed" : "not_satisfied", {code: numericLimit?.code ?? null});
+        controls.check("numeric_limits", numericLimit === null ? "passed" : "not_satisfied", {
+          code: numericLimit?.code ?? null,
+          controllerTurns: this.writer.getSnapshot().counters.controllerTurns, maxIterations: this.config.limits.maxIterations,
+          runActions: this.writer.getSnapshot().counters.runActions, maxActions: this.config.limits.maxActions,
+          consecutiveActionFailures: this.writer.getSnapshot().counters.consecutiveActionFailures, maxConsecutiveActionFailures: this.config.limits.maxConsecutiveActionFailures,
+        }, configurationRef);
         if (numericLimit !== null) return await this.settleLimitViolation(numericLimit);
 
-        this.flow.enter("controller");
+        this.flow.enter("controller", {}, [{owner:"context",kind:"context",id:this.writer.getSnapshot().context.ref.id,revision:String(this.writer.getSnapshot().context.ref.version)}]);
         const decision = await this.nextDecision();
         if (decision === null) continue;
-        const decisionStep = this.flow.enter("decision", {kind: decision.decision.kind, turnId: decision.turn.id, basisRevision: decision.basisRevision});
+        const decisionRef = {owner:"runtime",kind:"contribution",id:`${decision.turn.id}:decision`,revision:String(decision.basisRevision)};
+        this.flow.current?.output(decisionRef);
+        const decisionStep = this.flow.enter("decision", {kind: decision.decision.kind, turnId: decision.turn.id, basisRevision: decision.basisRevision}, [decisionRef]);
         if (this.resourceFailure !== null) {
+          for (const check of ["current_basis", "cancellation"]) decisionStep.check(check, "not_evaluated", {reason: "resource_failure"});
           return await this.settleResourceFailure(this.resourceFailure);
         }
         const settlementsAfterDecision = this.drainInteractionSettlements();
         decisionStep.check("current_basis", settlementsAfterDecision ? "not_satisfied" : "passed", {settlementsAfterDecision});
+        decisionStep.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
         if (this.config.cancellation.context.request !== null) {
           this.settleUnprocessedModelCalls(
             decision.decision,
@@ -1213,7 +1234,7 @@ export class RunExecution<TOutput> {
           continue;
         }
 
-        this.flow.enter("admission", {turnId: decision.turn.id, calls: decision.decision.candidates.length});
+        const admissionStep = this.flow.enter("admission", {turnId: decision.turn.id, calls: decision.decision.candidates.length}, [decisionRef]);
         const basis: CandidateBasis<TOutput> = {
           turn: decision.turn,
           runRevision: decision.basisRevision,
@@ -1226,15 +1247,22 @@ export class RunExecution<TOutput> {
                 semanticValidators: this.dependencies.operations.toolInputSemanticValidators })] as const]
             : [])),
         };
+        const rejectedAdmissions = [...basis.admissions.values()].filter(value => value.status === "rejected").length;
+        admissionStep.check("tool_admission", basis.admissions.size === 0 ? "not_applicable" : rejectedAdmissions > 0 ? "not_satisfied" : "passed", {
+          toolCandidates: basis.admissions.size, rejected: rejectedAdmissions,
+        });
+        admissionStep.output(...decision.decision.candidates.map(candidate => ({owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null})));
         if (this.dependencies.executionObserver) decision.decision.candidates.forEach((candidate, position) => {
           const admission = basis.admissions.get(candidate);
           publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "scheduling", runId: this.runId, occurredAt: null, call: candidate.modelCallRef, position,
             disposition: admission?.status === "rejected" ? "rejected" : "queued", rule: "decision_source_order", groupId: null, reason: admission?.status === "rejected" ? admission.code : null });
         });
         for (let index = 0; index < decision.decision.candidates.length; index += 1) {
-          this.flow.enter("dispatch", {turnId: decision.turn.id, candidateIndex: index});
+          const dispatchStep = this.flow.enter("dispatch", {turnId: decision.turn.id, candidateIndex: index}, [{owner:"runtime",kind:"call",id:decision.decision.candidates[index]!.modelCallRef.id,revision:null}]);
           await this.awaitSuspension();
+          dispatchStep.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
           if (this.config.cancellation.context.request !== null) {
+            for (const check of ["steering", "action_capacity"]) dispatchStep.check(check, "not_evaluated", {reason: "cancellation_requested"});
             this.settleCandidateRange(
               decision.decision.candidates,
               index,
@@ -1245,7 +1273,10 @@ export class RunExecution<TOutput> {
             break;
           }
           this.drainInteractionSettlements();
-          if (this.drainSteering("apply") > 0) {
+          const steeringChanges = this.drainSteering("apply");
+          dispatchStep.check("steering", steeringChanges > 0 ? "not_satisfied" : "passed", {applied:steeringChanges});
+          if (steeringChanges > 0) {
+            dispatchStep.check("action_capacity", "not_evaluated", {reason: "steering_applied"});
             this.settleCandidateRange(
               decision.decision.candidates,
               index,
@@ -1264,6 +1295,9 @@ export class RunExecution<TOutput> {
             const remainingActionCapacity = this.config.limits.maxActions -
               this.writer.getSnapshot().counters.runActions;
             if (siblingCount > 1) {
+              dispatchStep.check("action_capacity", remainingActionCapacity >= siblingCount ? "passed" : "not_satisfied", {
+                remaining: remainingActionCapacity, required: siblingCount, maxActions: this.config.limits.maxActions,
+              });
               if (remainingActionCapacity < siblingCount) {
                 this.settleCandidateRange(
                   decision.decision.candidates.slice(index, index + siblingCount),
@@ -1287,6 +1321,9 @@ export class RunExecution<TOutput> {
             } else if (this.concurrentToolGroupLength(decision.decision.candidates, index, basis) > 1) {
               const count = Math.min(remainingActionCapacity,
                 this.concurrentToolGroupLength(decision.decision.candidates, index, basis));
+              dispatchStep.check("action_capacity", "not_evaluated", {
+                reason: "individual_call_admission", remaining: remainingActionCapacity, scheduledTogether: count > 1 ? count : 1,
+              });
               if (count > 1) {
                 outcome = await this.processConcurrentToolCandidates(
                   decision.decision.candidates.slice(index, index + count), index, basis);
@@ -1295,6 +1332,7 @@ export class RunExecution<TOutput> {
                 outcome = await this.processCandidate(decision.decision.candidates[index]!, index, basis);
               }
             } else {
+              dispatchStep.check("action_capacity", "not_evaluated", {reason: "individual_call_admission"});
               outcome = await this.processCandidate(
                 decision.decision.candidates[index]!,
                 index,
@@ -1345,8 +1383,12 @@ export class RunExecution<TOutput> {
             break;
           }
         }
-        this.flow.enter("join");
+        const joinStep = this.flow.enter("join", {}, decision.decision.candidates.map(candidate => ({owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null})));
         await this.waitForModelCallSettlements();
+        joinStep.check("unsettled_calls", this.modelCallSettlementWaits.size === 0 ? "passed" : "not_satisfied", {
+          remaining: this.modelCallSettlementWaits.size,
+        });
+        joinStep.output(...decision.decision.candidates.map(candidate => ({owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null})));
       }
       return this.terminalResult;
     } catch (error) {
@@ -1383,6 +1425,8 @@ export class RunExecution<TOutput> {
       feedback,
       createdAt: this.now(),
     });
+    publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
+      occurredAt: contribution.source.observedAt, source: contribution.source, value: feedback});
     this.writer.commit(
       { kind: "controller_feedback", feedback },
       (state) => Object.freeze({
@@ -1418,10 +1462,16 @@ export class RunExecution<TOutput> {
   ): { readonly kind: "completed"; readonly source: RunCauseSourceRef } | { readonly kind: "continue" | "cancelled" } {
     const step = this.flow.enter("completion", {turnId: turn.id});
     step.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
-    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
+    if (this.config.cancellation.context.request !== null) {
+      for (const check of ["active_state", "descendant_obligations"]) step.check(check, "not_evaluated", {reason: "cancellation_requested"});
+      return { kind: "cancelled" };
+    }
     const current = this.writer.getSnapshot();
     step.check("active_state", current.status === "running" || current.status === "waiting" ? "passed" : "not_satisfied", {status: current.status, revision: current.revision});
-    if (current.status !== "running" && current.status !== "waiting") return { kind: "continue" };
+    if (current.status !== "running" && current.status !== "waiting") {
+      step.check("descendant_obligations", "not_evaluated", {reason: "inactive_state"});
+      return { kind: "continue" };
+    }
     const outstanding = this.hasUnsettledDescendantObligations();
     step.check("descendant_obligations", outstanding ? "not_satisfied" : "passed", {pendingDescendants: current.pending.filter(pending => pending.kind === "descendant_run").length});
     if (outstanding) return { kind: "continue" };
@@ -1538,6 +1588,7 @@ export class RunExecution<TOutput> {
     }, current => ({ status: this.statusAfterPendingChange(current, current.pending, action.ref.id) }));
     const flow = this.actionFlows.get(action.ref.id);
     flow?.advance("settlement", {settlement: result.settlement, callId: call.modelCallRef.id}, [{owner:"runtime",kind:"call",id:call.modelCallRef.id,revision:null}]).check("single_settlement", "passed");
+    flow?.current?.output({owner:"runtime",kind:"call",id:call.modelCallRef.id,revision:null});
     flow?.close(result.settlement === "cancelled" ? "cancelled" : result.settlement === "failed" ? "failed" : "returned");
     this.actionFlows.delete(action.ref.id);
   }
@@ -1678,7 +1729,9 @@ export class RunExecution<TOutput> {
       selected: Object.freeze(this.config.tools.tools.filter((tool) => tool.origins.includes("model")).map((tool) => tool.registration.descriptor.ref)),
     });
     let prepared: PreparedControllerOperation<TOutput>;
-    const contextStep = flow.advance("context");
+    const exposureRef = {owner: "runtime", kind: "turn", id: turn.id, revision: null};
+    exposureStep.output(exposureRef);
+    const contextStep = flow.advance("context", {}, [exposureRef]);
     try {
       prepared = prepareControllerOperation({
         agent: this.activeAgent,
@@ -1697,6 +1750,7 @@ export class RunExecution<TOutput> {
       publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_projection", runId: this.runId, occurredAt: prepared.manifest.createdAt, manifest: prepared.manifest, projection: prepared.context });
       this.emitContextProjectionCompleted(prepared.manifest, "projected", null);
       contextStep.check("projection_contract", "passed", {manifestId: prepared.manifest.id, contextId: prepared.context.id});
+      contextStep.output({owner:"context",kind:"contribution",id:prepared.manifest.projectionId,revision:String(prepared.manifest.activeContext.version)}, {owner:"context",kind:"context",id:prepared.manifest.id,revision:null});
     } catch (error) {
       if (error instanceof ContextProjectionPreparationError) {
         publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_projection", runId: this.runId, occurredAt: error.manifest.createdAt, manifest: error.manifest, projection: null });
@@ -1714,7 +1768,7 @@ export class RunExecution<TOutput> {
       throw error;
     }
     this.decisionBasis.capture(turn.id, state.revision);
-    flow.advance("controller", {turnId: turn.id}, [{owner: "runtime", kind: "turn", id: turn.id, revision: null}]);
+    flow.advance("controller", {turnId: turn.id}, [{owner: "runtime", kind: "turn", id: turn.id, revision: null}, {owner:"context",kind:"contribution",id:prepared.manifest.projectionId,revision:String(prepared.manifest.activeContext.version)}]);
     const retryScope = this.createRetryScope(turn.id, state.revision, flow.callContext);
     this.emit("controller.started", { turnId: turn.id, iteration });
     try {
@@ -1770,9 +1824,18 @@ export class RunExecution<TOutput> {
         });
         return null;
       }
-      const decision = validateControllerDecision(candidate, prepared.input);
-      const decisionStep = flow.advance("decision", {kind: decision.kind});
-      decisionStep.check("decision_contract", "passed");
+      const decisionStep = flow.advance("decision");
+      let decision: ControllerDecision<TOutput>;
+      try {
+        decision = validateControllerDecision(candidate, prepared.input);
+        decisionStep.check("decision_contract", "passed", {kind: decision.kind});
+      } catch (error) {
+        decisionStep.check("decision_contract", "error", {reason: "invalid_controller_decision"});
+        throw error;
+      }
+      const decisionRef = {owner:"runtime",kind:"contribution",id:`${turn.id}:decision`,revision:String(state.revision)};
+      publishRunExecutionObservation(this.dependencies.executionObserver, {kind:"controller_decision",runId:this.runId,occurredAt:new Date().toISOString(),turnId:turn.id,basisRevision:state.revision,decision});
+      decisionStep.output(decisionRef);
       this.writer.commit({
         kind: "controller_turn",
         turn,
@@ -1905,14 +1968,21 @@ export class RunExecution<TOutput> {
     const planId = this.currentContextContributionId(state.context, "agent-runtime", "run_plan")
       ?? this.id("context_contribution");
     const revision = String(state.revision + 1);
+    const plan = state.plan === null ? null : projectPlan(state.plan);
     const contributions = createCurrentRunContextContributions({
       runStateId,
       planId,
       revision,
       state,
-      plan: state.plan === null ? null : projectPlan(state.plan),
+      plan,
       createdAt: this.now(),
     });
+    for (const contribution of contributions) {
+      publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
+        occurredAt: contribution.source.observedAt, source: contribution.source,
+        value: contribution.source.kind === "run_state" ? {revision: state.revision, status: state.status, activeAgent: state.activeAgent, pending: state.pending}
+          : plan});
+    }
     this.writer.commitState((current) => Object.freeze({
       context: this.applyContextContributions(
         current.context,
@@ -2731,14 +2801,23 @@ export class RunExecution<TOutput> {
     const flow = new ExecutionFlowPath(OPERATION_EXECUTION_FLOW, input.executionFlow ?? (input.parentInvocation ? this.operationFlows.get(input.parentInvocation.id)?.callContext : undefined) ?? this.actionFlows.get(input.action.ref.id)?.callContext ?? this.flow.context, this.runId, [{owner:"operations",kind:"operation",id:input.invocationId,revision:null}]);
     this.operationFlows.set(input.invocationId, flow);
     let flowDisposition: "returned" | "failed" = "failed";
+    const requestRef = {owner: "operations", kind: "contribution", id: `${input.invocationId}:request`, revision: "1"};
+    publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "operation_request", runId: this.runId, occurredAt: new Date().toISOString(),
+      invocationId: input.invocationId, parentRunActionId: input.action.ref.id, operation: input.operation, request: input.request, requestOrigin: input.requestOrigin});
+    const observeResult = (result: OperationResult): OperationResult => {
+      publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "operation_result", runId: this.runId, occurredAt: result.finishedAt, invocationId: input.invocationId, result});
+      flow.current?.output({owner: "operations", kind: "contribution", id: result.ref.id, revision: null});
+      return result;
+    };
     try {
-    const registrationStep = flow.advance("registration", {invocationId:input.invocationId, origin:input.requestOrigin});
+    const registrationStep = flow.advance("registration", {invocationId:input.invocationId, origin:input.requestOrigin}, [requestRef]);
     const registration = findRegisteredOperation(
       this.dependencies.operations.catalog,
       input.operation,
     );
     registrationStep.check("registration", registration && !registration.retirement ? "passed" : "not_satisfied");
     if (registration === undefined) {
+      registrationStep.check("origin", "not_evaluated", {reason: "operation_not_registered"});
       this.commitRejectedOperation(
         input.action,
         "operation-catalog",
@@ -2748,6 +2827,7 @@ export class RunExecution<TOutput> {
       return null;
     }
     if (registration.retirement !== null) {
+      registrationStep.check("origin", "not_evaluated", {reason: "operation_retired"});
       this.commitRejectedOperation(
         input.action,
         "operation-catalog",
@@ -2776,14 +2856,18 @@ export class RunExecution<TOutput> {
       parentInvocation: input.parentInvocation,
       interruption: this.invocationInterruption(),
     });
-    const bindingStep = flow.advance("binding");
+    const bindingStep = flow.advance("binding", {}, [requestRef]);
     const resolution = await this.dependencies.operations.bindings.resolve({
       operation: registration,
       context,
       request: input.request,
       basis: input.basis,
     });
+    const bindingRef = {owner: "operations", kind: "contribution", id: `${input.invocationId}:binding`, revision: "1"};
+    publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "operation_binding", runId: this.runId, occurredAt: new Date().toISOString(), invocationId: input.invocationId, resolution});
+    bindingStep.output(bindingRef);
     if (resolution.status !== "resolved") {
+      bindingStep.check("binding", "not_satisfied", {status: resolution.status, code: resolution.code});
       const result = this.operationFailureResult(
         registration,
         invocation,
@@ -2794,13 +2878,13 @@ export class RunExecution<TOutput> {
         this.now(),
       );
       this.emitOperation(registration, resolutionBindingKind(registration), context, result);
-      return result;
+      return observeResult(result);
     }
     const binding = resolution.binding;
     bindingStep.check("binding", bindingMatchesResolution(registration, context, binding) ? "passed" : "not_satisfied", {kind:binding.kind});
     if (input.allowedBindings !== undefined && !input.allowedBindings.includes(binding.kind)) {
-      return this.operationFailureResult(registration, invocation, "invalid", "operation-composition",
-        "composite_child_binding_not_allowed", this.now(), this.now());
+      return observeResult(this.operationFailureResult(registration, invocation, "invalid", "operation-composition",
+        "composite_child_binding_not_allowed", this.now(), this.now()));
     }
     if (!bindingMatchesResolution(registration, context, binding)) {
       const result = this.operationFailureResult(
@@ -2813,7 +2897,7 @@ export class RunExecution<TOutput> {
         this.now(),
       );
       this.emitOperation(registration, binding.kind, context, result);
-      return result;
+      return observeResult(result);
     }
 
     const startedAt = this.now();
@@ -2829,7 +2913,7 @@ export class RunExecution<TOutput> {
       parentRunActionId: input.action.ref.id,
     }, startedAt);
     let result: OperationResult;
-    flow.advance("execute", {bindingKind:binding.kind, invocationId:invocation.id});
+    flow.advance("execute", {bindingKind:binding.kind, invocationId:invocation.id}, [bindingRef]);
     try {
       const execute = () => this.executeResolvedBinding(
         registration,
@@ -2866,7 +2950,9 @@ export class RunExecution<TOutput> {
       resultId: result.ref.id,
       lowerResultRefs: Object.freeze(result.lowerRefs.map((reference) => reference.id)),
     }, result.finishedAt);
-    flow.advance("result", {status:result.status, resultId:result.ref.id, code:result.failure?.code ?? null});
+    const resultRef = {owner: "operations", kind: "contribution", id: result.ref.id, revision: null};
+    observeResult(result);
+    flow.advance("result", {status:result.status, resultId:result.ref.id, code:result.failure?.code ?? null}, [resultRef]).output(resultRef);
     flowDisposition = result.status === "failed" ? "failed" : "returned";
     return result;
     } finally { flow.close(flowDisposition); this.operationFlows.delete(input.invocationId); }
@@ -3971,6 +4057,7 @@ export class RunExecution<TOutput> {
       });
       publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "descendant_result", runId: this.runId, occurredAt: delegationResult.createdAt, parentRunActionId: managed.action.ref.id, raw: result, projected: delegationResult });
       flow.current?.check("result_projection","passed",{resultId:delegationResult.ref.id});
+      flow.current?.output({owner:"agent-runtime",kind:"contribution",id:delegationResult.ref.id,revision:delegationResult.ref.revision});
     } catch {
       if (flow.current) flow.current.end("failed");
       flow.close("failed");
@@ -4011,7 +4098,7 @@ export class RunExecution<TOutput> {
     }
     this.cleanupManagedDescendant(managed, "resolved", delegationResult.ref.id);
     flow.advance("settle", {resultId:delegationResult.ref.id});
-    flow.close("returned");
+    flow.close("returned", undefined, [{owner:"agent-runtime",kind:"contribution",id:delegationResult.ref.id,revision:delegationResult.ref.revision}]);
     } catch (error) {flow.close("failed");throw error;}
   }
 
@@ -4567,9 +4654,10 @@ export class RunExecution<TOutput> {
       id: this.id("context_contribution"),
       observation,
     });
-    this.actionFlows.get(action.ref.id)?.advance("observation", {kind: payload.kind, owner}, [
-      {owner, kind: "contribution", id: observation.id, revision: "1"},
-    ]);
+    const observationRef = {owner, kind: "contribution", id: observation.id, revision: "1"};
+    const actionFlow = this.actionFlows.get(action.ref.id);
+    actionFlow?.current?.output(observationRef);
+    const observationStep = actionFlow?.advance("observation", {kind: payload.kind, owner}, [observationRef]);
     this.writer.commit({ kind: "observation", observation }, (current) => Object.freeze({
       context: this.applyContextContributions(
         current.context,
@@ -4586,6 +4674,10 @@ export class RunExecution<TOutput> {
           : 0,
       }),
     }));
+    const context = this.writer.getSnapshot().context;
+    observationStep?.output(observationRef,
+      {owner: "context", kind: "context", id: context.ref.id, revision: String(context.ref.version)},
+      {owner: "context", kind: "contribution", id: contribution.ref.id, revision: contribution.ref.revision});
   }
 
   private applyContextContributions(
@@ -5379,9 +5471,15 @@ export class RunExecution<TOutput> {
           );
     }
     this.runTree.settleResources(this.runId);
+    finalizerStep.check("resource_account", this.resourceFailure !== null || resultResource.status !== "recorded" ? "not_satisfied" : "passed", {
+      failurePresent: this.resourceFailure !== null, resultAccounting: resultResource.status,
+    });
 
     const completedAt = this.now();
     const cancellationRequest = this.config.cancellation.context.request;
+    finalizerStep.check("cancellation", cancellationRequest !== null ? "not_satisfied" : "passed", {
+      requestPresent: cancellationRequest !== null, candidate: terminal.status,
+    });
     if (cancellationRequest !== null && (terminal.status === "completed")) {
       terminal = { status: "cancelled" };
     }
@@ -5443,6 +5541,7 @@ export class RunExecution<TOutput> {
     };
     const result = createRunResult(base);
     this.terminalResult = result;
+    terminalStep.output({owner: "runtime", kind: "run", id: this.runId, revision: null});
     this.emitCommittedRunItems(state);
     this.emitTerminal(result);
     completeRunnerTrace(this.traceAssembler, result);
@@ -5724,6 +5823,7 @@ export class RunExecution<TOutput> {
   }
 
   private recordRetry(event: import("../retry/index.js").RetryEvent): void {
+    publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "retry_event", runId: this.runId, occurredAt: event.occurredAt, event});
     const current = this.retryProjection ?? Object.freeze({
       attemptCount: 0,
       scheduledCount: 0,

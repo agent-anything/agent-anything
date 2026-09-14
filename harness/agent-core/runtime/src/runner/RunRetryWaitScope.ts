@@ -54,7 +54,7 @@ export class RunRetryWaitScope implements RetryWaitControl {
       nextAttemptNumber: request.precedingAttempt.attemptNumber + 1,
       nextAttemptAt: request.delay.nextAttemptAt, deadlineAt: this.input.deadlineAt, policy: request.policy,
     });
-    const flow = new ExecutionFlowPath(RETRY_WAIT_EXECUTION_FLOW, request.executionFlow ?? this.input.executionFlow ?? {}, this.input.runId, request.operation.owner === "provider_request" ? [{owner: "provider", kind: "provider-attempt", id: pending.precedingAttemptId, revision: null}] : []);
+    const flow = new ExecutionFlowPath(RETRY_WAIT_EXECUTION_FLOW, request.executionFlow ?? this.input.executionFlow ?? {}, this.input.runId, [{owner: "retry", kind: "attempt", id: pending.precedingAttemptId, revision: null}]);
     flow.advance("register", {waitId: pending.waitId, generation, operationId: pending.operationId, budgetId: pending.budgetId, branchId: pending.branchId, nextAttemptAt: pending.nextAttemptAt, deadlineAt: pending.deadlineAt, nextAttemptNumber: pending.nextAttemptNumber}).check("invocation_ownership", "passed", {invocationId: this.input.invocationId});
     let signal!: () => void;
     let change = new Promise<void>(resolve => { signal = resolve; });

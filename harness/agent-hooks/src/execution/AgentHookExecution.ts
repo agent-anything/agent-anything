@@ -175,7 +175,7 @@ async function invokeStopHandler(
   executionFlow?: ExecutionFlowContext,
 ): Promise<AgentStopHandlerResult | null> {
   const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, executionFlow ?? {}, event.run.id, []);
-  flow.advance("invoke", {hookId:match.registration.ref.id, timeoutMs:match.registration.timeoutMs, mode:match.registration.mode});
+  flow.advance("invoke", {hookId:match.registration.ref.id, timeoutMs:match.registration.timeoutMs, mode:match.registration.mode}, [flow.material("Hook event and registration", "received", {event, registration: match.registration})]);
   const result = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) =>
     (match.binding.handler as AgentStopHandler).handle(event, context, flow.callContext));
   let decision: AgentStopHandlerResult | null = null;
@@ -193,7 +193,11 @@ async function invokeStopHandler(
     message = result.message;
   }
   store.append(record(match.registration.ref, event, match.registration.mode, status, code, message, result, now));
-  flow.advance("settle", {status, code}).check("result_contract", status === "allowed" || status === "continued" ? "passed" : "error");
+  const resultRef = flow.material("Hook handler result", "returned", result);
+  flow.current?.output(resultRef);
+  const settlementStep = flow.advance("settle", {status, code}, [resultRef]);
+  settlementStep.check("result_contract", status === "allowed" || status === "continued" ? "passed" : "error");
+  settlementStep.output(flow.material("Validated Hook decision", "validated", {status, code, message, decision}));
   flow.close(status === "allowed" || status === "continued" ? "returned" : status === "cancelled" ? "cancelled" : "failed");
   return decision;
 }
@@ -208,7 +212,7 @@ async function invokeObserver(
   executionFlow?: ExecutionFlowContext,
 ): Promise<void> {
   const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, {...executionFlow, relationship:match.registration.mode === "background" ? "spawn" : "call"}, event.run.id, []);
-  flow.advance("invoke", {hookId:match.registration.ref.id, mode:match.registration.mode, timeoutMs:match.registration.timeoutMs});
+  flow.advance("invoke", {hookId:match.registration.ref.id, mode:match.registration.mode, timeoutMs:match.registration.timeoutMs}, [flow.material("Hook event and registration", "received", {event, registration: match.registration})]);
   const result = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) => {
     if (event.point === "Stop") {
       await (match.binding.handler as AgentStopObserver).observe(event, context, flow.callContext);
@@ -216,7 +220,9 @@ async function invokeObserver(
       await (match.binding.handler as AgentStopFailureObserver).observe(event, context, flow.callContext);
     }
   });
-  flow.advance("settle", {status:result.status});
+  const resultRef = flow.material("Hook observer result", "returned", result);
+  flow.current?.output(resultRef);
+  flow.advance("settle", {status:result.status}, [resultRef]).check("result_contract", "not_applicable", {reason: "observer_has_no_decision_result"});
   flow.close(result.status === "completed" ? "returned" : result.status === "cancelled" ? "cancelled" : "failed");
   store.append(record(
     match.registration.ref,

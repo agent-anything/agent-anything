@@ -76,6 +76,7 @@ interface ActiveInteraction {
   readonly resolveCompletion: (settlement: RuntimeInteractionSettlement) => void;
   readonly completion: Promise<RuntimeInteractionSettlement>;
   expiryTimer: ReturnType<typeof setTimeout> | null;
+  submissionObserved: boolean;
 }
 
 type NonResolvedInteractionTransition =
@@ -140,22 +141,30 @@ export class RunInteractionCoordinator {
 
   open(input: OpenRuntimeInteractionInput): OpenRuntimeInteractionResult {
     const flow = new ExecutionFlowPath(INTERACTION_EXECUTION_FLOW, input.executionFlow ?? {}, this.dependencies.runId,
-      [{owner: "interaction", kind: "interaction", id: input.requestId, revision: String(input.requestVersion)}]);
-    const step = flow.advance("open", {protocolOwner: input.protocol.owner, protocolKind: input.protocol.kind});
+      []);
+    const step = flow.advance("open", {protocolOwner: input.protocol.owner, protocolKind: input.protocol.kind},
+      [flow.material("Interaction opening input", "received", {requestId: input.requestId, protocol: input.protocol, subject: input.subject, subjectRef: input.subjectRef,
+        correlation: input.correlation, presentation: input.presentation, requestVersion: input.requestVersion, expiresAt: input.expiresAt, blockingScope: input.blockingScope})]);
     const reject = (result: OpenRuntimeInteractionResult): OpenRuntimeInteractionResult => {
-      flow.advance("settle", {status: result.status});
+      const settlement = flow.advance("settle", {status: result.status});
+      settlement.check("terminal_commit", "not_applicable", {reason: "request_not_opened"});
+      settlement.output(flow.material("Interaction opening result", "rejected", result));
       flow.close("returned");
       return result;
     };
     step.check("run_open", this.settled ? "not_satisfied" : "passed");
     if (this.settled) {
+      step.check("protocol", "not_evaluated", {reason: "run_settled"});
+      step.check("unique_request", "not_evaluated", {reason: "run_settled"});
       return reject(unavailable("interaction_run_settled", "The Run no longer accepts interactions."));
     }
     const protocol = this.resolveProtocol(input.protocol);
     step.check("protocol", protocol === undefined ? "not_satisfied" : "passed");
     if (protocol === undefined) {
+      step.check("unique_request", "not_evaluated", {reason: "protocol_unavailable"});
       return reject(unavailable("interaction_protocol_unavailable", "The Interaction protocol revision is not registered."));
     }
+    let uniquenessChecked = false;
     try {
       const request = protocol.createRequest({
         requestId: input.requestId,
@@ -170,6 +179,7 @@ export class RunInteractionCoordinator {
       });
       const key = requestKey(request.ref);
       step.check("unique_request", this.active.has(key) ? "not_satisfied" : "passed");
+      uniquenessChecked = true;
       if (this.active.has(key)) {
         return reject(invalid("interaction_request_duplicate", "The exact Interaction request is already pending."));
       }
@@ -190,7 +200,7 @@ export class RunInteractionCoordinator {
       }, snapshotUnknown);
       const active: ActiveInteraction = {
         flow,
-        submissionStep: flow.advance("wait", {blockingScope: input.blockingScope, expiresAt: input.expiresAt}),
+        submissionStep: flow.advance("wait", {blockingScope: input.blockingScope, expiresAt: input.expiresAt}, [flow.material("Opened Interaction request", "opened", request)]),
         protocol,
         request,
         execution,
@@ -199,6 +209,7 @@ export class RunInteractionCoordinator {
         resolveCompletion,
         completion,
         expiryTimer: null,
+        submissionObserved: false,
       };
       this.active.set(key, active);
       this.revision += 1;
@@ -215,6 +226,7 @@ export class RunInteractionCoordinator {
       this.dependencies.onOpened(pending, input.parentRunAction);
       return Object.freeze({ status: "opened" as const, pending, envelope, completion });
     } catch (error) {
+      if (!uniquenessChecked) step.check("unique_request", "not_evaluated", {reason: "request_creation_failed"});
       return reject(invalid(
         "interaction_request_invalid",
         error instanceof Error ? error.message : "The Interaction request is invalid.",
@@ -245,6 +257,8 @@ export class RunInteractionCoordinator {
     });
     active.submissionStep.check("submission_receipt", commit.status === "rejected" ? "not_satisfied" : "passed",
       {status: commit.status, submissionId: input.submissionId});
+    active.submissionObserved = true;
+    active.submissionStep.output(active.flow.material("Interaction submission receipt", "recorded", {submission: input, commit}));
     if (commit.status === "rejected") {
       const code = commit.code === "stale_revision"
         ? "interaction_version_stale"
@@ -358,10 +372,12 @@ export class RunInteractionCoordinator {
 
   private async resolveSubmission(active: ActiveInteraction, input: InteractionSubmissionInput): Promise<void> {
     if (!this.active.has(requestKey(input.request))) return;
-    const step = active.flow.advance("resolve", {submissionId: input.submissionId});
+    const step = active.flow.advance("resolve", {submissionId: input.submissionId}, [active.flow.material("Accepted Interaction submission", "received", input)]);
+    let submissionValidated = false;
     try {
       const submission = active.protocol.validateSubmission(active.request, input.payload);
       step.check("submission_contract", "passed");
+      submissionValidated = true;
       const resolutionValue = active.protocol.resolve({
         request: active.request,
         submissionId: input.submissionId,
@@ -374,7 +390,9 @@ export class RunInteractionCoordinator {
         resolutionId: this.dependencies.createId("interaction_resolution", this.nextResolution++),
         resolutionRevision: String(input.request.requestVersion),
       });
-      active.flow.advance("apply", {resolutionId: resolution.resolutionId});
+      const resolutionRef = active.flow.material("Interaction resolution", "resolved", {resolution, value: resolutionValue});
+      step.output(resolutionRef);
+      active.flow.advance("apply", {resolutionId: resolution.resolutionId}, [resolutionRef]);
       const applicationValue = await active.protocol.apply({
         request: active.request,
         resolution: resolutionValue,
@@ -398,12 +416,14 @@ export class RunInteractionCoordinator {
         resolutionValue,
         applicationValue,
       });
+      active.flow.current?.output(active.flow.material("Interaction application", "applied", outcome));
       this.commitTerminal(active, Object.freeze({
         kind: "resolved" as const,
         request: input.request,
         resolution,
       }), settlement);
     } catch {
+      if (!submissionValidated) step.check("submission_contract", "error", {reason: "submission_invalid"});
       const failureId = this.dependencies.createId("interaction_resolution", this.nextResolution++);
       const settlement: RuntimeInteractionSettlement = Object.freeze({
         status: "failed" as const,
@@ -449,8 +469,10 @@ export class RunInteractionCoordinator {
       terminal,
     });
     if (commit.status === "rejected") return;
+    if (!active.submissionObserved) active.submissionStep.check("submission_receipt", "not_evaluated", {reason: settlement.status});
     active.flow.advance("settle", {status: settlement.status, owner: active.request.ref.protocol.owner})
       .check("terminal_commit", "passed");
+    active.flow.current?.output(active.flow.material("Interaction settlement", "committed", {terminal, settlement}));
     active.flow.close(settlement.status === "failed" ? "failed" : settlement.status === "cancelled" ? "cancelled" : "returned");
     const key = requestKey(active.pending.request);
     this.active.delete(key);

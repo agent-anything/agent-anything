@@ -3,9 +3,17 @@ import { useSearchParams } from "react-router-dom";
 import type { InspectionRecord, InspectionSubjectRef } from "@agent-anything/inspection/records";
 import type { InspectionReadResult, InspectionViewQuery } from "@agent-anything/inspection/query";
 import { inspectionQuery, openInspectorSession } from "./InspectorClient.js";
+import { inspectionReadLocation } from "../navigation/InspectionLocation.js";
 
 export const areas = ["Definitions", "Runs", "Model Interaction", "Execution", "Comparison"];
-export const views: Record<string, InspectionViewQuery | "get_execution_flow"> = { Records: "list_records", "Execution Flow": "get_execution_flow", Hierarchy: "get_hierarchy", Lifecycle: "get_lifecycle", "Data Flow": "get_data_flow", Scheduling: "get_scheduling", Dependencies: "get_dependencies", Timeline: "get_timeline", Telemetry: "get_telemetry" };
+export const views: Record<string, InspectionViewQuery | "get_execution_flow"> = { Overview: "list_runs", Requests: "get_model_request", Calls: "get_execution", Records: "list_records", "Execution Flow": "get_execution_flow", Hierarchy: "get_hierarchy", Lifecycle: "get_lifecycle", "Data Flow": "get_data_flow", Scheduling: "get_scheduling", Dependencies: "get_dependencies", Timeline: "get_timeline", Telemetry: "get_telemetry" };
+export const areaViews: Record<string, string[]> = {
+  Definitions: ["Records", "Data Flow", "Dependencies"],
+  Runs: ["Overview", "Execution Flow", "Lifecycle", "Timeline", "Data Flow", "Hierarchy", "Scheduling", "Dependencies", "Records", "Telemetry"],
+  "Model Interaction": ["Requests", "Data Flow", "Records", "Telemetry"],
+  Execution: ["Calls", "Scheduling", "Timeline", "Dependencies", "Data Flow", "Records"],
+  Comparison: ["Records"],
+};
 export interface InspectionBundle {
   snapshot: InspectionReadResult;
   inventory: InspectionReadResult;
@@ -31,11 +39,19 @@ export function useInspectionSnapshot() {
   const sourceId = params.get("source") ?? "";
   const datasetId = params.get("dataset") ?? "";
   const area = areas.includes(params.get("area") ?? "") ? params.get("area")! : "Runs";
-  const view = Object.hasOwn(views, params.get("view") ?? "") ? params.get("view")! : "Records";
+  const view = areaViews[area]!.includes(params.get("view") ?? "") ? params.get("view")! : areaViews[area]![0]!;
   let selected: InspectionSubjectRef | null = null;
   try { selected = JSON.parse(params.get("subject") ?? "null") as InspectionSubjectRef | null; } catch { /* Invalid URL selection is not a new object. */ }
-  const key = params.toString();
-  const inventoryFilter = { kind: (area === "Definitions" ? "list_definitions" : area === "Runs" ? "list_runs" : "list_records") as InspectionViewQuery, recordKind: area === "Model Interaction" ? "request" : area === "Execution" ? "execution" : undefined };
+  const runId = params.get("run") ?? (selected?.kind === "run" ? selected.id : selected?.runId) ?? undefined;
+  const includeDescendants = params.get("descendants") === "true";
+  const key = inspectionReadLocation(params);
+  const inventoryFilter = {kind: (area === "Definitions" ? "list_definitions" : "list_runs") as InspectionViewQuery};
+  const dataObjectFocus = view === "Data Flow" && selected !== null && (selected.kind !== "run" || params.get("dataFocus") === "true");
+  const viewFilter = () => ({
+    kind: views[view] as InspectionViewQuery,
+    subject: ["Requests", "Calls", "Scheduling", "Timeline", "Overview", "Execution Flow"].includes(view) || (view === "Data Flow" && !dataObjectFocus) ? undefined : selected ?? undefined,
+    ...(runId && area !== "Definitions" && !dataObjectFocus ? {runId, includeDescendants} : {}),
+  });
 
   useEffect(() => {
     let disposed = false;
@@ -66,16 +82,15 @@ export function useInspectionSnapshot() {
       const recordId = params.get("record");
       const detail = recordId ? await inspectionQuery({ ...scope, kind: "get_record", recordId }, abort.signal)
         : selected ? await inspectionQuery({ ...scope, kind: "get_subject", subject: selected }, abort.signal) : null;
-      const runId = selected?.kind === "run" ? selected.id : selected?.runId;
       const result = await inspectionQuery(view === "Execution Flow"
         ? runId ? { ...scope, kind: "get_execution_flow", runId, limit: 100 } : { ...scope, kind: "list_records", limit: 1 }
-        : { ...scope, kind: views[view] as InspectionViewQuery, subject: view === "Timeline" ? undefined : selected ?? undefined, runId: view === "Timeline" ? selected?.runId ?? undefined : undefined, limit: 500 }, abort.signal);
+        : { ...scope, ...viewFilter(), limit: view === "Requests" || view === "Calls" || view === "Scheduling" ? 50 : 100 }, abort.signal);
       if (active !== generation.current) return;
       // Publish one coherent snapshot only after every active view succeeds.
       setBundle({ snapshot, inventory, view: result, selected: detail?.records[0] ?? null });
       const next = new URLSearchParams(params); next.set("watermark", String(scope.watermark));
-      completedKey.current = next.toString();
-      if (completedKey.current !== key) setParams(next, { replace: !refresh });
+      completedKey.current = inspectionReadLocation(next);
+      if (completedKey.current !== key) setParams(current=>{const updated=new URLSearchParams(current);updated.set("watermark",String(scope.watermark));return updated;}, { replace: !refresh });
     } catch (failure) { if (active === generation.current && !abort.signal.aborted) setError((failure as Error).message); }
     finally { if (active === generation.current) setLoading(false); }
   }
@@ -86,13 +101,19 @@ export function useInspectionSnapshot() {
 
   function navigate(values: Record<string, string | null>) {
     const next = new URLSearchParams(params);
+    if (values.area && values.area !== area) {
+      next.delete("view"); next.delete("record");
+      if (values.area === "Definitions") next.delete("subject");
+      next.delete("fact"); next.delete("content");
+    }
     for (const [name, value] of Object.entries(values)) { if (value === null) next.delete(name); else next.set(name, value); }
     setParams(next);
   }
   function choose(subject: InspectionSubjectRef) {
-    navigate({ subject: JSON.stringify(subject), record: null,
-      ...(subject.runId !== selected?.runId ? {flowRun:null,flowInvocation:null,flowOccurrence:null,flowStep:null} : {}),
-    });
+    navigate({subject: JSON.stringify(subject), record: null});
+  }
+  function selectRun(subject: InspectionSubjectRef) {
+    navigate({run: subject.id, subject: JSON.stringify(subject), record: null, fact:null, content:null, flowRun:null, flowInvocation:null, flowOccurrence:null, flowStep:null, dataFocus:null});
   }
   function showRecord(record: InspectionRecord) { navigate({ subject: JSON.stringify(record.subject), record: record.id }); }
   async function findRecord(recordId: string) {
@@ -109,8 +130,8 @@ export function useInspectionSnapshot() {
     pagePending.current = true; setPaging(true);
     const active = generation.current;
     try {
-      const page = await inspectionQuery({ ...bundle.snapshot.selection, ...(target === "inventory" ? inventoryFilter : { kind: views[view] as InspectionViewQuery, subject: view === "Timeline" ? undefined : selected ?? undefined, runId: view === "Timeline" ? selected?.runId ?? undefined : undefined }), after: Number(bundle[target].next), limit: 500 });
-      if (active === generation.current) setBundle((current) => current ? { ...current, [target]: target === "view" && view === "Timeline" ? page : { ...page, records: [...new Map([...current[target].records, ...page.records].map((record) => [record.id, record])).values()], telemetry: [...current[target].telemetry, ...page.telemetry] } } : current);
+      const page = await inspectionQuery({ ...bundle.snapshot.selection, ...(target === "inventory" ? inventoryFilter : viewFilter()), after: String(bundle[target].next), limit: 500 });
+      if (active === generation.current) setBundle((current) => current ? { ...current, [target]: { ...page, records: [...new Map([...current[target].records, ...page.records].map((record) => [record.id, record])).values()], telemetry: [...current[target].telemetry, ...page.telemetry], intervals: [...current[target].intervals, ...page.intervals], summaries: [...current[target].summaries ?? [], ...page.summaries ?? []] } } : current);
     } catch (failure) { if (active === generation.current) setError((failure as Error).message); }
     finally { pagePending.current = false; setPaging(false); }
   }
@@ -130,5 +151,5 @@ export function useInspectionSnapshot() {
     catch (failure) { setError((failure as Error).message); }
   }
   const reading = loading || (ready && !!datasetId && completedKey.current !== key && error === null);
-  return { params, setParams, key, sourceId, datasetId, area, view, selected, sources, datasets, datasetNext, loadDatasets, paging, bundle, loading: reading, error, setError, navigate, choose, showRecord, findRecord, loadMore, refresh };
+  return { params, setParams, key, sourceId, datasetId, area, view, runId, includeDescendants, selected, sources, datasets, datasetNext, loadDatasets, paging, bundle, loading: reading, error, setError, navigate, choose, selectRun, showRecord, findRecord, loadMore, refresh };
 }

@@ -104,14 +104,15 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
     const flow = new ExecutionFlowPath(HELARC_STOP_EXECUTION_FLOW, executionFlow ?? {}, event.run.id, []);
     try {
       const result = await this.handleWithFlow(event, interruptionContext, flow);
-      flow.advance("decision", {disposition:result.disposition});
+      flow.advance("decision", {disposition:result.disposition}).output(flow.material("Stop instruction decision", "returned", result));
       flow.close("returned");
       return result;
     } catch (error) { flow.close("failed"); throw error; }
   }
 
   private async handleWithFlow(event: AgentStopEvent, interruptionContext: InvocationInterruptionContext, flow: ExecutionFlowPath): Promise<AgentStopHandlerResult> {
-    flow.advance("instructions").check("effective_instructions", this.instructions.length ? "passed" : "not_applicable", {characterCount:this.instructions.length, assessmentEnabled:this.instructions.length > 0});
+    flow.advance("instructions", {}, [flow.material("Stop instruction input", "received", {event, instructions: this.instructions})])
+      .check("effective_instructions", this.instructions.length ? "passed" : "not_applicable", {characterCount:this.instructions.length, assessmentEnabled:this.instructions.length > 0});
     if (this.instructions.length === 0) {
       return Object.freeze({ disposition: "allow" as const });
     }
@@ -119,10 +120,13 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
     const request = buildRequest(this.provider, event, this.instructions);
     flow.advance("request", {providerId:this.provider.descriptor.id}, [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
     const result = await this.provider.send(request, interruptionContext);
-    flow.advance("assessment", {providerOutcome:result.kind});
+    const resultRef = flow.material("Stop model result", "returned", result, "provider");
+    flow.current?.output(resultRef);
+    const assessmentStep = flow.advance("assessment", {providerOutcome:result.kind}, [resultRef]);
     const candidate = parseProviderResult(result);
     const assessment = createAssessment(event, candidate, this.now());
     this.assessments.push(assessment);
+    assessmentStep.output(flow.material("Stop instruction assessment", "assessed", assessment));
     return assessment.disposition === "allow"
       ? Object.freeze({ disposition: "allow" as const })
       : Object.freeze({

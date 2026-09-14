@@ -48,6 +48,7 @@ export type ExecutionFlowObservation =
     | { readonly kind: "step_entered"; readonly stepId: string; readonly stepExecutionId: string; readonly inputs: readonly ExecutionFlowSubjectRef[]; readonly basis: ExecutionFlowBasis }
     | { readonly kind: "step_exited"; readonly stepId: string; readonly stepExecutionId: string; readonly disposition: ExecutionFlowDisposition; readonly branch: string | null; readonly outputs: readonly ExecutionFlowSubjectRef[]; readonly basis: ExecutionFlowBasis }
     | { readonly kind: "constraint"; readonly stepId: string; readonly stepExecutionId: string; readonly checkId: string; readonly disposition: "passed" | "not_satisfied" | "not_applicable" | "not_evaluated" | "error"; readonly configuration: ExecutionFlowSubjectRef | null; readonly basis: ExecutionFlowBasis }
+    | { readonly kind: "material"; readonly subject: ExecutionFlowSubjectRef; readonly name: string; readonly stage: string; readonly contentClass: "agent" | "provider" | "execution"; readonly value: unknown }
     | { readonly kind: "link"; readonly from: ExecutionFlowOccurrenceRef; readonly to: ExecutionFlowOccurrenceRef; readonly relation: ExecutionFlowLinkKind; readonly transitionId: string | null; readonly establishedBy: ExecutionFlowSubjectRef | null }
   );
 export interface ExecutionFlowObserver { observe(observation: ExecutionFlowObservation): void }
@@ -96,6 +97,7 @@ function freeze<T>(value: T): T {
 export class ExecutionFlowInvocation<TStep extends string = string> {
   readonly ref: ExecutionFlowOccurrenceRef;
   private sequence = 0;
+  private materialSequence = 0;
   private closed = false;
   private readonly definitionRef: ExecutionFlowDefinitionRef;
   constructor(
@@ -116,21 +118,31 @@ export class ExecutionFlowInvocation<TStep extends string = string> {
     const ref = Object.freeze({...this.ref, stepExecutionId: randomUUID()});
     this.emit({kind: "step_entered", stepId, stepExecutionId: ref.stepExecutionId, inputs: input.inputs ?? [], basis: input.basis ?? {}});
     let closed = false;
+    const outputs: ExecutionFlowSubjectRef[] = [];
     return Object.freeze({
       ref,
       context: Object.freeze({observer: this.context.observer, caller: ref, relationship: "call" as const}),
       check: (checkId: string, disposition: Extract<ExecutionFlowObservation, {kind: "constraint"}>["disposition"], basis: ExecutionFlowBasis = {}, configuration: ExecutionFlowSubjectRef | null = null) => {
         this.emit({kind: "constraint", stepId, stepExecutionId: ref.stepExecutionId, checkId, disposition, configuration, basis});
       },
-      end: (disposition: ExecutionFlowDisposition = "returned", basis: ExecutionFlowBasis = {}, branch: string | null = null, outputs: readonly ExecutionFlowSubjectRef[] = []) => {
+      output: (...refs: readonly ExecutionFlowSubjectRef[]) => {
+        if (!closed) outputs.push(...refs.map(ref => Object.freeze({...ref})));
+      },
+      end: (disposition: ExecutionFlowDisposition = "returned", basis: ExecutionFlowBasis = {}, branch: string | null = null, resultRefs: readonly ExecutionFlowSubjectRef[] = []) => {
         if (closed) return; closed = true;
-        this.emit({kind: "step_exited", stepId, stepExecutionId: ref.stepExecutionId, disposition, branch, outputs, basis});
+        this.emit({kind: "step_exited", stepId, stepExecutionId: ref.stepExecutionId, disposition, branch, outputs: [...outputs, ...resultRefs], basis});
       },
     });
   }
 
   link(from: ExecutionFlowOccurrenceRef, to: ExecutionFlowOccurrenceRef, relation: ExecutionFlowLinkKind, transitionId: string | null = null, establishedBy: ExecutionFlowSubjectRef | null = null): void {
     this.emit({kind: "link", from, to, relation, transitionId, establishedBy});
+  }
+  /** Data-only owner material; executable dependencies and resolved secrets are excluded. */
+  material(name: string, stage: string, value: unknown, contentClass: "agent" | "provider" | "execution" = "agent"): ExecutionFlowSubjectRef {
+    const subject = Object.freeze({owner: this.definition.owner, kind: "contribution", id: `${this.ref.invocationId}:material:${++this.materialSequence}`, revision: "1", runId: this.runId});
+    this.emit({kind: "material", subject, name, stage, contentClass, value});
+    return subject;
   }
   close(disposition: ExecutionFlowDisposition, exit: ExecutionFlowOccurrenceRef | null = null, subjects: readonly ExecutionFlowSubjectRef[] = []): void {
     if (this.closed) return;
@@ -153,6 +165,7 @@ export interface ExecutionFlowStep {
   readonly ref: ExecutionFlowOccurrenceRef;
   readonly context: ExecutionFlowContext;
   check(checkId: string, disposition: Extract<ExecutionFlowObservation, {kind: "constraint"}>["disposition"], basis?: ExecutionFlowBasis, configuration?: ExecutionFlowSubjectRef | null): void;
+  output(...refs: readonly ExecutionFlowSubjectRef[]): void;
   end(disposition?: ExecutionFlowDisposition, basis?: ExecutionFlowBasis, branch?: string | null, outputs?: readonly ExecutionFlowSubjectRef[]): void;
 }
 

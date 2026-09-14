@@ -61,9 +61,10 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
       const observation = payload.observation;
       const target = ref(observation.owner, "contribution", observation.id, "1");
       const links = [inspectionLink("produces", ref("runtime", "action", observation.runAction.id), target), inspectionLink("trigger", subject, target)];
-      const transferred = observation.payload.kind === "descendant_result_transfer";
-      if (transferred && observation.payload.result) {
-        links.push(inspectionLink("delivers", ref("agent-runtime", "contribution", observation.payload.result.ref.id, observation.payload.result.ref.revision), target, { operation: "product_result_projection" }));
+      const resultRef = observation.lowerRefs.find((entry) => entry.owner === "agent-runtime" && entry.kind === "delegation_result");
+      const transferred = (observation.payload.kind === "descendant_result_transfer" || observation.payload.kind === "descendant_run") && resultRef !== undefined;
+      if (transferred) {
+        links.push(inspectionLink("delivers", ref("agent-runtime", "contribution", resultRef.id, resultRef.revision), target, { operation: "descendant_result_delivery" }));
       }
       r.offer({ subject: target, occurredAt: observation.createdAt,
         payload: { kind: "transfer", stage: transferred ? "delivered" : "produced", producerId: observation.runAction.id, consumerId: record.runId, operation: observation.payload.kind }, links,

@@ -496,6 +496,21 @@ describe("Runner semantic integration", () => {
     const coreSteps = captured.flowFacts.filter(fact => fact.kind === "step_entered" && fact.definition.id === "run-execution");
     expect(coreSteps.filter(fact => "stepId" in fact && fact.stepId === "controller")).toHaveLength(2);
     expect(coreSteps.filter(fact => "stepId" in fact && fact.stepId === "terminal")).toHaveLength(1);
+    for (const entry of coreSteps) {
+      if (entry.kind !== "step_entered") continue;
+      const declared = definitions.get("run-execution")!.steps.find(step => step.id === entry.stepId)!.checks;
+      const checks = captured.flowFacts.filter(fact => fact.kind === "constraint" && fact.stepExecutionId === entry.stepExecutionId);
+      expect(checks.map(fact => fact.kind === "constraint" ? fact.checkId : null)).toEqual(expect.arrayContaining(declared));
+    }
+    expect(captured.facts.filter(fact => fact.kind === "controller_decision")).toHaveLength(2);
+    expect(captured.facts.filter(fact => fact.kind === "scheduling").every(fact => fact.occurredAt !== null)).toBe(true);
+    expect(captured.facts.find(fact => fact.kind === "operation_result")).toMatchObject({result: {status: "succeeded", output: {content: "hello"}}});
+    const decisionOutputs = captured.flowFacts.filter(fact => fact.kind === "step_exited" && fact.definition.id === "run-execution" && fact.stepId === "controller");
+    expect(decisionOutputs.every(fact => fact.kind === "step_exited" && fact.outputs.length === 1)).toBe(true);
+    expect(captured.flowFacts.find(fact => fact.kind === "constraint" && fact.checkId === "numeric_limits")).toMatchObject({
+      configuration: {id: `${captured.result.runId}:configuration`, revision: "1"},
+      basis: {controllerTurns: 0, runActions: 0},
+    });
   });
 
   it("executes one exposed Tool through its exact internal Operation binding", async () => {

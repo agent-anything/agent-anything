@@ -221,6 +221,7 @@ export class ProviderBackedController<TOutput = unknown>
       ? await this.executeNativeToolTurn(controllerInput, callContext, flow)
       : await this.executeStructuredOutput(controllerInput, callContext, flow);
     throwIfCancelled(callContext);
+    flow.current?.output(flow.material("Validated Controller decision", "validated", decision));
     flow.close("returned");
     return decision;
     } catch (error) { flow.close(callContext.cancellation.signal.aborted ? "cancelled" : error instanceof RetryInvocationInvalidatedError ? "interrupted" : "failed"); throw error; }
@@ -231,7 +232,8 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
     flow: ExecutionFlowPath,
   ): Promise<ControllerDecision<TOutput>> {
-    const build = flow.advance("build", {controllerRequestId: controllerInput.toolExposure.controllerRequestId});
+    const build = flow.advance("build", {controllerRequestId: controllerInput.toolExposure.controllerRequestId},
+      [{owner: "runtime", kind: "request", id: controllerInput.toolExposure.controllerRequestId, revision: null}]);
     const request = await this.buildRequest(controllerInput, Object.freeze({
       executionFlow: flow.callContext,
       attemptNumber: 1,
@@ -240,19 +242,23 @@ export class ProviderBackedController<TOutput = unknown>
       requestedOutput: this.input.provider.modelContext.requestedOutput,
     }));
     build.check("request_contract", "passed", {requestId: request.requestId, compositionId: request.composition.id});
-    flow.advance("send", {requestId: request.requestId});
+    const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
+    build.output(requestRef);
+    const send = flow.advance("send", {requestId: request.requestId}, [requestRef]);
     const response = await this.sendRequest(
       request,
       controllerInput,
       {...callContext, executionFlow: flow.callContext},
       () => 1,
     );
+    const responseRef = flow.material("Normalized Provider response", "received", response, "provider");
+    send.output(responseRef);
     if (response.kind !== "native_tool_turn") {
       throw invalidOutput(
         "Provider returned a response kind that does not match native Tool interaction.",
       );
     }
-    const parse = flow.advance("parse");
+    const parse = flow.advance("parse", {}, [responseRef]);
     const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
     const decision = validateControllerDecision(parsed, controllerInput);
     parse.check("decision_contract", "passed", {kind: decision.kind});
@@ -328,8 +334,10 @@ export class ProviderBackedController<TOutput = unknown>
           }
 
           let response: ProviderResponse;
+          const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
+          build.output(requestRef);
           try {
-            flow.advance("send", {requestId: request.requestId});
+            flow.advance("send", {requestId: request.requestId}, [requestRef]);
             response = await this.sendRequest(
               request,
               controllerInput,
@@ -364,7 +372,9 @@ export class ProviderBackedController<TOutput = unknown>
 
           try {
             this.assertOutputLength(response);
-            const parse = flow.advance("parse");
+            const responseRef = flow.material("Normalized Provider response", "received", response, "provider");
+            flow.current?.output(responseRef);
+            const parse = flow.advance("parse", {}, [responseRef]);
             const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
             const decision = validateControllerDecision(parsed, controllerInput);
             parse.check("decision_contract", "passed", {kind: decision.kind});
@@ -624,6 +634,7 @@ export class ProviderBackedController<TOutput = unknown>
       [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
     try {
       const result = await this.assessModelContextRequest(request, callContext, recoveryAttempt, flow);
+      flow.current?.output(flow.material("Admitted model context", "admitted", {requestId: result.requestId, compositionId: result.composition.id, modelContext: result.modelContext}, "provider"));
       flow.close("returned");
       return result;
     } catch (error) { flow.close(callContext.cancellation.signal.aborted ? "cancelled" : "failed"); throw error; }
@@ -635,7 +646,9 @@ export class ProviderBackedController<TOutput = unknown>
     recoveryAttempt: number,
     flow: ExecutionFlowPath,
   ): Promise<ProviderRequest> {
-    const measurementStep = flow.advance("measure", {recoveryAttempt});
+    const measurementStep = flow.advance("measure", {recoveryAttempt},
+      [flow.material("Model context admission input", "received", {requestId: request.requestId, compositionId: request.composition.id,
+        capacity: this.input.provider.modelContext.capacity, requestedOutput: request.modelContext.requestedOutput, headroom: request.modelContext.headroom}, "provider")]);
     const measuredAt = this.input.retryClock.now().toISOString();
     const modelContext = this.input.provider.modelContext;
     const measurement = modelContext.measure(request.composition, measuredAt);
@@ -649,17 +662,19 @@ export class ProviderBackedController<TOutput = unknown>
       revision: "agent-runtime.model-context-assessment.v1",
     });
     const assessedRequest = withModelContextAssessment(request, assessment);
+    const assessmentRef = flow.material("Model context measurement and assessment", "assessed", {measurement, assessment}, "provider");
+    measurementStep.output(assessmentRef);
     measurementStep.check("capacity", assessment.disposition === "unresolved" ? "not_evaluated" : assessment.disposition.endsWith("overflow") ? "not_satisfied" : "passed",
       {assessmentId: assessment.id, disposition: assessment.disposition, effectiveInputBudget: assessment.effectiveInputBudget});
     if (assessment.disposition !== "proven_overflow" &&
         assessment.disposition !== "estimated_overflow") {
-      flow.advance("result", {disposition: assessment.disposition}).check("proven_overflow", "passed");
+      flow.advance("result", {disposition: assessment.disposition}, [assessmentRef]).check("proven_overflow", "passed");
       return assessedRequest;
     }
 
     const capability = this.modelInputRecovery.capability;
     const shouldRecover = assessment.disposition === "proven_overflow" || capability.supported;
-    const recoveryStep = flow.advance("recovery", {recoveryAttempt});
+    const recoveryStep = flow.advance("recovery", {recoveryAttempt}, [assessmentRef]);
     recoveryStep.check("recovery_capability", shouldRecover && capability.supported && recoveryAttempt < capability.maximumAttempts ? "passed" : "not_applicable",
       {supported: capability.supported, maximumAttempts: capability.supported ? capability.maximumAttempts : 0});
     if (shouldRecover && capability.supported && recoveryAttempt < capability.maximumAttempts) {
@@ -673,12 +688,15 @@ export class ProviderBackedController<TOutput = unknown>
       recoveryStep.check("recovery_result", recovered === null ? "not_satisfied" : "passed");
       if (recovered !== null) {
         const result = await this.prepareModelContextRequest(recovered, {...callContext, executionFlow: flow.callContext}, recoveryAttempt + 1, flow.runId);
-        flow.advance("result", {disposition: result.modelContext.assessment?.disposition ?? null});
+        flow.advance("result", {disposition: result.modelContext.assessment?.disposition ?? null})
+          .check("proven_overflow", "not_evaluated", {reason: "checked_by_recovered_request_admission"});
         return result;
       }
+    } else {
+      recoveryStep.check("recovery_result", "not_evaluated", {reason: "recovery_not_admitted"});
     }
 
-    flow.advance("result", {disposition: assessment.disposition}).check("proven_overflow", assessment.disposition === "proven_overflow" ? "not_satisfied" : "passed");
+    flow.advance("result", {disposition: assessment.disposition}, [assessmentRef]).check("proven_overflow", assessment.disposition === "proven_overflow" ? "not_satisfied" : "passed");
     if (assessment.disposition === "proven_overflow") {
       throw createControllerError(
         "model",

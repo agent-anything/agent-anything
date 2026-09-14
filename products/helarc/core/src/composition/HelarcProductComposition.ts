@@ -338,9 +338,10 @@ export async function createHelarcProductComposition(
       selectedEnforcement: SandboxEnforcement,
     ): HelarcProductResult {
       const flow = new ExecutionFlowPath(HELARC_RESULT_EXECUTION_FLOW, input.executionFlow ?? {}, runResult.runId, [{owner:"runtime",kind:"run",id:runResult.runId,revision:null}]);
-      flow.advance("result", {status:runResult.status});
+      const inputRef = flow.material("Run result for Product projection", "received", runResult);
+      flow.advance("result", {status:runResult.status}, [inputRef]);
       try {
-      flow.advance("project");
+      const projectionStep = flow.advance("project", {}, [inputRef]);
       const result = projectHelarcProductResult(
         input.task,
         input.workspace,
@@ -348,8 +349,11 @@ export async function createHelarcProductComposition(
         selectedEnforcement,
         qualification.safeProjection,
       );
-      flow.advance("deliver", {productStatus:result.status});
+      const resultRef = flow.material("Helarc Product result", "projected", result);
+      projectionStep.output(resultRef);
+      const deliveryStep = flow.advance("deliver", {productStatus:result.status}, [resultRef]);
       publishProductUpdate({ kind: "result_settled", result });
+      deliveryStep.output(resultRef);
       flow.close("returned");
       return result;
       } catch (error) {flow.close("failed");throw error;}
