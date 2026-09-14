@@ -34,13 +34,19 @@ export function ExecutionTimeline({intervals, runRecords, onRecord, scopeKey}: {
       className:item.status && /fail|denied|cancel|error|reject/u.test(item.status) ? "interval-failed" : item.end ? "interval-settled" : "interval-open",
     })));
     const asText = (item:{content?:string}|null) => {const label=document.createElement("span"); label.textContent=item?.content ?? "";return label;};
-    const timeline = new Timeline(element.current,items,groups,{height:"100%",editable:false,showCurrentTime:false,stack:true,zoomMin:100,horizontalScroll:true,verticalScroll:true,template:asText,groupTemplate:asText});
+    const timeline = new Timeline(element.current,items,groups,{height:"100%",autoResize:false,editable:false,showCurrentTime:false,stack:true,zoomMin:100,horizontalScroll:true,verticalScroll:true,template:asText,groupTemplate:asText});
+    let redraw = 0;
+    const resize = new ResizeObserver(() => {
+      cancelAnimationFrame(redraw);
+      redraw = requestAnimationFrame(() => timeline.redraw());
+    });
+    resize.observe(element.current);
     const windowKey=scopeKey+":window:"+clock;
     const window=readInspectionViewState<{start:number;end:number}|null>(windowKey,null);
     if(window)timeline.setWindow(window.start,window.end,{animation:false});
     timeline.on("rangechanged",event=>{if(event.byUser)rememberInspectionViewState(windowKey,{start:event.start.valueOf(),end:event.end.valueOf()});});
     timeline.on("select",event=>{const item=visible.find(entry=>entry.id===event.items[0]); if(item) selection.current(item.endRecordId ?? item.startRecordId);});
-    return ()=>{timeline.destroy();items.clear();groups.clear();};
+    return ()=>{resize.disconnect();cancelAnimationFrame(redraw);timeline.destroy();items.clear();groups.clear();};
   },[intervals,clock,runRecords,scopeKey]);
   return <div className="timeline-view"><div className="view-toolbar"><Select aria-label="Timeline clock" value={clock} options={clocks.map(value=>({value,label:value}))} onChange={setClock}/><Tag>{visible.length} intervals</Tag><span>Recorded source clock</span></div>
     {(current.length>visible.length) && <div className="coverage-note">Partial view: at most 100 lanes and 2,000 intervals.</div>}

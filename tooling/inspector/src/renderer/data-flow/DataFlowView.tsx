@@ -5,6 +5,8 @@ import { inspectionSubjectKey, type InspectionContentLocation, type InspectionLi
 import type { InspectionGraph } from "@agent-anything/inspection/query";
 import type { ContentTarget } from "../content/ContentLocation.js";
 import { DataFlowGraph } from "./DataFlowGraph.js";
+import { CanvasFrame } from "../canvas/CanvasFrame.js";
+import { CanvasSplit } from "../canvas/CanvasSplit.js";
 import { dataFlowNeighborhood, dataObjectTitle, dataRelationKinds, defaultDataFocus, shortDataIdentity, type DataFlowObject, type DataRelationFilter } from "./DataFlowModel.js";
 
 const ContentViewer = lazy(async () => ({ default: (await import("../content/ContentViewer.js")).ContentViewer }));
@@ -52,7 +54,7 @@ export function DataFlowView({ graph, selected, runId, onFocus, onReset, onRecor
       <Tooltip title={active.subject.id}><code>{shortDataIdentity(active.subject)}</code></Tooltip>
       {active.record && <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => onRecord(active.record!.id)}>Latest object record</Button>}
     </div>
-    <DataFlowGraph key={`${activeKey}:${filter}`} focus={active} incoming={neighborhood.incoming} outgoing={neighborhood.outgoing} onFocus={follow} onRelations={openRelations} />
+    <CanvasSplit view="data-flow" canvas={<CanvasFrame title="Data Flow"><DataFlowGraph key={`${activeKey}:${filter}`} focus={active} incoming={neighborhood.incoming} outgoing={neighborhood.outgoing} onFocus={follow} onRelations={openRelations} /></CanvasFrame>} details={<>
     <div className="data-relations-heading"><h3>Recorded relations <span>{neighborhood.links.length}</span></h3>
       <span>{graph.scope === "selected_neighborhood" ? "Object neighborhood" : `${graph.nodes.length} loaded objects`}{graph.limited ? " / Query limit reached" : ""}</span>
     </div>
@@ -64,6 +66,7 @@ export function DataFlowView({ graph, selected, runId, onFocus, onReset, onRecor
       {title:"",width:45,render:(_value,link)=><Tooltip title="Inspect relation"><Button type="text" aria-label="Inspect relation" icon={<EyeOutlined />} onClick={event=>{event.stopPropagation();openRelations([link]);}} /></Tooltip>},
     ]} />
     {graph.limited && <div className="coverage-note">The query is partial. Following an object reads its own neighborhood at this snapshot.</div>}
+    </>} />
     <Drawer title="Recorded relation" open={!!relation} onClose={()=>setRelations([])} size={560}>
       {relation && <>
         {relations.length > 1 && <Select className="data-relation-picker" aria-label="Recorded link" value={relationIndex} options={relations.map((link,index)=>({value:index,label:`${index+1}. ${link.kind} / ${link.operation ?? "No operation recorded"}`}))} onChange={setRelationIndex} />}

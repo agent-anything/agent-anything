@@ -13,6 +13,7 @@ import { RunOverview } from "./runs/RunOverview.js";
 import { ObjectSummaries } from "./records/ObjectSummaries.js";
 import { readContentTarget } from "./navigation/InspectionLocation.js";
 
+import { CanvasFrame } from "./canvas/CanvasFrame.js";
 const RelationGraph = lazy(async () => ({ default: (await import("./graph/RelationGraph.js")).RelationGraph }));
 const DataFlowView = lazy(async () => ({ default: (await import("./data-flow/DataFlowView.js")).DataFlowView }));
 const ExecutionTimeline = lazy(async () => ({ default: (await import("./timeline/ExecutionTimeline.js")).ExecutionTimeline }));
@@ -100,8 +101,8 @@ export function App() {
               : view === "Requests" || view === "Calls" || view === "Scheduling" ? <ObjectSummaries kind={view} summaries={bundle?.view.summaries ?? []} onRecord={setFactId} onContent={setContentId} onHistory={openHistory}/>
               : view === "Execution Flow" ? bundle?.snapshot.selection && runId ? <ExecutionFlowView key={`${sourceId}:${datasetId}:${runId}`} scope={bundle.snapshot.selection} runId={runId} paused={loading} params={params} navigate={navigate} onContent={setContentId} onRecord={setFactId} onSubject={openHistory} /> : <Empty description="Select a Run to inspect its execution flow" />
               : view === "Data Flow" && graph ? <DataFlowView key={`${sourceId}:${datasetId}:${bundle?.snapshot.selection?.watermark}:${selectionKey}:${runId}:${includeDescendants}`} graph={graph} selected={selected?.kind === "run" && params.get("dataFocus") !== "true" ? null : selected} runId={runId} onFocus={subject=>navigate({subject:JSON.stringify(subject),record:null,dataFocus:"true"})} onReset={()=>navigate({subject:null,record:null,dataFocus:null})} onRecord={setFactId} onContent={setContent} />
-              : graph ? graph.nodes.length ? <RelationGraph graph={graph} selected={selected} onSelect={choose} onLink={(id) => setSelectedLink(graph.links.find((link) => link.id === id) ?? null)} /> : <Empty description="No recorded relations in this scope" />
-              : view === "Timeline" ? bundle?.view.intervals.length ? <ExecutionTimeline scopeKey={[sourceId,datasetId,runId,includeDescendants].join(":")} intervals={bundle.view.intervals} runRecords={bundle.inventory.records} onRecord={setFactId} /> : <Empty description="No execution intervals recorded" />
+              : graph ? graph.nodes.length ? <CanvasFrame title={view}><RelationGraph graph={graph} selected={selected} onSelect={choose} onLink={(id) => setSelectedLink(graph.links.find((link) => link.id === id) ?? null)} /></CanvasFrame> : <Empty description="No recorded relations in this scope" />
+              : view === "Timeline" ? bundle?.view.intervals.length ? <CanvasFrame title="Timeline"><ExecutionTimeline scopeKey={[sourceId,datasetId,runId,includeDescendants].join(":")} intervals={bundle.view.intervals} runRecords={bundle.inventory.records} onRecord={setFactId} /></CanvasFrame> : <Empty description="No execution intervals recorded" />
               : view === "Lifecycle" ? selected ? <LifecycleView records={records} relatedRecords={bundle?.view.relatedRecords} onRecord={record=>setFactId(record.id)} /> : <Empty description="Select an object to inspect its lifecycle" />
               : view === "Telemetry" ? <ContentViewer text={JSON.stringify(bundle?.view.telemetry ?? [], null, 2)} language="json" />
               : <><Table className="records-table" size="small" rowKey="id" columns={recordColumns} dataSource={[...records]} pagination={{ pageSize: 25, showSizeChanger: false }} scroll={{ x: 650 }} rowClassName={(record) => record.id === params.get("record") ? "record-selected" : ""} onRow={(record) => ({ onClick: () => showRecord(record) })} />

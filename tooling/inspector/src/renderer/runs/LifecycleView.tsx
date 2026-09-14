@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { Button, Table, Empty, Switch } from "antd";
 import { ReactFlow, Background, Controls, MarkerType, type Node, type Edge } from "@xyflow/react";
 import type { InspectionRecord } from "@agent-anything/inspection/records";
+import { CanvasFrame } from "../canvas/CanvasFrame.js";
+import { CanvasSplit } from "../canvas/CanvasSplit.js";
 
 export function LifecycleView({ records, relatedRecords = [], onRecord }: { records: readonly InspectionRecord[]; relatedRecords?: readonly InspectionRecord[]; onRecord: (record: InspectionRecord) => void }) {
   const [showDefinition, setShowDefinition] = useState(false);
@@ -25,13 +27,13 @@ export function LifecycleView({ records, relatedRecords = [], onRecord }: { reco
     return { nodes, edges };
   }, [records, showDefinition, route]);
   const visible = route ? transitions.filter((record) => record.payload.kind === "transition" && JSON.stringify([record.payload.from, record.payload.to]) === route) : transitions;
-  return <div className="lifecycle-view"><div className="view-toolbar">
+  return <div className="lifecycle-view"><CanvasSplit view="lifecycle" canvas={<CanvasFrame title="Lifecycle"><div className="lifecycle-canvas"><div className="view-toolbar">
     <Switch size="small" aria-label="Show declared transitions" checked={showDefinition} onChange={setShowDefinition} /><span>Declared transitions</span><span>{transitions.length} recorded transitions</span>
     {route && <Button size="small" onClick={() => setRoute(null)}>All transitions</Button>}
   </div>{nodes.length ? <div className="lifecycle-map"><ReactFlow nodes={nodes} edges={edges} nodesConnectable={false} deleteKeyCode={null} fitView onEdgeClick={(_event, edge) => setRoute(edge.id)}>
     <Background /><Controls showInteractive={false} />
-  </ReactFlow></div> : <Empty description="Lifecycle not recorded in this scope" />}
-    <Table size="small" pagination={{ pageSize: 25, showSizeChanger: false }} rowKey="id" dataSource={visible} onRow={(record) => ({ onClick: () => onRecord(record) })} columns={[
+  </ReactFlow></div> : <Empty description="Lifecycle not recorded in this scope" />}</div></CanvasFrame>} details={
+    <Table size="small" scroll={{x:650}} pagination={{ pageSize: 25, showSizeChanger: false }} rowKey="id" dataSource={visible} onRow={(record) => ({ onClick: () => onRecord(record) })} columns={[
       { title: "Commit", dataIndex: "commitSequence", width: 75 },
       { title: "Revision", render: (_value, record) => record.payload.kind === "transition" ? record.payload.revision : "" },
       { title: "From", render: (_value, record) => record.payload.kind === "transition" ? record.payload.from ?? "Not observed" : "" },
@@ -41,6 +43,6 @@ export function LifecycleView({ records, relatedRecords = [], onRecord }: { reco
         const trigger = relatedRecords.find(item=>item.subject.id === link.from.id && item.subject.owner === link.from.owner && item.subject.revision === link.from.revision);
         return trigger ? <Button key={link.id} type="link" onClick={event=>{event.stopPropagation();onRecord(trigger);}}>{trigger.payload.kind === "event" ? trigger.payload.name : trigger.subject.kind} / #{trigger.commitSequence}</Button> : <span key={link.id}>Not observed</span>;
       }) },
-    ]} />
+    ]} />} />
   </div>;
 }
