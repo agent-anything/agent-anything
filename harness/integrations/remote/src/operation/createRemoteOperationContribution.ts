@@ -68,6 +68,7 @@ export function createRemoteOperationContribution<TOutput = unknown>(
       ? ["remote_invocation"]
       : ["network", "remote_invocation"],
     sandboxRequirementRevision: "remote.operation.sandbox.v1",
+    executionLifetime: "invocation",
     maxInvocationBytes: 512_000,
     maxPhysicalResultBytes: 2_000_000,
   }]);

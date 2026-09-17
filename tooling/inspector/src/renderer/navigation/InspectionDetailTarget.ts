@@ -38,3 +38,9 @@ export function inspectionObjectHistoryLocation(subject: InspectionSubjectRef): 
     subject: JSON.stringify(subject), record: null, detail: null, content: null,
     flowRun: null, flowInvocation: null, flowOccurrence: null, flowStep: null, dataFocus: null };
 }
+
+export function inspectionObjectViewLocation(subject: InspectionSubjectRef, view: "Lifecycle" | "Data Flow" | "Timeline") {
+  // A lifecycle belongs to the process, not to one immutable observed revision.
+  const target = view === "Lifecycle" && subject.kind === "process" ? {...subject, revision:null} : subject;
+  return {...inspectionObjectHistoryLocation(target), view, dataFocus:view === "Data Flow" ? "true":null};
+}

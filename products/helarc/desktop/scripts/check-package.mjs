@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(await readFile(join(appRoot, "package.json"), "utf8"));
 const appMetadata = JSON.parse(await readFile(join(appRoot, "app-metadata.json"), "utf8"));
+if (process.platform === "win32") {
+  const {resolveWindowsProcessHelper} = await import("../../local-environment/dist/command/WindowsJobProcessBackend.js");
+  await resolveWindowsProcessHelper();
+}
 
 const requiredFiles = [
   packageJson.main,

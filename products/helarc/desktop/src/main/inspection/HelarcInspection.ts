@@ -4,6 +4,7 @@ import { RunInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectio
 import { snapshotHelarcInspectionSettings, type HelarcInspectionSettings, type HelarcInspectionSettingsSnapshot } from "../../shared/HelarcInspectionSettings.js";
 import { SerializedAtomicFile } from "../persistence/SerializedAtomicFile.js";
 import { ExecutionFlowInspectionAdapter } from "@agent-anything/inspection/adapters";
+import {ProcessInspectionAdapter} from "./ProcessInspectionAdapter.js";
 
 const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: true, provider: true, execution: true });
 
@@ -16,6 +17,7 @@ export class HelarcInspection {
   readonly runtimeEvents: RuntimeEventInspectionAdapter | undefined;
   readonly actionObserver: ActionExecutionInspectionAdapter | undefined;
   readonly traceObserver: RunTraceInspectionAdapter | undefined;
+  readonly processObserver: import("@agent-anything/helarc-local-environment/command").ProcessExecutionObserver | undefined;
   readonly executionFlow: import("@agent-anything/observability/execution-flow").ExecutionFlowContext | undefined;
   private constructor(private readonly file: SerializedAtomicFile, private settings: HelarcInspectionSettings, readonly recorder: InspectionRecorder | null, private readonly failure: string | null) {
     this.runObserver = recorder ? new RunInspectionAdapter(recorder) : undefined;
@@ -27,6 +29,7 @@ export class HelarcInspection {
     this.actionObserver = recorder ? new ActionExecutionInspectionAdapter(recorder) : undefined;
     this.traceObserver = recorder ? new RunTraceInspectionAdapter(recorder) : undefined;
     this.executionFlow = recorder ? {observer: new ExecutionFlowInspectionAdapter(recorder)} : undefined;
+    this.processObserver = recorder ? new ProcessInspectionAdapter(recorder,this.executionFlow!).observe : undefined;
   }
   static async create(settingsPath: string, root?: string): Promise<HelarcInspection> {
     const file = new SerializedAtomicFile(settingsPath);

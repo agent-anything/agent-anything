@@ -8,22 +8,24 @@ import { RecordDetails, payloadSummary } from "./RecordDetails.js";
 import { RelationDetails, SubjectIdentity } from "./RelationDetails.js";
 import type { ContentTarget } from "../content/ContentLocation.js";
 
-export function InspectionDetailDrawer({ target, scope, onClose, onTarget, onContent, onHistory }: {
+export function InspectionDetailDrawer({ target, scope, onClose, onTarget, onContent, onHistory, onView }: {
   target: InspectionDetailTarget | null; scope: InspectionSelection | null; onClose: () => void;
   onTarget: (target: InspectionDetailTarget) => void; onContent: (target: ContentTarget) => void;
   onHistory: (subject: InspectionSubjectRef) => void;
+  onView: (subject: InspectionSubjectRef, view:"Lifecycle"|"Data Flow"|"Timeline") => void;
 }) {
   const key = JSON.stringify([target, scope]);
   return <Drawer title={target?.kind === "object" ? "Related object" : target?.kind === "relation" ? "Recorded relation" : "Recorded fact"}
     open={target !== null} onClose={onClose} size="large">
-    {target && scope && <DetailRead key={key} target={target} scope={scope} onTarget={onTarget} onContent={onContent} onHistory={onHistory} />}
+    {target && scope && <DetailRead key={key} target={target} scope={scope} onTarget={onTarget} onContent={onContent} onHistory={onHistory} onView={onView} />}
   </Drawer>;
 }
 
-function DetailRead({ target, scope, onTarget, onContent, onHistory }: {
+function DetailRead({ target, scope, onTarget, onContent, onHistory, onView }: {
   target: InspectionDetailTarget; scope: InspectionSelection;
   onTarget: (target: InspectionDetailTarget) => void; onContent: (target: ContentTarget) => void;
   onHistory: (subject: InspectionSubjectRef) => void;
+  onView: (subject: InspectionSubjectRef, view:"Lifecycle"|"Data Flow"|"Timeline") => void;
 }) {
   const [result, setResult] = useState<InspectionReadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +55,11 @@ function DetailRead({ target, scope, onTarget, onContent, onHistory }: {
   const link = target.kind === "relation" ? record?.links.find(item => item.id === target.linkId) : null;
   return <div className="inspection-detail">
     <div className="view-toolbar">{subject && <Button onClick={() => onHistory(subject)}>Object history</Button>}<span>Snapshot {scope.watermark}</span></div>
+    {subject && ["process","process-observation"].includes(subject.kind) && <div className="view-toolbar">
+      {subject.kind === "process" && <Button onClick={()=>onView(subject,"Lifecycle")}>Lifecycle</Button>}
+      <Button onClick={()=>onView(subject,"Data Flow")}>Data Flow</Button>
+      <Button onClick={()=>onView(subject,"Timeline")}>Timeline</Button>
+    </div>}
     {target.kind === "object" && <SubjectIdentity subject={target.subject} />}
     {error && <Alert type="warning" title={error} action={<Button size="small" onClick={() => { void read(result?.next == null ? undefined : String(result.next)); }}>Retry</Button>} />}
     {!result ? !error && <Spin /> : target.kind === "object" ? <>

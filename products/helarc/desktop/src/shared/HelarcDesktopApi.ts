@@ -530,6 +530,9 @@ export interface HelarcRunSnapshot {
     readonly phase: HelarcProductPhaseSnapshot;
     readonly qualification: HelarcModelUseSnapshot;
     readonly activity: readonly HelarcRunActivitySnapshot[];
+    readonly commands:readonly {readonly runId:string;readonly executionId:string;readonly revision:number;readonly phase:string;
+      readonly processId:number|null;readonly outcome:string|null;readonly capturedBytes:number;readonly omittedBytes:number|null;
+      readonly outputPersistence:string;readonly observedAt:string}[];
     readonly continuation: HelarcModelContinuationSnapshot | null;
     readonly result: HelarcRunProductResultSnapshot | null;
   };

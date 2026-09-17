@@ -50,6 +50,10 @@ describe("Helarc Evaluation target public API", () => {
       "HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_ACCEPTED_BASELINE",
       "HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_BASELINE_ACCEPTANCE",
       "HELARC_RUN_PROGRESS_ACCEPTED_BASELINE",
+      "HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE",
+      "HELARC_RUN_OWNED_COMMAND_BASELINE_ACCEPTANCE",
+      "HELARC_RUN_OWNED_COMMAND_OPERATIONAL_ACCEPTED_BASELINE",
+      "HELARC_RUN_OWNED_COMMAND_OPERATIONAL_BASELINE_ACCEPTANCE",
       "HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE",
       "HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE",
       "HELARC_RUN_STOP_EXECUTION_TRUTH_BASELINE_ACCEPTANCE",
@@ -107,6 +111,7 @@ describe("Helarc Evaluation target public API", () => {
       "verifyHelarcOperationalConformanceAcceptedBaseline",
       "verifyHelarcRunLifecycleSettlementOperationalAcceptedBaseline",
       "verifyHelarcRunStopOperationalAcceptedBaseline",
-    ]);
+      "verifyHelarcRunOwnedCommandOperationalAcceptedBaseline",
+    ].sort());
   });
 });

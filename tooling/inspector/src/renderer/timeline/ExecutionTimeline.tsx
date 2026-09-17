@@ -16,7 +16,8 @@ export function ExecutionTimeline({intervals, runRecords, onRecord, scopeKey}: {
   const [chosenClock,setClock] = useInspectionViewState<string|null>(scopeKey+":clock",null);
   const clock = chosenClock && clocks.includes(chosenClock) ? chosenClock : clocks[0];
   const current = intervals.filter(item=>item.clock===clock);
-  const laneKey = (item:InspectionTimelineInterval) => (item.subject.runId ?? "unowned") + ":" + item.activity;
+  const laneKey = (item:InspectionTimelineInterval) => (item.subject.runId ?? "unowned") + ":" + item.activity +
+    (["process","process-output"].includes(item.activity) ? ":"+item.subject.id:"");
   const lanes = [...new Set(current.map(laneKey))].slice(0,100);
   const visible = current.filter(item=>lanes.includes(laneKey(item))).slice(0,2000);
   useEffect(() => {
@@ -25,16 +26,20 @@ export function ExecutionTimeline({intervals, runRecords, onRecord, scopeKey}: {
     const parentGroups: DataGroup[] = runIds.map(id=>{
       const run = runRecords.find(r=>r.subject.id===id);
       const role = run?.payload.kind==="snapshot" ? run.payload.parentRunId ? "Child" : "Root" : "Run";
-      return {id:"run:"+id,content:`${role} / ${id.slice(0,12)}`,nestedGroups:lanes.filter(lane=>lane.startsWith(id+":")),showNested:true};
+      return {id:"run:"+id,content:`${role} / ${id.slice(0,12)}`,treeLevel:0,nestedGroups:lanes.filter(lane=>lane.startsWith(id+":")),showNested:true};
     });
-    const groups = new DataSet<DataGroup>([...parentGroups,...lanes.map(id=>({id,content:visible.find(item=>laneKey(item)===id)!.activity}))]);
-    const items = new DataSet<DataItem>(visible.map(item=>({
+    const groups = new DataSet<DataGroup>([...parentGroups,...lanes.map(id=>{
+      const item=visible.find(item=>laneKey(item)===id)!;
+      return {id,treeLevel:1,content:item.activity+(["process","process-output"].includes(item.activity)?" / "+item.subject.id.slice(-12):"")};
+    })]);
+    const items = new DataSet<DataItem>(visible.flatMap((item):DataItem[]=>[{
       id:item.id,group:laneKey(item),content:`${item.subject.kind} ${item.subject.id.slice(0,8)} / ${item.status ?? (item.end ? "settled" : "open")}`,
       start:new Date(item.start),end:new Date(item.end ?? item.horizon),
       className:item.status && /fail|denied|cancel|error|reject/u.test(item.status) ? "interval-failed" : item.end ? "interval-settled" : "interval-open",
-    })));
-    const asText = (item:{content?:string}|null) => {const label=document.createElement("span"); label.textContent=item?.content ?? "";return label;};
-    const timeline = new Timeline(element.current,items,groups,{height:"100%",autoResize:false,editable:false,showCurrentTime:false,stack:true,zoomMin:100,horizontalScroll:true,verticalScroll:true,template:asText,groupTemplate:asText});
+    },...item.markers.map((marker,index)=>({id:`${item.id}:marker:${index}`,group:laneKey(item),type:"point" as const,
+      content:marker.label,start:new Date(marker.occurredAt),className:"interval-marker"}))]));
+    const asText = (item:{content?:string}|null) => {const label=document.createElement("span"); label.textContent=item?.content ?? "";label.title=label.textContent;return label;};
+    const timeline = new Timeline(element.current,items,groups,{height:"100%",orientation:{axis:"top",item:"top"},autoResize:false,editable:false,showCurrentTime:false,stack:true,zoomMin:100,horizontalScroll:true,verticalScroll:true,template:asText,groupTemplate:asText});
     let redraw = 0;
     const resize = new ResizeObserver(() => {
       cancelAnimationFrame(redraw);
@@ -45,7 +50,14 @@ export function ExecutionTimeline({intervals, runRecords, onRecord, scopeKey}: {
     const window=readInspectionViewState<{start:number;end:number}|null>(windowKey,null);
     if(window)timeline.setWindow(window.start,window.end,{animation:false});
     timeline.on("rangechanged",event=>{if(event.byUser)rememberInspectionViewState(windowKey,{start:event.start.valueOf(),end:event.end.valueOf()});});
-    timeline.on("select",event=>{const item=visible.find(entry=>entry.id===event.items[0]); if(item) selection.current(item.endRecordId ?? item.startRecordId);});
+    timeline.on("select",event=>{
+      const id=event.items[0];
+      for(const item of visible){
+        if(item.id===id){selection.current(item.endRecordId ?? item.startRecordId);break;}
+        const marker=item.markers.find((_marker,index)=>`${item.id}:marker:${index}`===id);
+        if(marker){selection.current(marker.recordId);break;}
+      }
+    });
     return ()=>{resize.disconnect();cancelAnimationFrame(redraw);timeline.destroy();items.clear();groups.clear();};
   },[intervals,clock,runRecords,scopeKey]);
   return <div className="timeline-view"><div className="view-toolbar"><Select aria-label="Timeline clock" value={clock} options={clocks.map(value=>({value,label:value}))} onChange={setClock}/><Tag>{visible.length} intervals</Tag><span>Recorded source clock</span></div>

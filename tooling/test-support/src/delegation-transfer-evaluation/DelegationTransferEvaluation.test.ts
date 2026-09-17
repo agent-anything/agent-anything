@@ -16,8 +16,8 @@ describe("Delegation Transfer deterministic Evaluation", () => {
       effectTruthRate: 1,
       completionRate: 1,
       toolCallCount: 2,
-      modelTurnCount: 8,
-      latencyMs: 237,
+      modelTurnCount: 5,
+      latencyMs: 234,
       humanInteractionEvents: 0,
       terminalOutcome: "completed",
     });

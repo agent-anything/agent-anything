@@ -153,6 +153,7 @@ function registrationInput(spec: FileActionSpec): ActionRegistrationInput {
     executor: EXECUTOR_DESCRIPTOR,
     effectFamilies: ["filesystem"],
     sandboxRequirementRevision: "helarc.local.filesystem.sandbox.v1",
+    executionLifetime: "invocation",
     maxInvocationBytes: 2_000_000,
     maxPhysicalResultBytes: 2_000_000,
   };

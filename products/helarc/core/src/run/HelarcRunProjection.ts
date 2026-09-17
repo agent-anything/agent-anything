@@ -12,12 +12,26 @@ export type HelarcModelContinuationProjection = ModelContinuationSafeEvent;
 
 export type HelarcProductPhase = { readonly kind: "none" };
 
+export interface HelarcCommandProgress {
+  readonly runId:string;
+  readonly executionId:string;
+  readonly revision:number;
+  readonly phase:string;
+  readonly processId:number|null;
+  readonly outcome:string|null;
+  readonly capturedBytes:number;
+  readonly omittedBytes:number|null;
+  readonly outputPersistence:string;
+  readonly observedAt:string;
+}
+
 export interface HelarcProductRunProjection {
   readonly runId: string;
   readonly sequence: number;
   readonly phase: HelarcProductPhase;
   readonly qualification: HelarcModelQualificationSafeProjection;
   readonly activity: readonly HelarcActivityItem[];
+  readonly commands:readonly HelarcCommandProgress[];
   readonly continuation: HelarcModelContinuationProjection | null;
   readonly result: HelarcProductResult | null;
 }
@@ -48,6 +62,7 @@ export interface HelarcModelContinuationProjectionUpdate
 }
 
 export type HelarcProductRunProjectionUpdate =
+  | HelarcProductProjectionUpdateBase<"command_observed"> & {readonly command:HelarcCommandProgress}
   | HelarcProductActivityProjectionUpdate
   | HelarcModelContinuationProjectionUpdate
   | HelarcProductResultProjectionUpdate;
@@ -120,6 +135,7 @@ export function createHelarcProductRunProjection(
     phase: Object.freeze({ kind: "none" as const }),
     qualification: snapshotQualification(qualification),
     activity: Object.freeze([]),
+    commands:Object.freeze([]),
     continuation: null,
     result: null,
   });
@@ -144,6 +160,22 @@ export function reduceHelarcProductRunProjection(
 
   try {
     switch (update.kind) {
+      case "command_observed": {
+        const command=update.command;
+        if(!hasIdentity(command.runId)||!hasIdentity(command.executionId)||!Number.isSafeInteger(command.revision)||command.revision<0||
+          !hasIdentity(command.phase)||!Number.isFinite(Date.parse(command.observedAt))||
+          !Number.isSafeInteger(command.capturedBytes)||command.capturedBytes<0||
+          (command.omittedBytes!==null&&(!Number.isSafeInteger(command.omittedBytes)||command.omittedBytes<0))) return rejectProduct(current,"invalid_update");
+        const previous=current.commands.find(item=>item.executionId===command.executionId);
+        if(previous && (previous.runId!==command.runId||previous.revision>=command.revision))return rejectProduct(current,"stale_sequence");
+        const commands=current.commands.filter(item=>item.executionId!==command.executionId);
+        commands.push(Object.freeze({...command}));
+        if(commands.length>256) {
+          const index=commands.findIndex(item=>item.phase==="settled");
+          if(index>=0)commands.splice(index,1);
+        }
+        return appliedProduct(Object.freeze({...current,sequence:update.sequence,commands:Object.freeze(commands)}));
+      }
       case "activity_appended": {
         const activity = snapshotActivity(update.activity);
         const previous = current.activity.at(-1);

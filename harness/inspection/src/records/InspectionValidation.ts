@@ -1,8 +1,8 @@
 import type { InspectionJson, InspectionRecordInput, InspectionSubjectRef } from "./InspectionRecord.js";
 import { validateExecutionFlowDefinition, type ExecutionFlowDefinition } from "@agent-anything/observability/execution-flow";
 
-const kinds = new Set(["run", "turn", "request", "provider-attempt", "call", "operation", "action", "attempt", "control", "definition", "artifact", "context", "contribution", "hook", "event", "flow-definition", "flow-invocation", "flow-step"]);
-const relationKinds = ["contains", "descendant", "binding", "materializes", "trigger", "produces", "transforms", "delivers", "includes", "omits", "prerequisite", "retry", "settles", "cause", "next", "call", "return", "spawn", "join", "resume"];
+const kinds = new Set(["run", "turn", "request", "provider-attempt", "call", "operation", "action", "attempt", "control", "definition", "artifact", "context", "contribution", "hook", "event", "process", "process-observation", "flow-definition", "flow-invocation", "flow-step"]);
+const relationKinds = ["contains", "descendant", "binding", "materializes", "trigger", "produces", "transforms", "delivers", "includes", "omits", "prerequisite", "retry", "settles", "cause", "observes", "next", "call", "return", "spawn", "join", "resume"];
 type Check = (value: unknown) => boolean;
 const text: Check = (value) => typeof value === "string" && value.length <= 4096;
 const identity: Check = (value) => typeof value === "string" && value.length > 0 && value.length <= 512;
@@ -16,6 +16,13 @@ function shape(fields: Record<string, Check>): Check {
     Object.keys(value).length === Object.keys(fields).length && Object.entries(fields).every(([key, check]) => check((value as Record<string, unknown>)[key]));
 }
 const payloads: Record<string, Record<string, Check>> = {
+  process: {phase:identity,revision:integer,backend:identity,processId:nullable(integer),helperProcessId:nullable(integer),
+    rootExit:nullable(shape({code:nullable(value=>Number.isSafeInteger(value)),signal:nullable(text),observedAt:identity})),
+    containment:identity,capture:identity,persistence:identity,outcome:nullable(identity)},
+  process_observation: {executionId:identity,invocationId:identity,snapshotRevision:integer,
+    disposition:oneOf("started","returned","cancelled"),requestedWaitMs:integer,effectiveWaitMs:integer,
+    elapsedWaitMs:nullable(value=>typeof value === "number" && Number.isFinite(value) && value>=0),returnReason:nullable(identity),
+    ranges:array(shape({stream:oneOf("stdout","stderr"),start:integer,end:integer,omitted:integer}))},
   flow_definition: { definition: (value) => { try { validateExecutionFlowDefinition(value as ExecutionFlowDefinition); return true; } catch { return false; } } },
   flow_invocation: { observation: flowObservation("invocation_entered", "invocation_exited") },
   flow_step: { observation: flowObservation("step_entered", "step_exited") },
@@ -34,7 +41,7 @@ const payloads: Record<string, Record<string, Check>> = {
   transfer: { stage: oneOf("produced", "transformed", "delivered", "included", "omitted"), producerId: identity, consumerId: nullable(identity), operation: nullable(text) },
   dependency: { condition: oneOf("settled", "succeeded", "result"), status: oneOf("registered", "satisfied", "unsatisfied"), prerequisiteId: identity, dependentId: identity },
   event: { name: text, sequence: nullable(integer), code: nullable(identity) },
-  interval: { phase: oneOf("started", "settled"), activity: oneOf("run", "controller", "provider", "operation", "action", "attempt", "wait"), status: nullable(identity), clock: identity },
+  interval: { phase: oneOf("started", "settled"), activity: oneOf("run", "controller", "provider", "operation", "action", "attempt", "wait", "process", "process-output"), status: nullable(identity), clock: identity },
 };
 
 function flowObservation(...types: string[]): Check {

@@ -342,6 +342,7 @@ function captureProviders(
 }
 
 function validateRequest(request: SandboxExecutionRequest): string | null {
+  if (request.executionLifetime !== "invocation" && request.executionLifetime !== "run") return "sandbox_execution_lifetime_invalid";
   if (
     request.policy.schemaVersion !== 1 ||
     request.policy.defaultDisposition !== "deny" ||
@@ -374,6 +375,7 @@ function providerSupports(
   request: SandboxExecutionRequest,
 ): boolean {
   return provider.descriptor.supportedPolicyVersions.includes(request.policy.schemaVersion) &&
+    provider.descriptor.supportedExecutionLifetimes.includes(request.executionLifetime) &&
     request.policy.effectFamilies.every((family) =>
       provider.descriptor.supportedEffectFamilies.includes(family)
     );

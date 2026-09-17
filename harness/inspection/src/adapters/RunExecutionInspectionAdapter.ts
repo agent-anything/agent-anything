@@ -34,7 +34,9 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
     } else if (value.kind === "operation_result") {
       const result = ref("operations", "contribution", value.result.ref.id);
       r.offer({subject: result, occurredAt: value.occurredAt, payload: {kind: "event", name: "operation.result", sequence: null, code: value.result.failure?.code ?? null},
-        links: [inspectionLink("produces", ref("operations", "operation", value.invocationId), result)],
+        links: [inspectionLink("produces", ref("operations", "operation", value.invocationId), result),
+          ...value.result.lowerRefs.filter(lower=>lower.kind === "process_observation").map(lower=>
+            inspectionLink("produces",ref(lower.owner,"process-observation",lower.id,lower.revision),result))],
         contents: content("Operation result", value.result, "settled")});
     } else if (value.kind === "scheduling") {
       const call = ref("runtime", "call", value.call.id);

@@ -67,7 +67,7 @@ test("rejects ToolResult in production physical execution owners", () => {
   for (const sourcePath of [
     "harness/safety/action-execution/src/execution/ActionExecutor.ts",
     "harness/safety/action-execution/src/sandbox/SandboxContracts.ts",
-    "products/helarc/local-environment/src/command/ProcessExecutor.ts",
+    "products/helarc/local-environment/src/command/RunProcessManager.ts",
   ]) {
     const violations = evaluateSourceOwnershipRules({
       sourcePath,
@@ -294,7 +294,7 @@ test("rejects optional Agent Hook ownership in Agent Core Runtime", () => {
 
 test("test-only physical fixtures do not violate production result ownership", () => {
   const violations = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/local-environment/src/command/ProcessExecutor.test.ts",
+    sourcePath: "products/helarc/local-environment/src/command/RunProcessManager.test.ts",
     text: "const result: ToolResult = fixture;",
     isTestOnly: true,
   });

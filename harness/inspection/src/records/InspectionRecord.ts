@@ -1,13 +1,13 @@
 import type { ExecutionFlowDefinition, ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 
-export const INSPECTION_FORMAT_VERSION = 2 as const;
+export const INSPECTION_FORMAT_VERSION = 3 as const;
 
 export type InspectionJson = null | boolean | number | string |
   readonly InspectionJson[] | { readonly [key: string]: InspectionJson };
 export type InspectionContentClass = "definition" | "agent" | "provider" | "execution";
 export type InspectionSubjectKind = "run" | "turn" | "request" | "provider-attempt" |
   "call" | "operation" | "action" | "attempt" | "control" | "definition" |
-  "artifact" | "context" | "contribution" | "hook" | "event" | "flow-definition" | "flow-invocation" | "flow-step";
+  "artifact" | "context" | "contribution" | "hook" | "event" | "process" | "process-observation" | "flow-definition" | "flow-invocation" | "flow-step";
 
 export interface InspectionSubjectRef {
   readonly sourceId: string;
@@ -28,7 +28,7 @@ export interface InspectionContentLocation {
 
 export type InspectionRelationKind = "contains" | "descendant" | "binding" |
   "materializes" | "trigger" | "produces" | "transforms" | "delivers" |
-  "includes" | "omits" | "prerequisite" | "retry" | "settles" | "cause" | "next" | "call" | "return" | "spawn" | "join" | "resume";
+  "includes" | "omits" | "prerequisite" | "retry" | "settles" | "cause" | "observes" | "next" | "call" | "return" | "spawn" | "join" | "resume";
 
 export interface InspectionLink {
   readonly id: string;
@@ -49,6 +49,14 @@ export interface InspectionLifecycleDefinition {
 }
 
 export interface InspectionPayloadMap {
+  process: {readonly phase: string; readonly revision: number; readonly backend: string;
+    readonly processId: number | null; readonly helperProcessId: number | null;
+    readonly rootExit: {readonly code:number|null;readonly signal:string|null;readonly observedAt:string}|null;
+    readonly containment:string; readonly capture:string; readonly persistence:string; readonly outcome:string|null};
+  process_observation: {readonly executionId:string;readonly invocationId:string;readonly snapshotRevision:number;
+    readonly disposition:"started"|"returned"|"cancelled";readonly requestedWaitMs:number;readonly effectiveWaitMs:number;
+    readonly elapsedWaitMs:number|null;readonly returnReason:string|null;
+    readonly ranges:readonly {readonly stream:"stdout"|"stderr";readonly start:number;readonly end:number;readonly omitted:number}[]};
   flow_definition: {readonly definition: ExecutionFlowDefinition};
   flow_invocation: {readonly observation: Extract<ExecutionFlowObservation, {kind: "invocation_entered" | "invocation_exited"}>};
   flow_step: {readonly observation: Extract<ExecutionFlowObservation, {kind: "step_entered" | "step_exited"}>};
@@ -80,7 +88,7 @@ export interface InspectionPayloadMap {
   dependency: { readonly condition: "settled" | "succeeded" | "result";
     readonly status: "registered" | "satisfied" | "unsatisfied"; readonly prerequisiteId: string; readonly dependentId: string };
   event: { readonly name: string; readonly sequence: number | null; readonly code: string | null };
-  interval: { readonly phase: "started" | "settled"; readonly activity: "run" | "controller" | "provider" | "operation" | "action" | "attempt" | "wait";
+  interval: { readonly phase: "started" | "settled"; readonly activity: "run" | "controller" | "provider" | "operation" | "action" | "attempt" | "wait" | "process" | "process-output";
     readonly status: string | null; readonly clock: string };
 }
 

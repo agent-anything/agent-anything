@@ -7,18 +7,13 @@ export type {
   CreateHelarcLocalCommandActionCapabilityInput,
   HelarcLocalCommandActionCapability,
 } from "./LocalCommandActionCapability.js";
-export {
-  RunProcessTaskRegistry,
-  ProcessTaskRegistryError,
-} from "./RunProcessTaskRegistry.js";
+export { RunProcessManager, ProcessManagerError } from "./RunProcessManager.js";
 export type {
-  RunProcessTaskAvailabilitySnapshot,
-  ProcessTaskSnapshot,
-  ProcessTaskStatus,
-} from "./RunProcessTaskRegistry.js";
+  ProcessSnapshot, ProcessObservation, ProcessExecutionFact, ProcessExecutionObserver,
+  ProcessCleanupSummary,
+} from "./ProcessObservation.js";
 export { defaultCodeAgentCommandLimits } from "./CommandLimits.js";
 export type {
   CodeAgentCommandLimits,
-  ProcessTerminationLimits,
 } from "./ProcessContracts.js";
 export { HELARC_SHELL_COMMAND_OUTCOME_REVISION } from "./ShellCommandOutcome.js";

@@ -47,6 +47,8 @@ import { createHelarcBaselineToolGuidance } from "../tools/guidance/index.js";
 import {
   HELARC_SHELL_BINDING,
   HELARC_SHELL_OPERATION,
+  HELARC_PROCESS_START_BINDING,
+  HELARC_PROCESS_START_OPERATION,
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "../tools/HelarcCommandOperation.js";
@@ -251,7 +253,7 @@ describe("HelarcProductComposition", () => {
       revision: "1",
     });
     expect(composition.actions.registrations.registrations.map(({ operation }) => operation.operation.name))
-      .toEqual(expect.arrayContaining(["edit", "glob", "grep", "read", "write", "shell-execute", "task-stop"]));
+      .toEqual(expect.arrayContaining(["edit", "glob", "grep", "read", "write", "process-start", "task-stop"]));
     const selectedRegistrations = composition.actions.toolSelection.tools.map(
       ({ registration }) => registration,
     );
@@ -263,9 +265,9 @@ describe("HelarcProductComposition", () => {
         dialect: "windows-powershell",
       },
     );
-    expect(baselineGuidance.release.tools).toHaveLength(11);
-    expect(baselineGuidance.release.sources).toHaveLength(11);
-    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(10);
+    expect(baselineGuidance.release.tools).toHaveLength(12);
+    expect(baselineGuidance.release.sources).toHaveLength(12);
+    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(11);
     expect(composition.controllerProtocol.toolGuidance.entries.map(({ name }) => name))
       .toEqual(expect.arrayContaining([
         "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
@@ -517,6 +519,7 @@ function createLocalContributions() {
         executor,
         effectFamilies: ["filesystem" as const],
         sandboxRequirementRevision: "test.filesystem.sandbox.v1",
+        executionLifetime: "invocation",
         maxInvocationBytes: 1_000_000,
         maxPhysicalResultBytes: 1_000_000,
       }))),
@@ -524,6 +527,7 @@ function createLocalContributions() {
       executors: [],
     },
     commandActions: {
+      internalHandlers: [],
       shellTool: "PowerShell" as const,
       shellRuntime: {
         toolName: "PowerShell" as const,
@@ -535,17 +539,17 @@ function createLocalContributions() {
       taskStopBinding: HELARC_TASK_STOP_BINDING,
       taskAvailability: {
         getRunAvailability() {
-          return { revision: 0, activeTaskCount: 0 };
+          return { revision: 0, activeTaskCount: 0, retainedTaskCount: 0 };
         },
       },
       environment: { id: "test-shell", revision: "sha256:test-shell" },
       registrations: createActionRegistrationSnapshot([
         {
           registrationId: "test.shell.registration", revision: "1",
-          operation: HELARC_SHELL_OPERATION, binding: HELARC_SHELL_BINDING,
+          operation: HELARC_PROCESS_START_OPERATION, binding: HELARC_PROCESS_START_BINDING,
           adapter: { id: "test.shell.adapter", version: "1", requestSchemaRevision: "1" },
           executor: { ...executor, id: "test.shell.executor" },
-          effectFamilies: ["process", "filesystem"], sandboxRequirementRevision: "test.shell.sandbox.v1",
+          effectFamilies: ["process", "filesystem"], sandboxRequirementRevision: "test.shell.sandbox.v1", executionLifetime: "run",
           maxInvocationBytes: 1_000_000, maxPhysicalResultBytes: 1_000_000,
         },
         {
@@ -553,7 +557,7 @@ function createLocalContributions() {
           operation: HELARC_TASK_STOP_OPERATION, binding: HELARC_TASK_STOP_BINDING,
           adapter: { id: "test.task-stop.adapter", version: "1", requestSchemaRevision: "1" },
           executor: { ...executor, id: "test.task-stop.executor" },
-          effectFamilies: ["process"], sandboxRequirementRevision: "test.shell.sandbox.v1",
+          effectFamilies: ["process"], sandboxRequirementRevision: "test.shell.sandbox.v1", executionLifetime: "invocation",
           maxInvocationBytes: 1_000_000, maxPhysicalResultBytes: 1_000_000,
         },
       ]),

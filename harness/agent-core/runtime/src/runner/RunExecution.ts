@@ -6335,7 +6335,7 @@ function operationResultFromComposite(
     output: result.output,
     failure: result.failure === null
       ? null
-      : operationFailure("operation-composition", result.failure.code, result.failure.message),
+      : { ...operationFailure("operation-composition", result.failure.code, result.failure.message), metadata: result.failure.metadata },
     startedAt,
     finishedAt,
     lowerRefs: Object.freeze(result.children.flatMap((child) =>

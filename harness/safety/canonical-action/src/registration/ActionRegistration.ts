@@ -33,6 +33,7 @@ export interface ActionRegistration {
   readonly executor: ActionExecutorDescriptor;
   readonly effectFamilies: readonly CanonicalEffectFamily[];
   readonly sandboxRequirementRevision: string;
+  readonly executionLifetime: "invocation" | "run";
   readonly maxInvocationBytes: number;
   readonly maxPhysicalResultBytes: number;
   readonly registrationFingerprint: string;
@@ -44,7 +45,7 @@ export type ActionRegistrationInput = Omit<
 >;
 
 export interface ActionRegistrationSnapshot {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly snapshotId: string;
   readonly registrations: readonly ActionRegistration[];
 }
@@ -69,7 +70,7 @@ export class ActionRegistrationValidationError extends TypeError {
   }
 }
 
-const FINGERPRINT_DOMAIN = "agent-anything.action-registration.v2";
+const FINGERPRINT_DOMAIN = "agent-anything.action-registration.v3";
 
 export function createActionRegistrationSnapshot(
   inputs: readonly ActionRegistrationInput[],
@@ -123,9 +124,9 @@ export function createActionRegistrationSnapshot(
   );
   const frozen = Object.freeze(registrations);
   return Object.freeze({
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     snapshotId: sha256(
-      "agent-anything.action-registration-snapshot.v2",
+      "agent-anything.action-registration-snapshot.v3",
       frozen.map((registration) => registration.registrationFingerprint),
     ),
     registrations: frozen,
@@ -164,6 +165,7 @@ function snapshotRegistration(
     "executor",
     "effectFamilies",
     "sandboxRequirementRevision",
+    "executionLifetime",
     "maxInvocationBytes",
     "maxPhysicalResultBytes",
   ]);
@@ -190,6 +192,7 @@ function snapshotRegistration(
     adapter,
     executor,
     effectFamilies,
+    executionLifetime: executionLifetime(input.executionLifetime, `${path}.executionLifetime`),
     sandboxRequirementRevision: token(
       input.sandboxRequirementRevision,
       `${path}.sandboxRequirementRevision`,
@@ -207,6 +210,11 @@ function snapshotRegistration(
     ...base,
     registrationFingerprint: sha256(FINGERPRINT_DOMAIN, base),
   });
+}
+
+function executionLifetime(value: unknown, path: string): "invocation" | "run" {
+  if (value !== "invocation" && value !== "run") throw validationError("action_registration_invalid", "Unsupported execution lifetime.", path);
+  return value;
 }
 
 function snapshotOperation(

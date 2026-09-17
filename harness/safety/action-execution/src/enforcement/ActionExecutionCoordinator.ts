@@ -624,6 +624,7 @@ export class ActionExecutionCoordinator {
       dispatchStep.check("progression_basis", "passed");
       dispatchStep.check("authority_basis", "passed", {authorityRevision:authorityBasis.authorityRevision});
       sandbox = await this.dependencies.sandbox.execute({
+        executionLifetime: captured.registration.executionLifetime,
         executionFlow: flow.callContext,
         attempt: sandboxAttempt,
         policy: sandboxPolicy,

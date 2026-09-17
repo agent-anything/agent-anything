@@ -1,4 +1,5 @@
 import type { ToolAnnotations, ToolJsonObject } from "@agent-anything/tools/catalog";
+import {HELARC_PROCESS_OBSERVATION_SCHEMA, HELARC_PROCESS_WAIT_SCHEMA} from "./HelarcProcessSchemas.js";
 
 export type HelarcShellToolName = "Bash" | "PowerShell";
 
@@ -27,6 +28,7 @@ export type HelarcBaselineToolName =
   | "Write"
   | HelarcShellToolName
   | "TaskStop"
+  | "TaskOutput"
   | "AskUserQuestion"
   | "Agent"
   | "SendMessage";
@@ -39,7 +41,8 @@ export type HelarcToolSettlementBinding =
         | "file_system.read"
         | "file_system.write"
         | "process.spawn"
-        | "process.signal";
+        | "process.signal"
+        | null;
     }
   | {
       readonly kind: "interaction";
@@ -67,7 +70,7 @@ export interface HelarcBaselineToolContract {
 }
 
 export const HELARC_BASELINE_TOOL_CONTRACT_REVISION =
-  "helarc.baseline-tool-contracts.v3";
+  "helarc.baseline-tool-contracts.v4";
 
 const POSITIVE_INTEGER = Object.freeze({
   type: "integer",
@@ -243,18 +246,23 @@ const WRITE = contract({
 
 const TASK_STOP = contract({
   name: "TaskStop",
-  description: "Stop one exact background command owned by the current Run.",
+  description: "Request termination of one exact managed command owned by the current Run.",
   inputSchema: objectSchema(["task_id"], {
     task_id: { type: "string", minLength: 1, maxLength: 1_024 },
   }),
-  outputSchema: objectSchema(["task_id", "status", "signal", "effect_certainty"], {
+  outputSchema: objectSchema(["task_id", "snapshot", "effect_certainty"], {
     task_id: { type: "string", minLength: 1, maxLength: 1_024 },
-    status: { enum: ["stopped", "completed"] },
-    signal: { anyOf: [{ type: "string" }, { type: "null" }] },
+    snapshot: {type:"object",description:"Exact managed process lifecycle facts, including root exit, containment, termination and output persistence."},
     effect_certainty: { enum: ["known_applied", "known_not_applied", "unknown"] },
   }),
   annotations: { destructiveHint: true, idempotentHint: true },
   binding: operation("helarc.task.stop", "process.signal"),
+});
+
+const TASK_OUTPUT = contract({
+  name:"TaskOutput",description:"Observe retained output and lifecycle facts for one command owned by the current Run.",
+  inputSchema:objectSchema(["task_id"],{task_id:{type:"string",minLength:1,maxLength:1024},cursor:{type:"string",minLength:1,maxLength:4096},wait_ms:HELARC_PROCESS_WAIT_SCHEMA}),
+  outputSchema:HELARC_PROCESS_OBSERVATION_SCHEMA,annotations:{readOnlyHint:true},binding:operation("helarc.task.output",null),
 });
 
 const ASK_USER_QUESTION = contract({
@@ -378,62 +386,10 @@ const SHELL_INPUT = objectSchema(["command"], {
   command: { type: "string", minLength: 1 },
   description: { type: "string", minLength: 1, maxLength: 1_000 },
   timeout_ms: POSITIVE_INTEGER,
+  wait_ms: HELARC_PROCESS_WAIT_SCHEMA,
   run_in_background: { type: "boolean" },
 });
 
-const SHELL_STREAM_OUTPUT = objectSchema(
-  [
-    "text",
-    "encoding",
-    "encoding_source",
-    "integrity",
-    "replacement_count",
-    "truncated",
-    "overflow_file",
-  ],
-  {
-    text: { type: "string" },
-    encoding: { anyOf: [{ type: "string" }, { type: "null" }] },
-    encoding_source: {
-      enum: ["utf8", "bom", "detected", "fallback", "none"],
-    },
-    integrity: {
-      enum: ["exact", "inferred", "lossy", "unavailable"],
-    },
-    replacement_count: { type: "integer", minimum: 0 },
-    truncated: { type: "boolean" },
-    overflow_file: { anyOf: [PATH, { type: "null" }] },
-  },
-);
-
-const SHELL_OUTPUT = Object.freeze({
-  oneOf: [
-    objectSchema(
-      [
-        "mode",
-        "exit_code",
-        "signal",
-        "duration_ms",
-        "stdout",
-        "stderr",
-      ],
-      {
-        mode: { const: "foreground" },
-        exit_code: { anyOf: [{ type: "integer" }, { type: "null" }] },
-        signal: { anyOf: [{ type: "string" }, { type: "null" }] },
-        duration_ms: { type: "integer", minimum: 0 },
-        stdout: SHELL_STREAM_OUTPUT,
-        stderr: SHELL_STREAM_OUTPUT,
-      },
-    ),
-    objectSchema(["mode", "task_id", "status", "output_file"], {
-      mode: { const: "background" },
-      task_id: { type: "string", minLength: 1, maxLength: 1_024 },
-      status: { const: "running" },
-      output_file: PATH,
-    }),
-  ],
-}) satisfies ToolJsonObject;
 
 const BASH = shellContract("Bash");
 const POWERSHELL = shellContract("PowerShell");
@@ -447,6 +403,7 @@ export const HELARC_BASELINE_TOOL_CONTRACTS = Object.freeze([
   BASH,
   POWERSHELL,
   TASK_STOP,
+  TASK_OUTPUT,
   ASK_USER_QUESTION,
   AGENT,
   SEND_MESSAGE,
@@ -473,9 +430,9 @@ export function findHelarcBaselineToolContract(
 function shellContract(name: HelarcShellToolName): HelarcBaselineToolContract {
   return contract({
     name,
-    description: `Execute one bounded native ${name} command.`,
+    description: `Start one Run-owned native ${name} command and observe it for a bounded initial wait.`,
     inputSchema: SHELL_INPUT,
-    outputSchema: SHELL_OUTPUT,
+    outputSchema: HELARC_PROCESS_OBSERVATION_SCHEMA,
     annotations: { destructiveHint: true, openWorldHint: true },
     binding: operation("helarc.shell.execute", "process.spawn"),
   });

@@ -95,7 +95,7 @@ import {
 } from "./HelarcOperationalEvaluation.js";
 
 export const HELARC_OPERATIONAL_CONFORMANCE_REVISION =
-  "helarc-operational-conformance-v5";
+  "helarc-operational-conformance-v6";
 
 export interface HelarcOperationalConformanceFacts {
   readonly caseId: HelarcOperationalConformanceCaseId;

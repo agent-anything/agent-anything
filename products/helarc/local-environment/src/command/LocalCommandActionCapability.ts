@@ -51,19 +51,17 @@ import {
   type CommandEnvironmentPolicySnapshot,
   type NativeShellRuntimeProfile,
 } from "./CommandActionIdentity.js";
-import { executeProcess, type CapturedProcessOutput, type ProcessExecutionOutcome } from "./ProcessExecutor.js";
-import type { CodeAgentCommandLimits, ProcessTerminationLimits } from "./ProcessContracts.js";
-import { RunProcessTaskRegistry, ProcessTaskRegistryError } from "./RunProcessTaskRegistry.js";
+import { RunProcessManager, ProcessManagerError } from "./RunProcessManager.js";
+import { WindowsJobProcessBackend, resolveWindowsProcessHelper } from "./WindowsJobProcessBackend.js";
+import { PosixProcessBackend } from "./PosixProcessBackend.js";
+import type { ProcessExecutionObserver } from "./ProcessObservation.js";
+import { createProcessObservationHandlers } from "./ProcessObservationHandlers.js";
+import type { ProcessObservationHandler } from "./ProcessObservationHandlers.js";
+import type { CodeAgentCommandLimits } from "./ProcessContracts.js";
+
 import {
   ShellExecutionSession,
-  type ShellExecutionSessionSnapshot,
 } from "./ShellExecutionSession.js";
-import { interpretShellCommandOutcome } from "./ShellCommandOutcome.js";
-import type {
-  ProcessTextEncodingSource,
-  ProcessTextIntegrity,
-  ProcessTextProjection,
-} from "./ProcessOutputText.js";
 import {
   inspectPreparedFileSystemTarget,
   prepareFileSystemTarget,
@@ -79,7 +77,6 @@ const SHELL_ADAPTER = Object.freeze({ id: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, 
 const STOP_ADAPTER = Object.freeze({ id: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID, version: "1", requestSchemaRevision: "1" });
 const SHELL_EXECUTOR = Object.freeze({ id: "helarc.local.shell.executor", version: "2", invocationContractVersion: "2", physicalPayloadSchemaRevision: "2" });
 const STOP_EXECUTOR = Object.freeze({ id: "helarc.local.task-stop.executor", version: "1", invocationContractVersion: "1", physicalPayloadSchemaRevision: "1" });
-const DEFAULT_TERMINATION: ProcessTerminationLimits = Object.freeze({ gracePeriodMs: 500, forceKillTimeoutMs: 2_000 });
 const MAX_CWD_CONTROL_BYTES = 32_768;
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
@@ -93,9 +90,10 @@ export interface CreateHelarcLocalCommandActionCapabilityInput {
   readonly limits?: Partial<CodeAgentCommandLimits>;
   readonly environment?: Readonly<Record<string, string>>;
   readonly environmentPolicyId?: string;
-  readonly termination?: Partial<ProcessTerminationLimits>;
   readonly now?: () => string;
-  readonly nowMs?: () => number;
+  readonly processObserver?: ProcessExecutionObserver;
+  readonly initialObservationHandlerId: string;
+  readonly taskOutputHandlerId: string;
 }
 
 export interface HelarcLocalCommandActionCapability {
@@ -107,14 +105,17 @@ export interface HelarcLocalCommandActionCapability {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
-  readonly processTasks: RunProcessTaskRegistry;
+  readonly processes: RunProcessManager;
+  readonly internalHandlers: readonly ProcessObservationHandler[];
   readonly taskStopBinding: OperationBindingRevisionRef;
-  readonly taskAvailability: Pick<RunProcessTaskRegistry, "getRunAvailability">;
-  readonly shellSession: Pick<ShellExecutionSession, "snapshot">;
+  readonly taskAvailability: Pick<RunProcessManager, "getRunAvailability">;
+  readonly shellSession: (runId:string) => ReturnType<ShellExecutionSession["snapshot"]>;
 }
 
 interface ShellPayload {
   readonly runId: string;
+  readonly invocationId: string;
+  readonly runActionId: string;
   readonly executableCommand: string;
   readonly executablePath: string;
   readonly executableBaseline: FileBaseline;
@@ -133,6 +134,7 @@ interface ShellPayload {
   readonly outputPath: string;
   readonly outputAbsolutePath: string;
   readonly outputBaseline: FileBaseline;
+  readonly captureTargets: readonly {path:string;relativePath:string;baseline:FileBaseline}[];
   readonly timeoutMs: number;
   readonly runInBackground: boolean;
   readonly maxStdoutBytes: number;
@@ -143,7 +145,6 @@ interface ShellPayload {
   readonly runtimeEnvironmentId: string;
   readonly runtimeEnvironmentPlatform: "win32" | "posix";
   readonly runtimeEnvironmentFingerprint: string;
-  readonly termination: ProcessTerminationLimits;
 }
 
 interface StopPayload { readonly identity: CanonicalProcessIdentity; }
@@ -157,10 +158,20 @@ interface StopBasis { readonly taskId: string; readonly cwdDisplay: string; }
 
 export async function createHelarcLocalCommandActionCapability(input: CreateHelarcLocalCommandActionCapabilityInput): Promise<HelarcLocalCommandActionCapability> {
   const limits = resolveCommandLimits(input.limits);
-  const termination = resolveTermination(input.termination);
+  const now = input.now ?? (() => new Date().toISOString());
   const environment = await createCommandEnvironmentPolicy({ id: input.environmentPolicyId ?? "helarc.local.shell.environment.default", overrides: input.environment });
-  const processTasks = new RunProcessTaskRegistry(limits.maxActiveTasks, limits.maxSettledTasks);
+  const backend = input.platform === "win32"
+    ? new WindowsJobProcessBackend(await resolveWindowsProcessHelper()) : new PosixProcessBackend();
+  const processTasks = new RunProcessManager({backend, maximumActive:limits.maxActiveTasks,
+    maximumSettled:limits.maxSettledTasks, observer:input.processObserver, now});
+  const commandSemantics = new Map<string, {shell:"Bash"|"PowerShell";command:string}>();
   const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
+  const sessions = new Map<string,ShellExecutionSession>();
+  const sessionFor = (runId:string) => {
+    let session = sessions.get(runId);
+    if(!session) {session=shellSession.forkInitial();sessions.set(runId,session);}
+    return session;
+  };
   const shell = await selectNativeShell({
     platform: input.platform,
     cwd: shellSession.snapshot().canonicalPath,
@@ -170,8 +181,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     registration("helarc.local.shell.registration.v3", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process", "filesystem"]),
     registration("helarc.local.task-stop.registration.v1", input.taskStopOperation, input.taskStopBinding, STOP_ADAPTER, STOP_EXECUTOR, ["process"]),
   ]);
-  const now = input.now ?? (() => new Date().toISOString());
-  const nowMs = input.nowMs ?? (() => Date.now());
+
   return Object.freeze({
     shellTool: shell.toolName,
     shellRuntime: projectNativeShellRuntimeProfile(shell),
@@ -180,17 +190,19 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     environment: Object.freeze({ id: environment.id, revision: environment.digest }),
     registrations,
     adapters: Object.freeze([
-      Object.freeze({ adapter: createShellAdapter(input.workspace, shellSession, shell, limits, termination, environment) }),
+      Object.freeze({ adapter: createShellAdapter(input.workspace, sessionFor, shell, limits, environment) }),
       Object.freeze({ adapter: createTaskStopAdapter(processTasks) }),
     ]),
     executors: Object.freeze([
-      createShellExecutor(environment, processTasks, shellSession, now, nowMs),
+      createShellExecutor(environment, processTasks, sessionFor, commandSemantics, now),
       createTaskStopExecutor(processTasks, now),
     ]),
-    processTasks,
+    processes: processTasks,
+    internalHandlers: createProcessObservationHandlers({manager:processTasks, semantics:commandSemantics, now,
+      initialHandlerId:input.initialObservationHandlerId, outputHandlerId:input.taskOutputHandlerId}),
     taskStopBinding: input.taskStopBinding,
     taskAvailability: processTasks,
-    shellSession,
+    shellSession:(runId:string)=>sessionFor(runId).snapshot(),
   });
 }
 
@@ -204,17 +216,16 @@ function registration(
 ): ActionRegistrationInput {
   return {
     registrationId: id, revision: "1", operation, binding, adapter, executor,
-    effectFamilies, sandboxRequirementRevision: "helarc.local.shell.sandbox.v1",
+    effectFamilies, sandboxRequirementRevision: "helarc.local.shell.sandbox.v1", executionLifetime: adapter.id === SHELL_ADAPTER.id ? "run" : "invocation",
     maxInvocationBytes: 256_000, maxPhysicalResultBytes: 2_500_000,
   };
 }
 
 function createShellAdapter(
   workspace: WorkspaceSelection,
-  session: ShellExecutionSession,
+  sessionFor: (runId:string)=>ShellExecutionSession,
   shell: Awaited<ReturnType<typeof selectNativeShell>>,
   limits: CodeAgentCommandLimits,
-  termination: ProcessTerminationLimits,
   environment: CommandEnvironmentPolicySnapshot,
 ): OperationActionAdapter<unknown, ShellBasis> {
   const adapter: OperationActionAdapter<unknown, ShellBasis> = {
@@ -226,7 +237,7 @@ function createShellAdapter(
         const runId = context.parentRunAction?.run.id;
         if (runId === undefined) return invalidPreparation("shell_run_required", "Shell execution requires an owning RunAction.");
         if (context.workspace === null) return invalidPreparation("workspace_required", "Shell execution requires a Run Workspace.");
-        const sessionSnapshot = session.snapshot();
+        const sessionSnapshot = sessionFor(runId).snapshot();
         const cwd = await prepareFileSystemTarget({
           workspace,
           workspaceRoots: context.workspace.roots,
@@ -235,8 +246,13 @@ function createShellAdapter(
           path: sessionSnapshot.relativePath,
           operation: "directory",
         });
-        const outputPath = `.helarc-process-${digestToken(context.action.id)}.log`;
+        const outputPath = `.helarc-process-${digestToken(context.action.id)}`;
         const output = await prepareFileSystemTarget({ workspace, workspaceRoots: context.workspace.roots, platform: context.environment.platform, path: outputPath, operation: "write" });
+        const captureTargets = [output];
+        for (const suffix of [".stderr.raw", ".stdout.txt", ".stderr.txt", ".manifest.json"]) {
+          captureTargets.push(await prepareFileSystemTarget({workspace, workspaceRoots:context.workspace.roots,
+            platform:context.environment.platform,path:outputPath+suffix,operation:"write"}));
+        }
         const executable = await resolveCommandExecutable({ command: shell.command, cwd: cwd.canonicalTarget, platform: context.environment.platform, environment: environment.environment });
         const cwdControlPath = parsed.runInBackground
           ? null
@@ -250,21 +266,23 @@ function createShellAdapter(
           ),
         ]);
         const payload: ShellPayload = Object.freeze({
-          runId, executableCommand: shell.command, executablePath: executable.canonicalPath,
+          runId, invocationId:binding.invocation.id,runActionId:context.parentRunAction!.id,
+          executableCommand: shell.command, executablePath: executable.canonicalPath,
           executableBaseline: executable.identity.baseline,
           args, command: parsed.command, cwdControlPath, sessionRevision: sessionSnapshot.revision,
           rootName: cwd.rootName, workspaceId: cwd.workspaceId,
           workspaceRoot: cwd.workspaceRoot, canonicalRoot: cwd.canonicalRoot, cwdPath: cwd.pathIdentity.path,
           cwd: cwd.canonicalTarget, cwdDisplay: `${cwd.rootName}:${cwd.relativePath}`, cwdBaseline: cwd.baseline,
           outputPath: output.relativePath, outputAbsolutePath: output.canonicalTarget, outputBaseline: output.baseline,
+          captureTargets:captureTargets.map(target=>({path:target.canonicalTarget,relativePath:target.relativePath,baseline:target.baseline})),
           timeoutMs: parsed.timeoutMs, runInBackground: parsed.runInBackground,
           maxStdoutBytes: limits.maxStdoutBytes, maxStderrBytes: limits.maxStderrBytes,
           maxOutputFileBytes: limits.maxOutputFileBytes, environmentPolicyId: environment.id,
           environmentDigest: environment.digest, runtimeEnvironmentId: context.environment.environmentId,
           runtimeEnvironmentPlatform: context.environment.platform,
-          runtimeEnvironmentFingerprint: context.environment.configurationFingerprint, termination,
+          runtimeEnvironmentFingerprint: context.environment.configurationFingerprint,
         });
-        const data = await shellPreparedData(parsed.description, shell.toolName, payload, cwd, output, executable.identity, context.environment, context.now());
+        const data = await shellPreparedData(parsed.description, shell.toolName, payload, cwd, captureTargets, executable.identity, context.environment, context.now());
         return Object.freeze({ status: "prepared" as const, prepared: await createPreparedAction(binding, context, data) });
       } catch (error) {
         return invalidPreparation("shell_action_invalid", safeMessage(error, "Shell request or target is invalid."));
@@ -274,7 +292,7 @@ function createShellAdapter(
       if (context.interruption.signal.aborted) return interruptedRevalidation("shell_action_interrupted");
       try {
         const payload = readShellPayload(prepared.invocation);
-        const sessionSnapshot = session.snapshot();
+        const sessionSnapshot = sessionFor(payload.runId).snapshot();
         if (
           sessionSnapshot.revision !== payload.sessionRevision ||
           !samePath(sessionSnapshot.canonicalPath, payload.cwd)
@@ -285,6 +303,12 @@ function createShellAdapter(
         if (executableAssertion === undefined || cwdAssertions === null || outputAssertions === null) return invalidated("shell_assertion_missing");
         const cwd = await inspectTarget(payload, cwdAssertions, "directory", payload.cwd, payload.cwdBaseline);
         const output = await inspectTarget(payload, outputAssertions, "write", payload.outputAbsolutePath, payload.outputBaseline);
+        for (const target of payload.captureTargets) {
+          const expected = pathAssertions(assertions, target.path);
+          if (expected === null) return invalidated("shell_capture_assertion_missing");
+          const actual = await inspectTarget(payload, expected, "write", target.path, target.baseline);
+          if (!sameFileBaseline(actual.baseline,target.baseline) || !sameCanonicalPathIdentity(actual.pathIdentity,expected.path.expected)) return invalidated("shell_capture_target_changed");
+        }
         const executable = await revalidateCommandExecutable({ originalCommand: payload.executableCommand, expectedPath: payload.executablePath, cwd: payload.cwd, platform: context.environment.platform });
         const actualExecutable = createCanonicalExecutableIdentity(executable.identity);
         if (!sameCanonicalPathIdentity(cwd.pathIdentity, cwdAssertions.path.expected) ||
@@ -298,7 +322,7 @@ function createShellAdapter(
         return Object.freeze({ status: "valid" as const, recordId: `revalidation:${context.action.id}:${context.subjectRevision}` });
       } catch { return invalidated("shell_target_changed"); }
     },
-    async settle(prepared, settlement) { return settleShell(prepared, settlement); },
+    async settle(_prepared, settlement) { return settleOperation(settlement, "shell_start"); },
   };
   return Object.freeze(adapter);
 }
@@ -308,7 +332,7 @@ async function shellPreparedData(
   shell: "Bash" | "PowerShell",
   payload: ShellPayload,
   cwd: PreparedFileSystemTarget,
-  output: PreparedFileSystemTarget,
+  outputs: readonly PreparedFileSystemTarget[],
   executable: Parameters<typeof createCanonicalExecutableIdentity>[0],
   runtimeEnvironment: CanonicalEnvironmentIdentity,
   createdAt: string,
@@ -318,15 +342,18 @@ async function shellPreparedData(
   return {
     effectSet: { kind: "effects", values: [
       { kind: "process", operation: "spawn", executable },
-      { kind: "file_system", operation: "write", targets: [output.pathIdentity] },
+      { kind: "file_system", operation: "write", targets: outputs.map(output=>output.pathIdentity) },
     ] },
     requestedAuthority: null,
     targetAssertions: [
-      { kind: "workspace_root_identity", expected: rootIdentityInput(cwd.workspaceRootIdentity) },
+      ...[...new Map([cwd, ...outputs].map(target => [target.workspaceRootIdentity.rootId, target.workspaceRootIdentity])).values()]
+        .map(root => ({ kind: "workspace_root_identity" as const, expected: rootIdentityInput(root) })),
       { kind: "canonical_path_identity", expected: cwd.pathIdentity },
       { kind: "file_baseline", path: cwd.pathIdentity, expected: cwd.baseline },
-      { kind: "canonical_path_identity", expected: output.pathIdentity },
-      { kind: "file_baseline", path: output.pathIdentity, expected: output.baseline },
+      ...outputs.flatMap(output=>[
+        {kind:"canonical_path_identity" as const,expected:output.pathIdentity},
+        {kind:"file_baseline" as const,path:output.pathIdentity,expected:output.baseline},
+      ]),
       { kind: "executable_identity", expected: executable },
     ],
     approval: approval(runtimeEnvironment.environmentId, applicability, description ?? "Execute one native shell command.", [payload.executablePath, ...payload.args], commandDisplay, payload.cwd, payload.cwdDisplay, "Spawn one native shell process", createdAt),
@@ -338,90 +365,71 @@ async function shellPreparedData(
       commandDisplay,
       cwdDisplay: payload.cwdDisplay,
     },
-    deadlineAt: new Date(Date.parse(createdAt) + payload.timeoutMs).toISOString(),
+    deadlineAt: null,
   };
 }
 
 function createShellExecutor(
   environment: CommandEnvironmentPolicySnapshot,
-  tasks: RunProcessTaskRegistry,
-  session: ShellExecutionSession,
+  tasks: RunProcessManager,
+  sessionFor: (runId:string)=>ShellExecutionSession,
+  semantics: Map<string,{shell:"Bash"|"PowerShell";command:string}>,
   now: () => string,
-  nowMs: () => number,
 ): ActionExecutor {
-  const executor: ActionExecutor = {
-    descriptor: SHELL_EXECUTOR,
-    validatePayload(candidate): candidate is unknown { return isRecord(candidate); },
-    async execute(invocation, context) {
+  return Object.freeze({
+    descriptor:SHELL_EXECUTOR,
+    validatePayload(candidate:unknown):candidate is unknown {return isRecord(candidate);},
+    async execute(invocation,context) {
       assertActionExecutorDispatchContext(context);
       const startedAt = now();
-      const startedMs = nowMs();
-      let dispatched = false;
-      let cwdControlPath: string | null = null;
       try {
         const payload = readShellPayload(invocation);
-        cwdControlPath = payload.cwdControlPath;
-        if (context.interruption.signal.aborted) return interrupted("none", "shell_interrupted_before_dispatch");
-        if (payload.environmentPolicyId !== environment.id || payload.environmentDigest !== environment.digest) return failed("none", "shell_environment_changed", "Shell environment changed before dispatch.");
-        const executable = await revalidateCommandExecutable({ originalCommand: payload.executableCommand, expectedPath: payload.executablePath, cwd: payload.cwd, platform: payload.runtimeEnvironmentPlatform });
-        if (!sameFileBaseline(executable.identity.baseline, payload.executableBaseline)) return failed("none", "shell_executable_changed", "Shell executable changed before dispatch.");
-        dispatched = true;
-        if (payload.runInBackground) {
-          const task = await tasks.start({
-            runId: payload.runId, actionId: context.attempt.action.id, environmentId: payload.runtimeEnvironmentId,
-            executable: payload.executablePath, args: payload.args, cwd: payload.cwd, environment: environment.environment,
-            timeoutMs: payload.timeoutMs, interruption: context.interruption, termination: payload.termination,
-            outputAbsolutePath: payload.outputAbsolutePath, outputRelativePath: payload.outputPath,
-            maximumOutputBytes: payload.maxOutputFileBytes,
-          });
-          return completed({ mode: "background", task_id: task.taskId, status: "running", output_file: task.outputFile }, startedAt, now());
-        }
-        await removeCwdControlFile(cwdControlPath);
-        const outcome = await executeProcess({
-          command: payload.executablePath, args: payload.args, cwd: payload.cwd,
-          environment: environment.environment, replaceEnvironment: true, timeoutMs: payload.timeoutMs,
-          maxStdoutBytes: payload.maxStdoutBytes, maxStderrBytes: payload.maxStderrBytes,
-          outputFile: { absolutePath: payload.outputAbsolutePath, relativePath: payload.outputPath, maximumBytes: payload.maxOutputFileBytes },
-          interruption: context.interruption, termination: payload.termination, startedMs, nowMs,
+        if (context.interruption.signal.aborted) return interrupted("none","shell_interrupted_before_dispatch");
+        if (payload.environmentPolicyId !== environment.id || payload.environmentDigest !== environment.digest) return failed("none","shell_environment_changed","Shell environment changed.");
+        const executable = await revalidateCommandExecutable({originalCommand:payload.executableCommand,
+          expectedPath:payload.executablePath,cwd:payload.cwd,platform:payload.runtimeEnvironmentPlatform});
+        if (!sameFileBaseline(executable.identity.baseline,payload.executableBaseline)) return failed("none","shell_executable_changed","Shell executable changed.");
+        const executionId = context.attempt.action.id + ":process";
+        semantics.set(executionId,{shell:payload.runtimeEnvironmentPlatform === "win32" ? "PowerShell":"Bash",command:payload.command});
+        await removeCwdControlFile(payload.cwdControlPath);
+        const capture = payload.captureTargets;
+        const snapshot = await tasks.start({runId:payload.runId,executionId,actionId:context.attempt.action.id,
+          origin:{invocationId:payload.invocationId,runActionId:payload.runActionId,attemptId:context.attempt.id},
+          environmentId:payload.runtimeEnvironmentId,executable:payload.executablePath,args:payload.args,cwd:payload.cwd,
+          environment:environment.environment,timeoutMs:payload.timeoutMs,deadlineAt:context.deadlineAt,
+          runSignal:context.interruption.signal,maximumOutputBytes:payload.maxOutputFileBytes,background:payload.runInBackground,
+          paths:{stdout:capture[0]!.path,stderr:capture[1]!.path,stdoutText:capture[2]!.path,stderrText:capture[3]!.path,manifest:capture[4]!.path},
+          displayFiles:{stdout:capture[2]!.relativePath,stderr:capture[3]!.relativePath},
+          consumeFinalCwd:()=>consumeFinalWorkingDirectory(payload.cwdControlPath),
+          commitFinalCwd:async path=>(await sessionFor(payload.runId).commitFinalWorkingDirectory({expectedRevision:payload.sessionRevision,path}))?.canonicalPath ?? null,
         });
-        const finalWorkingDirectory = await consumeFinalWorkingDirectory(
-          cwdControlPath,
-        );
-        cwdControlPath = null;
-        const committed = finalWorkingDirectory === null
-          ? null
-          : await session.commitFinalWorkingDirectory({
-              expectedRevision: payload.sessionRevision,
-              path: finalWorkingDirectory,
-            });
-        return processOutcome(outcome, startedAt, now(), committed);
-      } catch (error) {
-        await removeCwdControlFile(cwdControlPath);
-        return failed(dispatched ? "unknown" : "none", error instanceof ProcessTaskRegistryError ? error.code : dispatched ? "shell_settlement_unknown" : "shell_execution_failed", safeMessage(error, "Shell execution failed."));
+        return completed({task_id:executionId,run_id:payload.runId,snapshot,action_id:context.attempt.action.id,attempt_id:context.attempt.id},startedAt,now());
+      } catch(error) {
+        const snapshot = error instanceof ProcessManagerError ? error.snapshot : null;
+        return {status:"failed" as const,effectState:snapshot === null ? "none" as const : snapshot.containment.disposition === "empty" ? "settled" as const : "unknown" as const,
+          failure:{code:error instanceof ProcessManagerError ? error.code : "shell_start_failed",
+            message:safeMessage(error,"Command startup failed."),retryable:false,metadata:{process:snapshot}}};
       }
     },
-  };
-  return Object.freeze(executor);
+  } satisfies ActionExecutor);
 }
 
-function createTaskStopAdapter(tasks: RunProcessTaskRegistry): OperationActionAdapter<unknown, StopBasis> {
+function createTaskStopAdapter(tasks: RunProcessManager): OperationActionAdapter<unknown, StopBasis> {
   const adapter: OperationActionAdapter<unknown, StopBasis> = {
     descriptor: STOP_ADAPTER,
     async prepare(binding, context) {
       if (context.interruption.signal.aborted) return interruptedPreparation("task_stop_interrupted");
       try {
         const taskId = parseTaskId(binding.request);
-        const task = tasks.get(taskId);
-        if (task === null) return invalidPreparation("process_task_not_found", "Background task does not exist.");
-        if (task.runId !== context.parentRunAction?.run.id) return invalidPreparation("process_task_foreign_run", "Background task belongs to another Run.");
-        if (task.status !== "running") return invalidPreparation("process_task_not_active", "Background task is no longer active.");
+        const task = tasks.get(context.parentRunAction?.run.id ?? "",taskId);
+        if (task.process === null || !tasks.isExactActive(task.process)) return invalidPreparation("process_task_not_active","The exact execution is no longer active.");
         const data: ActionAdapterPreparedData<StopBasis> = {
           effectSet: { kind: "effects", values: [{ kind: "process", operation: "signal", target: task.process }] },
           requestedAuthority: null, targetAssertions: [],
-          approval: approval(task.process.environmentId, task.process.startFingerprint, "Stop one background shell task.", ["TaskStop", task.taskId], `TaskStop ${task.taskId}`, task.outputFile, task.outputFile, "Signal one exact background process", context.now()),
-          safeSummary: { kind: "process", headline: "Stop background shell task", commandDisplay: `TaskStop ${task.taskId}`, cwdDisplay: task.outputFile },
+          approval: approval(task.process.environmentId, task.process.startFingerprint, "Stop one Run-owned command.", ["TaskStop", task.ref.executionId], `TaskStop ${task.ref.executionId}`, task.initialCwd, task.initialCwd, "Signal one exact owned process", context.now()),
+          safeSummary: { kind: "process", headline: "Stop Run-owned command", commandDisplay: `TaskStop ${task.ref.executionId}`, cwdDisplay: task.initialCwd },
           preparedInvocation: { contractVersion: "1", executorId: STOP_EXECUTOR.id, executorVersion: STOP_EXECUTOR.version, payload: { identity: task.process } as unknown as SerializableValue },
-          replayBasis: "none", semanticBasis: { taskId, cwdDisplay: task.outputFile },
+          replayBasis: "none", semanticBasis: { taskId, cwdDisplay: task.initialCwd },
         };
         return Object.freeze({ status: "prepared" as const, prepared: await createPreparedAction(binding, context, data) });
       } catch (error) { return invalidPreparation("task_stop_invalid", safeMessage(error, "TaskStop input is invalid.")); }
@@ -438,7 +446,7 @@ function createTaskStopAdapter(tasks: RunProcessTaskRegistry): OperationActionAd
   return Object.freeze(adapter);
 }
 
-function createTaskStopExecutor(tasks: RunProcessTaskRegistry, now: () => string): ActionExecutor {
+function createTaskStopExecutor(tasks: RunProcessManager, now: () => string): ActionExecutor {
   const executor: ActionExecutor = {
     descriptor: STOP_EXECUTOR,
     validatePayload(candidate): candidate is unknown { return isRecord(candidate); },
@@ -448,108 +456,19 @@ function createTaskStopExecutor(tasks: RunProcessTaskRegistry, now: () => string
       try {
         if (context.interruption.signal.aborted) return interrupted("none", "task_stop_interrupted_before_dispatch");
         const payload = readStopPayload(invocation);
-        const result = await tasks.stop(payload.identity);
-        if (result.status === "unknown") return failed("unknown", "task_stop_unknown_effect", "Process termination could not be confirmed.");
-        return completed({ task_id: result.taskId, status: "stopped", signal: result.signal, effect_certainty: "known_applied" }, startedAt, now());
+        const result = await tasks.stop(payload.identity, context.attempt.action.id);
+        if (result.containment.disposition !== "empty") return {status:"failed",effectState:"unknown",
+          failure:{code:"task_stop_unknown_effect",message:"Process termination could not be confirmed.",retryable:false,metadata:{process:result}}};
+        return completed({task_id:result.ref.executionId,snapshot:result,
+          effect_certainty:result.termination !== null && result.termination.method !== "none" ? "known_applied":"known_not_applied"},startedAt,now());
       } catch (error) {
-        return failed("none", error instanceof ProcessTaskRegistryError ? error.code : "task_stop_failed", safeMessage(error, "Background task could not be stopped."));
+        return failed("none", error instanceof ProcessManagerError ? error.code : "task_stop_failed", safeMessage(error, "Run-owned command could not be stopped."));
       }
     },
   };
   return Object.freeze(executor);
 }
 
-function processOutcome(
-  outcome: ProcessExecutionOutcome,
-  startedAt: string,
-  finishedAt: string,
-  session: ShellExecutionSessionSnapshot | null,
-): PhysicalAttemptOutcome<unknown> {
-  if (outcome.kind === "cancelled_before_start") return interrupted("none", "shell_interrupted_before_dispatch");
-  if (outcome.kind === "failed") return failed(outcome.effectState, "shell_process_failed", "Shell process failed.");
-  if (outcome.kind === "timeout") return outcome.terminationConfirmed
-    ? Object.freeze({ status: "timed_out" as const, effectState: "settled" as const, evidence: evidence("shell_timeout", "Shell command exceeded its timeout.") })
-    : failed("unknown", "shell_timeout_termination_unconfirmed", "Shell termination could not be confirmed.");
-  if (outcome.kind === "cancellation_unconfirmed") return interrupted("unknown", "shell_cancellation_unconfirmed");
-  if (outcome.kind === "cancelled") return interrupted("settled", "shell_cancelled");
-  return completed(foregroundOutput(outcome, session), startedAt, finishedAt);
-}
-
-function foregroundOutput(
-  output: CapturedProcessOutput & { readonly exitCode: number | null; readonly signal: string | null },
-  session: ShellExecutionSessionSnapshot | null,
-) {
-  return Object.freeze({
-    mode: "foreground" as const, exit_code: output.exitCode, signal: output.signal, duration_ms: output.durationMs,
-    stdout: shellStreamOutput(
-      output.stdout,
-      output.stdoutTruncated,
-      output.stdoutTruncated ? output.outputFile : null,
-    ),
-    stderr: shellStreamOutput(
-      output.stderr,
-      output.stderrTruncated,
-      output.stderrTruncated ? output.outputFile : null,
-    ),
-    final_working_directory: session?.canonicalPath ?? null,
-    shell_session_revision: session?.revision ?? null,
-  });
-}
-
-function shellStreamOutput(
-  projection: ProcessTextProjection,
-  truncated: boolean,
-  overflowFile: string | null,
-): ForegroundShellStream {
-  return Object.freeze({
-    text: projection.text,
-    encoding: projection.encoding,
-    encoding_source: projection.encodingSource,
-    integrity: projection.integrity,
-    replacement_count: projection.replacementCount,
-    truncated,
-    overflow_file: overflowFile,
-  });
-}
-
-function settleShell(prepared: PreparedAction<ShellBasis>, settlement: CanonicalActionSettlement): ActionSemanticResult {
-  const physical = settleOperation(settlement, "shell");
-  if (physical.status !== "succeeded") return physical;
-  if (!isRecord(physical.output)) {
-    return semanticFailure(
-      settlement,
-      "shell_result_invalid",
-      "The completed shell action did not provide a valid result.",
-    );
-  }
-  if (physical.output.mode === "background") return physical;
-  if (!isForegroundShellOutput(physical.output)) {
-    return semanticFailure(
-      settlement,
-      "shell_result_invalid",
-      "The completed shell action did not provide a valid foreground result.",
-    );
-  }
-
-  const outcome = interpretShellCommandOutcome({
-    shell: prepared.semanticBasis.shell,
-    command: prepared.semanticBasis.command,
-    exitCode: physical.output.exit_code,
-    signal: physical.output.signal,
-    stdout: processTextProjection(physical.output.stdout),
-    stderr: processTextProjection(physical.output.stderr),
-  });
-  if (outcome.status === "failed") {
-    return semanticFailure(settlement, outcome.code, outcome.message);
-  }
-  return Object.freeze({
-    ...physical,
-    output: Object.freeze({
-      ...physical.output,
-      exit_interpretation: outcome.interpretation,
-    }),
-  });
-}
 function settleStop(_prepared: PreparedAction<StopBasis>, settlement: CanonicalActionSettlement): ActionSemanticResult {
   return settleOperation(settlement, "task_stop");
 }
@@ -565,73 +484,6 @@ function settleOperation(settlement: CanonicalActionSettlement, owner: string): 
       code: settlement.causeRef ?? `${owner}_${settlement.status}`,
       message: settlement.causeRef ?? `${owner} operation ${settlement.status}.`,
     },
-  });
-}
-
-function semanticFailure(
-  settlement: CanonicalActionSettlement,
-  code: string,
-  message: string,
-): ActionSemanticResult {
-  return Object.freeze({
-    operationInvocationId: settlement.operationInvocation.id,
-    settlement,
-    status: "failed" as const,
-    output: null,
-    failure: Object.freeze({
-      owner: "helarc.local-environment",
-      code,
-      message,
-    }),
-  });
-}
-
-interface ForegroundShellStream {
-  readonly text: string;
-  readonly encoding: string | null;
-  readonly encoding_source: ProcessTextEncodingSource;
-  readonly integrity: ProcessTextIntegrity;
-  readonly replacement_count: number;
-  readonly truncated: boolean;
-  readonly overflow_file: string | null;
-}
-
-function isForegroundShellOutput(value: Record<string, any>): value is Record<string, any> & {
-  readonly mode: "foreground";
-  readonly exit_code: number | null;
-  readonly signal: string | null;
-  readonly stdout: ForegroundShellStream;
-  readonly stderr: ForegroundShellStream;
-} {
-  return value.mode === "foreground" &&
-    (value.exit_code === null || Number.isSafeInteger(value.exit_code)) &&
-    (value.signal === null || typeof value.signal === "string") &&
-    isForegroundShellStream(value.stdout) &&
-    isForegroundShellStream(value.stderr);
-}
-
-function isForegroundShellStream(value: unknown): value is ForegroundShellStream {
-  if (!isRecord(value)) return false;
-  return typeof value.text === "string" &&
-    (value.encoding === null || typeof value.encoding === "string") &&
-    isEncodingSource(value.encoding_source) &&
-    isTextIntegrity(value.integrity) &&
-    Number.isSafeInteger(value.replacement_count) &&
-    value.replacement_count >= 0 &&
-    typeof value.truncated === "boolean" &&
-    (value.overflow_file === null || typeof value.overflow_file === "string");
-}
-
-function processTextProjection(
-  value: ForegroundShellStream,
-): ProcessTextProjection & { readonly truncated: boolean } {
-  return Object.freeze({
-    text: value.text,
-    encoding: value.encoding,
-    encodingSource: value.encoding_source,
-    integrity: value.integrity,
-    replacementCount: value.replacement_count,
-    truncated: value.truncated,
   });
 }
 
@@ -658,9 +510,9 @@ async function inspectTarget(payload: ShellPayload, assertions: NonNullable<Retu
 function readShellPayload(invocation: PreparedActionInvocation): ShellPayload {
   if (invocation.executorId !== SHELL_EXECUTOR.id || !isRecord(invocation.payload)) throw new TypeError("Prepared shell invocation is invalid.");
   const value = invocation.payload as Record<string, any>;
-  if (!Array.isArray(value.args) || !value.args.every((entry) => typeof entry === "string") || !isBaseline(value.executableBaseline) || !isBaseline(value.cwdBaseline) || !isBaseline(value.outputBaseline) || !isRecord(value.termination)) throw new TypeError("Prepared shell payload is invalid.");
+  if (!Array.isArray(value.args) || !value.args.every((entry) => typeof entry === "string") || !isBaseline(value.executableBaseline) || !isBaseline(value.cwdBaseline) || !isBaseline(value.outputBaseline)) throw new TypeError("Prepared shell payload is invalid.");
   return Object.freeze({
-    runId: text(value.runId), executableCommand: text(value.executableCommand),
+    runId: text(value.runId), invocationId:text(value.invocationId),runActionId:text(value.runActionId), executableCommand: text(value.executableCommand),
     executablePath: text(value.executablePath), executableBaseline: value.executableBaseline,
     args: Object.freeze([...(value.args as string[])]), command: text(value.command),
     cwdControlPath: nullableText(value.cwdControlPath), sessionRevision: nonNegativeInteger(value.sessionRevision),
@@ -668,12 +520,12 @@ function readShellPayload(invocation: PreparedActionInvocation): ShellPayload {
     workspaceId: text(value.workspaceId), workspaceRoot: text(value.workspaceRoot), canonicalRoot: text(value.canonicalRoot),
     cwdPath: text(value.cwdPath), cwd: text(value.cwd), cwdDisplay: text(value.cwdDisplay), cwdBaseline: value.cwdBaseline,
     outputPath: text(value.outputPath), outputAbsolutePath: text(value.outputAbsolutePath), outputBaseline: value.outputBaseline,
+    captureTargets: readCaptureTargets(value.captureTargets),
     timeoutMs: integer(value.timeoutMs), runInBackground: boolean(value.runInBackground), maxStdoutBytes: integer(value.maxStdoutBytes),
     maxStderrBytes: integer(value.maxStderrBytes), maxOutputFileBytes: integer(value.maxOutputFileBytes),
     environmentPolicyId: text(value.environmentPolicyId), environmentDigest: text(value.environmentDigest),
     runtimeEnvironmentId: text(value.runtimeEnvironmentId), runtimeEnvironmentPlatform: platform(value.runtimeEnvironmentPlatform),
     runtimeEnvironmentFingerprint: text(value.runtimeEnvironmentFingerprint),
-    termination: Object.freeze({ gracePeriodMs: integer(value.termination.gracePeriodMs), forceKillTimeoutMs: integer(value.termination.forceKillTimeoutMs) }),
   });
 }
 
@@ -784,21 +636,14 @@ function bashLiteral(value: string): string {
   return value.replaceAll("'", "'\\''");
 }
 
-function isEncodingSource(value: unknown): value is ProcessTextEncodingSource {
-  return value === "utf8" || value === "bom" || value === "detected" ||
-    value === "fallback" || value === "none";
-}
-
-function isTextIntegrity(value: unknown): value is ProcessTextIntegrity {
-  return value === "exact" || value === "inferred" || value === "lossy" ||
-    value === "unavailable";
+function readCaptureTargets(value:unknown):ShellPayload["captureTargets"] {
+  if (!Array.isArray(value) || value.length !== 5) throw new TypeError("Capture targets are invalid.");
+  return Object.freeze(value.map(entry=>{
+    if(!isRecord(entry) || !isBaseline(entry.baseline)) throw new TypeError("Capture target baseline is invalid.");
+    return Object.freeze({path:text(entry.path),relativePath:text(entry.relativePath),baseline:entry.baseline});
+  }));
 }
 function rootIdentityInput(root: CanonicalWorkspaceRootIdentity) {
   if (root.resolvedPath === null) throw new TypeError("Canonical Workspace root requires a resolved path.");
   return { rootId: root.rootId, platform: root.platform, path: root.canonicalPath, resolvedPath: root.resolvedPath, resolutionFingerprint: root.resolutionFingerprint };
-}
-function resolveTermination(input: Partial<ProcessTerminationLimits> | undefined): ProcessTerminationLimits {
-  const value = { ...DEFAULT_TERMINATION, ...input };
-  if (!Number.isSafeInteger(value.gracePeriodMs) || value.gracePeriodMs < 1 || !Number.isSafeInteger(value.forceKillTimeoutMs) || value.forceKillTimeoutMs < 1) throw new TypeError("Process termination limits must be positive integers.");
-  return Object.freeze(value);
 }

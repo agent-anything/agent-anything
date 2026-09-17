@@ -3166,7 +3166,7 @@ describe("Runner semantic integration", () => {
               reducer: {
                 id: "collect-results",
                 reduce({ children }) {
-                  return { childStatuses: children.map(({ status }) => status) };
+                  return { status: "succeeded", output: { childStatuses: children.map(({ status }) => status) }, failure: null };
                 },
               },
               conflicts: null,
@@ -4513,6 +4513,7 @@ function createDirectActionExecutionFixture(
     executor: executorDescriptor,
     effectFamilies: ["filesystem"],
     sandboxRequirementRevision: "sandbox-requirement-1",
+    executionLifetime: "invocation",
     maxInvocationBytes: 64 * 1024,
     maxPhysicalResultBytes: 64 * 1024,
   }]);

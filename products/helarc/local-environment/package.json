@@ -9,9 +9,10 @@
     "./command": { "types": "./src/command/index.ts", "import": "./dist/command/index.js" },
     "./sandbox": { "types": "./src/sandbox/index.ts", "import": "./dist/sandbox/index.js" }
   },
-  "files": ["dist"],
+  "files": ["dist", "native-artifacts"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build-process-helper.mjs && tsc -p tsconfig.json",
+    "build:native": "node scripts/build-process-helper.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },

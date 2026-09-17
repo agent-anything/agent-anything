@@ -117,10 +117,13 @@ export function readIntervals(db: InspectionDatabase, records: readonly Inspecti
     if (end && following[1]?.payload.kind === "interval" && following[1].payload.phase === "settled") {limitations.add("interval_settlement_ambiguous"); continue;}
     if (end && (!end.occurredAt || Date.parse(end.occurredAt) < Date.parse(start.occurredAt))) {limitations.add("source_clock_regression"); continue;}
     const clock = start.payload.clock;
+    const process = start.payload.activity === "process" ? db.latest(inspectionSubjectKey(start.subject),watermark,"process"):null;
+    const exit = process?.payload.kind === "process" ? process.payload.rootExit:null;
     if (!horizons.has(clock)) horizons.set(clock, db.clockHorizon(clock, watermark));
     intervals.push({id: start.id, subject: start.subject, activity: start.payload.activity, clock, start: start.occurredAt, end: end?.occurredAt ?? null,
       horizon: horizons.get(clock) ?? start.occurredAt, startRecordId: start.id, endRecordId: end?.id ?? null,
-      status: end?.payload.kind === "interval" ? end.payload.status : null});
+      status: end?.payload.kind === "interval" ? end.payload.status : null,
+      markers:exit&&process ? [{label:`Root exit ${exit.code ?? exit.signal ?? "unknown"}`,occurredAt:exit.observedAt,recordId:process.id}]:[]});
   }
   return {intervals, limitations: [...limitations]};
 }

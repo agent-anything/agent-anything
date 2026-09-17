@@ -125,6 +125,7 @@ export interface HelarcProductComposition {
   readonly taskFulfillment: HelarcTaskFulfillmentHook;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
+  recordCommandProgress(command:import("../run/HelarcRunProjection.js").HelarcCommandProgress):void;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
   recordRuntimeEvent(event: RuntimeEvent): {
     readonly event: RuntimeEvent;
@@ -300,6 +301,10 @@ export async function createHelarcProductComposition(
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {
       return productProjection;
+    },
+    recordCommandProgress(command:import("../run/HelarcRunProjection.js").HelarcCommandProgress):void {
+      if(productProjection.result!==null||productProjection.commands.some(item=>item.executionId===command.executionId&&item.revision>=command.revision))return;
+      publishProductUpdate({kind:"command_observed",command});
     },
     subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void {
       if (typeof listener !== "function") {

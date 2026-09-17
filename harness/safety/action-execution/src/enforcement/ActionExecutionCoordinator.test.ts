@@ -321,6 +321,7 @@ function createFixture(options: FixtureOptions = {}) {
     executor: executorDescriptor,
     effectFamilies: ["filesystem"],
     sandboxRequirementRevision: "sandbox-requirement-1",
+    executionLifetime: "invocation",
     maxInvocationBytes: 64 * 1024,
     maxPhysicalResultBytes: 64 * 1024,
   }]);

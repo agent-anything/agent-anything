@@ -2,7 +2,7 @@ import { inspectionSubjectKey, type InspectionLink, type InspectionSubjectRef } 
 import type { InspectionGraph } from "@agent-anything/inspection/query";
 
 export type DataFlowObject = InspectionGraph["nodes"][number];
-export const dataRelationKinds = ["produces", "transforms", "delivers", "includes", "omits"] as const;
+export const dataRelationKinds = ["produces", "transforms", "delivers", "includes", "omits", "observes"] as const;
 export type DataRelationFilter = "all" | typeof dataRelationKinds[number];
 
 export function shortDataIdentity(subject: InspectionSubjectRef): string {

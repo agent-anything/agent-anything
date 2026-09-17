@@ -404,7 +404,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.normal-completion-baseline-result`,
+      id: `${definition.ref.id}.run-owned-command-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -415,7 +415,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.normal-completion.report.baseline",
+      id: "helarc.run-owned-command.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -461,7 +461,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.call-admission-scheduling.report.baseline",
+      id: "helarc.normal-completion.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -477,13 +477,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.normal-completion.baseline-acceptance",
+      id: "helarc.run-owned-command.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "normal-completion-v1",
+      revision: "run-owned-command-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -492,14 +492,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Normal Run completion is independent of task success; raw execution facts and external Evaluation oracles remain authoritative in their own domains.",
+      "Run-owned commands separate startup, observation and process settlement; workspace oracles exclude exact manager-owned capture artifacts while retaining all task effects.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.call-admission-scheduling.baseline-acceptance",
+      id: "helarc.normal-completion.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -524,10 +524,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v23-")) {
-    throw new TypeError(`Unknown Normal completion Target revision '${revision}'.`);
+  if (!revision.startsWith("v24-")) {
+    throw new TypeError(`Unknown Run-owned command Target revision '${revision}'.`);
   }
-  return revision.replace(/^v23-/, "v22-");
+  return revision.replace(/^v24-/, "v23-");
 }
 
 function gradeExpectedOutcome(

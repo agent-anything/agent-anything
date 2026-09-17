@@ -338,7 +338,9 @@ function createEnforcementSummary(
 ): HelarcEnforcementSummary {
   const operation = [...runResult.items].reverse().find(
     (candidate) => candidate.payload.kind === "observation" &&
-      candidate.payload.observation.payload.kind === "operation",
+      candidate.payload.observation.payload.kind === "operation" &&
+      candidate.payload.observation.payload.result.lowerRefs.some(ref =>
+        ref.owner === "canonical-action" && ref.kind === "action_settlement"),
   );
   if (operation?.payload.kind !== "observation" ||
     operation.payload.observation.payload.kind !== "operation") {

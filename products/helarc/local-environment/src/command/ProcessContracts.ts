@@ -9,8 +9,3 @@ export interface CodeAgentCommandLimits {
   maxActiveTasks: number;
   maxSettledTasks: number;
 }
-
-export interface ProcessTerminationLimits {
-  readonly gracePeriodMs: number;
-  readonly forceKillTimeoutMs: number;
-}

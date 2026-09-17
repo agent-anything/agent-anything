@@ -174,7 +174,8 @@ describe("Helarc Host Run composition", () => {
       expect(recorded.provider.stopRequests).toHaveLength(0);
       expect(await readFile(join(workspaceRoot, "input.txt"), "utf8")).toBe("existing work");
       await inspection.recorder!.flush();
-      await expect.poll(() => inspection.recorder!.health().queued, { timeout: 15_000 }).toBe(0);
+      // Durable capture competes with other real-filesystem suites; this is not a latency assertion.
+      await expect.poll(() => inspection.recorder!.health().queued, { timeout: 45_000 }).toBe(0);
       expect(inspection.snapshot().health).toMatchObject({ available: true, rejected: 0, dropped: 0, code: null });
       const scope = (await queries.query({ kind: "get_snapshot", sourceId: inspection.recorder!.source.sourceId, datasetId: inspection.recorder!.manifest.datasetId })).selection!;
       const definitions = (await queries.query({ ...scope, kind: "list_definitions", limit: 500 })).records;
@@ -240,7 +241,7 @@ describe("Helarc Host Run composition", () => {
       if (!relative(tmpdir(), directory).startsWith("helarc-inspection-run-")) throw new Error("Invalid test cleanup target");
       await rm(directory, { recursive: true });
     }
-  }, 60_000);
+  }, 90_000);
   it("binds instruction settings before asynchronous preparation and allows a Run with no system instructions", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-instructions-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);
@@ -859,15 +860,15 @@ describe("Helarc Host Run composition", () => {
         ? [item.payload.observation.payload.result]
         : []
     );
-    expect(commandResults).toHaveLength(1);
-    expect(commandResults[0]).toMatchObject({
+    expect(commandResults).toHaveLength(3);
+    expect(commandResults.at(-1)).toMatchObject({
       status: "succeeded",
       output: {
-        mode: "foreground",
-        exit_code: 0,
-        signal: null,
-        stdout: { integrity: "exact", truncated: false },
-        stderr: { text: "", integrity: "exact", truncated: false },
+        phase: "settled",
+        outcome: "succeeded",
+        root_exit: { code: 0, signal: null },
+        stdout: { integrity: "exact", omitted_bytes: 0 },
+        stderr: { text: "", integrity: "exact", omitted_bytes: 0 },
       },
     });
     await expect(access(markerPath)).resolves.toBeUndefined();
@@ -883,7 +884,7 @@ describe("Helarc Host Run composition", () => {
       owner: "canonical-action",
       kind: "action_settlement",
     }));
-    expect(provider.lastControllerInputContexts).toEqual([0, 1]);
+    expect(provider.lastControllerInputContexts).toEqual([0, 3]);
   });
 
   it("starts and stops one background shell task through its exact TaskStop identity", async () => {
@@ -922,19 +923,41 @@ describe("Helarc Host Run composition", () => {
       operationOutputs(result),
       JSON.stringify(operationResults(result), null, 2),
     ).toEqual([
+      expect.objectContaining({ task_id: expect.any(String), snapshot: expect.objectContaining({ phase: "running" }) }),
+      expect.objectContaining({ observation: expect.objectContaining({ phase: "running" }) }),
       expect.objectContaining({
-        mode: "background",
-        status: "running",
+        phase: "running",
         task_id: expect.any(String),
-        output_file: expect.any(String),
+        return_reason: "immediate_snapshot",
       }),
       expect.objectContaining({
-        status: "stopped",
+        snapshot: expect.objectContaining({ phase: "settled", containment: expect.objectContaining({ disposition: "empty" }) }),
         effect_certainty: "known_applied",
         task_id: expect.any(String),
       }),
     ]);
-    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2]);
+    expect(provider.lastControllerInputContexts).toEqual([0, 3, 4]);
+  });
+
+  it("retrieves a retained command through TaskOutput without launching it again", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-command-observation-"));
+    const provider = new ScriptedProvider([
+      {kind:"tool_call",toolName:nativeShellTool(),input:{
+        command:process.platform === "win32" ? "Start-Sleep -Milliseconds 100; Write-Output 'retained-output'" : "sleep 0.1; printf retained-output",
+        run_in_background:true,timeout_ms:10000,
+      }},
+      (request:ProviderRequest)=>({kind:"tool_call",toolName:"TaskOutput",input:{task_id:readBackgroundTaskId(request),wait_ms:3000}}),
+      (request:ProviderRequest)=>({kind:"tool_call",toolName:"TaskOutput",input:{task_id:readBackgroundTaskId(request),wait_ms:0}}),
+      {kind:"completion",summary:"Observed retained output."},
+    ]);
+    const result=await executeTestHostRun({...createTask(workspaceRoot),provider,permissionPreset:"full_access"});
+    expect(result.product.status,JSON.stringify(result.product.output.safeErrors)).toBe("completed");
+    const results=operationResults(result);
+    expect(results.filter(result=>result.binding.operation.operation.name === "process-start")).toHaveLength(1);
+    const observations=results.filter(result=>result.binding.operation.operation.name === "task-output");
+    expect(observations).toHaveLength(2);
+    expect(observations.at(-1)).toMatchObject({status:"succeeded",output:{stdout:{text:expect.stringContaining("retained-output")}}});
+    expect(observations[0]?.lowerRefs[0]?.id).not.toBe(observations[1]?.lowerRefs[0]?.id);
   });
 
   it("updates the Runner-owned plan and exposes it to the next controller turn", async () => {

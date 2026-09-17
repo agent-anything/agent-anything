@@ -125,7 +125,7 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
       return { ...result, telemetry, next: page.length > limit ? nextPage(telemetry.at(-1)!.sequence) : null };
     }
     if (["get_hierarchy", "get_data_flow", "get_dependencies"].includes(query.kind) || query.kind === "get_execution" && query.subject) {
-      const kinds: InspectionRelationKind[] = query.kind === "get_hierarchy" ? ["contains", "descendant", "materializes"] : query.kind === "get_dependencies" ? ["prerequisite"] : query.kind === "get_data_flow" ? ["produces", "transforms", "delivers", "includes", "omits"] : ["materializes", "contains", "binding", "settles", "cause"];
+      const kinds: InspectionRelationKind[] = query.kind === "get_hierarchy" ? ["contains", "descendant", "materializes", "spawn", "observes"] : query.kind === "get_dependencies" ? ["prerequisite"] : query.kind === "get_data_flow" ? ["produces", "transforms", "delivers", "includes", "omits", "observes"] : ["materializes", "contains", "binding", "settles", "cause"];
       return { ...result, graph: graph(db, watermark, key, kinds, runScope.runIds), records: query.subject ? db.records({ watermark, subjectKey: key!, limit: 100 }) : [], limitations: runScope.limitations };
     }
     const limit = Math.max(1, query.limit ?? 100);

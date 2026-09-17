@@ -6,6 +6,7 @@ export interface ParsedCommandInput {
   readonly timeoutMs: number;
   readonly description: string | null;
   readonly runInBackground: boolean;
+  readonly waitMs: number;
 }
 
 export class CommandInputError extends Error {
@@ -56,7 +57,15 @@ export function parseCommandInput(
     timeoutMs: readTimeout(value.timeout_ms, limits),
     description,
     runInBackground: value.run_in_background === true,
+    waitMs: readProcessWait(value.wait_ms, value.run_in_background === true),
   };
+}
+
+export function readProcessWait(value: unknown, background = false): number {
+  if (value === undefined) return background ? 0 : 10_000;
+  if (!Number.isSafeInteger(value) || (value !== 0 && ((value as number) < 1000 || (value as number) > 30_000))) throw invalidInput("wait_ms must be zero or 1000 through 30000.");
+  if (background && value !== 0) throw invalidInput("Background launch requires absent or zero wait_ms.");
+  return value as number;
 }
 
 function readTimeout(

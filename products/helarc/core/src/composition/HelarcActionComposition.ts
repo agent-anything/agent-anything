@@ -26,13 +26,13 @@ import {
   createFixedLocalToolSelection,
   type ToolSelectionRevision,
 } from "@agent-anything/tools/selection";
-import { createHelarcCommandOperationContribution } from "../tools/HelarcCommandOperation.js";
+import { createHelarcCommandOperationContribution, HELARC_TASK_OUTPUT_BINDING } from "../tools/HelarcCommandOperation.js";
 import type {
   HelarcShellRuntimeProfile,
   HelarcShellToolName,
 } from "../tools/HelarcBaselineToolContracts.js";
 import type { OperationBindingRevisionRef } from "@agent-anything/operation-catalog/identity";
-import type { OperationToolAvailabilityParticipant } from "@agent-anything/agent-runtime/runner";
+import type { OperationToolAvailabilityParticipant, InternalOperationHandler, CompositeOperationResolverPort } from "@agent-anything/agent-runtime/runner";
 
 export interface HelarcPhysicalActionContribution {
   readonly registrations: ActionRegistrationSnapshot;
@@ -45,6 +45,7 @@ export interface HelarcFileActionContribution extends HelarcPhysicalActionContri
 }
 
 export interface HelarcCommandActionContribution extends HelarcPhysicalActionContribution {
+  readonly internalHandlers: readonly InternalOperationHandler[];
   readonly shellTool: HelarcShellToolName;
   readonly shellRuntime: HelarcShellRuntimeProfile;
   readonly shellActionAdapterId: string;
@@ -58,6 +59,7 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
     getRunAvailability(runId: string): {
       readonly revision: number;
       readonly activeTaskCount: number;
+      readonly retainedTaskCount: number;
     };
   };
 }
@@ -70,6 +72,8 @@ export interface CreateHelarcActionCompositionInput {
 }
 
 export interface HelarcActionComposition {
+  readonly internalHandlers: readonly InternalOperationHandler[];
+  readonly composite: CompositeOperationResolverPort;
   readonly operationCatalog: OperationCatalogSnapshot;
   readonly operationBindings: OperationBindingResolverSnapshot;
   readonly toolSelection: ToolSelectionRevision;
@@ -131,11 +135,12 @@ export function createHelarcActionComposition(
   assertActionRegistrationsBelongToCatalog(registrations, operationCatalog);
   const operationAvailability = Object.freeze(operationCatalog.entries.map(
     (entry): OperationToolAvailabilityParticipant => {
-      if (sameOperationBinding(entry.binding.ref, input.command.taskStopBinding)) {
+      if (sameOperationBinding(entry.binding.ref, input.command.taskStopBinding) || sameOperationBinding(entry.binding.ref, HELARC_TASK_OUTPUT_BINDING)) {
         return Object.freeze({
           binding: entry.binding.ref,
           assess({ run }: { readonly run: import("@agent-anything/agent-core/run").RunRef }) {
             const current = input.command.taskAvailability.getRunAvailability(run.id);
+            const available = sameOperationBinding(entry.binding.ref,HELARC_TASK_OUTPUT_BINDING) ? current.retainedTaskCount > 0 : current.activeTaskCount > 0;
             return Object.freeze({
               basisRefs: Object.freeze([Object.freeze({
                 owner: "helarc-command",
@@ -143,10 +148,10 @@ export function createHelarcActionComposition(
                 id: run.id,
                 revision: String(current.revision),
               })]),
-              disposition: current.activeTaskCount > 0
+              disposition: available
                 ? "available" as const
                 : "unavailable" as const,
-              reason: current.activeTaskCount > 0
+              reason: available
                 ? null
                 : "no_eligible_subject" as const,
             });
@@ -178,6 +183,8 @@ export function createHelarcActionComposition(
     adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
     executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
     operationAvailability,
+    internalHandlers:input.command.internalHandlers,
+    composite:command.composite,
   });
 }
 

@@ -59,7 +59,9 @@ export interface InspectionFlowOccurrenceRead {
 
 export interface InspectionGraphNode { readonly subject: InspectionSubjectRef; readonly record: InspectionRecord | null; readonly availability: "present" | "not_observed" }
 export interface InspectionGraph { readonly nodes: readonly InspectionGraphNode[]; readonly links: readonly InspectionLink[]; readonly limited: boolean; readonly scope: "selected_neighborhood" | "dataset"; readonly nodeLimit: number; readonly edgeLimit: number }
-export interface InspectionTimelineInterval { readonly id: string; readonly subject: InspectionSubjectRef; readonly activity: string; readonly clock: string; readonly start: string; readonly end: string | null; readonly horizon: string; readonly startRecordId: string; readonly endRecordId: string | null; readonly status: string | null }
+export interface InspectionTimelineInterval { readonly id: string; readonly subject: InspectionSubjectRef; readonly activity: string; readonly clock: string; readonly start: string; readonly end: string | null; readonly horizon: string; readonly startRecordId: string; readonly endRecordId: string | null; readonly status: string | null;
+  readonly markers:readonly {readonly label:string;readonly occurredAt:string;readonly recordId:string}[];
+}
 export interface InspectionReadResult {
   readonly kind: InspectionQuery["kind"];
   readonly selection: InspectionSelection | null;

@@ -38,6 +38,7 @@ export interface SandboxPolicyEnvelope {
 }
 
 export interface SandboxExecutionRequest {
+  readonly executionLifetime: "invocation" | "run";
   readonly executionFlow?: ExecutionFlowContext;
   readonly attempt: SandboxAttempt;
   readonly policy: SandboxPolicyEnvelope;
@@ -59,6 +60,7 @@ export type SandboxCancellationResult =
   | { readonly status: "unavailable"; readonly code: string };
 
 export interface SandboxProviderDescriptor {
+  readonly supportedExecutionLifetimes: readonly ("invocation" | "run")[];
   readonly id: string;
   readonly version: string;
   readonly kind: SandboxProviderKind;

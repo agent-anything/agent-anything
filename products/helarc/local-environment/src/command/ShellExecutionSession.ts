@@ -15,7 +15,7 @@ export class ShellExecutionSession {
   private constructor(
     private readonly workspace: WorkspaceSelection,
     private readonly platform: "win32" | "posix",
-    initial: ShellExecutionSessionSnapshot,
+    private readonly initial: ShellExecutionSessionSnapshot,
   ) {
     this.state = initial;
   }
@@ -40,6 +40,10 @@ export class ShellExecutionSession {
     return this.state;
   }
 
+  forkInitial(): ShellExecutionSession {
+    return new ShellExecutionSession(this.workspace,this.platform,this.initial);
+  }
+
   async commitFinalWorkingDirectory(input: {
     readonly expectedRevision: number;
     readonly path: string;
@@ -53,6 +57,7 @@ export class ShellExecutionSession {
       const canonicalRoot = await realpath(selected.rootRef);
       const relativePath = relative(canonicalRoot, canonicalPath);
       if (!isWithinRoot(relativePath, this.platform)) continue;
+      if (input.expectedRevision !== this.state.revision) return null;
       this.state = Object.freeze({
         revision: this.state.revision + 1,
         rootName: selected.id,

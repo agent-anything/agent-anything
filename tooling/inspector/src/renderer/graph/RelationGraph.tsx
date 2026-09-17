@@ -101,7 +101,7 @@ export function RelationGraph({ graph, selected, onSelect, onLink }: { graph: In
       const parentId = tree.parents.get(id);
       return { id, type: "recorded", parentId, extent: parentId ? "parent" as const : undefined,
         position: prior?.position ?? { x: (index % 3) * 310 + 24, y: Math.floor(index / 3) * 130 + 90 },
-        data: { title: node.record?.payload.kind === "definition" ? node.record.payload.name : node.record?.payload.kind === "flow_step" ? node.record.payload.observation.stepId : node.record?.payload.kind === "flow_invocation" ? node.record.payload.observation.definition.id : node.subject.id, owner: node.subject.owner, kind: node.subject.kind, group, folded, availability: node.availability,
+        data: { title: node.record?.payload.kind === "process" ? `PID ${node.record.payload.processId ?? "pending"} / ${node.record.payload.phase}` : node.record?.payload.kind === "process_observation" ? `Observation / ${node.record.payload.returnReason ?? node.record.payload.disposition}` : node.record?.payload.kind === "definition" ? node.record.payload.name : node.record?.payload.kind === "flow_step" ? node.record.payload.observation.stepId : node.record?.payload.kind === "flow_invocation" ? node.record.payload.observation.definition.id : node.subject.id, owner: node.subject.owner, kind: node.subject.kind, group, folded, availability: node.availability,
           toggle: () => setCollapsed((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }) },
         style: { width: group && !folded ? prior?.width ?? 530 : 230, height: group && !folded ? prior?.height ?? 320 : 86 },
         selected: selected !== null && inspectionSubjectKey(selected) === id,

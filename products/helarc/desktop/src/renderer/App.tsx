@@ -682,6 +682,14 @@ export function RunTimelinePanel({
           <span>Waiting for run activity</span>
         </div>
       ) : null}
+      {run?.product.commands.length ? <section className="command-progress" aria-label="Command execution">
+        <h3>Commands</h3>
+        {run.product.commands.map(command=><div className="command-progress-row" key={command.executionId}>
+          <strong>{command.phase} / {command.outcome ?? "pending"}</strong>
+          <span>PID {command.processId ?? "not started"} / {command.capturedBytes} bytes captured{command.omittedBytes===null ? " / capture incomplete":command.omittedBytes ? ` / ${command.omittedBytes} omitted`:""}</span>
+          <small>{command.executionId}</small><small>Run {command.runId} / output {command.outputPersistence}</small>
+        </div>)}
+      </section>:null}
       {activity.map((event) => {
         const trace = formatTraceMetadata(event.metadata);
         return (

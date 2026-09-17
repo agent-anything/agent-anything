@@ -386,6 +386,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             reason: run.product.continuation.reason,
             occurredAt: run.product.continuation.occurredAt,
           },
+      commands:run.product.commands.map(command=>({...command})),
       activity: run.product.activity.map((activity) => ({
         id: activity.id,
         sequence: activity.sequence,

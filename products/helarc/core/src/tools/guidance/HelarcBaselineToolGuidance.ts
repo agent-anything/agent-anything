@@ -177,10 +177,14 @@ const DEFINITIONS = Object.freeze({
   Bash: shellGuidance("Bash", "POSIX-compatible native shell syntax"),
   PowerShell: shellGuidance("PowerShell", "PowerShell native syntax"),
   TaskStop: Object.freeze({
-    description: "Stop one exact background command task owned by the current Run. Use it only for a task_id returned by a prior background Shell result when that process should no longer continue. Do not use it for foreground commands, unknown tasks, other Runs, or as a substitute for stopping the Agent Run. A completed result means the task had already settled; a stopped result records the confirmed stop settlement. If effect certainty is unknown, do not claim that termination is confirmed.",
+    description: "Request termination of one exact managed command owned by the current Run, using the task_id from Shell or TaskOutput. It does not stop the Agent Run. The returned snapshot distinguishes signal application, root exit, contained descendants and output persistence. A termination request is not proof of exit; unknown effect must remain unknown. If the command already ended, retrieve its final facts with TaskOutput.",
     fields: Object.freeze({
-      "/properties/task_id": "Exact current-Run background task identity returned by a prior Bash or PowerShell call.",
+      "/properties/task_id": "Exact current-Run command identity returned by Shell or TaskOutput; never invent a PID or use another Run's identity.",
     }),
+  }),
+  TaskOutput: Object.freeze({
+    description:"Read a managed command's retained stdout, stderr and lifecycle without starting a new command. Use task_id from Shell and pass next_cursor for later output; omitting cursor rereads from the beginning. Reads are independent and non-destructive. If no unread output exists, wait up to wait_ms for output, lifecycle change or completion. Successful retrieval does not mean the command succeeded: inspect phase, outcome, root_exit, containment, output quality and limitations. Reaching a wait limit does not kill the command, extend its timeout or diagnose a hang. Output remains available after command completion while retained by the owning Run.",
+    fields:Object.freeze({"/properties/task_id":"Exact command identity from a prior Shell result in this Run.","/properties/cursor":"Optional opaque next_cursor returned by a prior observation of this exact command.","/properties/wait_ms":"Observation wait only: default 10000ms; zero returns immediately; otherwise 1000 through 30000ms."}),
   }),
   AskUserQuestion: Object.freeze({
     description: "Request bounded missing information or a user decision when safe useful progress cannot be chosen from current evidence. Ask only questions whose answers materially change the next action; do not ask for facts available through active Tools, repeat answered questions, or use clarification as a routine progress update. Keep each prompt concrete, provide concise mutually distinct options when known, and allow free text where predefined options are insufficient. The Run blocks for the correlated answer, so combine related questions without collecting unrelated information.",
@@ -216,11 +220,12 @@ function shellGuidance(
   runtimeConstraint = "",
 ): GuidanceDefinition {
   return Object.freeze({
-    description: `Execute one bounded native ${name} command in the active Workspace using ${syntax}.${runtimeConstraint} Use it for build, test, static-analysis, runtime, package, Git, and other command-line work that has no more precise admitted Tool. Prefer Read, Glob, Grep, Edit, or Write for their dedicated file responsibilities. Compose a command whose effects and failure behavior are understandable, avoid destructive or irreversible operations unless explicitly required and authorized, and never infer success from intent. Foreground results settle with exit code, stdout, stderr, duration, and truncation state. Background results return a task_id rather than command completion and must be observed through later context or stopped with TaskStop. Timeouts, nonzero exits, truncated output, uncertain effects, and missing verification require explicit interpretation and recovery.`,
+    description: `Start one Run-owned native ${name} command in the active Workspace using ${syntax}.${runtimeConstraint} Prefer dedicated file Tools for reading, searching and editing. Startup is subject to normal execution authority. After confirmed startup, observe for wait_ms (default 10000ms) and return an exact task_id, snapshot and bounded stdout/stderr. A continuing result is not command completion: use TaskOutput for further observation, and TaskStop when termination is needed. Do not start the same command again merely because its initial wait expired. run_in_background selects immediate observation, not detached Run ownership. timeout_ms starts at process launch, is independent of each observation wait and remains bounded by the Run deadline. Only an initially settled command can update this Run's Shell working directory; later TaskOutput cannot. Interpret root exit, containment, output quality and omissions separately. Run finalization terminates remaining owned commands.`,
     fields: Object.freeze({
       "/properties/command": `Required command string interpreted by the Host-selected native ${name} executable. Use ${syntax} and quote paths and values correctly for that shell.${runtimeConstraint}`,
       "/properties/description": "Optional concise explanation of the command's intended effect for progress and review surfaces.",
-      "/properties/run_in_background": "Set true only when the command should continue asynchronously. A background result means started, not completed.",
+      "/properties/run_in_background": "True requests immediate return after startup; wait_ms must be absent or zero. False still allows a continuing result after the bounded wait.",
+      "/properties/wait_ms": "Initial observation wait, not an execution timeout. Default 10000ms; zero is immediate; otherwise 1000 through 30000ms.",
       "/properties/timeout_ms": "Optional positive execution timeout in milliseconds. Omit it for the Host default; the Host enforces its maximum.",
     }),
   });

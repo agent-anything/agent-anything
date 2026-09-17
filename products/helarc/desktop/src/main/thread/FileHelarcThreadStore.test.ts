@@ -366,6 +366,7 @@ function projectionCommit(
         phase: { kind: "none" },
         qualification: qualificationProjection(),
         activity: [],
+        commands:[],
         continuation: null,
         result: null,
       },

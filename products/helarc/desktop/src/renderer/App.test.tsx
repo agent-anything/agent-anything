@@ -554,6 +554,7 @@ function runProjection(input: {
       phase: { kind: "none" },
       qualification,
       activity,
+      commands: [],
       continuation: null,
       result: terminal
         ? {

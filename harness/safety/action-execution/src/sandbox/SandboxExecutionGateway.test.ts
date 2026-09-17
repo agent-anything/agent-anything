@@ -64,6 +64,7 @@ describe("SandboxExecutionGateway", () => {
         kind: "managed",
         supportedPolicyVersions: [2],
         supportedEffectFamilies: ["filesystem"],
+        supportedExecutionLifetimes: ["invocation"],
       },
       execute: providerExecute,
       async cancel() {
@@ -82,6 +83,20 @@ describe("SandboxExecutionGateway", () => {
         code: "sandbox_policy_unsupported",
         effectState: "none",
       });
+    expect(providerExecute).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch Run-owned work through an invocation-only provider", async () => {
+    const execute = vi.fn<ActionExecutor["execute"]>();
+    const providerExecute = vi.fn<SandboxProvider["execute"]>();
+    const gateway = createSandboxExecutionGateway({executors:[createExecutor(execute)],providers:[{
+      kind:"managed",descriptor:{id:"test.invocation-only",version:"1",kind:"managed",
+        supportedPolicyVersions:[1],supportedEffectFamilies:[],supportedExecutionLifetimes:["invocation"]},
+      execute:providerExecute,async cancel(){return {status:"accepted"};},
+    }]});
+    const request={...createRequest("managed"),executionLifetime:"run" as const};
+    expect(await gateway.execute(request)).toMatchObject({status:"sandbox_unavailable",effectState:"none"});
+    expect(execute).not.toHaveBeenCalled();
     expect(providerExecute).not.toHaveBeenCalled();
   });
 
@@ -134,6 +149,7 @@ function createRequest(
   effectFamilies: readonly string[] = [],
 ): SandboxExecutionRequest {
   return {
+    executionLifetime: "invocation",
     attempt: {
       action: { id: "action-1" },
       id: "attempt-1",

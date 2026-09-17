@@ -12,7 +12,7 @@ import { RunTree } from "./runs/RunTree.js";
 import { RunOverview } from "./runs/RunOverview.js";
 import { ObjectSummaries } from "./records/ObjectSummaries.js";
 import { readContentTarget } from "./navigation/InspectionLocation.js";
-import { inspectionObjectHistoryLocation, readInspectionDetailTarget, type InspectionDetailTarget } from "./navigation/InspectionDetailTarget.js";
+import { inspectionObjectHistoryLocation, inspectionObjectViewLocation, readInspectionDetailTarget, type InspectionDetailTarget } from "./navigation/InspectionDetailTarget.js";
 
 import { CanvasFrame } from "./canvas/CanvasFrame.js";
 const RelationGraph = lazy(async () => ({ default: (await import("./graph/RelationGraph.js")).RelationGraph }));
@@ -122,7 +122,7 @@ export function App() {
         <RecordDetails record={detail} link={selectedLink} onSubject={openSubject} onRecord={setFactId} onContent={setContentId} onLocation={setContent} onRelation={openRelation} />
       </aside>}
     </main>}
-    <InspectionDetailDrawer target={detailTarget} scope={bundle?.snapshot.selection ?? null} onClose={() => setDetailTarget(null)} onTarget={setDetailTarget} onContent={setContent} onHistory={openHistory} />
+    <InspectionDetailDrawer target={detailTarget} scope={bundle?.snapshot.selection ?? null} onClose={() => setDetailTarget(null)} onTarget={setDetailTarget} onContent={setContent} onHistory={openHistory} onView={(subject,view)=>navigate(inspectionObjectViewLocation(subject,view))} />
     <ContentDrawer id={content?.id ?? null} location={content} scope={bundle?.snapshot.selection ?? null} onClose={() => setContent(null)} />
   </div>;
 }

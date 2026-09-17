@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -88,6 +89,10 @@ import {
 import {
   HELARC_SHELL_BINDING,
   HELARC_SHELL_OPERATION,
+  HELARC_PROCESS_START_OPERATION,
+  HELARC_PROCESS_START_BINDING,
+  HELARC_INITIAL_OBSERVATION_HANDLER,
+  HELARC_TASK_OUTPUT_HANDLER,
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
@@ -554,8 +559,10 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   const commandActions = await createHelarcLocalCommandActionCapability({
     workspace: runContext.workspace,
     platform: process.platform === "win32" ? "win32" : "posix",
-    shellOperation: HELARC_SHELL_OPERATION,
-    shellBinding: HELARC_SHELL_BINDING,
+    shellOperation: HELARC_PROCESS_START_OPERATION,
+    shellBinding: HELARC_PROCESS_START_BINDING,
+    initialObservationHandlerId: HELARC_INITIAL_OBSERVATION_HANDLER,
+    taskOutputHandlerId: HELARC_TASK_OUTPUT_HANDLER,
     taskStopOperation: HELARC_TASK_STOP_OPERATION,
     taskStopBinding: HELARC_TASK_STOP_BINDING,
     now: clock.now,
@@ -609,7 +616,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       bindings: product.actions.operationBindings,
       toolInputSemanticValidators: Object.freeze([]),
       delegation: product.delegation,
-      internalHandlers: [],
+      internalHandlers: product.actions.internalHandlers,
+      composite: product.actions.composite,
       availability: product.actions.operationAvailability,
       actionExecution: {
         registrations: product.actions.registrations,
@@ -629,7 +637,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     },
     resourceFinalizers: Object.freeze([Object.freeze({
       async finalize(context: RunFinalizationContext) {
-        return await commandActions.processTasks.finalizeRun(context.runId)
+        const cleanup = await commandActions.processes.finalizeRun(context);
+        return cleanup.completed
           ? null
           : createRunFailureCause("runtime", Object.freeze({
               code: "runtime_process_cleanup_failed",
@@ -700,7 +709,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       limits: {
         maxIterations: options.maxIterations ?? 8,
         maxActions: options.maxActions ?? 8,
-        maxConsecutiveActionFailures: 1,
+        maxConsecutiveActionFailures: 3,
         maxDurationMs: options.maxDurationMs ?? 30_000,
         maxPendingInteractions: 4,
         plan: {
@@ -850,7 +859,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     runtimeEvents: Object.freeze([...runtimeEvents]),
     trace,
     before: lease.before,
-    after: await snapshotWorkspace(lease.root),
+    after: await snapshotWorkspace(lease.root, new Set(commandActions.processes.getOutputArtifacts(hostResult.runResult.runId)
+      .flatMap(paths => Object.values(paths)).map(workspacePathKey))),
     approval: approval.record,
     providerRequests: Object.freeze([...providerRequests]),
     providerResults: Object.freeze([...providerResults]),
@@ -1206,13 +1216,15 @@ function workspaceCapture(snapshot: HelarcEvaluationWorkspaceSnapshot) {
   });
 }
 
-async function snapshotWorkspace(root: string): Promise<HelarcEvaluationWorkspaceSnapshot> {
+async function snapshotWorkspace(root: string, executionArtifacts: ReadonlySet<string> = new Set()): Promise<HelarcEvaluationWorkspaceSnapshot> {
+  root = await realpath(root);
   const files: HelarcEvaluationFixtureFile[] = [];
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
       const target = join(directory, entry.name);
+      if (executionArtifacts.has(workspacePathKey(target))) continue;
       if (entry.isSymbolicLink()) throw new TypeError("Evaluation fixtures cannot contain symbolic links.");
       if (entry.isDirectory()) {
         await visit(target);
@@ -1232,6 +1244,10 @@ async function snapshotWorkspace(root: string): Promise<HelarcEvaluationWorkspac
   return Object.freeze({
     files: Object.freeze(files.sort((left, right) => left.path.localeCompare(right.path))),
   });
+}
+
+function workspacePathKey(path: string): string {
+  return process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
 }
 
 function resolveFixturePath(root: string, candidate: string): string {

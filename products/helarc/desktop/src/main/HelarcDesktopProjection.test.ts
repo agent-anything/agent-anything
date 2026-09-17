@@ -22,6 +22,7 @@ describe("Helarc Desktop IPC projection", () => {
     ]);
     expect(Object.keys(projected.run?.product ?? {}).sort()).toEqual([
       "activity",
+      "commands",
       "continuation",
       "phase",
       "qualification",
@@ -232,6 +233,7 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       rawRunResult: SECRET,
     },
     product: {
+      commands: [],
       runId: "product-run-1",
       sequence: 1,
       phase: { kind: "none" },

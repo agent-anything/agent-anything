@@ -9,6 +9,8 @@ const ContentViewer = lazy(async () => ({ default: (await import("../content/Con
 
 export function payloadSummary(payload: InspectionPayload): string {
   switch (payload.kind) {
+    case "process": return `Process ${payload.processId ?? "not started"} / ${payload.phase} / ${payload.outcome ?? "pending"}`;
+    case "process_observation": return `Observation ${payload.disposition} / ${payload.returnReason ?? "waiting"} / snapshot ${payload.snapshotRevision}`;
     case "snapshot": return payload.status + " / revision " + payload.revision;
     case "transition": return (payload.from ?? "unknown") + " -> " + payload.to;
     case "scheduling": return payload.disposition + " / " + payload.rule + (payload.reason ? " / " + payload.reason : "");
@@ -44,6 +46,14 @@ export function RecordDetails({ record, link, onSubject, onRecord, onContent, on
     { key: "record", label: "Record", children: record.id },
     { key: "sequence", label: "Commit", children: record.commitSequence },
     { key: "time", label: "Occurred", children: record.occurredAt ?? "Not recorded" },
+    ...(record.payload.kind === "process" ? [
+      {key:"command-pid",label:"Command PID",children:String(record.payload.processId ?? "Not started")},
+      {key:"helper-pid",label:"Helper PID",children:String(record.payload.helperProcessId ?? "Not used")},
+      {key:"root-exit",label:"Root exit",children:record.payload.rootExit ? `${record.payload.rootExit.code ?? record.payload.rootExit.signal ?? "unknown"} / ${record.payload.rootExit.observedAt}` : "Not observed"},
+      {key:"containment",label:"Process scope",children:record.payload.containment},
+      {key:"capture",label:"Output capture",children:record.payload.capture},
+      {key:"persistence",label:"Output persistence",children:record.payload.persistence},
+    ] : []),
   ]} />{record.contents.map((item) => <button type="button" className="content-row" key={item.id} onClick={() => onContent(item.id)}><FileTextOutlined /><span className="content-row-label"><span className="content-row-name">{item.name}</span><small>{item.stage} / {item.availability}{item.truncated ? " / truncated" : ""}</small></span><RightOutlined className="content-row-arrow" /></button>)}
     <RecordRelations links={record.links} onRelation={onRelation} />
     <Suspense fallback={<Spin />}><ContentViewer text={JSON.stringify(record.payload, null, 2)} language="json" /></Suspense></>;

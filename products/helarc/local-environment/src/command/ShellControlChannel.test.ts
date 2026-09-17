@@ -6,8 +6,9 @@ import {
   commandWithFinalWorkingDirectory,
   consumeFinalWorkingDirectory,
 } from "./LocalCommandActionCapability.js";
-import { selectNativeShell } from "./CommandActionIdentity.js";
-import { executeProcess } from "./ProcessExecutor.js";
+import { selectNativeShell, resolveCommandExecutable } from "./CommandActionIdentity.js";
+import { WindowsJobProcessBackend, resolveWindowsProcessHelper } from "./WindowsJobProcessBackend.js";
+import { PosixProcessBackend } from "./PosixProcessBackend.js";
 
 describe("Shell final-working-directory control channel", () => {
   it("keeps PowerShell control data out of stdout", () => {
@@ -67,32 +68,26 @@ describe("Shell final-working-directory control channel", () => {
         ? "Write-Output 'visible'"
         : "printf 'visible\\n'";
       const controller = new AbortController();
-      const outcome = await executeProcess({
-        command: shell.command,
-        args: [
-          ...shell.argumentsBeforeCommand,
-          commandWithFinalWorkingDirectory(shell.toolName, command, controlPath),
-        ],
-        cwd: process.cwd(),
-        timeoutMs: 10_000,
-        maxStdoutBytes: 10_000,
-        maxStderrBytes: 10_000,
-        interruption: {
-          signal: controller.signal,
-          get interruption() { return null; },
-        },
-        termination: { gracePeriodMs: 500, forceKillTimeoutMs: 2_000 },
-        startedMs: 0,
-        nowMs: () => 1,
+      const backend = process.platform === "win32"
+        ? new WindowsJobProcessBackend(await resolveWindowsProcessHelper())
+        : new PosixProcessBackend();
+      const chunks: Buffer[] = [];
+      let finish!: () => void;
+      const closed = new Promise<void>(resolve => { finish = resolve; });
+      const executable = await resolveCommandExecutable({command:shell.command,cwd:process.cwd(),platform,environment});
+      const handle = await backend.launch({
+        executionId: "cwd-test", executable: executable.canonicalPath,
+        args: [...shell.argumentsBeforeCommand, commandWithFinalWorkingDirectory(shell.toolName, command, controlPath)],
+        cwd: process.cwd(), environment, signal: controller.signal, startupTimeoutMs: 3000,
+      }, event => {
+        if(event.kind === "output" && event.stream === "stdout") chunks.push(Buffer.from(event.bytes));
+        if(event.kind === "output_closed") finish();
       });
-
-      expect(outcome).toMatchObject({
-        kind: "completed",
-        exitCode: 0,
-        stdout: { text: expect.stringContaining("visible") },
-      });
-      if (outcome.kind !== "completed") throw new Error("Expected shell completion.");
-      expect(outcome.stdout.text).not.toContain("HELARC_FINAL_CWD");
+      await closed;
+      await handle.close();
+      const stdout = Buffer.concat(chunks).toString("utf8");
+      expect(stdout).toContain("visible");
+      expect(stdout).not.toContain("HELARC_FINAL_CWD");
       await expect(consumeFinalWorkingDirectory(controlPath)).resolves.toBe(
         await realpath(process.cwd()),
       );

@@ -4,6 +4,8 @@ import type { RegisteredOperation } from "@agent-anything/operation-catalog/cata
 import type { OperationBindingRevisionRef, OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import { findHelarcBaselineToolContract, type HelarcShellToolName } from "./HelarcBaselineToolContracts.js";
+import {createHelarcShellComposite} from "./HelarcShellComposite.js";
+import type {CompositeOperationResolverPort} from "@agent-anything/agent-runtime/runner";
 
 export const HELARC_TASK_STOP_TOOL = "TaskStop";
 
@@ -11,16 +13,11 @@ export interface HelarcCommandOperationContribution {
   readonly operations: readonly RegisteredOperation[];
   readonly bindings: readonly OperationBindingResolverRegistration[];
   readonly tools: readonly ToolRegistrationInput[];
+  readonly composite: CompositeOperationResolverPort;
 }
 
-export const HELARC_SHELL_OPERATION: OperationRevisionRef = Object.freeze({
-  operation: Object.freeze({ namespace: "helarc", name: "shell-execute" }), revision: "2",
-});
-export const HELARC_SHELL_BINDING: OperationBindingRevisionRef = Object.freeze({ operation: HELARC_SHELL_OPERATION, revision: "2" });
-export const HELARC_TASK_STOP_OPERATION: OperationRevisionRef = Object.freeze({
-  operation: Object.freeze({ namespace: "helarc", name: "task-stop" }), revision: "1",
-});
-export const HELARC_TASK_STOP_BINDING: OperationBindingRevisionRef = Object.freeze({ operation: HELARC_TASK_STOP_OPERATION, revision: "1" });
+import {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER, HELARC_TASK_OUTPUT_HANDLER, HELARC_SHELL_COMPOSITE, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING} from "./HelarcCommandIdentity.js";
+export {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER, HELARC_TASK_OUTPUT_HANDLER, HELARC_SHELL_COMPOSITE, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING} from "./HelarcCommandIdentity.js";
 
 export function createHelarcCommandOperationContribution(input: {
   readonly shellTool: HelarcShellToolName;
@@ -30,33 +27,41 @@ export function createHelarcCommandOperationContribution(input: {
 }): HelarcCommandOperationContribution {
   return Object.freeze({
     operations: Object.freeze([
-      operation("helarc.shell.admission.v2", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.direct", "code-agent.shell"),
-      operation("helarc.task-stop.admission.v1", input.admittedAt, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING, "helarc.task-stop.direct", "code-agent.task-stop"),
+      operation("helarc.shell.admission.v3", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.composite", "code-agent.shell", "composite"),
+      operation("helarc.process-start.admission.v1", input.admittedAt, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, "helarc.process.start", "command.start", "direct", false),
+      operation("helarc.initial-observation.admission.v1", input.admittedAt, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, "helarc.process.initial", "command.observe", "internal", false),
+      operation("helarc.task-output.admission.v1", input.admittedAt, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, "helarc.process.output", "command.observe", "internal"),
+      operation("helarc.task-stop.admission.v2", input.admittedAt, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING, "helarc.task-stop.direct", "code-agent.task-stop"),
     ]),
     bindings: Object.freeze([
-      binding("helarc.shell.direct", HELARC_SHELL_BINDING, input.shellActionAdapterId),
+      binding("helarc.shell.composite", HELARC_SHELL_BINDING, HELARC_SHELL_COMPOSITE,"composite"),
+      binding("helarc.process.start", HELARC_PROCESS_START_BINDING, input.shellActionAdapterId),
+      binding("helarc.process.initial", HELARC_INITIAL_OBSERVATION_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER,"internal"),
+      binding("helarc.process.output", HELARC_TASK_OUTPUT_BINDING, HELARC_TASK_OUTPUT_HANDLER,"internal"),
       binding("helarc.task-stop.direct", HELARC_TASK_STOP_BINDING, input.taskStopActionAdapterId),
     ]),
     tools: Object.freeze([
       tool("helarc.tool.shell.admission.v2", findHelarcBaselineToolContract(input.shellTool), HELARC_SHELL_BINDING, input.admittedAt),
-      tool("helarc.tool.task-stop.admission.v1", findHelarcBaselineToolContract("TaskStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
+      tool("helarc.tool.task-stop.admission.v2", findHelarcBaselineToolContract("TaskStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
+      tool("helarc.tool.task-output.admission.v1", findHelarcBaselineToolContract("TaskOutput"), HELARC_TASK_OUTPUT_BINDING, input.admittedAt),
     ]),
+    composite:createHelarcShellComposite(),
   });
 }
 
-function operation(admissionId: string, admittedAt: string, ref: OperationRevisionRef, bindingRef: OperationBindingRevisionRef, resolverId: string, domainPurpose: string): RegisteredOperation {
+function operation(admissionId: string, admittedAt: string, ref: OperationRevisionRef, bindingRef: OperationBindingRevisionRef, resolverId: string, domainPurpose: string,kind:"direct"|"internal"|"composite"="direct",exposed=true): RegisteredOperation {
   return {
     admissionId,
     operation: {
       ref, semanticOwner: "helarc", requestSchemaRevision: "1", resultSchemaRevision: ref.revision,
-      roles: { requestOrigins: ["tool_request"], exposure: "eager_tool", runControl: "direct", trust: "canonical_external_effect", participation: "semantic_owner", domainPurpose },
+      roles: { requestOrigins: [exposed ? "tool_request":"trusted_workflow"], exposure: exposed ? "eager_tool":"workflow_only", runControl: kind, trust: kind === "internal" ? "effect_free":"canonical_external_effect", participation: "semantic_owner", domainPurpose },
     },
-    binding: { ref: bindingRef, kind: "direct", resolverId, resolverRevision: bindingRef.revision },
-    sourceRevision: ref.revision, allowedRequestOrigins: ["tool_request"], admittedAt, retirement: null,
+    binding: { ref: bindingRef, kind, resolverId, resolverRevision: bindingRef.revision },
+    sourceRevision: ref.revision, allowedRequestOrigins: [exposed ? "tool_request":"trusted_workflow"], admittedAt, retirement: null,
   };
 }
 
-function binding(resolverId: string, bindingRef: OperationBindingRevisionRef, actionAdapterId: string): OperationBindingResolverRegistration {
+function binding(resolverId: string, bindingRef: OperationBindingRevisionRef, target: string,kind:"direct"|"internal"|"composite"="direct"): OperationBindingResolverRegistration {
   return {
     resolver: Object.freeze({
       id: resolverId, revision: bindingRef.revision,
@@ -64,9 +69,9 @@ function binding(resolverId: string, bindingRef: OperationBindingRevisionRef, ac
         return Object.freeze({
           status: "resolved" as const,
           binding: snapshotResolvedOperationBinding({
-            kind: "direct", invocation: request.context.invocation, correlation: request.context.correlation,
+            ...(kind === "direct" ? {kind,actionAdapterId:target} : kind === "internal" ? {kind,handlerId:target} : {kind,compositeDefinitionRef:target}), invocation: request.context.invocation, correlation: request.context.correlation,
             parentInvocation: request.context.parentInvocation, binding: bindingRef, request: request.request,
-            resolverRevision: bindingRef.revision, resolutionFingerprint: `${request.context.invocation.id}:direct:${actionAdapterId}`, actionAdapterId,
+            resolverRevision: bindingRef.revision, resolutionFingerprint: `${request.context.invocation.id}:${kind}:${target}`,
           }, snapshotRequest),
         });
       },

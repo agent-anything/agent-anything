@@ -1,4 +1,5 @@
 export type { RootRunConfig, RunConfig, RunLimits, RunTreeLimits } from "./RunConfig.js";
+export type { InternalOperationHandler, InternalOperationExecutionContext, CompositeOperationResolverPort, CompositeOperationResolution } from "./RunnerDependencies.js";
 export type { DelegationPreparationPort, DelegationPreparationResult, DelegationNarrativeProjectionPort, DelegationResultProjectionPort, DelegationProgressProjectionPort, DescendantOperationOutcome, OperationToolAvailabilityParticipant, RunnerContextProjection, RunInvocationOptions, RunnerDependencies, RunnerDelegationComposition, ToolPathAvailability } from "./RunnerDependencies.js";
 export type {
   ActiveDelegationProjection,

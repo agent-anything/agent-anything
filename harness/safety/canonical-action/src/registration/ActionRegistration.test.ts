@@ -13,7 +13,7 @@ describe("ActionRegistration", () => {
     const registered = snapshot.registrations[0]!;
     input.adapter.version = "changed";
 
-    expect(snapshot.schemaVersion).toBe(2);
+    expect(snapshot.schemaVersion).toBe(3);
     expect(registered).toMatchObject({
       registrationId: "action-registration.read-file",
       revision: "1",
@@ -180,6 +180,7 @@ function registration(
     },
     effectFamilies: ["filesystem"],
     sandboxRequirementRevision: "sandbox-1",
+    executionLifetime: "invocation",
     maxInvocationBytes: 1_024,
     maxPhysicalResultBytes: 2_048,
     ...overrides,

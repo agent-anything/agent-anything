@@ -64,6 +64,8 @@
 .timeline-view .timeline-surface { flex: 1; min-height: 0; }
 .timeline-view .ant-select { width: 240px; }
 .vis-item.interval-failed { background: #f9e3de; border-color: #ba6654; }
+.timeline-surface .vis-labelset .vis-label { width: 220px; max-width: 220px; font-size: 12px; }
+.timeline-surface .vis-label .vis-inner { max-width: 100%; white-space: nowrap; }
 .record-selected td { background: #e1f0ea !important; }
 .view-loading { flex: 1; display: grid; place-items: center; min-height: 200px; }
 .ant-tooltip { pointer-events: none; }

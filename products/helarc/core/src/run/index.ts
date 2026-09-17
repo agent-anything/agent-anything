@@ -8,6 +8,7 @@ export type {
   HelarcRunProviderRef,
 } from "./HelarcRun.js";
 export type {
+  HelarcCommandProgress,
   HelarcProductActivityProjectionUpdate,
   HelarcProductPhase,
   HelarcProductResultProjectionUpdate,

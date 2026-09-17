@@ -73,7 +73,10 @@ export interface CompositeReducerPort {
   reduce(input: {
     readonly compositeInput: unknown;
     readonly children: readonly CompositeNodeSettlement[];
-  }): unknown;
+  }):
+    | {readonly status: "succeeded"; readonly output: unknown; readonly failure: null}
+    | {readonly status: "partial"; readonly output: unknown; readonly failure: CompositeFailure}
+    | {readonly status: "failed" | "cancelled" | "unknown_effect"; readonly output: null; readonly failure: CompositeFailure};
 }
 
 export interface CompositeChildExecutionPort {
@@ -382,7 +385,13 @@ export class CompositeExecution {
     let output: unknown = null;
     if (status === "succeeded" || status === "partial") {
       try {
-        output = this.dependencies.reducer.reduce({ compositeInput, children });
+        const reduced = this.dependencies.reducer.reduce({ compositeInput, children });
+        if (!reduced || !["succeeded", "partial", "failed", "cancelled", "unknown_effect"].includes(reduced.status) ||
+            (reduced.status === "succeeded" ? reduced.failure !== null : reduced.failure === null) ||
+            (reduced.status === "partial" && reduced.output === null)) throw new TypeError("Invalid Composite semantic reduction.");
+        output = reduced.output;
+        if (status === "succeeded" || reduced.status !== "succeeded") status = reduced.status;
+        cause = reduced.failure;
       } catch (error) {
         status = "failed";
         cause = handlerFailure("reducer", this.dependencies.reducer.id, error);
@@ -392,7 +401,8 @@ export class CompositeExecution {
       code: `composite_${status}`, message: `Composite Operation settled as ${status}.`,
       retryable: false, metadata: Object.freeze({
         children: children.map((child) => ({ nodeId: child.nodeId, status: child.status,
-          runAction: child.runAction, failure: child.failure })),
+          runAction: child.runAction, resultRef: child.result?.ref ?? null,
+          output: child.result?.output ?? null, failure: child.failure })),
       }),
     });
     return Object.freeze({

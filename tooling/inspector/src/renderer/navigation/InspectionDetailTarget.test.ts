@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { InspectionSubjectRef } from "@agent-anything/inspection/records";
-import { inspectionDetailQuery, inspectionObjectHistoryLocation, readInspectionDetailTarget, type InspectionDetailTarget } from "./InspectionDetailTarget.js";
+import { inspectionDetailQuery, inspectionObjectHistoryLocation, inspectionObjectViewLocation, readInspectionDetailTarget, type InspectionDetailTarget } from "./InspectionDetailTarget.js";
 import { inspectionReadLocation } from "./InspectionLocation.js";
 
 const subject: InspectionSubjectRef = { sourceId: "source", datasetId: "dataset", owner: "agent-core", kind: "definition", id: "agent", runId: null, revision: "1" };
 const scope = { sourceId: "source", datasetId: "dataset", watermark: 42 };
 
 describe("Contextual inspection targets", () => {
+  it("targets process lifecycle without mistaking an immutable snapshot for its state owner",()=>{
+    const process={...subject,kind:"process" as const,runId:"child",revision:"9"};
+    expect(inspectionObjectViewLocation(process,"Lifecycle")).toMatchObject({run:"child",view:"Lifecycle",subject:JSON.stringify({...process,revision:null})});
+    expect(inspectionObjectViewLocation(process,"Data Flow")).toMatchObject({subject:JSON.stringify(process),dataFocus:"true"});
+  });
   it("keeps object, exact record and establishing relation identities distinct", () => {
     const targets: InspectionDetailTarget[] = [{ kind: "object", subject }, { kind: "record", recordId: "historical" }, { kind: "relation", recordId: "binding-event", linkId: "binding-link" }];
     for (const target of targets) expect(readInspectionDetailTarget(JSON.stringify(target))).toEqual(target);

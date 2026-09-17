@@ -41,9 +41,9 @@ import {
 
 export const HELARC_EVALUATION_TIME = "2026-09-05T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-normal-completion-corpus-v1";
+  "helarc-run-owned-command-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-normal-completion-target-v1";
+  "helarc-run-owned-command-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -355,7 +355,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v23-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v24-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -366,7 +366,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-normal-completion-v1",
+    "product.revision": "helarc-product-run-owned-command-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -389,19 +389,19 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-normal-completion-v1",
+    "source.revision": "helarc-run-owned-command-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
-    "tool-profile.revision": "child-report-and-failure-code-v1",
+    "tool-profile.revision": "helarc-baseline-tools-v4",
     "delegation-contract.revision": "child-terminal-stop-reason-v1",
     "delegation-dispatch.revision": "agent-runtime.descendant-boundary-progression.v1",
     "delegation-tool-inheritance.revision": "agent-runtime.exact-parent-tool-selection.v1",
-    "action-registration.revision": "helarc-shell-action-registration-v2",
+    "action-registration.revision": "helarc-shell-action-registration-v3-run-lifetime",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
     "context-projector.revision": "helarc-context-projector-v1",
-    "run-limits.revision": "helarc-descendant-suspension-progression-limits-v1",
+    "run-limits.revision": "helarc-composite-recovery-limits-v1",
     "run-tree-resource-account.revision": "agent-runtime.run-tree-resource-account.v3",
     "run-tree-authority.revision": "agent-runtime.run-tree-authority.v3",
     "run-tree-approval-account.revision": "agent-runtime.run-tree-approval-account.v1",

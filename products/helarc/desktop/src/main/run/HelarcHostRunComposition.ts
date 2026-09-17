@@ -59,6 +59,10 @@ import type { HelarcTaskInput } from "@agent-anything/helarc/task";
 import {
   HELARC_SHELL_BINDING,
   HELARC_SHELL_OPERATION,
+  HELARC_PROCESS_START_BINDING,
+  HELARC_PROCESS_START_OPERATION,
+  HELARC_INITIAL_OBSERVATION_HANDLER,
+  HELARC_TASK_OUTPUT_HANDLER,
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
@@ -236,14 +240,21 @@ export async function prepareHelarcHostRun(
     workspace: runWorkspace,
     now,
   });
+  let reportCommand:(fact:import("@agent-anything/helarc-local-environment/command").ProcessExecutionFact)=>void=()=>{};
   const commandActions = await createHelarcLocalCommandActionCapability({
     workspace: runWorkspace,
     platform,
-    shellOperation: HELARC_SHELL_OPERATION,
-    shellBinding: HELARC_SHELL_BINDING,
+    shellOperation: HELARC_PROCESS_START_OPERATION,
+    shellBinding: HELARC_PROCESS_START_BINDING,
+    initialObservationHandlerId: HELARC_INITIAL_OBSERVATION_HANDLER,
+    taskOutputHandlerId: HELARC_TASK_OUTPUT_HANDLER,
     taskStopOperation: HELARC_TASK_STOP_OPERATION,
     taskStopBinding: HELARC_TASK_STOP_BINDING,
     limits: input.commandLimits,
+    processObserver:fact=>{
+      try { input.inspection?.processObserver?.(fact); } catch { /* Independent diagnostic consumer. */ }
+      reportCommand(fact);
+    },
     now,
   });
   const product = await createHelarcProductComposition({
@@ -273,6 +284,12 @@ export async function prepareHelarcHostRun(
       product.agentHooks.subscribe((projection) => inspectionDefinitions.hookInvocations(projection));
     } catch { /* Diagnostic capture cannot change Product composition. */ }
   }
+  reportCommand=fact=>{
+    const s=fact.snapshot;
+    product.recordCommandProgress({runId:s.ref.runId,executionId:s.ref.executionId,revision:s.revision,phase:s.phase,
+      processId:s.process?.processId ?? null,outcome:s.outcome,capturedBytes:s.output.retainedBytes,
+      omittedBytes:s.output.omittedBytes,outputPersistence:s.output.persistence,observedAt:fact.occurredAt});
+  };
   const configurationFingerprint = await createCanonicalSha256Digest(
     "agent-anything.helarc.local-environment.v1",
     {
@@ -340,7 +357,8 @@ export async function prepareHelarcHostRun(
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
       toolInputSemanticValidators: Object.freeze([]),
-      internalHandlers: Object.freeze([]),
+      internalHandlers: product.actions.internalHandlers,
+      composite: product.actions.composite,
       availability: product.actions.operationAvailability,
       actionExecution: {
         observer: input.inspection?.actionObserver,
@@ -362,12 +380,12 @@ export async function prepareHelarcHostRun(
     runTranscriptPort: input.runTranscriptPort,
     resourceFinalizers: Object.freeze([Object.freeze({
       async finalize(context: RunFinalizationContext) {
-        const completed = await commandActions.processTasks.finalizeRun(context.runId);
-        return completed ? null : createRunFailureCause("runtime", Object.freeze({
+        const cleanup = await commandActions.processes.finalizeRun(context);
+        return cleanup.completed ? null : createRunFailureCause("runtime", Object.freeze({
           code: "runtime_process_cleanup_failed",
-          message: "Run-owned background process cleanup could not be confirmed.",
+          message: "Run-owned command cleanup could not be confirmed.",
           retryable: false,
-          metadata: Object.freeze({ runId: context.runId }),
+          metadata: Object.freeze({ runId: context.runId, cleanup }),
         }));
       },
     })]),

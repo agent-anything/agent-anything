@@ -67,7 +67,8 @@ Current Helarc capabilities include:
 - Local credential storage for provider API keys
 - Provider-backed Controller and unified Runner execution
 - Complete Read, Glob, Grep, Edit and Write Tools
-- Permission-gated Bash/PowerShell execution and background task control
+- Permission-gated Bash/PowerShell with Run-owned processes, bounded initial waits,
+  independent TaskOutput observations and exact TaskStop control
 - Model-requested Agent delegation, concurrent descendants and explicit resume
 - Multiple pending user questions, approvals and Run cancellation
 - Patch proposal, review, and application flow
@@ -86,6 +87,7 @@ Current Helarc capabilities include:
 - Vite and React for Helarc renderer UI
 - Vitest
 - SQLite and OpenTelemetry for local Inspection
+- Rust Windows Job Object helper for owned command process lifetimes
 - Ant Design, React Flow/ELK, vis-timeline and Monaco for Agent Inspector
 
 ## Repository Layout
@@ -184,6 +186,12 @@ fnm, verifies both versions, and refuses fallback runtimes:
 ```
 
 Install dependencies:
+
+On Windows x64, command builds also require rustup, Visual Studio C++ build
+tools and the Windows SDK. Local Environment's pinned Rust crate builds the
+helper and validates its protocol/build/architecture/digest manifest. Runtime
+execution never downloads a helper or falls back to uncontained spawning.
+See [native build and deployment](products/helarc/local-environment/native/README.md).
 
 ```powershell
 pnpm install

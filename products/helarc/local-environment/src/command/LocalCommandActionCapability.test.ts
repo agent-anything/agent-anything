@@ -41,7 +41,8 @@ describe("createHelarcLocalCommandActionCapability", () => {
         },
         additional: [],
       },
-      platform: "win32",
+      platform: process.platform === "win32" ? "win32":"posix",
+      initialObservationHandlerId:"test.initial",taskOutputHandlerId:"test.output",
       shellOperation,
       shellBinding,
       taskStopOperation,
@@ -63,53 +64,23 @@ describe("createHelarcLocalCommandActionCapability", () => {
     });
   });
 
-  it("keeps physical completion while reporting a nonzero command exit as semantic failure", async () => {
-    const capability = await createCapability();
-    const adapter = capability.adapters.find(
-      (candidate) => candidate.adapter.descriptor.id === capability.shellActionAdapterId,
-    )!.adapter;
-    const settlement = shellSettlement(73, "The project already exists.");
-
-    const result = await adapter.settle(
-      shellPreparedAction("PowerShell", "dotnet new console --name HelloWorldApp"),
-      settlement,
-    );
-
-    expect(result).toMatchObject({
-      status: "failed",
-      output: null,
-      failure: {
-        owner: "helarc.local-environment",
-        code: "command_exit_nonzero",
-      },
-    });
-    expect(result.failure?.message).toContain("exit code 73");
-    expect(result.failure?.message).toContain("The project already exists.");
+  it("settles startup without pretending that command execution has finished", async () => {
+    const capability=await createCapability();
+    const adapter=capability.adapters[0]!.adapter;
+    const settlement=shellSettlement();
+    const result=await adapter.settle(shellPreparedAction("PowerShell","command"),settlement);
+    expect(result.status).toBe("succeeded");
     expect(result.settlement).toBe(settlement);
-    expect(result.settlement.status).toBe("succeeded");
+    expect(result.output).toEqual(settlement.payload!.value);
+    expect(capability.registrations.registrations[0]!.executionLifetime).toBe("run");
   });
 
-  it("reports a zero command exit as semantic success", async () => {
-    const capability = await createCapability();
-    const adapter = capability.adapters.find(
-      (candidate) => candidate.adapter.descriptor.id === capability.shellActionAdapterId,
-    )!.adapter;
-
-    const result = await adapter.settle(
-      shellPreparedAction("Bash", "dotnet run"),
-      shellSettlement(0, ""),
-    );
-
-    expect(result).toMatchObject({
-      status: "succeeded",
-      output: {
-        mode: "foreground",
-        exit_code: 0,
-        exit_interpretation: null,
-      },
-      failure: null,
-    });
+  it("keeps Shell sessions separate for Root and Child Runs", async () => {
+    const capability=await createCapability();
+    expect(capability.shellSession("root")).toEqual(capability.shellSession("child"));
+    expect(capability.internalHandlers.map(handler=>handler.id)).toEqual(["test.initial","test.output"]);
   });
+
 });
 
 async function createCapability() {
@@ -134,7 +105,8 @@ async function createCapability() {
       },
       additional: [],
     },
-    platform: "win32",
+    platform: process.platform === "win32" ? "win32":"posix",
+    initialObservationHandlerId:"test.initial",taskOutputHandlerId:"test.output",
     shellOperation,
     shellBinding: { operation: shellOperation, revision: "3" },
     taskStopOperation,
@@ -157,10 +129,7 @@ function shellPreparedAction(
   } as unknown as PreparedAction;
 }
 
-function shellSettlement(
-  exitCode: number,
-  stderr: string,
-): CanonicalActionSettlement {
+function shellSettlement(): CanonicalActionSettlement {
   const operation = {
     operation: { namespace: "test-product", name: "shell" },
     revision: "7",
@@ -177,14 +146,11 @@ function shellSettlement(
     completionExtent: "complete",
     payload: {
       value: {
-        mode: "foreground",
-        exit_code: exitCode,
-        signal: null,
-        duration_ms: 10,
-        stdout: stream(""),
-        stderr: stream(stderr),
-        final_working_directory: null,
-        shell_session_revision: null,
+        task_id: "action-1:process",
+        run_id: "run-1",
+        action_id: "action-1",
+        attempt_id: "attempt-1",
+        snapshot: { phase: "running", outcome: null },
       },
       startedAt: NOW,
       finishedAt: NOW,
@@ -193,17 +159,5 @@ function shellSettlement(
     causeRef: null,
     reconciliationRequired: false,
     settledAt: NOW,
-  };
-}
-
-function stream(text: string) {
-  return {
-    text,
-    encoding: "utf-8",
-    encoding_source: "utf8",
-    integrity: "exact",
-    replacement_count: 0,
-    truncated: false,
-    overflow_file: null,
   };
 }

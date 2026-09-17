@@ -441,8 +441,15 @@ function trialMetrics(
     };
   }, { inputTokens: 0, outputTokens: 0 });
   const outcomeCorrect = expectedOutcomeMatches(material);
-  const invalidOrUnsafeActionAttempts = material.product.effects.filter((effect) =>
-    effect.status !== "succeeded"
+  const modelRequestedActions = new Set(items.flatMap((item) =>
+    item.payload.kind === "run_action" && item.payload.action.provenance.kind === "controller"
+      ? [item.payload.action.ref.id]
+      : []
+  ));
+  const invalidOrUnsafeActionAttempts = material.product.runActions.filter((action) =>
+    modelRequestedActions.has(action.runActionId) &&
+    ["tool", "operation", "model_call_rejection"].includes(action.subjectKind) &&
+    ["invalid", "invalidated", "denied", "cancelled", "timed_out", "failed", "partial", "unknown_effect", "rejected"].includes(action.status)
   ).length;
   return Object.freeze({
     outcomeCorrect,

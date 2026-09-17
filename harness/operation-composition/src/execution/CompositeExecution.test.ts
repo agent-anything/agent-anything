@@ -59,7 +59,7 @@ describe("CompositeExecution", () => {
     const graph = definition([{ ...node("first"), conditionId: stage === "condition" ? "fail" : null }]);
     const result = await configuredExecution(graph, {
       conditions: [{ id: "fail", evaluate() { throw new Error("condition failed"); } }],
-      reducer: { id: "collect", reduce() { if (stage === "reducer") throw new Error("reducer failed"); return {}; } },
+      reducer: { id: "collect", reduce() { if (stage === "reducer") throw new Error("reducer failed"); return {status:"succeeded",output:{},failure:null}; } },
     }).run({}, activeInterruption());
     expect(result.status).toBe("failed");
     expect(stage === "condition" ? result.children[0]?.failure?.code : result.failure?.code).toBe(`composite_${stage}_failed`);
@@ -228,7 +228,7 @@ function createExecution(input: {
       conditions: [],
       reducer: {
         id: "collect",
-        reduce: ({ children }) => ({ statuses: children.map(({ status }) => status) }),
+        reduce: ({ children }) => ({ status:"succeeded", output:{ statuses: children.map(({ status }) => status) }, failure:null }),
       },
       conflicts: input.conflicts,
       children: {
@@ -328,7 +328,7 @@ function activeInterruption(): InvocationInterruptionContext {
 function configuredExecution(graph: CompositeDefinitionRevision, overrides: Partial<CompositeExecutionDependencies> = {}) {
   return new CompositeExecution("composite", snapshotCompositeDefinition(graph), {
     transforms: [{ id: "identity", transform: ({ compositeInput }) => compositeInput }],
-    conditions: [], reducer: { id: "collect", reduce: ({ children }) => children }, conflicts: null,
+    conditions: [], reducer: { id: "collect", reduce: ({ children }) => ({status:"succeeded",output:children,failure:null}) }, conflicts: null,
     children: { start: async ({ node: current }) => child(current.id, 1, "succeeded") }, now: () => NOW,
     ...overrides,
   });

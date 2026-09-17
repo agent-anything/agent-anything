@@ -12,6 +12,8 @@ playwright-report/
 .artifacts/
 .tsbuildinfo
 *.tsbuildinfo
+target/
+native-artifacts/
 
 # Package manager
 .pnpm-store/
