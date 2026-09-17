@@ -3,9 +3,12 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { atomicInspectionJson, registerInspectionSource, datasetDirectory, containedInspectionPath, type InspectionDatasetManifest } from "../sources/index.js";
 import { validateInspectionCapturePolicy } from "../content/index.js";
-import { InspectionDatabase, inspectionSourceBytes, retireInspectionDatasets } from "../storage/index.js";
+import { InspectionDatabase } from "../storage/index.js";
+import { InspectionStorageMaintenance } from "../storage/InspectionStorageMaintenance.js";
+import { InspectionStorageUsage } from "../storage/InspectionStorageUsage.js";
 import { InspectionTelemetry } from "../telemetry/index.js";
 import type { RecorderCommand, RecorderReply } from "./InspectionRecorderProtocol.js";
+import { inspectionRecorderFailureCode } from "./InspectionRecorderError.js";
 import { INSPECTION_FORMAT_VERSION } from "../records/index.js";
 
 const port = parentPort!;
@@ -14,106 +17,139 @@ let db: InspectionDatabase;
 let telemetry: InspectionTelemetry;
 let manifest: InspectionDatasetManifest;
 let directory: string;
-let policyPath: string;
-let retainedBytes = 0;
+let usage: InspectionStorageUsage;
+let maintenance: InspectionStorageMaintenance | undefined;
 let writerRejected = 0;
-let sourceId: string;
-let cachedSourceBytes = 0;
-let sourceSizeCheckedAt = 0;
+let pendingTelemetryBytes = 0;
 let failed = false;
-let budgetExhausted = false;
-let timer: ReturnType<typeof setInterval>;
+let closing = false;
+let heartbeat: ReturnType<typeof setInterval> | undefined;
+let reconciliation: ReturnType<typeof setTimeout> | undefined;
 const updateHealth = (dropped: number, rejected: number) => db.updateCoverage({ dropped, rejected: rejected + writerRejected, telemetryDropped: telemetry.dropped });
-function checkStorageBudget(additional = 0): void {
-  if (budgetExhausted) throw new Error("inspection_storage_budget_exhausted");
-  if (Date.now() - sourceSizeCheckedAt > 5000) {
-    cachedSourceBytes = inspectionSourceBytes(workerData.root, sourceId);
-    sourceSizeCheckedAt = Date.now();
+function stopMaintenance(): void {
+  clearInterval(heartbeat); clearTimeout(reconciliation); maintenance?.close();
+}
+function fail(error: unknown): void {
+  if (failed || closing) return;
+  failed = true; stopMaintenance();
+  const code = inspectionRecorderFailureCode(error);
+  if (code === "inspection_storage_budget_exhausted") {
+    try { db.updateCoverage({ limitations: [...new Set([...db.snapshot().limitations, "storage_budget_exhausted"])] }); } catch { /* Preserve the first failure. */ }
   }
-  if (db.size() + retainedBytes + additional > 511 * 1024 * 1024 || cachedSourceBytes + additional > 2047 * 1024 * 1024) {
-    budgetExhausted = true;
-    db.updateCoverage({ limitations: [...new Set([...db.snapshot().limitations, "storage_budget_exhausted"])] });
-    throw new Error("inspection_storage_budget_exhausted");
-  }
+  send({ kind: "failed", code });
+}
+function refreshBudget(): void { usage.refreshDatabase(directory); usage.check(); pendingTelemetryBytes = 0; }
+function scheduleReconciliation(): void {
+  reconciliation = setTimeout(() => {
+    if (failed || closing) return;
+    usage.beginReconciliation();
+    void maintenance!.measure({ datasetId: manifest.datasetId }).then((measurement) => {
+      if (failed || closing) return;
+      usage.reconcile(measurement); refreshBudget(); scheduleReconciliation();
+    }).catch(fail);
+  }, 60_000);
+  reconciliation.unref();
 }
 function writeTelemetry(record: Parameters<InspectionDatabase["writeTelemetry"]>[0]): void {
-  const bytes = Buffer.byteLength(record.data) * 2 + 8192;
-  checkStorageBudget(bytes);
+  const reservation = Buffer.byteLength(record.data) * 2 + 8192;
+  usage.check(pendingTelemetryBytes + reservation);
   db.writeTelemetry(record);
-  cachedSourceBytes += bytes;
+  pendingTelemetryBytes += reservation;
 }
 
 try {
+  let completed = 0;
+  const progress = () => send({ kind: "initializing", completed: ++completed });
   const source = registerInspectionSource(workerData.root, workerData.application, workerData.name);
-  sourceId = source.sourceId;
-  retireInspectionDatasets(workerData.root, sourceId, { before: new Date(Date.now() - 7 * 86400000).toISOString(), apply: true });
-  cachedSourceBytes = inspectionSourceBytes(workerData.root, sourceId);
-  if (cachedSourceBytes >= 2047 * 1024 * 1024) {
-    retireInspectionDatasets(workerData.root, sourceId, { before: new Date().toISOString(), apply: true });
-    cachedSourceBytes = inspectionSourceBytes(workerData.root, sourceId);
-    if (cachedSourceBytes >= 2047 * 1024 * 1024) throw new Error("inspection_storage_budget_exhausted");
+  progress();
+  maintenance = new InspectionStorageMaintenance(workerData.root, source.sourceId);
+  const measure = (retireBefore: string) => {
+    let previous = 0;
+    return maintenance!.measure({ retireBefore, progress: (count) => {
+      completed += count - previous; previous = count;
+      send({ kind: "initializing", completed });
+    } });
+  };
+  let baseline = await measure(new Date(Date.now() - 7 * 86400000).toISOString());
+  if (baseline.bytes >= 2047 * 1024 * 1024) {
+    baseline = await measure(new Date().toISOString());
+    if (baseline.bytes >= 2047 * 1024 * 1024) throw new Error("inspection_storage_budget_exhausted");
   }
-  sourceSizeCheckedAt = Date.now();
-  policyPath = containedInspectionPath(workerData.root, "sources", source.sourceId, "read-policy.json");
+  usage = new InspectionStorageUsage(baseline);
+  const policyPath = containedInspectionPath(workerData.root, "sources", source.sourceId, "read-policy.json");
   atomicInspectionJson(policyPath, validateInspectionCapturePolicy(workerData.policy));
   manifest = { formatVersion: INSPECTION_FORMAT_VERSION, sourceId: source.sourceId, datasetId: randomUUID(), producerInstanceId: randomUUID(), createdAt: new Date().toISOString(), status: "open" };
   directory = datasetDirectory(workerData.root, source.sourceId, manifest.datasetId);
-  db = new InspectionDatabase(directory, manifest);
+  db = new InspectionDatabase(directory, manifest, (path, bytes) => usage.physicalFileChanged(path, bytes));
   atomicInspectionJson(join(directory, "manifest.json"), manifest);
+  refreshBudget(); progress();
   telemetry = new InspectionTelemetry(source.sourceId, manifest.datasetId);
-  timer = setInterval(() => {
-    if (failed) return;
-    try { checkStorageBudget(8192); db.updateCoverage({}); cachedSourceBytes += 8192; } catch { failed = true; clearInterval(timer); send({ kind: "failed", code: "inspection_storage_unavailable" }); }
+  heartbeat = setInterval(() => {
+    if (failed || closing) return;
+    try { refreshBudget(); db.updateCoverage({}); refreshBudget(); } catch (error) { fail(error); }
   }, 5000);
-  timer.unref();
+  heartbeat.unref();
+  scheduleReconciliation();
   send({ kind: "ready", source, manifest });
-} catch { send({ kind: "failed", code: "inspection_storage_unavailable" }); port.close(); }
+} catch (error) {
+  fail(error);
+  try { db!.close(); } catch { /* Initialization may have failed before opening SQLite. */ }
+  port.close();
+}
 
 let processing = Promise.resolve();
-port.on("message", (message: RecorderCommand) => {
+if (!failed) port.on("message", (message: RecorderCommand) => {
   processing = processing.then(async () => {
-    if (failed) return;
+    if (failed || closing) return;
     try {
       if (message.kind === "batch") {
+        refreshBudget();
+        let pendingSqlBytes = 0;
         const committedRecords: Parameters<InspectionTelemetry["accept"]>[0][] = [];
         db.writeBatch(() => {
-        for (const offer of message.offers) {
-          const bytes = offer.bytes + offer.contents.reduce((sum, content) => sum + content.descriptor.retainedBytes, 0);
-          checkStorageBudget(bytes + offer.bytes * 3 + 8192);
-          try {
-            const committed = db.write(offer.record, offer.contents);
-            if (!committed.duplicate) {
-              cachedSourceBytes += bytes + offer.bytes * 3 + 8192;
-              retainedBytes += offer.contents.reduce((sum, content) => sum + content.descriptor.retainedBytes, 0);
-              committedRecords.push(committed.record);
+          for (const offer of message.offers) {
+            const contentBytes = offer.contents.reduce((sum, content) => sum + content.descriptor.retainedBytes, 0);
+            usage.check(contentBytes + pendingSqlBytes + offer.bytes * 3 + 8192);
+            try {
+              const committed = db.write(offer.record, offer.contents);
+              if (!committed.duplicate) {
+                pendingSqlBytes += offer.bytes * 3 + 8192;
+                committedRecords.push(committed.record);
+              }
+            } catch (error) {
+              if (error instanceof Error && (error.message === "inspection_record_conflict" || error.message.startsWith("inspection_flow_"))) {
+                writerRejected++;
+                const coverage = db.snapshot();
+                db.updateCoverage({ limitations: [...new Set([...coverage.limitations, error.message === "inspection_record_conflict" ? "conflicting_record_identity" : error.message])] });
+              } else throw error;
             }
-          } catch (error) {
-            if (error instanceof Error && (error.message === "inspection_record_conflict" || error.message.startsWith("inspection_flow_"))) {
-              writerRejected++;
-              const coverage = db.snapshot();
-              db.updateCoverage({ limitations: [...new Set([...coverage.limitations, error.message === "inspection_record_conflict" ? "conflicting_record_identity" : error.message])] });
-            } else throw error;
           }
-        }
-        updateHealth(message.dropped, message.rejected);
+          updateHealth(message.dropped, message.rejected);
         });
+        refreshBudget();
         for (const record of committedRecords) telemetry.accept(record);
         const exported: Parameters<typeof writeTelemetry>[0][] = [];
         await telemetry.flush(record => exported.push(record));
+        if (failed) return;
         db.writeBatch(() => { for (const record of exported) writeTelemetry(record); });
+        refreshBudget();
         send({ kind: "ack", coverage: db.snapshot() });
       } else {
         if (message.close) await telemetry.close(writeTelemetry);
         else await telemetry.flush(writeTelemetry);
+        if (failed) return;
         updateHealth(message.dropped, message.rejected);
         if (message.close) {
-          clearInterval(timer);
+          closing = true; stopMaintenance();
           db.updateCoverage({ status: "closed" });
           atomicInspectionJson(join(directory, "manifest.json"), { ...manifest, status: "closed" });
+          db.checkpoint();
         }
+        refreshBudget();
         send({ kind: "flushed", id: message.id, coverage: db.snapshot() });
-        if (message.close) { db.checkpoint(); db.close(); port.close(); }
+        if (message.close) { db.close(); port.close(); }
       }
-    } catch { failed = true; clearInterval(timer); send({ kind: "failed", code: "inspection_storage_unavailable" }); }
+    } catch (error) { closing = false; fail(error); }
   });
 });
+port.on("close", stopMaintenance);

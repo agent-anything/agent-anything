@@ -65,7 +65,8 @@ export function registerInspectionSource(root: string, application: string, name
   if (existsSync(path)) {
     if (statSync(path).size > 64 * 1024) throw new Error("inspection_source_invalid");
     const existing = JSON.parse(readFileSync(path, "utf8")) as InspectionSource;
-    if (existing.formatVersion !== INSPECTION_FORMAT_VERSION || existing.application !== application || existing.sourceId !== sourceId) throw new Error("inspection_source_invalid");
+    if (existing.formatVersion !== INSPECTION_FORMAT_VERSION) throw new Error("inspection_source_unsupported");
+    if (existing.application !== application || existing.sourceId !== sourceId) throw new Error("inspection_source_invalid");
     return existing;
   }
   atomicInspectionJson(path, source);

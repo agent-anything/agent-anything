@@ -1534,7 +1534,7 @@ checkBuiltSurfaces({
   "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey"],
   "@agent-anything/inspection/content": ["DEFAULT_INSPECTION_CAPTURE_POLICY", "captureClassEnabled", "redactInspectionContent", "validateInspectionCapturePolicy"],
   "@agent-anything/inspection/sources": ["atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "registerInspectionSource", "validateOpaqueId"],
-  "@agent-anything/inspection/recording": ["InspectionRecorder"],
+  "@agent-anything/inspection/recording": ["InspectionRecorder", "InspectionRecorderError"],
   "@agent-anything/inspection/storage": ["InspectionDatabase", "inspectionSourceBytes", "retireInspectionDatasets", "wasInspectionDatasetRetired"],
   "@agent-anything/inspection/telemetry": ["InspectionTelemetry"],
   "@agent-anything/inspection/query": ["InspectionQueryService", "executeInspectionQuery", "readInspectionJson", "validateInspectionQuery"],

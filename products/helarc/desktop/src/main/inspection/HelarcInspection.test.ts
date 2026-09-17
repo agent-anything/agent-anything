@@ -1,9 +1,28 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { InspectionRecorder, InspectionRecorderError } from "@agent-anything/inspection/recording";
 import { InspectionQueryService } from "@agent-anything/inspection/query";
 import { HelarcInspection } from "./HelarcInspection.js";
+
+it("preserves bounded recording failure causes without failing Desktop startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "helarc-inspection-"));
+  const create = vi.spyOn(InspectionRecorder, "create");
+  try {
+    for (const code of ["inspection_initialization_stalled", "inspection_storage_budget_exhausted", "inspection_storage_scan_failed", "inspection_source_unsupported"]) {
+      create.mockRejectedValueOnce(new InspectionRecorderError(code));
+      const source = await HelarcInspection.create(join(root, "settings.json"), join(root, "inspection"));
+      expect(source.snapshot().health).toMatchObject({ available: false, code });
+      expect(source.recorder).toBeNull();
+      await source.close();
+    }
+  } finally {
+    create.mockRestore();
+    if (!relative(tmpdir(), root).startsWith("helarc-inspection-")) throw new Error("Invalid test cleanup target");
+    await rm(root, { recursive: true });
+  }
+});
 
 it("persists independent capture settings and opens a new recording on source restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "helarc-inspection-"));

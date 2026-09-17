@@ -6,8 +6,10 @@ import type { InspectionRecord, InspectionRecordInput, InspectionSubjectRef, Ins
 import { snapshotInspectionJson, validateInspectionInput } from "../records/InspectionValidation.js";
 import type { InspectionContentWrite } from "../storage/index.js";
 import type { InspectionOffer, RecorderCommand, RecorderReply } from "./InspectionRecorderProtocol.js";
+import { waitForInspectionReady } from "./InspectionRecorderStartup.js";
+import { InspectionRecorderError } from "./InspectionRecorderError.js";
 
-export interface InspectionRecorderOptions { readonly root?: string; readonly application: string; readonly name: string; readonly policy?: InspectionCapturePolicy }
+export interface InspectionRecorderOptions { readonly root?: string; readonly application: string; readonly name: string; readonly policy?: InspectionCapturePolicy; readonly signal?: AbortSignal }
 export interface InspectionRecorderHealth { readonly available: boolean; readonly queued: number; readonly dropped: number; readonly rejected: number; readonly code: string | null; readonly coverage: InspectionCoverage | null }
 
 export class InspectionRecorder {
@@ -48,17 +50,13 @@ export class InspectionRecorder {
   }
 
   static async create(options: InspectionRecorderOptions): Promise<InspectionRecorder> {
+    if (options.signal?.aborted) throw new InspectionRecorderError("inspection_start_cancelled");
     const policy = validateInspectionCapturePolicy(options.policy ?? DEFAULT_INSPECTION_CAPTURE_POLICY);
-    const worker = new Worker(new URL("./InspectionRecorderWorker.js", import.meta.url), { workerData: { root: options.root ?? defaultInspectionRoot(), application: options.application, name: options.name, policy } });
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { void worker.terminate(); reject(new Error("inspection_start_timeout")); }, 5000);
-      worker.once("error", () => { clearTimeout(timeout); reject(new Error("inspection_worker_failed")); });
-      worker.once("message", (reply: RecorderReply) => {
-        clearTimeout(timeout);
-        if (reply.kind !== "ready") { void worker.terminate(); reject(new Error("inspection_storage_unavailable")); return; }
-        resolve(new InspectionRecorder(worker, reply, policy, options.root ?? defaultInspectionRoot()));
-      });
-    });
+    let worker: Worker;
+    try { worker = new Worker(new URL("./InspectionRecorderWorker.js", import.meta.url), { workerData: { root: options.root ?? defaultInspectionRoot(), application: options.application, name: options.name, policy } }); }
+    catch { throw new InspectionRecorderError("inspection_worker_failed"); }
+    const ready = await waitForInspectionReady(worker, options.signal);
+    return new InspectionRecorder(worker, ready, policy, options.root ?? defaultInspectionRoot());
   }
 
   ref(owner: string, kind: InspectionSubjectRef["kind"], id: string, runId: string | null = null, revision: string | null = null): InspectionSubjectRef {

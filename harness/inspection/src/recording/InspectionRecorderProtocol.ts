@@ -7,6 +7,7 @@ export type RecorderCommand =
   | { readonly kind: "batch"; readonly offers: readonly InspectionOffer[]; readonly dropped: number; readonly rejected: number }
   | { readonly kind: "flush"; readonly id: number; readonly close: boolean; readonly dropped: number; readonly rejected: number };
 export type RecorderReply =
+  | { readonly kind: "initializing"; readonly completed: number }
   | { readonly kind: "ready"; readonly source: InspectionSource; readonly manifest: InspectionDatasetManifest }
   | { readonly kind: "ack"; readonly coverage: InspectionCoverage }
   | { readonly kind: "flushed"; readonly id: number; readonly coverage: InspectionCoverage }

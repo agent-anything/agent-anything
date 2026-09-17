@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, openSync, writeFileSync, fsyncSync, fstatSync, closeSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { inspectionSubjectKey, INSPECTION_FORMAT_VERSION, type InspectionRecord, type InspectionCoverage, type InspectionContentDescriptor } from "../records/index.js";
 import { containedInspectionPath, validateOpaqueId, type InspectionDatasetManifest } from "../sources/index.js";
@@ -44,7 +44,7 @@ export class InspectionDatabase {
   private readonly db: Database.Database;
   readonly directory: string;
 
-  constructor(directory: string, manifest?: InspectionDatasetManifest) {
+  constructor(directory: string, manifest?: InspectionDatasetManifest, private readonly physicalFileChanged?: (path: string, bytes: number) => void) {
     this.directory = directory;
     if (manifest) {
       mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -106,8 +106,14 @@ export class InspectionDatabase {
       const staging = containedInspectionPath(this.directory, "staging", content.descriptor.id);
       const target = containedInspectionPath(this.directory, "content", content.descriptor.id);
       const fd = openSync(staging, "wx", 0o600);
-      try { writeFileSync(fd, content.text, "utf8"); fsyncSync(fd); } finally { closeSync(fd); }
+      try { writeFileSync(fd, content.text, "utf8"); fsyncSync(fd); }
+      finally {
+        try { this.physicalFileChanged?.(join("staging", content.descriptor.id), fstatSync(fd).size); }
+        finally { closeSync(fd); }
+      }
       renameSync(staging, target);
+      this.physicalFileChanged?.(join("staging", content.descriptor.id), 0);
+      this.physicalFileChanged?.(join("content", content.descriptor.id), Buffer.byteLength(content.text));
     }
     return this.db.transaction(() => {
       const previous = this.snapshot();

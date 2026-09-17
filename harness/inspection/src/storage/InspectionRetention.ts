@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { scanInspectionSource } from "./InspectionStorageScan.js";
 import { atomicInspectionJson, containedInspectionPath, datasetDirectory, validateOpaqueId, type InspectionDatasetManifest } from "../sources/index.js";
 import { acquireInspectionRetirement } from "./InspectionDatasetAccess.js";
 import { INSPECTION_FORMAT_VERSION } from "../records/index.js";
@@ -55,20 +56,5 @@ export function wasInspectionDatasetRetired(root: string, sourceId: string, data
 }
 
 export function inspectionSourceBytes(root: string, sourceId: string): number {
-  validateOpaqueId(sourceId);
-  const pending = [containedInspectionPath(root, "sources", sourceId)];
-  let bytes = 0;
-  let visited = 0;
-  while (pending.length) {
-    const path = pending.pop()!;
-    if (++visited > 100000) return Number.POSITIVE_INFINITY;
-    const stat = lstatSync(path);
-    if (stat.isSymbolicLink()) throw new Error("inspection_path_invalid");
-    if (stat.isDirectory()) {
-      const entries = readdirSync(path);
-      if (entries.length + visited > 100000) return Number.POSITIVE_INFINITY;
-      for (const entry of entries) pending.push(containedInspectionPath(path, entry));
-    } else bytes += stat.size;
-  }
-  return bytes;
+  return scanInspectionSource(root, sourceId).bytes;
 }

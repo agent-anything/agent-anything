@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, relative } from "node:path";
 import { InspectionRecorder } from "../../dist/recording/InspectionRecorder.js";
@@ -23,6 +23,32 @@ async function setup(rich = false) {
   return { directory, recorder, query, subject, selection: { sourceId: subject.sourceId, datasetId: subject.datasetId } };
 }
 describe("Inspection recording", () => {
+  it("reports unsupported Source format without migrating or replacing retained metadata", async () => {
+    const { directory, recorder, selection } = await setup();
+    await recorder.flush(true);
+    const path = join(directory, "sources", selection.sourceId, "source.json");
+    const metadata = JSON.parse(readFileSync(path, "utf8"));
+    const text = JSON.stringify({ ...metadata, formatVersion: 0 });
+    writeFileSync(path, text);
+    await expect(InspectionRecorder.create({ root: directory, application: "test", name: "Test" })).rejects.toMatchObject({ code: "inspection_source_unsupported" });
+    expect(readFileSync(path, "utf8")).toBe(text);
+  });
+
+  it("writes and heartbeats without traversing historical Source entries", async () => {
+    const { directory, recorder, query, selection, subject } = await setup();
+    const outside = join(directory, "outside"); mkdirSync(outside);
+    const link = join(directory, "sources", selection.sourceId, "unrelated-history-link");
+    symlinkSync(outside, link, "junction");
+    try {
+      await new Promise(resolve => setTimeout(resolve, 5200));
+      expect(recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "after-heartbeat", sequence: null, code: null } })).toBe(true);
+      await recorder.flush();
+      expect(recorder.health()).toMatchObject({ available: true, queued: 0, dropped: 0, rejected: 0, code: null });
+      const snapshot = await query.query({ kind: "get_snapshot", ...selection });
+      expect(snapshot.coverage?.captured).toBeGreaterThan(0);
+    } finally { rmdirSync(link); }
+  }, 15000);
+
   it.each([0, 1])("records Model Turn provenance with %i calls and keeps logical Retry Attempts distinct from HTTP Attempts", async (callCount) => {
     const {recorder, query, selection} = await setup(true);
     const execution = new RunExecutionInspectionAdapter(recorder);

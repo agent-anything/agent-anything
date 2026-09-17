@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { InspectionRecorder } from "@agent-anything/inspection/recording";
+import { InspectionRecorder, InspectionRecorderError } from "@agent-anything/inspection/recording";
 import { RunInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectionAdapter, DefinitionInspectionAdapter, RunExecutionInspectionAdapter, RuntimeEventInspectionAdapter, ActionExecutionInspectionAdapter, RunTraceInspectionAdapter } from "@agent-anything/inspection/adapters";
 import { snapshotHelarcInspectionSettings, type HelarcInspectionSettings, type HelarcInspectionSettingsSnapshot } from "../../shared/HelarcInspectionSettings.js";
 import { SerializedAtomicFile } from "../persistence/SerializedAtomicFile.js";
@@ -43,7 +43,7 @@ export class HelarcInspection {
       }
       const recorder = await InspectionRecorder.create({ root, application: "helarc-desktop", name: "Helarc Desktop", policy: { revision: randomUUID(), ...settings } });
       return new HelarcInspection(file, settings, recorder, null);
-    } catch { return new HelarcInspection(file, settings, null, "inspection_unavailable"); }
+    } catch (error) { return new HelarcInspection(file, settings, null, error instanceof InspectionRecorderError ? error.code : "inspection_unavailable"); }
   }
   snapshot(): HelarcInspectionSettingsSnapshot {
     const health = this.recorder?.health();
