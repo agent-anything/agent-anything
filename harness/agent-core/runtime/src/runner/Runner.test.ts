@@ -406,6 +406,8 @@ describe("Runner semantic integration", () => {
       },
     });
     expect(controller.calls).toHaveLength(0);
+    expect(recordedFlows.some(fact => fact.kind === "material" && fact.name === "Controller input")).toBe(false);
+    expect(recordedFlows.some(fact => fact.kind === "step_entered" && fact.definition.id === "controller-execution" && fact.stepId === "controller")).toBe(false);
     const projection = events.find(
       (event) => event.name === "context.projection.completed",
     );
@@ -496,6 +498,51 @@ describe("Runner semantic integration", () => {
     const coreSteps = captured.flowFacts.filter(fact => fact.kind === "step_entered" && fact.definition.id === "run-execution");
     expect(coreSteps.filter(fact => "stepId" in fact && fact.stepId === "controller")).toHaveLength(2);
     expect(coreSteps.filter(fact => "stepId" in fact && fact.stepId === "terminal")).toHaveLength(1);
+    const materials = captured.flowFacts.filter(fact => fact.kind === "material");
+    const controllerInputs = materials.filter(fact => fact.name === "Controller input");
+    expect(controllerInputs).toHaveLength(captured.calls.length);
+    for (const [index, material] of controllerInputs.entries()) {
+      const actual = captured.calls[index]!;
+      const {output: _validator, ...agentData} = actual.agent;
+      expect(material.value).toEqual({
+        input: JSON.parse(JSON.stringify({...actual, agent: agentData})),
+        excludedExecutableFields: ["input.agent.output.validate"],
+      });
+      expect(captured.flowFacts.find(fact => fact.kind === "step_exited" && fact.invocationId === material.invocationId && fact.stepId === "context"))
+        .toMatchObject({outputs: expect.arrayContaining([material.subject])});
+      expect(captured.flowFacts.find(fact => fact.kind === "step_entered" && fact.invocationId === material.invocationId && fact.stepId === "controller"))
+        .toMatchObject({inputs: expect.arrayContaining([material.subject])});
+    }
+    expect(controllerInputs[0]!.subject.id).not.toBe(controllerInputs[1]!.subject.id);
+    for (const entry of coreSteps.filter(fact => fact.kind === "step_entered" && fact.stepId === "controller")) {
+      if (entry.kind !== "step_entered") continue;
+      expect(entry.inputs[0]).toMatchObject({owner: "runtime", id: `${captured.result.runId}:input`, revision: "1"});
+      expect(entry.inputs.slice(1).map(ref => materials.find(fact => fact.subject.id === ref.id)?.name))
+        .toEqual(["Decision preparation state", "Decision preparation settings"]);
+    }
+    const states = materials.filter(fact => fact.name === "Decision preparation state");
+    expect(states).toHaveLength(2);
+    expect(states[0]!.value).toMatchObject({counters: {controllerTurns: 0}});
+    expect(states[1]!.value).toMatchObject({
+      counters: {controllerTurns: 1},
+      history: {items: expect.arrayContaining([expect.objectContaining({kind: "controller_turn"}), expect.objectContaining({kind: "observation"})])},
+    });
+    for (const material of materials.filter(fact => fact.name === "Decision preparation settings")) {
+      expect(material.value).not.toHaveProperty("agent.output");
+      expect(material.value).not.toHaveProperty("permissions.persistentPolicyAmendments");
+      expect(material.value).not.toHaveProperty("permissions.reviewer.reviewer");
+      expect(material.value).not.toHaveProperty("permissions.sessionAuthority.port");
+    }
+    const controls = materials.filter(fact => fact.name === "Controller invocation controls");
+    expect(controls).toHaveLength(2);
+    for (const control of controls) {
+      expect(control.value).toMatchObject({
+        cancellationRequest: null,
+        retry: {providerRequest: disabledRetryPolicy(), structuredOutput: disabledRetryPolicy(), deadlineAt: expect.any(String)},
+      });
+      expect(control.value).not.toHaveProperty("retry.waitControl");
+      expect(control.value).not.toHaveProperty("retry.events");
+    }
     for (const entry of coreSteps) {
       if (entry.kind !== "step_entered") continue;
       const declared = definitions.get("run-execution")!.steps.find(step => step.id === entry.stepId)!.checks;
@@ -511,6 +558,26 @@ describe("Runner semantic integration", () => {
       configuration: {id: `${captured.result.runId}:configuration`, revision: "1"},
       basis: {controllerTurns: 0, runActions: 0},
     });
+  });
+
+  it("records preparation data without inspecting executable permission services", async () => {
+    const operations = createOperationFixture([]);
+    const config = createRunConfig(operations);
+    const service = {commit: vi.fn(), toJSON: vi.fn(() => {throw new Error("Executable service must not be serialized");})};
+    const result = await createRunner(new ScriptedController([complete("Done")]), operations).run(
+      createAgent(), createRunInput(), {
+        ...config,
+        permissions: {...config.permissions, persistentPolicyAmendments: service},
+      },
+    );
+    expect(result.status).toBe("completed");
+    expect(service.toJSON).not.toHaveBeenCalled();
+    const settings = recordedFlows.find(fact => fact.kind === "material" && fact.name === "Decision preparation settings");
+    expect(settings).toMatchObject({value: {
+      permissions: {approvalPolicy: config.permissions.approvalPolicy},
+      excludedExecutableFields: expect.arrayContaining(["permissions.persistentPolicyAmendments"]),
+    }});
+    expect(recordedFlows.some(fact => fact.kind === "material" && fact.name === "Controller input")).toBe(true);
   });
 
   it("executes one exposed Tool through its exact internal Operation binding", async () => {
@@ -2440,6 +2507,11 @@ describe("Runner semantic integration", () => {
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
+    const capturedInputs = recordedFlows.filter(fact => fact.kind === "material" && fact.name === "Controller input");
+    expect(capturedInputs).toHaveLength(2);
+    expect(capturedInputs[0]!.value).toMatchObject({input: {plan: null}});
+    expect(capturedInputs[1]!.value).toMatchObject({input: {plan: controller.calls[1]!.plan, interaction: controller.calls[1]!.interaction}});
+    expect(capturedInputs[1]!.value).toMatchObject({input: {plan: {status: "active"}}});
     expect(result.items.some(({ payload }) =>
       payload.kind === "state_transition" && payload.transition === "plan"
     )).toBe(true);

@@ -74,10 +74,10 @@ const delegatedScope = source(
 );
 
 export const HELARC_DEFAULT_AGENT_INSTRUCTIONS = Object.freeze(
-  productionSources.map(({ section: id, content }) => Object.freeze({ id, enabled: true, content })),
+  productionSources.map(({ section: id, content }) => Object.freeze({ id, enabled: false, content })),
 );
 export const HELARC_DEFAULT_DELEGATED_INSTRUCTIONS = Object.freeze([
-  Object.freeze({ id: delegatedScope.section, enabled: true, content: delegatedScope.content }),
+  Object.freeze({ id: delegatedScope.section, enabled: false, content: delegatedScope.content }),
 ]);
 
 const minimalRelease = createHelarcInstructionRelease({

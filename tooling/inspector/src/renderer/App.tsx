@@ -7,11 +7,12 @@ import { areas, areaViews, useInspectionSnapshot } from "./query-client/useInspe
 import { RecordDetails, payloadSummary } from "./records/RecordDetails.js";
 import { ContentDrawer } from "./content/ContentDrawer.js";
 import type { ContentTarget } from "./content/ContentLocation.js";
-import { RecordedFactDrawer } from "./records/RecordedFactDrawer.js";
+import { InspectionDetailDrawer } from "./records/InspectionDetailDrawer.js";
 import { RunTree } from "./runs/RunTree.js";
 import { RunOverview } from "./runs/RunOverview.js";
 import { ObjectSummaries } from "./records/ObjectSummaries.js";
 import { readContentTarget } from "./navigation/InspectionLocation.js";
+import { inspectionObjectHistoryLocation, readInspectionDetailTarget, type InspectionDetailTarget } from "./navigation/InspectionDetailTarget.js";
 
 import { CanvasFrame } from "./canvas/CanvasFrame.js";
 const RelationGraph = lazy(async () => ({ default: (await import("./graph/RelationGraph.js")).RelationGraph }));
@@ -29,10 +30,13 @@ export function App() {
   const [selectedLink, setSelectedLink] = useState<InspectionLink | null>(null);
   const content = readContentTarget(params.get("content"));
   const setContent = (value:ContentTarget|null) => navigate({content:value ? JSON.stringify(value):null});
-  const factId = params.get("fact");
-  const setFactId = (id:string|null) => navigate({fact:id});
+  const detailTarget = readInspectionDetailTarget(params.get("detail"));
+  const setDetailTarget = (target: InspectionDetailTarget | null) => navigate({ detail: target ? JSON.stringify(target) : null });
+  const setFactId = (recordId: string) => setDetailTarget({ kind: "record", recordId });
+  const openSubject = (subject: NonNullable<typeof selected>) => setDetailTarget({ kind: "object", subject });
+  const openRelation = (link: InspectionLink) => setDetailTarget({ kind: "relation", recordId: link.establishedBy, linkId: link.id });
   const setContentId = (id: string | null) => setContent(id ? {id} : null);
-  const openHistory = (subject: NonNullable<typeof selected>) => {navigate({view:"Records",subject:JSON.stringify(subject),record:null,fact:null,content:null});};
+  const openHistory = (subject: NonNullable<typeof selected>) => { navigate(inspectionObjectHistoryLocation(subject)); };
   const [comparison, setComparison] = useState<{ record: InspectionRecord; selection: InspectionSelection } | null>(null);
   const selectionKey = selected ? inspectionSubjectKey(selected) : "";
   useEffect(() => { setSelectedLink(null); }, [sourceId, datasetId, bundle?.snapshot.selection?.watermark]);
@@ -115,10 +119,10 @@ export function App() {
         {coverage?.limitations.length ? <div className="coverage-note">{coverage.limitations.join(" / ")}</div> : null}
       </section>
       {sideDetail && <aside className="detail-pane"><h2>{selectedLink ? "Recorded relation" : "Object detail"}</h2>
-        <RecordDetails record={detail} link={selectedLink} onSubject={choose} onRecord={setFactId} onContent={setContentId} onLocation={setContent} />
+        <RecordDetails record={detail} link={selectedLink} onSubject={openSubject} onRecord={setFactId} onContent={setContentId} onLocation={setContent} onRelation={openRelation} />
       </aside>}
     </main>}
-    <RecordedFactDrawer recordId={factId} scope={bundle?.snapshot.selection ?? null} onClose={()=>setFactId(null)} onContent={setContentId} onRecord={setFactId} onLocation={setContent} onHistory={openHistory}/>
+    <InspectionDetailDrawer target={detailTarget} scope={bundle?.snapshot.selection ?? null} onClose={() => setDetailTarget(null)} onTarget={setDetailTarget} onContent={setContent} onHistory={openHistory} />
     <ContentDrawer id={content?.id ?? null} location={content} scope={bundle?.snapshot.selection ?? null} onClose={() => setContent(null)} />
   </div>;
 }

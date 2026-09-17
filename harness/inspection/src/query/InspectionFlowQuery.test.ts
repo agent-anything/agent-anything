@@ -6,6 +6,7 @@ import { createExecutionFlowDefinition, ExecutionFlowPath, type ExecutionFlowObs
 import { InspectionRecorder } from "../../dist/recording/index.js";
 import { InspectionQueryService } from "../../dist/query/index.js";
 import { ExecutionFlowInspectionAdapter } from "../../dist/adapters/index.js";
+import { DEFAULT_INSPECTION_CAPTURE_POLICY } from "../../dist/content/index.js";
 
 const dispose: (() => Promise<void>)[]=[];
 afterEach(async () => {for (const close of dispose.splice(0).reverse()) await close();});
@@ -23,6 +24,46 @@ async function setup() {
 }
 
 describe("Recorded execution flow queries",()=>{
+  it("keeps per-invocation prepared inputs readable through the shared output/input reference", async () => {
+    const {adapter, recorder, query, snapshot} = await setup();
+    recorder.setPolicy({...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "capture-inputs", agent: true});
+    const occurrences = [];
+    for (const iteration of [1, 2]) {
+      const flow = new ExecutionFlowPath(definition, {observer: adapter}, "run");
+      const preparation = flow.advance("work");
+      preparation.check("ready", "passed");
+      const value = {input: {iteration, task: {input: "Inspect the workspace"}, plan: iteration === 1 ? null : {version: 1}, apiKey: "private"}};
+      const input = flow.material("Controller input", "prepared", value);
+      preparation.output(input);
+      const controls = flow.material("Controller invocation controls", "before_invocation", {cancellationRequest: null});
+      const invocation = flow.advance("finish", {}, [input, controls]);
+      flow.close("returned");
+      value.input.iteration = 99;
+      occurrences.push({flow, preparation, invocation, input, iteration});
+    }
+    const scope = await snapshot();
+    const contentIds = new Set<string>();
+    for (const {flow, preparation, invocation, input, iteration} of occurrences) {
+      const selection = {...scope, kind: "get_flow_occurrence" as const, runId: "run", invocationId: flow.ref.invocationId};
+      const outputDetail = await query.query({...selection, occurrenceId: preparation.ref.stepExecutionId!});
+      const inputDetail = await query.query({...selection, occurrenceId: invocation.ref.stepExecutionId!});
+      const outputRef = outputDetail.flow!.occurrence!.references.find(ref => ref.role === "output")!;
+      const inputRef = inputDetail.flow!.occurrence!.references.find(ref => ref.role === "input" && ref.reference.id === input.id)!;
+      expect(inputRef).toMatchObject({availability: "present", contents: expect.any(Array)});
+      expect(inputRef.reference).toEqual(outputRef.reference);
+      expect(inputRef.recordId).toBe(outputRef.recordId);
+      expect(inputRef.contents).toEqual(outputRef.contents);
+      const records = await query.query({...scope, kind: "get_record", recordId: inputRef.recordId!});
+      const descriptor = records.records[0]!.contents[0]!;
+      expect(descriptor).toMatchObject({name: "Controller input", class: "agent", stage: "prepared", availability: "present", redacted: true});
+      contentIds.add(descriptor.id);
+      const content = await query.query({...scope, kind: "get_content", contentId: descriptor.id});
+      expect(JSON.parse(content.content!.text).input).toMatchObject({iteration, plan: iteration === 1 ? null : {version: 1}});
+      expect(content.content!.text).not.toContain('"private"');
+    }
+    expect(contentIds.size).toBe(2);
+    expect(recorder.health().rejected).toBe(0);
+  });
   it("persists owner-local material under content policy with exact input/output references", async () => {
     const {adapter, query, snapshot} = await setup();
     const flow = new ExecutionFlowPath(definition, {observer: adapter}, "run");

@@ -39,7 +39,8 @@ describe("Helarc workbench shell", () => {
 
     expect(html).toContain('<option value="ollama" selected="">Ollama</option>');
     expect(html).toContain('value="Ollama Provider"');
-    expect(html).toContain('value="http://localhost:11434"');
+    expect(html).toContain('value="http://localhost:11435"');
+    expect(html).toContain('value="163840"');
     expect(html).toContain('value="gemma4:e4b"');
     expect(html).toContain('value="300000000"');
     expect(html).toContain(

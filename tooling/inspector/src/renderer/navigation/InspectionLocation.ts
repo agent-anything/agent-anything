@@ -1,6 +1,6 @@
 import type { ContentTarget } from "../content/ContentLocation.js";
 
-const focusKeys = ["fact", "content", "flowRun", "flowInvocation", "flowOccurrence", "flowStep"];
+const focusKeys = ["detail", "content", "flowRun", "flowInvocation", "flowOccurrence", "flowStep"];
 export function inspectionReadLocation(params:URLSearchParams):string {
   const read=new URLSearchParams(params);
   for(const key of focusKeys) read.delete(key);

@@ -65,6 +65,12 @@ describe("Instruction settings editor", () => {
     expect(instructionPreview(settings, "root")).toBe("");
     expect(instructionPreview(settings, "child")).toBe("");
     expect(instructionPreview(settings, "stop")).toBe("");
+    const html = renderToStaticMarkup(<InstructionSettingsEditor snapshot={{settings, defaults}}
+      onSave={async value => ({settings: value, defaults})} />);
+    expect(html).not.toContain('checked=""');
+    expect(html.match(/>Disabled</g)).toHaveLength(4);
+    expect(html).toContain("Root role.");
+    expect(html).toContain("Use native calls.");
     settings.agent[0] = { ...settings.agent[0]!, enabled: true, content: "My role." };
     settings.protocol[0] = { ...settings.protocol[0]!, enabled: true, content: "My protocol." };
     expect(instructionPreview(settings, "root")).toBe("My role.\n\nMy protocol.");

@@ -74,7 +74,7 @@ Current Helarc capabilities include:
 - Durable Thread, Conversation, Message, Run, and Artifact history
 - Safe trace projection for renderer-visible Controller behavior
 - Protocol fixtures for validating Controller action behavior
-- Editable Agent, Protocol and Stop Instructions with independent enable flags
+- Editable Agent, Child, Protocol and Stop Instructions, all disabled by default
 - Optional diagnostic capture settings for the standalone Inspector
 
 ## Tech Stack
@@ -272,9 +272,12 @@ Helarc desktop stores provider profiles locally and supports these provider kind
 - `openai-compatible`: base URL is the API base path, such as
   `https://api.openai.com/v1` or a compatible provider endpoint. The adapter calls
   `/chat/completions`.
-- `ollama`: base URL is the Ollama server origin, such as
-  `http://localhost:11434`. Native Tool turns use `/api/chat`; structured
+- `ollama`: base URL is the Ollama server origin, defaulting in Helarc to
+  `http://localhost:11435`. Native Tool turns use `/api/chat`; structured
   generation uses `/api/generate`.
+
+The default Ollama context window is 163840 tokens, with a maximum output of
+2048 tokens. Saved profiles and explicit environment settings override defaults.
 
 HTTP provider URLs are accepted only for loopback addresses.
 Provider timeout values use positive whole-second increments expressed in milliseconds.

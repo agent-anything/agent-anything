@@ -104,7 +104,7 @@ export function useInspectionSnapshot() {
     if (values.area && values.area !== area) {
       next.delete("view"); next.delete("record");
       if (values.area === "Definitions") next.delete("subject");
-      next.delete("fact"); next.delete("content");
+      next.delete("detail"); next.delete("content");
     }
     for (const [name, value] of Object.entries(values)) { if (value === null) next.delete(name); else next.set(name, value); }
     setParams(next);
@@ -113,7 +113,7 @@ export function useInspectionSnapshot() {
     navigate({subject: JSON.stringify(subject), record: null});
   }
   function selectRun(subject: InspectionSubjectRef) {
-    navigate({run: subject.id, subject: JSON.stringify(subject), record: null, fact:null, content:null, flowRun:null, flowInvocation:null, flowOccurrence:null, flowStep:null, dataFocus:null});
+    navigate({run: subject.id, subject: JSON.stringify(subject), record: null, detail:null, content:null, flowRun:null, flowInvocation:null, flowOccurrence:null, flowStep:null, dataFocus:null});
   }
   function showRecord(record: InspectionRecord) { navigate({ subject: JSON.stringify(record.subject), record: record.id }); }
   async function findRecord(recordId: string) {

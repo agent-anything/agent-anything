@@ -21,7 +21,7 @@ const routes: readonly (readonly [StepId, StepId])[] = [
   ["finalizers","terminal"],
 ];
 export const RUN_EXECUTION_FLOW = createExecutionFlowDefinition({
-  owner: "agent-runtime", id: "run-execution", revision: "2", label: "Harness Core Loop",
+  owner: "agent-runtime", id: "run-execution", revision: "3", label: "Harness Core Loop",
   description: "Runner-owned progression and mechanical settlement. Normal completion does not assert task success.",
   steps, transitions: routes.map(([from,to]) => ({id: `${from}:${to}`, from, to, label: `${from} to ${to}`})),
   entryStepIds: ["initialize"], exitStepIds: ["terminal"],

@@ -53,6 +53,22 @@ Graphs support pan, zoom, drag, folding and explicit auto layout. Cross-group
 edges retain their actual endpoints. Time order does not become dependency;
 unrecorded transformations or consumers remain unknown.
 
+In Execution Flow, `Request typed decision` links Run input, decision preparation
+state and settings. Open its `Controller and Context` subflow to follow
+`Prepare Controller input` into `Invoke Controller`: both refer to the same
+captured Controller input. Task, history, Tools, Plan, Permission and projected
+Context are visible together; invocation controls are separate. These are owner
+inputs, not the Provider request itself. Executable dependencies are explicitly
+excluded, and missing capture is never reconstructed from later state.
+
+Record details list the relations asserted by that record. Open relation detail
+to inspect and follow Source and Target objects. Related objects open their paged facts and named content in
+contextual detail without changing the current Run, selected record or watermark.
+Inspecting a relation shows its condition, operation, establishing record and
+exact content locations. Missing targets remain explicitly not observed. Object
+history is a separate command; following a reference never substitutes a newer
+definition revision or latest payload for an exact historical target.
+
 Views are bounded: graph neighborhoods use at most 300 nodes/1,000 edges, layout
 has a two-second budget, and timelines use at most 100 lanes/2,000 intervals.
 Lists expose seek pages; timeline pages report incomplete interval coverage.

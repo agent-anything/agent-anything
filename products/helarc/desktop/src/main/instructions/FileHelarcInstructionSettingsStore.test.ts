@@ -19,10 +19,12 @@ describe("Instruction settings storage", () => {
     const store = new FileHelarcInstructionSettingsStore(path);
     const defaults = createDefaultHelarcInstructionSettings();
     expect(await store.load()).toEqual(defaults);
+    expect(Object.values(defaults).flat().every(section => !section.enabled)).toBe(true);
     const settings = {
       ...defaults,
       agent: defaults.agent.map((section) => ({ ...section, enabled: false, content: "Saved draft." })),
       stop: defaults.stop.map((section) => ({ ...section, enabled: false, content: "Saved Stop text." })),
+      protocol: defaults.protocol.map((section) => ({ ...section, enabled: true })),
     };
     await store.save(settings);
     expect(await new FileHelarcInstructionSettingsStore(path).load()).toEqual(settings);
@@ -48,7 +50,7 @@ describe("Instruction settings storage", () => {
     const defaults = createDefaultHelarcInstructionSettings();
     await store.save(defaults);
     const failing = new FileHelarcInstructionSettingsStore(path, { operations: { replace: async () => { throw new Error("disk failure"); } } });
-    await expect(failing.save({ ...defaults, protocol: defaults.protocol.map((entry) => ({ ...entry, enabled: false })) })).rejects.toThrow("disk failure");
+    await expect(failing.save({ ...defaults, protocol: defaults.protocol.map((entry) => ({ ...entry, enabled: true })) })).rejects.toThrow("disk failure");
     expect(await store.load()).toEqual(defaults);
   });
 });

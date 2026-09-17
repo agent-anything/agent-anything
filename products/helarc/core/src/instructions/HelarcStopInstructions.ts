@@ -3,7 +3,7 @@ import type { HelarcInstructionSectionSetting } from "./HelarcProtocolInstructio
 export const HELARC_DEFAULT_STOP_INSTRUCTIONS: readonly HelarcInstructionSectionSetting[] = Object.freeze([
   Object.freeze({
     id: "stop_instructions",
-    enabled: true,
+    enabled: false,
     content: [
       "Evaluate whether the proposed completion and settled trajectory fulfill the original task objective.",
       "Judge the original objective, not a reduced or substituted objective.",

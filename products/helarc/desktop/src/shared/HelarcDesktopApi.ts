@@ -61,7 +61,7 @@ export type HelarcModelUsePolicy =
 export const HELARC_DEFAULT_PROVIDER_SETTINGS = Object.freeze({
   providerKind: "ollama" as const satisfies HelarcProviderKind,
   displayName: "Ollama Provider",
-  baseUrl: "http://localhost:11434",
+  baseUrl: "http://localhost:11435",
   model: "gemma4:e4b",
   timeoutMs: 300_000_000,
   qualificationPolicy: "allow_experimental" as const satisfies HelarcModelUsePolicy,
@@ -75,7 +75,7 @@ export interface HelarcOllamaRuntimeProfileSnapshot {
 export const HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE: Readonly<
   HelarcOllamaRuntimeProfileSnapshot
 > = Object.freeze({
-  contextWindowTokens: 16_384,
+  contextWindowTokens: 163_840,
   maximumOutputTokens: 2_048,
 });
 

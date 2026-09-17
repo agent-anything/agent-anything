@@ -266,7 +266,7 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-stop-instructions-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);
     const defaults = createDefaultHelarcInstructionSettings();
-    const instructionSettings = { ...defaults, stop: [{ ...defaults.stop[0]!, content: "Check only the supplied completion evidence." }] };
+    const instructionSettings = { ...defaults, stop: [{ ...defaults.stop[0]!, enabled: true, content: "Check only the supplied completion evidence." }] };
     await executeTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings });
     expect(provider.stopRequests).toHaveLength(1);
     expect(provider.stopRequests[0]?.instructions.content).toEqual([
@@ -280,6 +280,7 @@ describe("Helarc Host Run composition", () => {
     const prepared = await prepareTestHostRun({
       ...createTask(workspaceRoot),
       provider,
+      instructionSettings: createDefaultHelarcInstructionSettings(),
     });
 
     expect(provider.requests).toHaveLength(0);
@@ -290,6 +291,8 @@ describe("Helarc Host Run composition", () => {
       product: { status: "completed" },
     });
     expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.instructions.content).toEqual([]);
+    expect(provider.stopRequests).toHaveLength(0);
   });
 
   it("keeps the complete Run deadline separate from one Provider request window", async () => {

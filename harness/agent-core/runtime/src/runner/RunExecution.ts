@@ -4,7 +4,7 @@ import { RunExecutionFlow } from "./RunExecutionFlow.js";
 import { RUN_CONTROL_EXECUTION_FLOW, RUN_SUSPENSION_WAIT_FLOW } from "./RunControlExecutionFlow.js";
 import { DESCENDANT_TRANSFER_EXECUTION_FLOW } from "./DescendantTransferExecutionFlow.js";
 import { createExecutionFlowDefinition, ExecutionFlowInvocation, ExecutionFlowPath, type ExecutionFlowContext, type ExecutionFlowOccurrenceRef, type ExecutionFlowStep } from "@agent-anything/observability/execution-flow";
-import { CONTROLLER_EXECUTION_FLOW } from "./ControllerExecutionFlow.js";
+import { CONTROLLER_EXECUTION_FLOW, recordControllerInput, recordControllerPreparation } from "./ControllerExecutionFlow.js";
 import { RUN_CALL_EXECUTION_FLOW, OPERATION_EXECUTION_FLOW } from "./RunCallExecutionFlow.js";
 import { snapshotRunSuspendRequestInput, type RunSuspendRequestInput, type RunSuspendReceipt } from "../run/RunSuspension.js";
 import { snapshotAgent, toAgentRevisionRef } from "@agent-anything/agent-core/agent";
@@ -1173,7 +1173,12 @@ export class RunExecution<TOutput> {
         }, configurationRef);
         if (numericLimit !== null) return await this.settleLimitViolation(numericLimit);
 
-        this.flow.enter("controller", {}, [{owner:"context",kind:"context",id:this.writer.getSnapshot().context.ref.id,revision:String(this.writer.getSnapshot().context.ref.version)}]);
+        const preparationInputs = this.flow.invocation.context.observer ? recordControllerPreparation(this.flow.invocation, {
+          agent: this.activeAgent, instructionBinding: this.activeInstructionBinding,
+          config: this.config, state: this.writer.getSnapshot(),
+          modelInteractionSeed: this.modelInteractionSeed, descendants: this.projectDescendantTargets(),
+        }) : [];
+        this.flow.enter("controller", {}, preparationInputs);
         const decision = await this.nextDecision();
         if (decision === null) continue;
         const decisionRef = {owner:"runtime",kind:"contribution",id:`${decision.turn.id}:decision`,revision:String(decision.basisRevision)};
@@ -1731,7 +1736,10 @@ export class RunExecution<TOutput> {
     let prepared: PreparedControllerOperation<TOutput>;
     const exposureRef = {owner: "runtime", kind: "turn", id: turn.id, revision: null};
     exposureStep.output(exposureRef);
-    const contextStep = flow.advance("context", {}, [exposureRef]);
+    const contextStep = flow.advance("context", {}, [exposureRef,
+      {owner:"context",kind:"context",id:state.context.ref.id,revision:String(state.context.ref.version)},
+      {owner:"runtime",kind:"contribution",id:`${this.runId}:input`,revision:"1"},
+    ]);
     try {
       prepared = prepareControllerOperation({
         agent: this.activeAgent,
@@ -1768,7 +1776,14 @@ export class RunExecution<TOutput> {
       throw error;
     }
     this.decisionBasis.capture(turn.id, state.revision);
-    flow.advance("controller", {turnId: turn.id}, [{owner: "runtime", kind: "turn", id: turn.id, revision: null}, {owner:"context",kind:"contribution",id:prepared.manifest.projectionId,revision:String(prepared.manifest.activeContext.version)}]);
+    const controllerInputRef = recordControllerInput(flow, prepared.input);
+    contextStep.output(controllerInputRef);
+    const controlsRef = flow.material("Controller invocation controls", "before_invocation", {
+      cancellationRequest: this.config.cancellation.context.request,
+      retry: {providerRequest: this.config.retry.providerRequest, structuredOutput: this.config.retry.structuredOutput, deadlineAt: prepared.deadlineAt},
+      excludedExecutableFields: ["cancellation.signal", "retry.waitControl", "retry.events", "executionFlow.observer"],
+    });
+    flow.advance("controller", {turnId: turn.id}, [controllerInputRef, controlsRef]);
     const retryScope = this.createRetryScope(turn.id, state.revision, flow.callContext);
     this.emit("controller.started", { turnId: turn.id, iteration });
     try {

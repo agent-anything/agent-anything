@@ -85,24 +85,24 @@ describe("resolveHelarcProviderConfig", () => {
       ok: true,
       config: {
         providerKind: "ollama",
-        baseUrl: "http://localhost:11434",
+        baseUrl: "http://localhost:11435",
         apiKey: "",
         model: "gemma3:4b",
         timeoutMs: 300_000_000,
         ollamaRuntime: {
-          contextWindowTokens: 16_384,
+          contextWindowTokens: 163_840,
           maximumOutputTokens: 2_048,
         },
       },
       profile: {
         providerKind: "ollama",
-        baseUrl: "http://localhost:11434/",
-        baseUrlOrigin: "http://localhost:11434",
+        baseUrl: "http://localhost:11435/",
+        baseUrlOrigin: "http://localhost:11435",
         credentialStatus: "empty_allowed",
         qualificationPolicy: "allow_experimental",
         timeoutMs: 300_000_000,
         ollamaRuntime: {
-          contextWindowTokens: 16_384,
+          contextWindowTokens: 163_840,
           maximumOutputTokens: 2_048,
         },
       },
@@ -121,6 +121,7 @@ describe("resolveHelarcProviderConfig", () => {
     expect(result).toMatchObject({
       ok: true,
       config: {
+        baseUrl: "http://localhost:11434",
         ollamaRuntime: {
           contextWindowTokens: 32_768,
           maximumOutputTokens: 4_096,

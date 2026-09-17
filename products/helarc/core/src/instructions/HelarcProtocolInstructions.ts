@@ -18,5 +18,5 @@ export const HELARC_DEFAULT_PROTOCOL_INSTRUCTIONS: readonly HelarcInstructionSec
 ]);
 
 function section(id: string, content: string): HelarcInstructionSectionSetting {
-  return Object.freeze({ id, enabled: true, content });
+  return Object.freeze({ id, enabled: false, content });
 }

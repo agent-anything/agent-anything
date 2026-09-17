@@ -1,8 +1,10 @@
 import { lazy, Suspense } from "react";
-import { Button, Descriptions, Empty, Spin, Tag } from "antd";
+import { Descriptions, Empty, Spin } from "antd";
 import { FileTextOutlined, RightOutlined } from "@ant-design/icons";
 import type { InspectionRecord, InspectionSubjectRef, InspectionLink, InspectionPayload } from "@agent-anything/inspection/records";
 import type { ContentTarget } from "../content/ContentLocation.js";
+import { RecordRelations } from "./RecordRelations.js";
+import { RelationDetails } from "./RelationDetails.js";
 const ContentViewer = lazy(async () => ({ default: (await import("../content/ContentViewer.js")).ContentViewer }));
 
 export function payloadSummary(payload: InspectionPayload): string {
@@ -29,15 +31,8 @@ export function payloadSummary(payload: InspectionPayload): string {
   }
 }
 
-export function RecordDetails({ record, link, onSubject, onRecord, onContent, onLocation }: { record: InspectionRecord | null; link: InspectionLink | null; onSubject: (subject: InspectionSubjectRef) => void; onRecord: (id: string) => void; onContent: (id: string) => void; onLocation?: (target: ContentTarget) => void }) {
-  if (link) return <><Tag>{link.kind}</Tag><Descriptions column={1} size="small" items={[
-    { key: "condition", label: "Condition", children: link.condition ?? "Not applicable" },
-    { key: "operation", label: "Transformation", children: link.operation ?? "Not recorded" },
-    { key: "from", label: "Producer", children: <Button type="link" onClick={() => onSubject(link.from)}>{link.from.id}</Button> },
-    { key: "to", label: "Consumer", children: <Button type="link" onClick={() => onSubject(link.to)}>{link.to.id}</Button> },
-    { key: "proof", label: "Established by", children: <Button type="link" onClick={() => onRecord(link.establishedBy)}>{link.establishedBy}</Button> },
-    ...(["sourceLocation", "targetLocation"] as const).map((name) => ({ key: name, label: name === "sourceLocation" ? "Source location" : "Target location", children: link[name] ? <span>{link[name].stage}<br />{link[name].partId}<br />{link[name].jsonPointer}{link[name].contentId && <Button type="link" onClick={() => onLocation ? onLocation({id:link[name]!.contentId!,jsonPointer:link[name]!.jsonPointer ?? undefined,stage:link[name]!.stage ?? undefined,recordId:link.establishedBy}) : onContent(link[name]!.contentId!)}>Open recorded content</Button>}</span> : "Not recorded" })),
-  ]} /><Suspense fallback={<Spin />}><ContentViewer text={JSON.stringify(link, null, 2)} language="json" /></Suspense></>;
+export function RecordDetails({ record, link, onSubject, onRecord, onContent, onLocation, onRelation }: { record: InspectionRecord | null; link: InspectionLink | null; onSubject: (subject: InspectionSubjectRef) => void; onRecord: (id: string) => void; onContent: (id: string) => void; onLocation: (target: ContentTarget) => void; onRelation: (link: InspectionLink) => void }) {
+  if (link) return <RelationDetails link={link} onSubject={onSubject} onRecord={onRecord} onContent={onLocation} />;
   if (!record) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Select an object or record" />;
   return <><Descriptions column={1} size="small" items={[
     { key: "summary", label: "Fact", children: payloadSummary(record.payload) },
@@ -45,10 +40,11 @@ export function RecordDetails({ record, link, onSubject, onRecord, onContent, on
     { key: "owner", label: "Owner", children: record.subject.owner },
     { key: "id", label: "Identity", children: record.subject.id },
     { key: "revision", label: "Revision", children: record.subject.revision ?? "Not revisioned" },
+    { key: "run", label: "Run", children: record.subject.runId ?? "Not Run-scoped" },
     { key: "record", label: "Record", children: record.id },
     { key: "sequence", label: "Commit", children: record.commitSequence },
     { key: "time", label: "Occurred", children: record.occurredAt ?? "Not recorded" },
   ]} />{record.contents.map((item) => <button type="button" className="content-row" key={item.id} onClick={() => onContent(item.id)}><FileTextOutlined /><span className="content-row-label"><span className="content-row-name">{item.name}</span><small>{item.stage} / {item.availability}{item.truncated ? " / truncated" : ""}</small></span><RightOutlined className="content-row-arrow" /></button>)}
-    {record.links.filter((item) => item.kind === "trigger").map((item) => <Button key={item.id} type="link" onClick={() => onSubject(item.from)}>Trigger: {item.from.id}</Button>)}
+    <RecordRelations links={record.links} onRelation={onRelation} />
     <Suspense fallback={<Spin />}><ContentViewer text={JSON.stringify(record.payload, null, 2)} language="json" /></Suspense></>;
 }

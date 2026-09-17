@@ -18,13 +18,17 @@ import { HelarcTaskFulfillmentHook } from "./HelarcTaskFulfillmentHook.js";
 
 const NOW = "2026-08-28T00:00:00.000Z";
 
+function enabledStopInstructions() {
+  return createDefaultHelarcInstructionSettings().stop.map(section => ({...section, enabled: true}));
+}
+
 describe("HelarcTaskFulfillmentHook", () => {
   it.each(["incomplete", "uncertain"] as const)("allows an honest %s outcome without forcing another turn", async (status) => {
     const provider = new StructuredProvider({
       status, disposition: "allow", rationale: "The limitation is disclosed; no useful action remains.",
       missingOutcomes: ["Unavailable external service."], unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
     await expect(hook.handle(createEvent(), context())).resolves.toEqual({ disposition: "allow" });
     expect(hook.getAssessments()).toMatchObject([{ status, disposition: "allow", feedback: null }]);
     expect(provider.requests).toHaveLength(1);
@@ -37,7 +41,7 @@ describe("HelarcTaskFulfillmentHook", () => {
       missingOutcomes: [],
       unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
 
     await expect(hook.handle(createEvent(), context())).resolves.toEqual({ disposition: "allow" });
     expect(hook.getAssessments()).toMatchObject([
@@ -65,7 +69,7 @@ describe("HelarcTaskFulfillmentHook", () => {
       missingOutcomes: ["No settled command result shows that the program ran."],
       unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
 
     const decision = await hook.handle(createEvent(), context());
 
@@ -90,7 +94,7 @@ describe("HelarcTaskFulfillmentHook", () => {
       missingOutcomes: ["The requested process was not executed."],
       unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, createDefaultHelarcInstructionSettings().stop, () => NOW);
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
 
     await expect(hook.handle(createEvent(), context())).rejects.toThrow(
       "A fulfilled Task response cannot carry unresolved outcomes or claims.",
@@ -122,6 +126,7 @@ describe("HelarcTaskFulfillmentHook", () => {
 
   describe.each(["root", "descendant"] as const)("%s Stop handling", (runKind) => {
     it.each([
+      { name: "fresh settings", sections: createDefaultHelarcInstructionSettings().stop },
       { name: "no sections", sections: [] },
       { name: "disabled text", sections: [{ id: "stop_instructions", enabled: false, content: "Retained disabled Stop text." }] },
       { name: "empty text", sections: [{ id: "stop_instructions", enabled: true, content: "" }] },

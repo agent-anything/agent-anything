@@ -9,6 +9,12 @@ describe("Helarc Instruction settings", () => {
     expect(draft.protocol).toHaveLength(3);
     expect(draft.delegated).toHaveLength(1);
     expect(draft.stop).toHaveLength(1);
+    for (const entries of Object.values(draft)) {
+      expect(entries.every(section => !section.enabled && section.content.trim().length > 0)).toBe(true);
+    }
+    const input = { providerId: "test", modelId: "model", instructionSettings: draft };
+    expect(createHelarcAgent({ ...input, target: "production" }).instructions.blocks).toEqual([]);
+    expect(createHelarcDelegatedWorkerAgent(input).instructions.blocks).toEqual([]);
     const settings = snapshotHelarcInstructionSettings({ ...draft, agent: draft.agent.map((section) => ({ ...section, enabled: false })) });
     expect(settings.agent[0]?.content).toContain("You are Helarc");
     expect(Object.isFrozen(settings.agent[0])).toBe(true);
@@ -19,7 +25,7 @@ describe("Helarc Instruction settings", () => {
     const instructionSettings = {
       ...defaults,
       agent: defaults.agent.map((section, index) => ({ ...section, enabled: index === 0, content: "Custom role." })),
-      delegated: defaults.delegated.map((section) => ({ ...section, content: "Custom delegation." })),
+      delegated: defaults.delegated.map((section) => ({ ...section, enabled: true, content: "Custom delegation." })),
     };
     const input = { providerId: "test", modelId: "model", instructionSettings };
     const root = createHelarcAgent({ ...input, target: "production" });
@@ -36,7 +42,7 @@ describe("Helarc Instruction settings", () => {
     const instructionSettings = {
       ...defaults,
       agent: defaults.agent.map((section) => ({ ...section, enabled: false })),
-      delegated: defaults.delegated.map((section) => ({ ...section, content: "  " })),
+      delegated: defaults.delegated.map((section) => ({ ...section, enabled: true, content: "  " })),
       protocol: defaults.protocol.map((section) => ({ ...section, enabled: false })),
     };
     const input = { providerId: "test", modelId: "model", instructionSettings };
