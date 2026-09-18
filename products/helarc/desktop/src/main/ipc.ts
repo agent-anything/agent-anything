@@ -1,4 +1,4 @@
-import { dialog, ipcMain, type BrowserWindow } from "electron";
+import { dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import type { HelarcMainController } from "./HelarcMainController.js";
 import {
   projectHelarcDesktopSnapshot,
@@ -15,6 +15,11 @@ import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspacePro
 import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 
 export const HELARC_IPC_CHANNELS = {
+  listThreadRuns: "helarc:list-thread-runs",
+  readRunWorkbench: "helarc:read-run-workbench",
+  readWorkbenchItem: "helarc:read-workbench-item",
+  readCommandOutput: "helarc:read-command-output",
+  openExternalLink: "helarc:open-external-link",
   getInspectionSettings: "helarc:get-inspection-settings",
   saveInspectionSettings: "helarc:save-inspection-settings",
   getInstructionSettings: "helarc:get-instruction-settings",
@@ -44,6 +49,19 @@ export interface RegisterHelarcIpcInput {
 }
 
 export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
+  const trustedSender = (event: IpcMainInvokeEvent) => event.sender === input.window.webContents &&
+    event.senderFrame === input.window.webContents.mainFrame && event.senderFrame?.url === input.window.webContents.getURL();
+  for (const method of ["listThreadRuns", "readRunWorkbench", "readWorkbenchItem", "readCommandOutput"] as const) {
+    ipcMain.handle(HELARC_IPC_CHANNELS[method], (event, query) => {
+      if (!trustedSender(event)) return { status: "rejected", code: "invalid_query" };
+      return input.controller.workbench[method](query);
+    });
+  }
+  ipcMain.handle(HELARC_IPC_CHANNELS.openExternalLink, async (event, inputLink: unknown) => {
+    if (!trustedSender(event) || !inputLink || typeof inputLink !== "object" || !("url" in inputLink) || typeof inputLink.url !== "string" || inputLink.url.length > 8192) return { ok: false };
+    try { const url = new URL(inputLink.url); if (!["http:", "https:"].includes(url.protocol)) return { ok: false }; await shell.openExternal(url.href); return { ok: true }; }
+    catch { return { ok: false }; }
+  });
   const unsubscribe = input.controller.subscribeSnapshot((snapshot) => {
     if (!input.window.isDestroyed()) {
       input.window.webContents.send(

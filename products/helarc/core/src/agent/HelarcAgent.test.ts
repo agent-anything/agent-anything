@@ -19,9 +19,10 @@ describe("Helarc Agents", () => {
     expect(production.revision).toContain(production.instructions.contentDigest.value);
     expect(minimal.revision).toContain(minimal.instructions.contentDigest.value);
     expect(minimal.revision).not.toBe(production.revision);
-    expect(production.output.validate({ kind: "complete", summary: "Done." })).toEqual({
+    const source = { kind: "model_text", turnId: "turn-1", modelItemIds: ["item-1"] };
+    expect(production.output.validate({ kind: "complete", summary: "Done.", source })).toEqual({
       valid: true,
-      output: { kind: "complete", summary: "Done." },
+      output: { kind: "complete", summary: "Done.", source },
     });
   });
 

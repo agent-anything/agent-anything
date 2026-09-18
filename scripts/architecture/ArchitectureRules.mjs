@@ -167,6 +167,9 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "lucide-react",
     "react",
     "react-dom",
+    "react-markdown",
+    "react-resizable-panels",
+    "remark-gfm",
   ],
 });
 

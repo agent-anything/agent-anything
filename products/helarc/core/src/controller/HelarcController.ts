@@ -37,7 +37,7 @@ export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
   "helarc.provider-native-tool-interaction.v1";
 export const HELARC_MODEL_CONTEXT_HEADROOM_TOKENS = 1_024;
-export type HelarcAgentOutput = { kind: "complete"; summary: string };
+export type HelarcAgentOutput = { kind: "complete"; summary: string; source: import("../run/presentation/HelarcRunPresentation.js").HelarcOutputSource };
 
 class HelarcInstructionModelMismatchError extends TypeError {
   readonly code = "agent_instruction_model_mismatch";
@@ -250,7 +250,10 @@ function interpretResponse(
     if (calls.length > 0) return nativeTurnFailure("helarc_refusal_with_calls");
     return Object.freeze({
       kind: "propose_completion",
-      output: Object.freeze({ kind: "complete", summary: response.turn.finish.reason ?? text }),
+      output: Object.freeze({ kind: "complete", summary: response.turn.finish.reason ?? text,
+        source: response.turn.finish.reason !== null
+          ? { kind: "model_finish" as const, turnId: response.turn.turnId }
+          : { kind: "model_text" as const, turnId: response.turn.turnId, modelItemIds: modelItems.filter(item => item.kind === "assistant_text").map(item => item.id) } }),
       modelItems,
     });
   }
@@ -261,7 +264,8 @@ function interpretResponse(
     if (text.length === 0) return nativeTurnFailure("helarc_native_turn_empty");
     return Object.freeze({
       kind: "propose_completion",
-      output: Object.freeze({ kind: "complete", summary: text }),
+      output: Object.freeze({ kind: "complete", summary: text,
+        source: { kind: "model_text" as const, turnId: response.turn.turnId, modelItemIds: modelItems.filter(item => item.kind === "assistant_text").map(item => item.id) } }),
       modelItems,
     });
   }

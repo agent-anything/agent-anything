@@ -394,6 +394,7 @@ function createShellExecutor(
         await removeCwdControlFile(payload.cwdControlPath);
         const capture = payload.captureTargets;
         const snapshot = await tasks.start({runId:payload.runId,executionId,actionId:context.attempt.action.id,
+          displayCommand: semantics.get(executionId),
           origin:{invocationId:payload.invocationId,runActionId:payload.runActionId,attemptId:context.attempt.id},
           environmentId:payload.runtimeEnvironmentId,executable:payload.executablePath,args:payload.args,cwd:payload.cwd,
           environment:environment.environment,timeoutMs:payload.timeoutMs,deadlineAt:context.deadlineAt,

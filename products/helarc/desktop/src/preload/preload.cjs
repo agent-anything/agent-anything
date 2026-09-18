@@ -22,6 +22,11 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
+  listThreadRuns: (input) => ipcRenderer.invoke("helarc:list-thread-runs", { threadId: input?.threadId }),
+  readRunWorkbench: (input) => ipcRenderer.invoke("helarc:read-run-workbench", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, includeDescendants: input?.includeDescendants, cursor: input?.cursor, limit: input?.limit }),
+  readWorkbenchItem: (input) => ipcRenderer.invoke("helarc:read-workbench-item", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, itemId: input?.itemId, offset: input?.offset }),
+  readCommandOutput: (input) => ipcRenderer.invoke("helarc:read-command-output", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, executionId: input?.executionId, cursor: input?.cursor }),
+  openExternalLink: (input) => ipcRenderer.invoke("helarc:open-external-link", { url: input?.url }),
   getInspectionSettings: () => ipcRenderer.invoke(channels.getInspectionSettings),
   saveInspectionSettings: (input) => ipcRenderer.invoke(channels.saveInspectionSettings, productCommand("inspection.save", input?.commandId, { settings: input?.settings })),
   getInstructionSettings: () => ipcRenderer.invoke(channels.getInstructionSettings),

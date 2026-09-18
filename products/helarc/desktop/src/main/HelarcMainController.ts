@@ -63,8 +63,6 @@ import type {
   HelarcModelQualificationCatalog,
 } from "@agent-anything/helarc/model-qualification";
 import {
-  createBuiltInHelarcTaskTemplates,
-  type HelarcTaskTemplate,
   type HelarcTaskInputError,
 } from "@agent-anything/helarc/task";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
@@ -74,6 +72,8 @@ import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { Provider } from "@agent-anything/model-interaction";
 import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
 import { basename, isAbsolute, normalize } from "node:path";
+import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
+import { HelarcWorkbenchQueries } from "./workbench/HelarcWorkbenchQueries.js";
 import type { HelarcProductRunStartTarget } from "../shared/HelarcDesktopCommand.js";
 import type { HelarcProviderProfileStoreError } from "./provider/HelarcProviderProfileStore.js";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
@@ -145,6 +145,7 @@ export interface HelarcThreadMessageSnapshot {
   createdAt: string;
   relatedRunIds: string[];
   relatedArtifactIds: string[];
+  outputSource?: import("../shared/HelarcWorkbench.js").HelarcOutputSource;
 }
 
 export interface HelarcArtifactSnapshot {
@@ -187,7 +188,6 @@ export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfile[];
-  taskTemplates: HelarcTaskTemplate[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   activeThread: HelarcActiveThreadSnapshot | null;
@@ -285,6 +285,7 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  commandOutputRegistry?: CommandOutputRegistry;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   instructionSettings?: HelarcInstructionSettings;
   provider?: Provider | null;
@@ -292,7 +293,6 @@ export interface HelarcMainControllerInput {
   providerProfile?: HelarcProviderProfile | null;
   workspaceProfiles?: HelarcWorkspaceProfile[];
   threadSummaries?: HelarcThreadSummary[];
-  taskTemplates?: HelarcTaskTemplate[];
   threadStore?: HelarcThreadStore;
   modelContinuationStore?: ModelContinuationStore;
   contextManifestPersistence?: ContextManifestPersistencePort;
@@ -321,6 +321,8 @@ type DesktopActiveRunSlot =
     };
 
 export class HelarcMainController {
+  readonly workbench: HelarcWorkbenchQueries;
+  private readonly commandOutputRegistry: CommandOutputRegistry;
   private readonly inspection: import("./inspection/HelarcInspection.js").HelarcInspection | undefined;
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
@@ -328,7 +330,6 @@ export class HelarcMainController {
   private lastError: HelarcMainError | null = null;
   private workspaceProfiles: HelarcWorkspaceProfile[] = [];
   private threadSummaries: HelarcThreadSummarySnapshot[] = [];
-  private readonly taskTemplates: HelarcTaskTemplate[];
   private currentThreadRecord: HelarcThreadRecord | null = null;
   private readonly threadStore: HelarcThreadStore;
   private readonly modelContinuationStore: ModelContinuationStore | undefined;
@@ -379,6 +380,16 @@ export class HelarcMainController {
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput = {}) {
+    this.commandOutputRegistry = input.commandOutputRegistry ?? new CommandOutputRegistry();
+    this.workbench = new HelarcWorkbenchQueries({
+      loadThread: async threadId => this.currentThreadRecord?.thread.id === threadId ? this.currentThreadRecord : this.threadStore.loadThread(threadId),
+      live: (threadId, productRunId) => {
+        const slot = this.activeRunSlot;
+        return slot.kind === "active" && slot.threadId === threadId && slot.productRunId === productRunId && this.runProjection
+          ? { projection: this.runProjection, handle: slot.handle } : null;
+      },
+      outputs: this.commandOutputRegistry,
+    });
     this.inspection = input.inspection;
     this.instructionSettings = snapshotHelarcInstructionSettings(
       input.instructionSettings ?? createDefaultHelarcInstructionSettings(),
@@ -387,7 +398,6 @@ export class HelarcMainController {
     this.workspaceProfiles = input.workspaceProfiles ?? [];
     this.threadSummaries = (input.threadSummaries ?? []).map(createThreadSummarySnapshot);
     this.nextTaskNumber = resolveNextTaskNumber(input.threadSummaries ?? []);
-    this.taskTemplates = input.taskTemplates ?? createBuiltInHelarcTaskTemplates();
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
     this.modelContinuationStore = input.modelContinuationStore;
     this.contextManifestPersistence = input.contextManifestPersistence;
@@ -431,7 +441,6 @@ export class HelarcMainController {
       status: this.getCurrentStatus(),
       workspace: this.selectedWorkspace,
       workspaceProfiles: this.workspaceProfiles,
-      taskTemplates: this.taskTemplates,
       provider: this.provider,
       acceptedTask: this.acceptedTask,
       activeThread: createActiveThreadSnapshot(this.currentThreadRecord),
@@ -576,7 +585,6 @@ export class HelarcMainController {
       providerProfileId: this.provider.activeProfile.id,
       workspaceProfiles,
       providerProfiles: this.provider.profiles,
-      taskTemplates: this.taskTemplates,
       permissionPreset: "ask_for_approval",
       createdAt: startedAt,
       metadata: {
@@ -608,6 +616,18 @@ export class HelarcMainController {
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
       const preparedHostRun = await prepareHelarcHostRun({
+        retainCommandOutput: async (harnessRunId, executionId, paths) => {
+          const roots = [threadWorkspace.primary, ...threadWorkspace.additional];
+          let recorded = false;
+          for (const root of roots) {
+            try {
+              await this.commandOutputRegistry.register({ threadId, productRunId: runId, runId: harnessRunId }, executionId, root.path, paths);
+              recorded = true;
+              break;
+            } catch { /* Try only the explicitly selected workspace roots. */ }
+          }
+          if (!recorded) throw new Error("Command output could not be retained.");
+        },
         instructionSettings,
         task: preparedStart.prepared.task,
         workspaceResolver: createHelarcDesktopWorkspaceResolver(threadWorkspace),
@@ -1218,6 +1238,9 @@ export class HelarcMainController {
       terminal: {
         host: outcome.terminal,
         product: outcome.product,
+        finalProjection: this.runProjection === null ? null : {
+          recordedAt: new Date().toISOString(), host: this.runProjection.host, product: this.runProjection.product,
+        },
       },
       assistantMessage,
       artifacts,
@@ -1280,6 +1303,7 @@ function createAssistantTerminalMessage(
     createdAt: terminal.completedAt,
     relatedRunIds: [run.id],
     relatedArtifactIds,
+    metadata: { outputSource: product.output.source },
   });
 
   return result.ok ? result.message : null;
@@ -1464,6 +1488,8 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
     createdAt: message.createdAt,
     relatedRunIds: [...message.relatedRunIds],
     relatedArtifactIds: [...message.relatedArtifactIds],
+    ...(message.source.kind === "agent_run" && message.metadata.outputSource
+      ? { outputSource: message.metadata.outputSource as import("../shared/HelarcWorkbench.js").HelarcOutputSource } : {}),
   }));
 
   const primaryWorkspace = record.thread.workspace.primary;

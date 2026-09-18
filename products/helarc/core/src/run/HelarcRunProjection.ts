@@ -1,4 +1,5 @@
 import type { HostRunProjection } from "@agent-anything/host/projection";
+import { createHelarcRunPresentation, type HelarcRunPresentation } from "./presentation/HelarcRunPresentation.js";
 import type {
   HelarcActivityItem,
   HelarcProductResult,
@@ -23,6 +24,14 @@ export interface HelarcCommandProgress {
   readonly omittedBytes:number|null;
   readonly outputPersistence:string;
   readonly observedAt:string;
+  readonly command?: string;
+  readonly shell?: string;
+  readonly cwd?: string;
+  readonly startedAt?: string | null;
+  readonly completedAt?: string | null;
+  readonly exitCode?: number | null;
+  readonly invocationId?: string | null;
+  readonly attemptId?: string | null;
 }
 
 export interface HelarcProductRunProjection {
@@ -32,6 +41,7 @@ export interface HelarcProductRunProjection {
   readonly qualification: HelarcModelQualificationSafeProjection;
   readonly activity: readonly HelarcActivityItem[];
   readonly commands:readonly HelarcCommandProgress[];
+  readonly presentation: HelarcRunPresentation;
   readonly continuation: HelarcModelContinuationProjection | null;
   readonly result: HelarcProductResult | null;
 }
@@ -62,6 +72,7 @@ export interface HelarcModelContinuationProjectionUpdate
 }
 
 export type HelarcProductRunProjectionUpdate =
+  | HelarcProductProjectionUpdateBase<"presentation_observed"> & { readonly presentation: HelarcRunPresentation }
   | HelarcProductProjectionUpdateBase<"command_observed"> & {readonly command:HelarcCommandProgress}
   | HelarcProductActivityProjectionUpdate
   | HelarcModelContinuationProjectionUpdate
@@ -136,6 +147,7 @@ export function createHelarcProductRunProjection(
     qualification: snapshotQualification(qualification),
     activity: Object.freeze([]),
     commands:Object.freeze([]),
+    presentation: createHelarcRunPresentation(),
     continuation: null,
     result: null,
   });
@@ -160,6 +172,9 @@ export function reduceHelarcProductRunProjection(
 
   try {
     switch (update.kind) {
+      case "presentation_observed":
+        if (update.presentation.revision <= current.presentation.revision) return rejectProduct(current, "stale_sequence");
+        return appliedProduct(Object.freeze({ ...current, sequence: update.sequence, presentation: update.presentation }));
       case "command_observed": {
         const command=update.command;
         if(!hasIdentity(command.runId)||!hasIdentity(command.executionId)||!Number.isSafeInteger(command.revision)||command.revision<0||
@@ -189,7 +204,7 @@ export function reduceHelarcProductRunProjection(
         return appliedProduct(Object.freeze({
           ...current,
           sequence: update.sequence,
-          activity: Object.freeze([...current.activity, activity]),
+          activity: Object.freeze([...current.activity, activity].slice(-2048)),
         }));
       }
       case "continuation_changed":

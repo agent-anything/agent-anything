@@ -16,6 +16,7 @@ import { createHelarcWindowOptions } from "./windowOptions.js";
 import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
 import { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 import { HelarcInspection } from "./inspection/HelarcInspection.js";
+import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 let inspection: Promise<HelarcInspection> | null = null;
@@ -78,6 +79,7 @@ async function createWindow(): Promise<void> {
     contextManifestStore.listManifests(),
   ]);
   const controller = new HelarcMainController({
+    commandOutputRegistry: new CommandOutputRegistry(join(userDataPath, "command-output-locators.json")),
     inspection: inspectionSource,
     instructionSettings: await instructionSettingsStore.load(),
     provider: providerConfig.ok ? createHelarcProvider(providerConfig.config, inspectionSource.providerObserver) : null,

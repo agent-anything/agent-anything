@@ -157,6 +157,7 @@ function applyRunOperation(
     );
     return Object.freeze({
       request: pending.envelope.request,
+      runId: pending.runId,
       presentation: snapshotUnknown(pending.envelope.presentation),
       disclosureClass: pending.envelope.disclosureClass,
       expiresAt: pending.envelope.expiresAt,

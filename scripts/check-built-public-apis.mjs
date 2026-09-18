@@ -937,11 +937,7 @@ const expectedValueExports = {
   "@agent-anything/helarc/task": [
     "DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH",
     "HELARC_TASK_KIND",
-    "createBuiltInHelarcTaskTemplates",
     "createHelarcTask",
-    "createHelarcTaskTemplate",
-    "renderHelarcTaskTemplatePrompt",
-    "selectHelarcTaskTemplate",
   ],
   "@agent-anything/helarc/task-fulfillment": [
     "HELARC_TASK_FULFILLMENT_HOOK_REVISION",
@@ -1085,9 +1081,12 @@ const expectedValueExports = {
     "HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID",
     "HELARC_SHELL_COMMAND_OUTCOME_REVISION",
     "ProcessManagerError",
+    "RetainedProcessOutputError",
     "RunProcessManager",
     "createHelarcLocalCommandActionCapability",
     "defaultCodeAgentCommandLimits",
+    "readRetainedProcessOutput",
+    "registerRetainedProcessOutput",
   ],
   "@agent-anything/helarc-local-environment/filesystem": [
     "HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS",

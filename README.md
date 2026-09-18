@@ -62,6 +62,10 @@ supports OpenAI-compatible providers and Ollama through editable provider profil
 Current Helarc capabilities include:
 
 - Electron desktop host with a React renderer
+- Conversation-led workbench with a resizable execution area, separate Settings,
+  collapsible Run hierarchy and independently editable pending requests
+- Attributable assistant/Tool/Plan activity, retained Run details and independent
+  paged stdout/stderr inspection without affecting model observations
 - Workspace and task setup for local development work
 - Provider profile management for OpenAI-compatible APIs and Ollama
 - Local credential storage for provider API keys

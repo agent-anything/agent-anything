@@ -38,6 +38,26 @@ async function setup(options: { instant?: boolean; observerThrows?: boolean } = 
 }
 
 describe("RunProcessManager", () => {
+  it("keeps Desktop reads independent of observation, cwd and process control", async () => {
+    const t = await setup();
+    const commit = vi.fn(async (path: string) => path);
+    await t.manager.start({ ...t.input, consumeFinalCwd: async () => t.directory, commitFinalCwd: commit });
+    t.emit({ kind: "output", stream: "stdout", bytes: Buffer.from("hello") });
+    const before = t.manager.get(t.input.runId, t.input.executionId);
+    const first = t.manager.readOutput(t.input.runId, t.input.executionId);
+    const second = t.manager.readOutput(t.input.runId, t.input.executionId);
+    expect(first.stdout.text).toBe("hello");
+    expect(second).toEqual(first);
+    expect(t.manager.readOutput(t.input.runId, t.input.executionId, first.nextCursor).stdout.text).toBe("");
+    expect(t.manager.get(t.input.runId, t.input.executionId)).toEqual(before);
+    expect(commit).not.toHaveBeenCalled();
+    expect(t.handle.terminate).not.toHaveBeenCalled();
+    expect((await t.observe({ initial: true })).stdout.text).toBe("hello");
+    expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    t.finish();
+    await t.cleanup();
+  });
+
   it("records settled retention expiry without losing live ownership or reconnecting", async () => {
     const t = await setup({instant:true});
     const facts: string[] = [];

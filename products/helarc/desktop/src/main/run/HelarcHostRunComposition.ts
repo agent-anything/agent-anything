@@ -124,6 +124,7 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly retainCommandOutput?: (runId: string, executionId: string, paths: import("@agent-anything/helarc-local-environment/command").ProcessOutputPaths) => Promise<void>;
   readonly inspection?: import("../inspection/HelarcInspection.js").HelarcInspection;
   readonly instructionSettings?: HelarcInstructionSettings;
   readonly sessionId: string;
@@ -178,6 +179,7 @@ export interface PreparedHelarcHostRun {
 }
 
 export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
+  readCommandOutput(runId: string, executionId: string, cursor?: string): ReturnType<import("@agent-anything/helarc-local-environment/command").RunProcessManager["readOutput"]>;
   getProductProjection(): HelarcProductRunProjection;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
 }
@@ -288,7 +290,14 @@ export async function prepareHelarcHostRun(
     const s=fact.snapshot;
     product.recordCommandProgress({runId:s.ref.runId,executionId:s.ref.executionId,revision:s.revision,phase:s.phase,
       processId:s.process?.processId ?? null,outcome:s.outcome,capturedBytes:s.output.retainedBytes,
-      omittedBytes:s.output.omittedBytes,outputPersistence:s.output.persistence,observedAt:fact.occurredAt});
+      omittedBytes:s.output.omittedBytes,outputPersistence:s.output.persistence,observedAt:fact.occurredAt,
+      command:commandActions.processes.getDisplayDescriptor(s.ref.runId,s.ref.executionId).command ?? undefined,
+      shell:commandActions.processes.getDisplayDescriptor(s.ref.runId,s.ref.executionId).shell ?? undefined,
+      cwd:s.initialCwd,startedAt:s.startedAt,completedAt:s.finishedAt,exitCode:s.rootExit?.code ?? null,
+      invocationId:s.origin?.invocationId ?? null,attemptId:s.origin?.attemptId ?? null});
+    if (fact.kind === "settled" && s.output.persistence === "complete") {
+      void input.retainCommandOutput?.(s.ref.runId, s.ref.executionId, commandActions.processes.getOutputPaths(s.ref.runId, s.ref.executionId)).catch(() => {});
+    }
   };
   const configurationFingerprint = await createCanonicalSha256Digest(
     "agent-anything.helarc.local-environment.v1",
@@ -346,9 +355,20 @@ export async function prepareHelarcHostRun(
         manifestPersistence: input.contextManifestPersistence,
       });
   const runner = new Runner({
-    runObserver: input.inspection?.runObserver,
+    runObserver: {
+      observe(observation) {
+        try { product.recordRunLineage(observation.snapshot.runId, observation.lineage); } catch { /* Display is non-authoritative. */ }
+        try { input.inspection?.runObserver?.observe(observation); } catch { /* Independent observer. */ }
+      },
+      transition(observation) { input.inspection?.runObserver?.transition?.(observation); },
+    },
     runTraceObserver: input.inspection?.traceObserver,
-    runTranscriptObserver: input.inspection?.transcriptObserver,
+    runTranscriptObserver: {
+      observe(record) {
+        try { product.recordTranscript(record); } catch { /* Display is non-authoritative. */ }
+        try { input.inspection?.transcriptObserver?.observe(record); } catch { /* Independent observer. */ }
+      },
+    },
     executionObserver: input.inspection?.executionObserver,
     executionFlow: input.inspection?.executionFlow,
     controller: product.controller,
@@ -482,6 +502,7 @@ export async function prepareHelarcHostRun(
         hostActiveRun,
         product.getProductProjection,
         product.subscribeProductProjection,
+        commandActions.processes,
       );
 
       return Object.freeze({
@@ -512,6 +533,7 @@ function createHelarcHostActiveRun(
   subscribeProductProjection: (
     listener: HelarcProductRunProjectionListener,
   ) => () => void,
+  processes: import("@agent-anything/helarc-local-environment/command").RunProcessManager,
 ): HelarcHostActiveRun {
   return Object.freeze({
     sessionId: host.sessionId,
@@ -530,6 +552,7 @@ function createHelarcHostActiveRun(
     getResult: () => host.getResult(),
     getProductProjection,
     subscribeProductProjection,
+    readCommandOutput: (runId: string, executionId: string, cursor?: string) => processes.readOutput(runId, executionId, cursor),
   });
 }
 

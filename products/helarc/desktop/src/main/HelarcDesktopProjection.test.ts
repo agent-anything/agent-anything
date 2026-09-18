@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HelarcMainSnapshot } from "./HelarcMainController.js";
-import { projectHelarcDesktopSnapshot } from "./HelarcDesktopProjection.js";
+import { projectHelarcDesktopSnapshot, projectWorkbenchActivity } from "./HelarcDesktopProjection.js";
 import { createHelarcRunTreeTestSnapshot } from "../shared/testing/HelarcRunTreeTestSnapshot.js";
 
 const SECRET = "sentinel-desktop-private-value";
@@ -21,10 +21,9 @@ describe("Helarc Desktop IPC projection", () => {
       "terminal",
     ]);
     expect(Object.keys(projected.run?.product ?? {}).sort()).toEqual([
-      "activity",
-      "commands",
       "continuation",
       "phase",
+      "presentationRevision",
       "qualification",
       "result",
     ]);
@@ -51,7 +50,7 @@ describe("Helarc Desktop IPC projection", () => {
     });
     expect(projected.provider.configured && projected.provider.activeProfile)
       .not.toHaveProperty("storedCredential");
-    expect(projected.run?.product.activity[0]?.metadata).toEqual({
+    expect(projectWorkbenchActivity(snapshotWithRun([]).run!.product.activity[0]!).metadata).toEqual({
       status: "running",
       exposedToolNames: ["Read", "Glob", "Grep", "Edit", "Write"],
       modelUseDispositionStatus: "experimental",
@@ -302,7 +301,6 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
     status: "running",
     workspace: { id: "workspace-1", name: "Workspace", path: "D:/workspace" },
     workspaceProfiles: [],
-    taskTemplates: [],
     provider: {
       configured: true,
       activeProfile: profile,

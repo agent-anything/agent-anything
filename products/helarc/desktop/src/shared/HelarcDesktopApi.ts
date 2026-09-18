@@ -25,21 +25,6 @@ export interface HelarcAcceptedTaskSnapshot {
   prompt: string;
 }
 
-export type HelarcTaskTemplateCategory =
-  | "inspect"
-  | "edit"
-  | "test"
-  | "refactor";
-
-export interface HelarcTaskTemplateSnapshot {
-  id: string;
-  title: string;
-  description: string;
-  promptText: string;
-  category: HelarcTaskTemplateCategory;
-  defaultConstraints: string[];
-}
-
 export interface HelarcMainError {
   code: string;
   message: string;
@@ -213,6 +198,7 @@ export interface HelarcInteractionRequestRefSnapshot {
 }
 
 interface HelarcPendingInteractionSnapshotBase<TFamily extends string> {
+  readonly runId: string;
   readonly family: TFamily;
   readonly request: HelarcInteractionRequestRefSnapshot;
   readonly phase: "pending" | "submitted_for_resolution";
@@ -475,6 +461,7 @@ export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "cancelled";
   readonly qualification: HelarcModelUseSnapshot;
   readonly output: {
+    readonly source: import("./HelarcWorkbench.js").HelarcOutputSource;
     readonly taskId: string;
     readonly workspace: {
       readonly primaryId: string | null;
@@ -527,12 +514,9 @@ export interface HelarcRunSnapshot {
     } | null;
   };
   readonly product: {
+    readonly presentationRevision: number;
     readonly phase: HelarcProductPhaseSnapshot;
     readonly qualification: HelarcModelUseSnapshot;
-    readonly activity: readonly HelarcRunActivitySnapshot[];
-    readonly commands:readonly {readonly runId:string;readonly executionId:string;readonly revision:number;readonly phase:string;
-      readonly processId:number|null;readonly outcome:string|null;readonly capturedBytes:number;readonly omittedBytes:number|null;
-      readonly outputPersistence:string;readonly observedAt:string}[];
     readonly continuation: HelarcModelContinuationSnapshot | null;
     readonly result: HelarcRunProductResultSnapshot | null;
   };
@@ -545,6 +529,7 @@ export type HelarcThreadMessageRole =
   | "product";
 
 export interface HelarcThreadMessageSnapshot {
+  outputSource?: import("./HelarcWorkbench.js").HelarcOutputSource;
   id: string;
   sequence: number;
   role: HelarcThreadMessageRole;
@@ -612,7 +597,6 @@ export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfileSnapshot[];
-  taskTemplates: HelarcTaskTemplateSnapshot[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   activeThread: HelarcActiveThreadSnapshot | null;
@@ -961,6 +945,11 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
+  listThreadRuns(input: { threadId: string }): Promise<{ status: "page"; runs: readonly import("./HelarcWorkbench.js").ThreadRunSummary[] } | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readRunWorkbench(input: import("./HelarcWorkbench.js").WorkbenchQuery): Promise<import("./HelarcWorkbench.js").WorkbenchPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readWorkbenchItem(input: import("./HelarcWorkbench.js").WorkbenchItemQuery): Promise<import("./HelarcWorkbench.js").WorkbenchItemPage>;
+  readCommandOutput(input: import("./HelarcWorkbench.js").CommandOutputQuery): Promise<import("./HelarcWorkbench.js").CommandOutputPage>;
+  openExternalLink(input: { url: string }): Promise<{ ok: boolean }>;
   getInstructionSettings(): Promise<import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot>;
   getInspectionSettings(): Promise<import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot>;
   saveInspectionSettings(input: { readonly commandId: string; readonly settings: import("./HelarcInspectionSettings.js").HelarcInspectionSettings }): Promise<HelarcProductCommandReceipt<"inspection.save">>;

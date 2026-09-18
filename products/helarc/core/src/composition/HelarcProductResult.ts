@@ -49,6 +49,7 @@ export interface HelarcProductOutput {
     readonly additionalIds: readonly string[];
   };
   readonly agentSummary: string | null;
+  readonly source: HelarcAgentOutput["source"];
   readonly runtimeStatus: RunResultStatus;
   readonly enforcement: HelarcEnforcementSummary;
   readonly safeErrors: readonly { readonly code: string; readonly message: string }[];
@@ -197,6 +198,7 @@ export function projectHelarcProductResult(
         additionalIds: Object.freeze(workspace.additional.map(({ id }) => id)),
       }),
       agentSummary: agentOutput?.summary ?? null,
+      source: agentOutput?.source ?? { kind: "product_status" as const },
       runtimeStatus: runResult.status,
       enforcement: Object.freeze(createEnforcementSummary(runResult, selectedEnforcement)),
       safeErrors: Object.freeze(safeErrors.map((error) => Object.freeze({ ...error }))),

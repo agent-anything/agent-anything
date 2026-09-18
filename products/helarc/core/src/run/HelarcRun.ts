@@ -10,7 +10,6 @@ export interface CreateHelarcRunInput {
   workspaceProfileId: string;
   additionalWorkspaceProfileIds?: readonly string[];
   providerProfileId: string;
-  taskTemplateId?: string | null;
   permissionPreset?: HelarcRunPermissionPreset;
   createdAt: string;
   metadata?: Readonly<Record<string, unknown>>;
@@ -22,7 +21,6 @@ export interface HelarcRunInput {
   workspaceProfileId: string;
   additionalWorkspaceProfileIds: readonly string[];
   providerProfileId: string;
-  taskTemplateId: string | null;
   permissionPreset: HelarcRunPermissionPreset;
   createdAt: string;
   metadata: Readonly<Record<string, unknown>>;
@@ -114,7 +112,6 @@ export function createHelarcRunInput(
       workspaceProfileId,
       additionalWorkspaceProfileIds,
       providerProfileId,
-      taskTemplateId: normalizeNullableString(input.taskTemplateId ?? null),
       permissionPreset,
       createdAt: input.createdAt,
       metadata: input.metadata ?? {},

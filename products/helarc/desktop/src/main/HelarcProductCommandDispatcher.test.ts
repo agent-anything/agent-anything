@@ -219,7 +219,6 @@ function snapshot(
     status,
     workspace: null,
     workspaceProfiles: [],
-    taskTemplates: [],
     provider: {
       configured: false,
       nativeToolInteraction: { supported: false },

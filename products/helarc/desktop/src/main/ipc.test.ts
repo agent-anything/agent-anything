@@ -29,6 +29,19 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  it("restricts workbench reads to the registered main frame and does not route invalid senders", async () => {
+    const frame = { url: "file:///helarc/index.html" };
+    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn() };
+    const readRunWorkbench = vi.fn(async () => ({ status: "rejected", code: "not_found" }));
+    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller: controllerDouble(mainSnapshot(), { workbench: { readRunWorkbench } }) });
+    const read = requiredHandler(HELARC_IPC_CHANNELS.readRunWorkbench);
+    expect(await read({ sender: {}, senderFrame: frame }, {})).toMatchObject({ status: "rejected", code: "invalid_query" });
+    expect(await read({ sender: contents, senderFrame: { ...frame } }, {})).toMatchObject({ status: "rejected", code: "invalid_query" });
+    expect(readRunWorkbench).not.toHaveBeenCalled();
+    expect(await read({ sender: contents, senderFrame: frame }, {})).toMatchObject({ code: "not_found" });
+    expect(readRunWorkbench).toHaveBeenCalledOnce();
+    expect(await requiredHandler(HELARC_IPC_CHANNELS.openExternalLink)({ sender: contents, senderFrame: frame }, { url: "file:///private" })).toEqual({ ok: false });
+  });
   const PRIVATE_RESULT = "private-main-command-result";
 
   beforeEach(() => {
@@ -528,7 +541,6 @@ function mainSnapshot(
     status,
     workspace: null,
     workspaceProfiles: [],
-    taskTemplates: [],
     provider: {
       configured: false,
       nativeToolInteraction: { supported: false },

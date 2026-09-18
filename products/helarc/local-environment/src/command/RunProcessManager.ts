@@ -22,6 +22,7 @@ export interface ManagedProcessStart {
   readonly displayFiles: { readonly stdout: string; readonly stderr: string };
   readonly maximumOutputBytes: number;
   readonly background: boolean;
+  readonly displayCommand?: { readonly shell: string; readonly command: string };
   readonly consumeFinalCwd?: () => Promise<string | null>;
   readonly commitFinalCwd?: (path: string) => Promise<string | null>;
 }
@@ -145,6 +146,18 @@ export class RunProcessManager {
   }
 
   get(runId: string, executionId: string): ProcessSnapshot { return this.find(runId, executionId).snapshot; }
+  getDisplayDescriptor(runId: string, executionId: string) {
+    const entry = this.find(runId, executionId);
+    return { shell: entry.input.displayCommand?.shell ?? null, command: entry.input.displayCommand?.command ?? null };
+  }
+  readOutput(runId: string, executionId: string, cursor?: string) {
+    const entry = this.find(runId, executionId);
+    if (!entry.output) throw new ProcessManagerError("process_output_unavailable");
+    return { ...entry.output.read(cursor), snapshot: entry.snapshot };
+  }
+  getOutputPaths(runId: string, executionId: string): ProcessOutputPaths {
+    return { ...this.find(runId, executionId).input.paths };
+  }
   getOutputArtifacts(runId: string): readonly ProcessOutputPaths[] {
     return Object.freeze([...this.executions.values()].filter(entry => entry.input.runId === runId)
       .map(entry => Object.freeze({...entry.input.paths})));

@@ -95,11 +95,18 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
     if (candidate.kind !== "complete") {
       return { valid: false as const, message: "Helarc output kind is invalid." };
     }
+    const source = candidate.source;
+    if (!isRecord(source) || !(source.kind === "product_status" ||
+      (source.kind === "model_finish" && typeof source.turnId === "string") ||
+      (source.kind === "model_text" && typeof source.turnId === "string" && Array.isArray(source.modelItemIds) && source.modelItemIds.every(id => typeof id === "string")))) {
+      return { valid: false as const, message: "Helarc output requires explicit provenance." };
+    }
     return {
       valid: true as const,
       output: Object.freeze({
         kind: "complete" as const,
         summary: candidate.summary,
+        source: structuredClone(source) as HelarcAgentOutput["source"],
       }),
     };
   },

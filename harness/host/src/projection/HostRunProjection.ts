@@ -40,6 +40,7 @@ export type HostRunProjectionStatus =
 export type HostPlanProjection = PlanProjection;
 
 export interface HostPendingInteractionProjection {
+  readonly runId: string;
   readonly request: InteractionRequestRef;
   readonly presentation: unknown;
   readonly disclosureClass: "public" | "internal" | "sensitive";

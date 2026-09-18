@@ -1,4 +1,3 @@
-import { createBuiltInHelarcTaskTemplates } from "@agent-anything/helarc/task";
 import { describe, expect, it } from "vitest";
 import { prepareHelarcRunStart } from "./prepareHelarcRunStart.js";
 
@@ -17,7 +16,6 @@ describe("prepareHelarcRunStart", () => {
           taskText: "Inspect workspace",
           workspaceProfileId: "workspace-1",
           providerProfileId: "provider-1",
-          taskTemplateId: null,
           permissionPreset: "ask_for_approval",
         },
         task: {
@@ -28,7 +26,6 @@ describe("prepareHelarcRunStart", () => {
           metadata: {
             runId: "run-1",
             providerProfileId: "provider-1",
-            taskTemplateId: null,
           },
         },
         workspace: {
@@ -52,57 +49,6 @@ describe("prepareHelarcRunStart", () => {
     expect(JSON.stringify(result)).not.toContain("authorization");
   });
 
-  it("derives task text from a selected template when manual text is empty", () => {
-    const result = prepareHelarcRunStart({
-      ...input(),
-      taskText: " ",
-      taskTemplateId: "inspect-code",
-      taskTemplates: createBuiltInHelarcTaskTemplates(),
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      prepared: {
-        run: {
-          taskTemplateId: "inspect-code",
-        },
-        task: {
-          input: {
-            prompt: expect.stringContaining("Inspect the relevant code"),
-          },
-        },
-      },
-    });
-    if (result.ok) {
-      expect(result.prepared.run.taskText).toBe(result.prepared.task.input.prompt);
-      expect(result.prepared.run.taskText).toContain("Constraints:");
-    }
-  });
-
-  it("keeps edited task text while preserving the selected template id", () => {
-    const result = prepareHelarcRunStart({
-      ...input(),
-      taskText: "Inspect only the README.",
-      taskTemplateId: "inspect-code",
-      taskTemplates: createBuiltInHelarcTaskTemplates(),
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      prepared: {
-        run: {
-          taskText: "Inspect only the README.",
-          taskTemplateId: "inspect-code",
-        },
-        task: {
-          input: {
-            prompt: "Inspect only the README.",
-          },
-        },
-      },
-    });
-  });
-
   it("retains additional Workspace profiles without changing the primary", () => {
     const result = prepareHelarcRunStart({
       ...input(),
@@ -124,7 +70,7 @@ describe("prepareHelarcRunStart", () => {
     });
   });
 
-  it("rejects stale workspace, provider, and template references", () => {
+  it("rejects stale workspace and provider references", () => {
     expect(prepareHelarcRunStart({
       ...input(),
       workspaceProfileId: "missing-workspace",
@@ -141,18 +87,9 @@ describe("prepareHelarcRunStart", () => {
       error: { code: "provider_profile_not_found" },
     });
 
-    expect(prepareHelarcRunStart({
-      ...input(),
-      taskText: "Inspect workspace.",
-      taskTemplateId: "missing-template",
-      taskTemplates: createBuiltInHelarcTaskTemplates(),
-    })).toMatchObject({
-      ok: false,
-      error: { code: "task_template_not_found" },
-    });
   });
 
-  it("rejects empty task text when no template can provide it", () => {
+  it("rejects empty task text ", () => {
     expect(prepareHelarcRunStart({
       ...input(),
       taskText: " ",

@@ -362,6 +362,7 @@ function projectionCommit(
       },
       product: {
         runId: "run-1",
+        presentation: { revision: 0, nextSequence: 1, records: [], labels: [], plans: {}, sourceSequences: {}, omittedRecords: 0, retainedBytes: 0 },
         sequence,
         phase: { kind: "none" },
         qualification: qualificationProjection(),
@@ -383,6 +384,7 @@ function terminalCommit(): HelarcRunTerminalCommit {
     committedAt: COMPLETED_AT,
     expectedThreadRevision: 1,
     terminal: {
+      finalProjection: null,
       host: {
         runId: "run-1",
         taskId: "task-1",
@@ -421,6 +423,7 @@ function terminalCommit(): HelarcRunTerminalCommit {
           taskId: "task-1",
           workspace: { primaryId: "workspace-1", additionalIds: [] },
           agentSummary: "Done",
+          source: { kind: "product_status" },
           runtimeStatus: "completed",
           enforcement: { selected: "disabled", status: "not_exercised", code: null },
           safeErrors: [],

@@ -17,3 +17,6 @@ export type {
   CodeAgentCommandLimits,
 } from "./ProcessContracts.js";
 export { HELARC_SHELL_COMMAND_OUTCOME_REVISION } from "./ShellCommandOutcome.js";
+export { readRetainedProcessOutput, registerRetainedProcessOutput, RetainedProcessOutputError } from "./RetainedProcessOutput.js";
+export type { RetainedProcessOutputLocator } from "./RetainedProcessOutput.js";
+export type { ProcessOutputPaths } from "./ProcessOutputStore.js";

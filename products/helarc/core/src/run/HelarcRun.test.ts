@@ -10,7 +10,6 @@ describe("HelarcRun", () => {
       taskText: " Inspect workspace ",
       workspaceProfileId: " workspace-1 ",
       providerProfileId: " provider-1 ",
-      taskTemplateId: " template-1 ",
       permissionPreset: "full_access",
       createdAt: "2026-07-04T00:00:00.000Z",
       metadata: { source: "test" },
@@ -24,7 +23,6 @@ describe("HelarcRun", () => {
         workspaceProfileId: "workspace-1",
         additionalWorkspaceProfileIds: [],
         providerProfileId: "provider-1",
-        taskTemplateId: "template-1",
         permissionPreset: "full_access",
         createdAt: "2026-07-04T00:00:00.000Z",
         metadata: { source: "test" },
@@ -44,7 +42,6 @@ describe("HelarcRun", () => {
     expect(result).toMatchObject({
       ok: true,
       input: {
-        taskTemplateId: null,
         permissionPreset: "ask_for_approval",
         metadata: {},
       },

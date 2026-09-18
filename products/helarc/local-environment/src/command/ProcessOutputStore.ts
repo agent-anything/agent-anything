@@ -119,7 +119,8 @@ export class ProcessOutputStore {
           streams: Object.fromEntries((["stdout", "stderr"] as const).map((stream) => {
             const state = this.streams[stream];
             return [stream, { receivedBytes: state.received, retainedBytes: state.retained,
-              omittedBytes: state.omitted, projection: state.projection, projectedBytes: state.projected }];
+              omittedBytes: state.omitted, projection: state.projection, projectedBytes: state.projected,
+              textBytes: state.textBytes }];
           })), persistenceFailure: this.failure }));
         for (const handle of this.handles()) await handle.sync();
       } catch (error) { this.failure ??= message(error); }

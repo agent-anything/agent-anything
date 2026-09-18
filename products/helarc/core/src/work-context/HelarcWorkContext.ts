@@ -177,6 +177,7 @@ export interface HelarcRunProjectionRecord {
 export interface HelarcRunTerminalRecord {
   readonly host: HostTerminalRunProjection;
   readonly product: HelarcProductResult | null;
+  readonly finalProjection: HelarcRunProjectionRecord | null;
 }
 
 export interface HelarcPersistedRun {
@@ -692,7 +693,11 @@ function normalizeTerminalRecord(
     host.taskId !== run.taskId ||
     !isIsoDateTime(host.completedAt) || host.completedAt < run.startedAt ||
     host.completedAt > updatedAt || !isHostTerminalProjection(host) ||
-    !isCompatibleProductTerminal(run, host, terminal.product)
+    !isCompatibleProductTerminal(run, host, terminal.product) ||
+    (terminal.finalProjection !== null && (!terminal.finalProjection ||
+      terminal.finalProjection.host.runId !== run.harnessRunId ||
+      terminal.finalProjection.product.runId !== run.id ||
+      terminal.finalProjection.host.terminal?.status !== host.status))
   ) {
     return reject("run_terminal_invalid", "Run terminal record is invalid.");
   }
@@ -1132,6 +1137,9 @@ function isProductRunProjection(value: unknown): value is HelarcProductRunProjec
     projection.result === null &&
     isModelQualificationSafeProjection(projection.qualification) &&
     Array.isArray(projection.activity) &&
+    Array.isArray(projection.commands) &&
+    projection.presentation !== null && typeof projection.presentation === "object" &&
+    Array.isArray(projection.presentation.records) &&
     projection.phase !== null && typeof projection.phase === "object";
 }
 

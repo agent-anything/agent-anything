@@ -27,14 +27,6 @@ export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSna
       lastOpenedAt: profile.lastOpenedAt,
       trustState: profile.trustState,
     })),
-    taskTemplates: snapshot.taskTemplates.map((template) => ({
-      id: template.id,
-      title: template.title,
-      description: template.description,
-      promptText: template.promptText,
-      category: template.category,
-      defaultConstraints: [...template.defaultConstraints],
-    })),
     provider: projectProvider(snapshot.provider),
     acceptedTask: snapshot.acceptedTask === null
       ? null
@@ -62,6 +54,7 @@ export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSna
             createdAt: message.createdAt,
             relatedRunIds: [...message.relatedRunIds],
             relatedArtifactIds: [...message.relatedArtifactIds],
+            ...(message.outputSource ? { outputSource: message.outputSource } : {}),
           })),
           artifacts: snapshot.activeThread.artifacts.map((artifact) => ({
             id: artifact.id,
@@ -348,7 +341,7 @@ function projectProviderProfile(
   };
 }
 
-function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
+export function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
   return {
     productRunId: run.productRunId,
     harnessRunId: run.harnessRunId,
@@ -375,6 +368,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
           },
     },
     product: {
+      presentationRevision: run.product.sequence,
       phase: projectProductPhase(run.product.phase),
       qualification: projectModelQualification(run.product.qualification),
       continuation: run.product.continuation === null
@@ -386,17 +380,6 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             reason: run.product.continuation.reason,
             occurredAt: run.product.continuation.occurredAt,
           },
-      commands:run.product.commands.map(command=>({...command})),
-      activity: run.product.activity.map((activity) => ({
-        id: activity.id,
-        sequence: activity.sequence,
-        source: projectActivitySource(activity.source),
-        timestamp: activity.timestamp,
-        kind: activity.kind,
-        title: activity.title,
-        detail: activity.detail,
-        metadata: projectActivityMetadata(activity.metadata),
-      })),
       result: run.product.result === null
         ? null
         : {
@@ -406,6 +389,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             ),
             output: {
               taskId: run.product.result.output.taskId,
+              source: run.product.result.output.source,
               workspace: {
                 primaryId: run.product.result.output.workspace.primaryId,
                 additionalIds: [...run.product.result.output.workspace.additionalIds],
@@ -541,9 +525,14 @@ function projectContinuationTargets(
   }));
 }
 
+export function projectWorkbenchActivity(activity: NonNullable<MainSnapshot["run"]>["product"]["activity"][number]): import("../shared/HelarcDesktopApi.js").HelarcRunActivitySnapshot {
+  return { id: activity.id, sequence: activity.sequence, source: projectActivitySource(activity.source), timestamp: activity.timestamp,
+    kind: activity.kind, title: activity.title, detail: activity.detail, metadata: projectActivityMetadata(activity.metadata) };
+}
+
 function projectActivitySource(
   source: NonNullable<MainSnapshot["run"]>["product"]["activity"][number]["source"],
-): HelarcRunSnapshot["product"]["activity"][number]["source"] {
+): import("../shared/HelarcDesktopApi.js").HelarcRunActivitySourceSnapshot {
   if (source.lineage.kind === "root") {
     return {
       runId: source.runId,
@@ -663,6 +652,7 @@ function projectPendingInteraction(
 ): HelarcPendingInteractionSnapshot {
   const base = {
     request: projectInteractionRequestRef(pending.request),
+    runId: pending.runId,
     phase: pending.phase,
     disclosureClass: pending.disclosureClass,
     expiresAt: pending.expiresAt,

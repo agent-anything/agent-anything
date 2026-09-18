@@ -100,6 +100,7 @@ describe("Helarc work context domain", () => {
       ...original.runs[0]!,
       harnessRunId: "harness-run-1",
       terminal: {
+        finalProjection: null,
         host: {
           runId: "harness-run-1",
           taskId: "task-1",

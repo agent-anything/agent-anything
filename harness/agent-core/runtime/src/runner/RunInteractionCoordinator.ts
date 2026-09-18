@@ -324,10 +324,12 @@ export class RunInteractionCoordinator {
   }
 
   getPendingProjections(): readonly {
+    readonly runId: string;
     readonly envelope: SafeInteractionEnvelope<unknown>;
     readonly blockingScope: PendingInteractionRef["blockingScope"];
   }[] {
     return Object.freeze([...this.active.values()].map((active) => Object.freeze({
+      runId: this.dependencies.runId,
       envelope: active.envelope,
       blockingScope: active.pending.blockingScope,
     })));

@@ -2,6 +2,9 @@ import { ProviderBackedController } from "@agent-anything/agent-runtime/controll
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
+import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
+import { appendHelarcRunPresentation, labelHelarcRunPresentation } from "../run/presentation/HelarcRunPresentation.js";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
 import {
   createDefaultHelarcInstructionSettings,
@@ -125,6 +128,8 @@ export interface HelarcProductComposition {
   readonly taskFulfillment: HelarcTaskFulfillmentHook;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
+  recordTranscript(record: RunTranscriptRecord): void;
+  recordRunLineage(runId: string, lineage: RunLineage): void;
   recordCommandProgress(command:import("../run/HelarcRunProjection.js").HelarcCommandProgress):void;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
   recordRuntimeEvent(event: RuntimeEvent): {
@@ -301,6 +306,16 @@ export async function createHelarcProductComposition(
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {
       return productProjection;
+    },
+    recordTranscript(record: RunTranscriptRecord): void {
+      if (productProjection.result) return;
+      const presentation = appendHelarcRunPresentation(productProjection.presentation, record);
+      if (presentation !== productProjection.presentation) publishProductUpdate({ kind: "presentation_observed", presentation });
+    },
+    recordRunLineage(runId: string, lineage: RunLineage): void {
+      if (productProjection.result) return;
+      const presentation = labelHelarcRunPresentation(productProjection.presentation, runId, lineage, input.task.input.prompt);
+      if (presentation !== productProjection.presentation) publishProductUpdate({ kind: "presentation_observed", presentation });
     },
     recordCommandProgress(command:import("../run/HelarcRunProjection.js").HelarcCommandProgress):void {
       if(productProjection.result!==null||productProjection.commands.some(item=>item.executionId===command.executionId&&item.revision>=command.revision))return;

@@ -280,6 +280,8 @@ function projectionCommit(
       },
       product: {
         runId: "run-1",
+        presentation: { revision: 0, nextSequence: 1, records: [], labels: [], plans: {}, sourceSequences: {}, omittedRecords: 0, retainedBytes: 0 },
+        commands: [],
         sequence: projectionSequence,
         phase: { kind: "none" },
         qualification: qualificationProjection(),
@@ -300,6 +302,7 @@ function terminalCommit(expectedThreadRevision: number): HelarcRunTerminalCommit
     committedAt: COMPLETED_AT,
     expectedThreadRevision,
     terminal: {
+      finalProjection: null,
       host: {
         runId: "harness-run-1",
         taskId: "task-1",

@@ -30,6 +30,7 @@ import type { AgentInstructionBindingProjection } from "../instructions/index.js
 import type { DescendantContinuationTargetProjection } from "../delegation/index.js";
 
 export interface RunPendingInteractionProjection {
+  readonly runId: string;
   readonly envelope: SafeInteractionEnvelope<unknown>;
   readonly blockingScope: PendingInteractionRef["blockingScope"];
 }
