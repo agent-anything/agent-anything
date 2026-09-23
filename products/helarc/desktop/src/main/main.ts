@@ -12,6 +12,7 @@ import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfile
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
 import { FileHelarcThreadStore } from "./thread/index.js";
 import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
+import { FileHelarcProjectStore } from "./project/FileHelarcProjectStore.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
 import { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
@@ -65,6 +66,7 @@ async function createWindow(): Promise<void> {
   const threadStore = new FileHelarcThreadStore(
     join(userDataPath, "threads.json"),
   );
+  const projectStore = new FileHelarcProjectStore(join(userDataPath, "projects.json"));
   const modelContinuationStore = new FileHelarcModelContinuationStore(
     join(userDataPath, "model-continuations.json"),
   );
@@ -79,6 +81,7 @@ async function createWindow(): Promise<void> {
     contextManifestStore.listManifests(),
   ]);
   const controller = new HelarcMainController({
+    projects: await projectStore.listProjects(),
     responseDelivery: "streaming",
     commandOutputRegistry: new CommandOutputRegistry(join(userDataPath, "command-output-locators.json")),
     inspection: inspectionSource,
@@ -94,6 +97,7 @@ async function createWindow(): Promise<void> {
     runTranscriptPort: runTranscriptStore,
   });
   registerHelarcIpc({
+    projectStore,
     inspection: inspectionSource,
     instructionSettingsStore,
     window,

@@ -22,7 +22,7 @@ import {
 } from "./HelarcThreadSummary.js";
 
 export interface HelarcThreadStoreDocumentV3 {
-  readonly formatVersion: 3;
+  readonly formatVersion: 4;
   readonly aggregates: readonly HelarcThreadAggregate[];
 }
 
@@ -123,7 +123,7 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
         result.aggregate.record.thread.id,
         this.maxThreads,
       );
-      await this.writeDocument(file, { formatVersion: 3, aggregates: retained });
+      await this.writeDocument(file, { formatVersion: 4, aggregates: retained });
       return result;
     });
   }
@@ -133,7 +133,7 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
   ): Promise<HelarcThreadStoreDocumentV3> {
     const contents = await file.readText();
     if (contents === null) {
-      return Object.freeze({ formatVersion: 3, aggregates: Object.freeze([]) });
+      return Object.freeze({ formatVersion: 4, aggregates: Object.freeze([]) });
     }
 
     let parsed: unknown;
@@ -167,7 +167,7 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
       aggregates.push(normalized.aggregate);
     }
     return Object.freeze({
-      formatVersion: 3,
+      formatVersion: 4,
       aggregates: Object.freeze(aggregates),
     });
   }
@@ -209,11 +209,11 @@ function sortAggregates(
 }
 
 function isStoreDocument(value: unknown): value is {
-  readonly formatVersion: 3;
+  readonly formatVersion: 4;
   readonly aggregates: readonly unknown[];
 } {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return Object.keys(record).length === 2 && record.formatVersion === 3 &&
+  return Object.keys(record).length === 2 && record.formatVersion === 4 &&
     Array.isArray(record.aggregates);
 }

@@ -4,6 +4,9 @@ export const HELARC_PRODUCT_COMMAND_VERSION = 1 as const;
 export const HELARC_PRODUCT_COMMAND_RECEIPT_LIMIT = 4_096;
 
 export type HelarcProductCommandKind =
+  | "project.save"
+  | "project.select"
+  | "project.chooseFolder"
   | "workspace.choose"
   | "workspace.select"
   | "provider.save"
@@ -20,6 +23,15 @@ export type HelarcProductRunStartTarget =
     };
 
 export interface HelarcProductCommandPayloadMap {
+  readonly "project.save": {
+    readonly id: string | null;
+    readonly expectedRevision: number | null;
+    readonly name: string;
+    readonly primaryProfileId: string;
+    readonly additionalProfileIds: readonly string[];
+  };
+  readonly "project.select": { readonly projectId: string };
+  readonly "project.chooseFolder": Record<string, never>;
   readonly "inspection.save": { readonly settings: import("./HelarcInspectionSettings.js").HelarcInspectionSettings };
   readonly "instructions.save": { readonly settings: HelarcInstructionSettings };
   readonly "workspace.choose": Record<string, never>;

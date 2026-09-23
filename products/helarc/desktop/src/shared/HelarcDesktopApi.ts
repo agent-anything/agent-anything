@@ -10,6 +10,16 @@ export interface HelarcWorkspaceSnapshot {
   path: string;
 }
 
+export interface HelarcProjectSnapshot {
+  readonly id: string;
+  readonly revision: number;
+  readonly name: string;
+  readonly primaryProfileId: string;
+  readonly additionalProfileIds: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export type HelarcWorkspaceTrustState = "trusted";
 
 export interface HelarcWorkspaceProfileSnapshot {
@@ -528,6 +538,7 @@ export interface HelarcArtifactSnapshot {
 }
 
 export interface HelarcActiveThreadSnapshot {
+  projectId: string | null;
   id: string;
   title: string;
   status: "open" | "closed" | "archived";
@@ -552,6 +563,7 @@ export interface HelarcThreadLatestRunSnapshot {
 }
 
 export interface HelarcThreadSummarySnapshot {
+  projectId: string | null;
   id: string;
   title: string;
   status: "open" | "closed" | "archived";
@@ -562,6 +574,8 @@ export interface HelarcThreadSummarySnapshot {
 }
 
 export interface HelarcMainSnapshot {
+  projects: readonly HelarcProjectSnapshot[];
+  selectedProjectId: string | null;
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfileSnapshot[];
@@ -661,6 +675,9 @@ export interface HelarcChooseWorkspaceInput {
 }
 
 export interface HelarcProductCommandResultMap {
+  readonly "project.select": HelarcMainSnapshot;
+  readonly "project.save": { readonly ok: boolean; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
+  readonly "project.chooseFolder": { readonly profile: HelarcWorkspaceProfileSnapshot | null; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
   readonly "instructions.save": import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot;
   readonly "inspection.save": import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot;
   readonly "workspace.choose": HelarcMainSnapshot;
@@ -935,6 +952,9 @@ export interface HelarcDesktopApi {
     readonly settings: import("./HelarcInstructionSettings.js").HelarcInstructionSettings;
   }): Promise<HelarcProductCommandReceipt<"instructions.save">>;
   readonly bridgeVersion: 11;
+  saveProject(input: import("./HelarcDesktopCommand.js").HelarcProductCommandPayloadMap["project.save"] & { readonly commandId: string }): Promise<HelarcProductCommandReceipt<"project.save">>;
+  selectProject(input: { readonly commandId: string; readonly projectId: string }): Promise<HelarcProductCommandReceipt<"project.select">>;
+  chooseProjectFolder(input: { readonly commandId: string }): Promise<HelarcProductCommandReceipt<"project.chooseFolder">>;
   readonly productId: "helarc";
   chooseWorkspace(
     input: HelarcChooseWorkspaceInput,

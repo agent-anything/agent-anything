@@ -31,6 +31,47 @@ import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
 type InteractionRequestRef = NonNullable<HelarcMainSnapshot["run"]>["host"]["pendingInteractions"][number]["request"];
 
 describe("HelarcMainController", () => {
+  it("binds Project folders per Run and applies edits only to subsequent work", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-project-binding-"));
+    const firstPath = join(directory, "first");
+    const secondPath = join(directory, "second");
+    await mkdir(firstPath); await mkdir(secondPath);
+    const at = new Date().toISOString();
+    const project = { id: "project-1", revision: 1, name: "Example", primaryProfileId: "first", additionalProfileIds: ["second"], createdAt: at, updatedAt: at };
+    const profiles = [firstPath, secondPath].map((path, index) => ({ id: index ? "second" : "first", displayName: index ? "Second" : "First", path, lastOpenedAt: at, trustState: "trusted" as const }));
+    const provider = new DeferredCompleteProvider();
+    const store = new FileHelarcThreadStore(join(directory, "threads.json"));
+    const controller = new HelarcMainController({ provider, threadStore: store, projects: [project], workspaceProfiles: profiles });
+    expect(controller.selectProject(project.id).workspace?.path).toBe(firstPath);
+    const first = await controller.startRun({ taskText: "Inspect", target: { kind: "new_thread" } });
+    if (!first.ok) throw new Error(first.error.message);
+    await vi.waitFor(() => expect(provider.callCount).toBe(1));
+    const changed = { ...project, revision: 2, name: "Changed", primaryProfileId: "second", additionalProfileIds: [] };
+    controller.setProjects([changed]);
+    expect(controller.getSnapshot().workspace?.path).toBe(firstPath);
+    expect((await controller.openThread(first.threadId)).snapshot.workspace?.path).toBe(firstPath);
+    expect(controller.selectProject(project.id).error?.code).toBe("run_already_active");
+    const before = (await store.loadThread(first.threadId))!.runs[0]!;
+    expect(before.project).toEqual({ id: project.id, revision: 1 });
+    provider.complete();
+    await waitForSnapshot(controller, (snapshot) => snapshot.threadSummaries[0]?.latestRun?.status === "completed");
+    expect(controller.getSnapshot().workspace?.path).toBe(secondPath);
+    const complete = new CompleteProvider();
+    const currentProvider = controller.getSnapshot().provider;
+    if (!currentProvider.configured) throw new Error("Provider unavailable");
+    controller.configureProvider({ provider: complete, profile: currentProvider.activeProfile });
+    const second = await controller.startRun({ taskText: "Inspect again", target: { kind: "continue_thread", threadId: first.threadId } });
+    if (!second.ok) throw new Error(second.error.message);
+    await waitForSnapshot(controller, (snapshot) => snapshot.threadSummaries[0]?.latestRun?.runId === second.productRunId && snapshot.threadSummaries[0]?.latestRun?.status === "completed");
+    const stored = (await store.loadThread(first.threadId))!;
+    expect(stored.thread.projectId).toBe(project.id);
+    expect(stored.thread.workspace.primary.path).toBe(firstPath);
+    expect(stored.runs[0]!.workspace).toEqual(before.workspace);
+    expect(stored.runs.map((run) => run.project)).toEqual([{ id: project.id, revision: 1 }, { id: project.id, revision: 2 }]);
+    expect(stored.runs[1]!.workspace).not.toEqual(before.workspace);
+    const reopened = new HelarcMainController({ projects: [changed], workspaceProfiles: profiles, threadStore: new FileHelarcThreadStore(join(directory, "threads.json")) });
+    expect((await reopened.openThread(first.threadId)).snapshot).toMatchObject({ selectedProjectId: project.id, workspace: { path: secondPath } });
+  }, 20_000);
   it("persists display checkpoints and final provenance through one ordered writer with Inspector disabled", async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-response-checkpoint-"));
     const store = new FileHelarcThreadStore(join(directory,"threads.json"));

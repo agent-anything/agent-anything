@@ -1,6 +1,9 @@
 import {
   createDefaultHelarcInstructionSettings,
   snapshotHelarcInstructionSettings,
+  snapshotHelarcProject,
+  type HelarcProject,
+  type HelarcProjectRef,
   type HelarcInstructionSettings,
 } from "@agent-anything/helarc/configuration";
 import {
@@ -158,6 +161,7 @@ export interface HelarcArtifactSnapshot {
 }
 
 export interface HelarcActiveThreadSnapshot {
+  projectId: string | null;
   id: string;
   title: string;
   status: "open" | "closed" | "archived";
@@ -168,6 +172,7 @@ export interface HelarcActiveThreadSnapshot {
 }
 
 export interface HelarcThreadSummarySnapshot {
+  projectId: string | null;
   id: string;
   title: string;
   status: "open" | "closed" | "archived";
@@ -185,6 +190,8 @@ export interface HelarcThreadLatestRunSnapshot {
 }
 
 export interface HelarcMainSnapshot {
+  projects: readonly HelarcProject[];
+  selectedProjectId: string | null;
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfile[];
@@ -197,6 +204,7 @@ export interface HelarcMainSnapshot {
 }
 
 export type HelarcMainErrorCode =
+  | "project_invalid"
   | "provider_config_missing"
   | "provider_config_invalid"
   | "provider_not_available"
@@ -267,6 +275,7 @@ type HelarcRunStartCommitTarget =
     };
 
 interface ResolvedHelarcRunStartTarget {
+  readonly project: HelarcProjectRef | null;
   readonly threadId: string;
   readonly startedAt: string;
   readonly workspaceProfileId: string;
@@ -285,6 +294,7 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  projects?: readonly HelarcProject[];
   responseDelivery?: "buffered" | "streaming";
   commandOutputRegistry?: CommandOutputRegistry;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
@@ -327,6 +337,8 @@ export class HelarcMainController {
   private readonly commandOutputRegistry: CommandOutputRegistry;
   private readonly inspection: import("./inspection/HelarcInspection.js").HelarcInspection | undefined;
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
+  private projects: readonly HelarcProject[] = [];
+  private selectedProjectId: string | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
   private runProjection: HelarcRunProjection | null = null;
   private lastError: HelarcMainError | null = null;
@@ -399,6 +411,7 @@ export class HelarcMainController {
     );
     this.providerInstance = input.provider ?? null;
     this.workspaceProfiles = input.workspaceProfiles ?? [];
+    this.projects = (input.projects ?? []).map(snapshotHelarcProject);
     this.threadSummaries = (input.threadSummaries ?? []).map(createThreadSummarySnapshot);
     this.nextTaskNumber = resolveNextTaskNumber(input.threadSummaries ?? []);
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
@@ -441,6 +454,8 @@ export class HelarcMainController {
 
   getSnapshot(): HelarcMainSnapshot {
     return {
+      projects: this.projects,
+      selectedProjectId: this.selectedProjectId,
       status: this.getCurrentStatus(),
       workspace: this.selectedWorkspace,
       workspaceProfiles: this.workspaceProfiles,
@@ -509,6 +524,28 @@ export class HelarcMainController {
     return this.publishSnapshot();
   }
 
+  setProjects(projects: readonly HelarcProject[]): HelarcMainSnapshot {
+    this.projects = projects.map(snapshotHelarcProject);
+    if (this.activeRunSlot.kind === "empty") this.refreshProjectWorkspace();
+    return this.publishSnapshot();
+  }
+
+  selectProject(projectId: string): HelarcMainSnapshot {
+    if (this.activeRunSlot.kind !== "empty") return this.fail("run_already_active", "Wait for the current work to finish before opening another conversation.");
+    const project = this.projects.find((item) => item.id === projectId);
+    const primary = this.workspaceProfiles.find((item) => item.id === project?.primaryProfileId);
+    if (!project || !primary) return this.fail("project_invalid", "Project folders are unavailable.");
+    return this.selectWorkspace({ id: primary.id, name: primary.displayName, path: primary.path }, project.id);
+  }
+
+  private refreshProjectWorkspace(): void {
+    if (this.selectedProjectId === null) return;
+    const project = this.projects.find((item) => item.id === this.selectedProjectId);
+    const primary = this.workspaceProfiles.find((item) => item.id === project?.primaryProfileId);
+    this.selectedWorkspace = primary ? { id: primary.id, name: primary.displayName, path: primary.path } : null;
+    this.inactiveStatus = primary ? "workspace_selected" : "idle";
+  }
+
   selectWorkspaceProfile(profile: HelarcWorkspaceProfile): HelarcMainSnapshot {
     this.workspaceProfiles = [
       profile,
@@ -525,11 +562,12 @@ export class HelarcMainController {
     return this.fail(code, message);
   }
 
-  private selectWorkspace(workspace: HelarcWorkspaceSnapshot): HelarcMainSnapshot {
+  private selectWorkspace(workspace: HelarcWorkspaceSnapshot, projectId: string | null = null): HelarcMainSnapshot {
     if (this.activeRunSlot.kind !== "empty") {
       return this.fail("run_already_active", "A Helarc Run is already active.");
     }
     this.selectedWorkspace = workspace;
+    this.selectedProjectId = projectId;
     this.inactiveStatus = "workspace_selected";
     this.acceptedTask = null;
     this.runProjection = null;
@@ -585,6 +623,7 @@ export class HelarcMainController {
       threadId,
       workspaceProfileId,
       workspaceProfiles,
+      project,
     } = resolvedTarget.target;
     const preparedStart = prepareHelarcRunStart({
       runId,
@@ -666,6 +705,7 @@ export class HelarcMainController {
         persistentPolicyAmendments: this.policyAmendmentStore,
       });
       const startCommitResult = this.createRunStartCommit({
+        project,
         sequenceNumber,
         taskId,
         taskText: preparedStart.prepared.task.input.prompt,
@@ -766,12 +806,16 @@ export class HelarcMainController {
       this.detachRunProjectionSubscriptions();
     }
     this.currentThreadRecord = record;
+    this.selectedProjectId = record.thread.projectId;
     const primaryWorkspace = record.thread.workspace.primary;
-    this.selectedWorkspace = {
-      id: primaryWorkspace.profileId,
-      name: primaryWorkspace.displayName,
-      path: primaryWorkspace.path,
-    };
+    if (slot.kind === "empty") {
+      this.selectedWorkspace = {
+        id: primaryWorkspace.profileId,
+        name: primaryWorkspace.displayName,
+        path: primaryWorkspace.path,
+      };
+      this.refreshProjectWorkspace();
+    }
     this.inactiveStatus = "workspace_selected";
     this.lastError = null;
     return { ok: true, snapshot: this.publishSnapshot() };
@@ -790,6 +834,14 @@ export class HelarcMainController {
       );
     }
 
+    const project = this.projects.find((item) => item.id === this.selectedProjectId) ?? null;
+    if (this.selectedProjectId !== null && project === null) return rejectRunStartTarget("project_invalid", "Project was not found.");
+    const projectProfiles = project === null ? [] : [project.primaryProfileId, ...project.additionalProfileIds]
+      .map((id) => this.workspaceProfiles.find((profile) => profile.id === id));
+    if (projectProfiles.some((profile) => !profile)) return rejectRunStartTarget("project_invalid", "Project folders are unavailable.");
+    const capturedProfiles = projectProfiles as HelarcWorkspaceProfile[];
+    const projectRef = project === null ? null : Object.freeze({ id: project.id, revision: project.revision });
+
     if (target.kind === "new_thread") {
       const threadId = `helarc-thread-${sequenceNumber}`;
       const workspaceProfile = this.workspaceProfiles.find(
@@ -807,11 +859,12 @@ export class HelarcMainController {
       return {
         ok: true,
         target: {
+          project: projectRef,
           threadId,
           startedAt: requestedStartedAt,
-          workspaceProfileId: workspaceProfile.id,
-          additionalWorkspaceProfileIds: [],
-          workspaceProfiles: [workspaceProfile],
+          workspaceProfileId: project?.primaryProfileId ?? workspaceProfile.id,
+          additionalWorkspaceProfileIds: project?.additionalProfileIds ?? [],
+          workspaceProfiles: project ? capturedProfiles : [workspaceProfile],
           inputItems: [],
           commitTarget: {
             kind: "create_thread",
@@ -842,13 +895,14 @@ export class HelarcMainController {
         "Only an open Thread can be continued.",
       );
     }
+    if (record.thread.projectId !== this.selectedProjectId) return rejectRunStartTarget("project_invalid", "Conversation and Project do not match.");
 
     const primary = record.thread.workspace.primary;
-    if (
+    if (project === null && (
       selectedWorkspace.id !== primary.profileId ||
       selectedWorkspace.name !== primary.displayName ||
       selectedWorkspace.path !== primary.path
-    ) {
+    )) {
       return rejectRunStartTarget(
         "thread_workspace_mismatch",
         "The selected Workspace does not match the continued Thread.",
@@ -857,10 +911,10 @@ export class HelarcMainController {
 
     const startedAt = maxIsoDateTime(requestedStartedAt, record.thread.updatedAt);
     const workspaceProfiles: HelarcWorkspaceProfile[] = [];
-    for (const workspace of [
+    for (const workspace of project === null ? [
       record.thread.workspace.primary,
       ...record.thread.workspace.additional,
-    ]) {
+    ] : []) {
       const currentProfile = this.workspaceProfiles.find(
         (profile) => profile.id === workspace.profileId,
       );
@@ -906,13 +960,14 @@ export class HelarcMainController {
     return {
       ok: true,
       target: {
+        project: projectRef,
         threadId: record.thread.id,
         startedAt,
-        workspaceProfileId: primary.profileId,
-        additionalWorkspaceProfileIds: record.thread.workspace.additional.map(
+        workspaceProfileId: project?.primaryProfileId ?? primary.profileId,
+        additionalWorkspaceProfileIds: project?.additionalProfileIds ?? record.thread.workspace.additional.map(
           (workspace) => workspace.profileId,
         ),
-        workspaceProfiles,
+        workspaceProfiles: project ? capturedProfiles : workspaceProfiles,
         inputItems,
         commitTarget: {
           kind: "existing_thread",
@@ -1083,6 +1138,7 @@ export class HelarcMainController {
     if (this.activeRunSlot.kind === "empty" || this.activeRunSlot.token !== token) return;
     this.detachRunProjectionSubscriptions();
     this.activeRunSlot = { kind: "empty" };
+    this.refreshProjectWorkspace();
   }
 
   private detachRunProjectionSubscriptions(): void {
@@ -1101,6 +1157,7 @@ export class HelarcMainController {
   }
 
   private createRunStartCommit(input: {
+    project: HelarcProjectRef | null;
     sequenceNumber: number;
     taskId: string;
     taskText: string;
@@ -1136,6 +1193,7 @@ export class HelarcMainController {
     }
 
     const runResult = createHelarcPersistedRun({
+      project: input.project,
       id: input.runId,
       taskId: input.taskId,
       sessionId: threadId,
@@ -1161,6 +1219,7 @@ export class HelarcMainController {
     let target: HelarcRunStartCommit["target"];
     if (input.target.kind === "create_thread") {
       const threadResult = createHelarcThread({
+        projectId: input.project?.id ?? null,
         id: threadId,
         revision: 0,
         workspace: input.threadWorkspace,
@@ -1505,6 +1564,7 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
 
   const primaryWorkspace = record.thread.workspace.primary;
   return {
+    projectId: record.thread.projectId,
     id: record.thread.id,
     title: record.thread.title,
     status: record.thread.status,
@@ -1529,6 +1589,7 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
 function createThreadSummarySnapshot(summary: HelarcThreadSummary): HelarcThreadSummarySnapshot {
   const primaryWorkspace = summary.workspace.primary;
   return {
+    projectId: summary.projectId,
     id: summary.id,
     title: summary.title,
     status: summary.status,
@@ -1546,6 +1607,7 @@ function createThreadSummarySnapshot(summary: HelarcThreadSummary): HelarcThread
 function createThreadSummarySnapshotFromRecord(record: HelarcThreadRecord): HelarcThreadSummarySnapshot {
   const primaryWorkspace = record.thread.workspace.primary;
   return {
+    projectId: record.thread.projectId,
     id: record.thread.id,
     title: record.thread.title,
     status: record.thread.status,

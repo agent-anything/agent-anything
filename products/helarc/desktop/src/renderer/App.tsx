@@ -5,7 +5,7 @@ import {
   ArrowUp,
   CircleStop,
   FolderOpen,
-  History,
+  PanelLeft,
   PanelRight,
   Settings,
   X,
@@ -15,6 +15,7 @@ import {
 import type {
   HelarcActiveDelegationSnapshot,
   HelarcMainSnapshot,
+  HelarcProjectSnapshot,
 } from "../shared/HelarcDesktopApi.js";
 import type {
   ThreadRunSummary,
@@ -26,8 +27,12 @@ import { ConversationPlan } from "./plan/PlanView.js";
 import { AttentionPanel } from "./interactions/AttentionPanel.js";
 import { CurrentWorkPanel, displayStatus } from "./work/CurrentWorkPanel.js";
 import { useRead } from "./workbench/useRead.js";
+import { ProjectNavigation } from "./projects/ProjectNavigation.js";
+import { ProjectEditor } from "./projects/ProjectEditor.js";
 
 const initialSnapshot: HelarcMainSnapshot = {
+  projects: [],
+  selectedProjectId: null,
   status: "idle",
   workspace: null,
   workspaceProfiles: [],
@@ -52,7 +57,9 @@ const commandId = (kind: string) =>
 export function App() {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [settings, setSettings] = useState(false);
-  const [threads, setThreads] = useState(false);
+  const [threads, setThreads] = useState(() => typeof window === "undefined" || window.innerWidth >= 900);
+  const [navigationDocked, setNavigationDocked] = useState(() => typeof window === "undefined" || window.innerWidth >= 900);
+  const [projectEditor, setProjectEditor] = useState<{ project: HelarcProjectSnapshot | null } | null>(null);
   const [execution, setExecution] = useState(
     () => typeof window === "undefined" || window.innerWidth >= 1100,
   );
@@ -83,6 +90,8 @@ export function App() {
   const [layoutKey, setLayoutKey] = useState(0);
   const input = useRef<HTMLTextAreaElement>(null);
   const runActive = !!snapshot.run && !snapshot.run.display.terminal;
+  const workInFlight = runActive || snapshot.status === "starting";
+  const activeProject = snapshot.projects.find((project) => project.id === snapshot.selectedProjectId) ?? null;
   const attentionCount = runActive
     ? snapshot.run!.host.pendingInteractions.length
     : 0;
@@ -97,6 +106,12 @@ export function App() {
   useEffect(() => {
     const query = window.matchMedia("(min-width: 1100px)");
     const changed = () => setWide(query.matches);
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  }, []);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 900px)");
+    const changed = () => { setNavigationDocked(query.matches); setThreads(query.matches); };
     query.addEventListener("change", changed);
     return () => query.removeEventListener("change", changed);
   }, []);
@@ -140,18 +155,15 @@ export function App() {
       setBusy(false);
     }
   }
-  async function chooseWorkspace(profileId?: string) {
+  async function newConversation(projectId: string) {
     await perform(async () => {
-      const receipt = profileId
-        ? await window.helarc.selectWorkspaceProfile({
-            commandId: commandId("workspace.select"),
-            profileId,
-          })
-        : await window.helarc.chooseWorkspace({
-            commandId: commandId("workspace.choose"),
-          });
-      if (receipt.status === "handled") setSnapshot(receipt.result);
-      else setError(receipt.code);
+      const receipt = await window.helarc.selectProject({ commandId: commandId("project.select"), projectId });
+      if (receipt.status !== "handled") { setError(receipt.code); return; }
+      setSnapshot(receipt.result);
+      if (receipt.result.error) { setError(receipt.result.error.message); return; }
+      setNewThread(true); setDraft(""); setSteering(""); setSelected(null);
+      if (!navigationDocked) setThreads(false);
+      input.current?.focus();
     });
   }
   async function openThread(threadId: string) {
@@ -163,8 +175,9 @@ export function App() {
       if (receipt.status === "handled") {
         setSnapshot(receipt.result.snapshot);
         if (receipt.result.ok) {
-          setThreads(false);
+          if (!navigationDocked) setThreads(false);
           setNewThread(false);
+          setDraft(""); setSteering("");
         } else setError(receipt.result.error.message);
       } else setError(receipt.code);
     });
@@ -420,38 +433,54 @@ export function App() {
           <span className="wb-brand">H</span>
           <button
             className="wb-icon"
-            title="Threads"
-            aria-label="Threads"
-            onClick={() => setThreads(true)}
+            title="Projects"
+            aria-label="Toggle projects"
+            aria-pressed={threads}
+            onClick={() => {
+              if (!threads && !navigationDocked) setExecution(false);
+              setThreads((value) => !value);
+            }}
           >
-            <History size={18} />
+            <PanelLeft size={18} />
           </button>
           <div className="wb-title">
             <strong>
               {newThread
-                ? "New thread"
+                ? "New conversation"
                 : (snapshot.activeThread?.title ?? "Helarc")}
             </strong>
             <button
               type="button"
               className="wb-workspace"
-              title={snapshot.workspace?.path ?? "Choose workspace"}
-              onClick={() => void chooseWorkspace()}
-              disabled={busy || runActive}
+              title={snapshot.workspace ? `${workInFlight ? "Current work" : "Next work"}: ${snapshot.workspace.path}` : "Add project"}
+              onClick={() => {
+                if (activeProject || !snapshot.projects.length) setProjectEditor({ project: activeProject });
+                else {
+                  if (!navigationDocked) setExecution(false);
+                  setThreads(true);
+                }
+              }}
+              disabled={busy}
             >
               <FolderOpen size={13} />
-              {snapshot.workspace?.name ?? "No workspace selected"}
+              <span className="wb-workspace-label">{activeProject?.name ?? snapshot.workspace?.name ?? "Choose project"}
+                {activeProject && snapshot.workspace && activeProject.name !== snapshot.workspace.name && ` / ${snapshot.workspace.name}`}
+              </span>
             </button>
           </div>
           <button
             type="button"
             className="wb-icon"
-            title="New thread"
-            aria-label="New thread"
-            disabled={runActive}
+            title="New conversation"
+            aria-label="New conversation"
+            disabled={workInFlight || busy}
             onClick={() => {
-              setNewThread(true);
-              input.current?.focus();
+              if (activeProject) void newConversation(activeProject.id);
+              else {
+                if (!navigationDocked) setExecution(false);
+                setThreads(true);
+                if (!snapshot.projects.length) setProjectEditor({ project: null });
+              }
             }}
           >
             <Plus size={18} />
@@ -462,7 +491,10 @@ export function App() {
             title="Current work"
             aria-label="Toggle work"
             aria-pressed={execution}
-            onClick={() => setExecution((value) => !value)}
+            onClick={() => {
+              if (!execution && !wide) setThreads(false);
+              setExecution((value) => !value);
+            }}
           >
             <PanelRight size={18} />
           </button>
@@ -490,6 +522,13 @@ export function App() {
           </button>
         </header>
         <main className="wb-main">
+          {threads && <div className={navigationDocked ? "project-sidebar" : undefined}>
+            <Overlay label="Projects" side="left" docked={navigationDocked} onClose={() => setThreads(false)}>
+              <ProjectNavigation snapshot={snapshot} busy={busy} active={workInFlight}
+                onOpen={(id) => void openThread(id)} onNew={(id) => void newConversation(id)}
+                onEdit={(project) => setProjectEditor({ project })} onClose={() => setThreads(false)}/>
+            </Overlay>
+          </div>}
           {
             <Group
               key={layoutKey}
@@ -533,56 +572,11 @@ export function App() {
             </Group>
           }
         </main>
-        {threads && (
-          <Overlay
-            label="Threads"
-            onClose={() => setThreads(false)}
-            side="left"
-          >
-            <header className="wb-panel-header">
-              <strong>Threads</strong>
-              <button
-                className="wb-icon"
-                title="Close threads"
-                aria-label="Close threads"
-                onClick={() => setThreads(false)}
-              >
-                <X size={17} />
-              </button>
-            </header>
-            <div className="wb-drawer-scroll">
-              <select
-                aria-label="Recent workspaces"
-                value=""
-                disabled={busy || runActive}
-                onChange={(event) => void chooseWorkspace(event.target.value)}
-              >
-                <option value="">Recent workspaces</option>
-                {snapshot.workspaceProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.displayName}
-                  </option>
-                ))}
-              </select>
-              {snapshot.threadSummaries.map((thread) => (
-                <button
-                  className="wb-thread"
-                  type="button"
-                  key={thread.id}
-                  disabled={busy}
-                  aria-pressed={thread.id === snapshot.activeThread?.id}
-                  onClick={() => void openThread(thread.id)}
-                >
-                  <strong>{thread.title}</strong>
-                  <small>
-                    {thread.workspace.name} /{" "}
-                    {thread.latestRun?.status ?? thread.status}
-                  </small>
-                </button>
-              ))}
-            </div>
-          </Overlay>
-        )}
+        {projectEditor && <ProjectEditor project={projectEditor.project} snapshot={snapshot} onSnapshot={setSnapshot}
+          onClose={() => setProjectEditor(null)} onSaved={(next, id) => {
+            setSnapshot(next); setProjectEditor(null);
+            if (!projectEditor.project && !workInFlight) void newConversation(id);
+          }}/>}
       </div>
       {settings && (
         <SettingsPage

@@ -1026,6 +1026,7 @@ const expectedValueExports = {
     "selectHelarcProviderProfile",
     "selectHelarcWorkspaceProfile",
     "snapshotHelarcInstructionSettings",
+    "snapshotHelarcProject",
   ],
   "@agent-anything/helarc/work-context": [
     "applyHelarcRunProjectionCommit",

@@ -11,6 +11,22 @@ interface ExposedHelarcApi {
 }
 
 describe("Helarc preload bridge", () => {
+  it("forwards Project identity and folder references through named commands", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let api!: HelarcDesktopApi;
+    const invoke = vi.fn(async () => ({ status: "handled" }));
+    runInNewContext(source, { require: () => ({
+      contextBridge: { exposeInMainWorld: (_key: string, value: HelarcDesktopApi) => { api = value; } },
+      ipcRenderer: { invoke, on: vi.fn(), removeListener: vi.fn() },
+    }) });
+    const input = { commandId: "save", id: "project", expectedRevision: 3, name: "Name", primaryProfileId: "a", additionalProfileIds: ["b"], path: "D:/forged" };
+    await api.saveProject(input);
+    expect(invoke).toHaveBeenCalledWith("helarc:save-project", { version: 1, commandId: "save", kind: "project.save", payload: { id: "project", expectedRevision: 3, name: "Name", primaryProfileId: "a", additionalProfileIds: ["b"] } });
+    await api.chooseProjectFolder({ commandId: "folder" });
+    expect(invoke).toHaveBeenLastCalledWith("helarc:choose-project-folder", { version: 1, commandId: "folder", kind: "project.chooseFolder", payload: {} });
+    await api.selectProject({ commandId: "select", projectId: "project" });
+    expect(invoke).toHaveBeenLastCalledWith("helarc:select-project", { version: 1, commandId: "select", kind: "project.select", payload: { projectId: "project" } });
+  });
   it("registers response delivery before acknowledgement and filters scope without exposing Electron events", async () => {
     const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
     let api!: HelarcDesktopApi;

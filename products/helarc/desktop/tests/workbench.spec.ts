@@ -89,13 +89,15 @@ async function setup(
         modelItemIds: ["answer"],
       };
       const snapshot: any = {
+        projects: [{ id: "project", revision: 1, name: "Example project", primaryProfileId: "workspace", additionalProfileIds: [], createdAt: "2026-09-18T08:00:00.000Z", updatedAt: "2026-09-18T08:00:00.000Z" }],
+        selectedProjectId: "project",
         status: terminal ? "completed" : "running",
         workspace: {
           id: "workspace",
           name: "Example project",
           path: "D:/example",
         },
-        workspaceProfiles: [],
+        workspaceProfiles: [{ id: "workspace", displayName: "Example project", path: "D:/example", trustState: "trusted", lastOpenedAt: "2026-09-18T08:00:00.000Z" }],
         acceptedTask: {
           id: "task",
           prompt: "Inspect the workspace and report findings.",
@@ -121,6 +123,7 @@ async function setup(
           nativeToolInteraction: { supported: true },
         },
         activeThread: {
+          projectId: "project",
           id: "thread",
           title: "Inspect the workspace",
           status: "open",
@@ -166,7 +169,7 @@ async function setup(
               ]
             : [],
         },
-        threadSummaries: [],
+        threadSummaries: [{ id: "thread", projectId: "project", title: "Inspect the workspace", status: "open", workspace: { id: "workspace", name: "Example project", path: "D:/example" }, latestRun: null, createdAt: "2026-09-18T08:00:00.000Z", updatedAt: "2026-09-18T08:00:00.000Z" }],
         run,
         error: null,
       };
@@ -252,6 +255,28 @@ async function setup(
         listener(structuredClone(snapshot));
       };
       (window as any).helarc = {
+        chooseProjectFolder: async () => {
+          const profile = { id: "extra", displayName: "Documentation", path: "D:/docs", trustState: "trusted", lastOpenedAt: "2026-09-18T08:00:00.000Z" };
+          if (!snapshot.workspaceProfiles.some((item: any) => item.id === profile.id)) snapshot.workspaceProfiles.push(profile);
+          return { status: "handled", result: { profile, snapshot: structuredClone(snapshot), error: null } };
+        },
+        saveProject: async (query: any) => {
+          (window as any).calls.push({ method: "saveProject", query });
+          const existing = snapshot.projects.find((item: any) => item.id === query.id);
+          const updated = { id: query.id ?? "created-project", revision: (existing?.revision ?? 0) + 1, name: query.name, primaryProfileId: query.primaryProfileId, additionalProfileIds: query.additionalProfileIds, createdAt: "2026-09-18T08:00:00.000Z", updatedAt: "2026-09-18T08:00:00.000Z" };
+          snapshot.projects = existing ? snapshot.projects.map((item: any) => item.id === query.id ? updated : item) : [...snapshot.projects, updated];
+          return { status: "handled", result: { ok: true, error: null, snapshot: structuredClone(snapshot) } };
+        },
+        selectProject: async (query: any) => {
+          (window as any).calls.push({ method: "selectProject", query });
+          snapshot.selectedProjectId = query.projectId;
+          const project = snapshot.projects.find((item: any) => item.id === query.projectId);
+          const primary = snapshot.workspaceProfiles.find((item: any) => item.id === project.primaryProfileId);
+          snapshot.workspace = { id: primary.id, name: primary.displayName, path: primary.path };
+          snapshot.activeThread = null; snapshot.run = null; snapshot.acceptedTask = null; snapshot.status = "workspace_selected";
+          return { status: "handled", result: structuredClone(snapshot) };
+        },
+        openThread: async () => ({ status: "handled", result: { ok: true, snapshot: structuredClone(snapshot) } }),
         getSnapshot: async () => structuredClone(snapshot),
         subscribeSnapshot: (fn: typeof listener) => {
           listener = fn;
@@ -535,6 +560,51 @@ async function setup(
     page.getByText("The recorded result is ready.", { exact: true }),
   ).toBeVisible();
 }
+
+test("Project navigation and folder editing preserve active work", async ({ page }, info) => {
+  await setup(page);
+  const navigation = page.getByRole("navigation", { name: "Projects and conversations" });
+  await expect(navigation).toBeVisible();
+  await expect(navigation).toHaveCSS("display", "flex");
+  await expect(page.locator(".project-sidebar")).toHaveCSS("width", "230px");
+  await expect(navigation.getByRole("button", { name: "Inspect the workspace", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("button", { name: "New conversation in Example project", exact: true })).toBeDisabled();
+  await navigation.getByRole("button", { name: "Edit Example project", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Project settings" });
+  await expect(editor).toHaveCSS("border-radius", "8px");
+  await expect(editor.locator(".project-folder").first().getByRole("button")).toBeDisabled();
+  await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Application");
+  await editor.getByRole("button", { name: "Add folder", exact: true }).click();
+  await editor.getByRole("radio", { name: "Primary folder: Documentation", exact: true }).check();
+  await expect(editor.locator(".project-folder").first().getByRole("button")).toBeEnabled();
+  await expect(editor).toContainText("Current work keeps its folders.");
+  await page.screenshot({ path: info.outputPath("project-editor.png") });
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  await expect(navigation.getByRole("button", { name: "Application", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).calls.find((call: any) => call.method === "saveProject").query)).toMatchObject({ id: "project", expectedRevision: 1, name: "Application", primaryProfileId: "extra", additionalProfileIds: ["workspace"] });
+  await expect(page.locator(".wb-workspace")).toHaveAttribute("title", "Current work: D:/example");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Toggle projects" }).click();
+  await expect(navigation).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Current work", exact: true })).not.toBeVisible();
+  await page.screenshot({ path: info.outputPath("project-mobile.png") });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("a new Project starts an empty conversation in its selected folder", async ({ page }) => {
+  await setup(page, false, true);
+  await page.getByRole("button", { name: "Add project", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New project" });
+  await editor.getByRole("button", { name: "Add folder", exact: true }).click();
+  await expect(editor.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Documentation");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  await expect(page.locator(".wb-title strong")).toHaveText("New conversation");
+  await expect(page.locator(".wb-workspace")).toHaveAttribute("title", "Next work: D:/docs");
+  await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.method === "selectProject" && call.query.projectId === "created-project"))).toBe(true);
+  await expect(page.locator(".wb-conversation-scroll").getByText("The recorded result is ready.", { exact: true })).toHaveCount(0);
+});
 
 test("conversation and final answer use one source; wide layout stays bounded", async ({
   page,
@@ -855,7 +925,7 @@ test("finished replies expose retained results without inventing Plan completion
       query: { threadId: "thread", artifactId: "result", cursor: null },
     },
   ]);
-  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await page.getByRole("button", { name: "New conversation", exact: true }).click();
   await expect(plan).toHaveCount(0);
 });
 

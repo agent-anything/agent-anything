@@ -294,6 +294,8 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
     status: "running",
     workspace: { id: "workspace-1", name: "Workspace", path: "D:/workspace" },
     workspaceProfiles: [],
+    projects: [],
+    selectedProjectId: null,
     provider: {
       configured: true,
       activeProfile: profile,

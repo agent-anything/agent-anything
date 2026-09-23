@@ -6,6 +6,7 @@ import {
 } from "@agent-anything/helarc/work-context";
 
 export interface HelarcThreadSummary {
+  projectId: string | null;
   id: string;
   title: string;
   status: HelarcThread["status"];
@@ -25,6 +26,7 @@ export function createHelarcThreadSummary(record: HelarcThreadRecord): HelarcThr
     ? null
     : record.runs.find((run) => run.id === record.thread.latestRunId) ?? null;
   return {
+    projectId: record.thread.projectId,
     id: record.thread.id,
     title: record.thread.title,
     status: record.thread.status,

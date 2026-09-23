@@ -183,6 +183,7 @@ export async function applyHelarcRunStartCommit(
     if (
       !hasExactKeys(commit.target, ["kind", "thread"]) ||
       thread.id !== commit.threadId || thread.revision !== 0 ||
+      thread.projectId !== (commit.run.project?.id ?? null) ||
       commit.expectedThreadRevision !== 0 || thread.latestRunId !== null ||
       commit.triggeringMessage.sequence !== 1 ||
       !sameWorkspaceSelectionSelection(thread.workspace, commit.run.workspace) ||
@@ -218,10 +219,11 @@ export async function applyHelarcRunStartCommit(
       !hasExactKeys(commit.target, ["kind"]) ||
       aggregate.record.thread.id !== commit.threadId ||
       commit.triggeringMessage.sequence !== aggregate.record.messages.length + 1 ||
-      !sameWorkspaceSelectionSelection(
+      aggregate.record.thread.projectId !== (commit.run.project?.id ?? null) ||
+      (aggregate.record.thread.projectId === null && !sameWorkspaceSelectionSelection(
         aggregate.record.thread.workspace,
         commit.run.workspace,
-      ) ||
+      )) ||
       commit.committedAt < aggregate.record.thread.updatedAt ||
       commit.committedAt < commit.triggeringMessage.createdAt
     ) {

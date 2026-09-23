@@ -231,6 +231,7 @@ function record(): HelarcThreadRecord {
 
 function thread(): HelarcThread {
   return {
+    projectId: null,
     id: "thread-1",
     revision: 1,
     workspace: threadWorkspace(),
@@ -261,6 +262,7 @@ function message(): HelarcMessage {
 
 function run(): HelarcPersistedRun {
   return {
+    project: null,
     id: "run-1",
     harnessRunId: null,
     taskId: "task-1",

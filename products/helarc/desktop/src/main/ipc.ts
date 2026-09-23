@@ -12,11 +12,15 @@ import type {
   FileHelarcProviderProfileStore,
 } from "./provider/HelarcProviderProfileStore.js";
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
+import type { FileHelarcProjectStore } from "./project/FileHelarcProjectStore.js";
 import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 import { HelarcResponseProgress } from "./workbench/HelarcResponseProgress.js";
 import { readToken, workScopeValid } from "./workbench/WorkbenchReadLimits.js";
 
 export const HELARC_IPC_CHANNELS = {
+  saveProject: "helarc:save-project",
+  selectProject: "helarc:select-project",
+  chooseProjectFolder: "helarc:choose-project-folder",
   readConversation: "helarc:read-conversation",
   readCurrentWork: "helarc:read-current-work",
   readTaskDetails: "helarc:read-task-details",
@@ -50,6 +54,7 @@ export const HELARC_IPC_CHANNELS = {
 } as const;
 
 export interface RegisterHelarcIpcInput {
+  projectStore?: FileHelarcProjectStore;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   instructionSettingsStore?: FileHelarcInstructionSettingsStore | null;
   window: BrowserWindow;
@@ -111,6 +116,29 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   const productCommands = createHelarcProductCommandDispatcher({
     handlers: {
+      "project.select": ({ projectId }) => projectHelarcDesktopSnapshot(input.controller.selectProject(projectId)),
+      "project.chooseFolder": async () => {
+        if (!input.workspaceProfileStore) throw new Error("Folder storage is unavailable.");
+        const result = await dialog.showOpenDialog(input.window, { properties: ["openDirectory"], title: "Add Project folder" });
+        if (result.canceled || !result.filePaths[0]) return { profile: null, error: null, snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()) };
+        const remembered = await input.workspaceProfileStore.rememberWorkspacePath(result.filePaths[0]);
+        if (!remembered.ok) return { profile: null, error: remembered.error.message, snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()) };
+        return { profile: remembered.profile, error: null, snapshot: projectHelarcDesktopSnapshot(input.controller.setWorkspaceProfiles(remembered.profiles)) };
+      },
+      "project.save": async (payload) => {
+        if (!input.projectStore || !input.workspaceProfileStore) throw new Error("Project storage is unavailable.");
+        for (const id of [payload.primaryProfileId, ...payload.additionalProfileIds]) {
+          const resolved = await input.workspaceProfileStore.resolveWorkspaceProfile(id);
+          if (!resolved.ok) return { ok: false, error: resolved.error.message, snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()) };
+          input.controller.setWorkspaceProfiles(resolved.profiles);
+        }
+        try {
+          const projects = await input.projectStore.save(payload);
+          return { ok: true, error: null, snapshot: projectHelarcDesktopSnapshot(input.controller.setProjects(projects)) };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : "Project could not be saved.", snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()) };
+        }
+      },
       "inspection.save": async ({ settings }) => {
         if (!input.inspection) throw new Error("Inspection source is unavailable.");
         return input.inspection.save(settings);
@@ -250,6 +278,16 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       },
     },
   });
+  for (const [channel, kind] of [
+    [HELARC_IPC_CHANNELS.saveProject, "project.save"],
+    [HELARC_IPC_CHANNELS.selectProject, "project.select"],
+    [HELARC_IPC_CHANNELS.chooseProjectFolder, "project.chooseFolder"],
+  ] as const) {
+    ipcMain.handle(channel, (event, command: unknown) => {
+      if (!trustedSender(event)) throw new Error("Untrusted Project request.");
+      return productCommands.dispatch(command, kind);
+    });
+  }
 
   ipcMain.handle(HELARC_IPC_CHANNELS.getSnapshot, () => {
     return projectHelarcDesktopSnapshot(input.controller.getSnapshot());

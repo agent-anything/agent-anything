@@ -182,6 +182,7 @@ function startCommit(): HelarcRunStartCommit {
     target: {
       kind: "create_thread",
       thread: {
+        projectId: null,
         id: "thread-1",
         revision: 0,
         workspace: {
@@ -216,6 +217,7 @@ function startCommit(): HelarcRunStartCommit {
     run: {
       id: "run-1",
       harnessRunId: null,
+      project: null,
       taskId: "task-1",
       sessionId: "session-1",
       threadId: "thread-1",

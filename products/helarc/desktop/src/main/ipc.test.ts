@@ -2,6 +2,8 @@ import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDefaultHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
+import type { FileHelarcProjectStore } from "./project/FileHelarcProjectStore.js";
+import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import {
   HELARC_PRODUCT_COMMAND_VERSION,
 } from "../shared/HelarcDesktopCommand.js";
@@ -29,6 +31,37 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  it("validates Project folders in Main without switching the active workspace", async () => {
+    const frame = { url: "file:///helarc/index.html" };
+    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };
+    const profile = { id: "folder", displayName: "Folder", path: "D:/folder", trustState: "trusted", lastOpenedAt: "2026-09-23T00:00:00.000Z" };
+    const setWorkspaceProfiles = vi.fn(() => mainSnapshot());
+    const setProjects = vi.fn(() => mainSnapshot());
+    const selectWorkspaceProfile = vi.fn();
+    const save = vi.fn(async () => []);
+    const resolveWorkspaceProfile = vi.fn(async (id: string) => id === "folder"
+      ? { ok: true, profile, profiles: [profile] }
+      : { ok: false, error: { code: "workspace_profile_not_found", message: "Folder unavailable." } });
+    const controller = controllerDouble(mainSnapshot(), { setWorkspaceProfiles, setProjects, selectWorkspaceProfile });
+    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller,
+      projectStore: { save } as unknown as FileHelarcProjectStore,
+      workspaceProfileStore: { resolveWorkspaceProfile, rememberWorkspacePath: async () => ({ ok: true, profile, profiles: [profile] }) } as unknown as HelarcWorkspaceProfileStore });
+    const event = { sender: contents, senderFrame: frame };
+    const choose = requiredHandler(HELARC_IPC_CHANNELS.chooseProjectFolder);
+    electron.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["D:/folder"] });
+    expect(await choose(event, { version: 1, commandId: "choose", kind: "project.chooseFolder", payload: {} })).toMatchObject({ status: "handled", result: { profile } });
+    expect(setWorkspaceProfiles).toHaveBeenCalledOnce();
+    expect(selectWorkspaceProfile).not.toHaveBeenCalled();
+    const handler = requiredHandler(HELARC_IPC_CHANNELS.saveProject);
+    const command = { version: 1, commandId: "save", kind: "project.save", payload: { id: null, expectedRevision: null, name: "Project", primaryProfileId: "folder", additionalProfileIds: [] } };
+    expect(() => handler({ sender: {}, senderFrame: frame }, command)).toThrow("Untrusted");
+    expect(await handler(event, { ...command, commandId: "missing", payload: { ...command.payload, primaryProfileId: "unknown" } })).toMatchObject({ status: "handled", result: { ok: false, error: "Folder unavailable." } });
+    expect(save).not.toHaveBeenCalled();
+    expect(await handler(event, command)).toMatchObject({ status: "handled", result: { ok: true } });
+    expect(save).toHaveBeenCalledOnce();
+    expect(setProjects).toHaveBeenCalledOnce();
+    expect(selectWorkspaceProfile).not.toHaveBeenCalled();
+  });
   it("authorizes named reads and clears scoped response subscriptions on navigation without cancelling work", async () => {
     const frame = {url:"file:///helarc/index.html"};
     const callbacks = new Map<string,(...args:unknown[]) => void>();
@@ -573,6 +606,8 @@ function mainSnapshot(
     status,
     workspace: null,
     workspaceProfiles: [],
+    projects: [],
+    selectedProjectId: null,
     provider: {
       configured: false,
       nativeToolInteraction: { supported: false },

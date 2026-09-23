@@ -15,11 +15,11 @@ describe("Helarc workbench shell", () => {
     const html = renderToStaticMarkup(<App />);
 
     expect(html).toContain("Helarc");
-    expect(html).toContain("No workspace selected");
+    expect(html).toContain("Choose project");
     expect(html).toContain("No work yet");
     expect(html).not.toContain("Requests 0");
     expect(html).toContain("Conversation");
-    expect(html).toContain("Threads");
+    expect(html).toContain("Projects");
     expect(html).toContain("Settings");
     expect(html).not.toContain("Templates");
   });
@@ -206,6 +206,8 @@ function unconfiguredSnapshot(): HelarcMainSnapshot {
     status: "idle",
     workspace: null,
     workspaceProfiles: [],
+    projects: [],
+    selectedProjectId: null,
     provider: {
       configured: false,
       nativeToolInteraction: { supported: false },

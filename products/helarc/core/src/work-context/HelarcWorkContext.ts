@@ -84,6 +84,7 @@ export interface HelarcThreadWorkspaceIdentity {
 
 export interface CreateHelarcThreadInput {
   id: string;
+  projectId?: string | null;
   revision: number;
   workspace: HelarcThreadWorkspaceIdentity;
   title: string;
@@ -96,6 +97,7 @@ export interface CreateHelarcThreadInput {
 
 export interface HelarcThread {
   id: string;
+  projectId: string | null;
   revision: number;
   workspace: HelarcThreadWorkspaceIdentity;
   title: string;
@@ -155,6 +157,7 @@ export interface HelarcWorkspaceSelectionIdentity {
 
 export interface CreateHelarcPersistedRunInput {
   id: string;
+  project?: import("../configuration/HelarcProject.js").HelarcProjectRef | null;
   taskId: string;
   sessionId: string;
   threadId: string;
@@ -182,6 +185,7 @@ export interface HelarcRunTerminalRecord {
 
 export interface HelarcPersistedRun {
   id: string;
+  project: import("../configuration/HelarcProject.js").HelarcProjectRef | null;
   harnessRunId: string | null;
   taskId: string;
   sessionId: string;
@@ -288,6 +292,11 @@ export function createHelarcThread(input: CreateHelarcThreadInput): CreateHelarc
     return reject("thread_revision_invalid", "Thread revision must be a non-negative safe integer.");
   }
 
+  const projectId = input.projectId ?? null;
+  if (projectId !== null && (typeof projectId !== "string" || !projectId || /\s/.test(projectId))) {
+    return reject("thread_record_invalid", "Thread Project identity is invalid.");
+  }
+
   const workspace = normalizeWorkspace(input.workspace);
   if (!workspace.ok) {
     return workspace;
@@ -316,6 +325,7 @@ export function createHelarcThread(input: CreateHelarcThreadInput): CreateHelarc
     ok: true,
     thread: {
       id,
+      projectId,
       revision: input.revision,
       workspace: workspace.workspace,
       title,
@@ -433,6 +443,12 @@ export function createHelarcPersistedRun(
     return workspace;
   }
 
+  const project = input.project ?? null;
+  if (project !== null && (!hasExactKeys(project, ["id", "revision"]) || !hasText(project.id) || /\s/.test(project.id) ||
+      !Number.isSafeInteger(project.revision) || project.revision < 1)) {
+    return reject("run_workspace_invalid", "Run Project binding is invalid.");
+  }
+
   const provider = normalizeProvider(input.provider ?? null);
   if (!provider.ok) {
     return provider;
@@ -451,6 +467,7 @@ export function createHelarcPersistedRun(
     ok: true,
     run: {
       id,
+      project: project === null ? null : Object.freeze({ id: project.id, revision: project.revision }),
       harnessRunId: null,
       taskId,
       sessionId,
@@ -590,6 +607,7 @@ export function createHelarcArtifact(input: CreateHelarcArtifactInput): CreateHe
 }
 
 function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersistedRunResult {
+  if (!input || !Object.hasOwn(input, "project")) return reject("run_workspace_invalid", "Run Project binding is missing.");
   const base = createHelarcPersistedRun({
     id: input.id,
     taskId: input.taskId,
@@ -598,6 +616,7 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
     triggeringMessageId: input.triggeringMessageId,
     triggerMessageRole: input.triggerMessageRole,
     triggeringThreadRevision: input.triggeringThreadRevision,
+    project: input.project,
     workspace: input.workspace,
     provider: input.provider,
     permissionPreset: input.permissionPreset,
@@ -714,6 +733,7 @@ export function normalizeHelarcThreadRecord(
 ): NormalizeHelarcThreadRecordResult {
   if (
     !hasExactKeys(input, ["thread", "messages", "runs", "artifacts", "collaboration", "reviews"]) ||
+    !input.thread || !Object.hasOwn(input.thread, "projectId") ||
     !Array.isArray(input.messages) || !Array.isArray(input.runs) ||
     !Array.isArray(input.artifacts) || !Array.isArray(input.collaboration) ||
     !Array.isArray(input.reviews)
@@ -738,6 +758,9 @@ export function normalizeHelarcThreadRecord(
     return failedRun;
   }
   const runs = runResults.map((result) => result.ok ? result.run : never());
+  if (runs.some((run) => (run.project?.id ?? null) !== threadResult.thread.projectId)) {
+    return reject("thread_record_invalid", "Run Project does not match its Thread.");
+  }
 
   const artifactResults = input.artifacts.map(createHelarcArtifact);
   const failedArtifact = artifactResults.find((result) => !result.ok);

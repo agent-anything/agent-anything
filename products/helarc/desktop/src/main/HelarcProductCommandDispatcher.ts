@@ -115,6 +115,29 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
   assertProductCommandKind(candidate.kind, "Helarc Product command kind");
 
   switch (candidate.kind) {
+    case "project.chooseFolder":
+      return envelope(commandId, candidate.kind, snapshotEmptyPayload(candidate.payload));
+    case "project.select": {
+      assertRecord(candidate.payload, "Project selection");
+      assertExactKeys(candidate.payload, ["projectId"], "Project selection");
+      return envelope(commandId, candidate.kind, { projectId: identity(candidate.payload.projectId, "Project id") });
+    }
+    case "project.save": {
+      const value = candidate.payload;
+      assertRecord(value, "Project save");
+      assertExactKeys(value, ["id", "expectedRevision", "name", "primaryProfileId", "additionalProfileIds"], "Project save");
+      const id = value.id === null ? null : identity(value.id, "Project id");
+      if (id === null ? value.expectedRevision !== null : !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 1) invalid("Project revision is invalid.");
+      if (!Array.isArray(value.additionalProfileIds) || value.additionalProfileIds.length > 63) invalid("Project folders are invalid.");
+      const primaryProfileId = identity(value.primaryProfileId, "Primary folder");
+      const additionalProfileIds = value.additionalProfileIds.map((id) => identity(id, "Additional folder"));
+      if (new Set([primaryProfileId, ...additionalProfileIds]).size !== additionalProfileIds.length + 1) invalid("Project folders must be distinct.");
+      return envelope(commandId, candidate.kind, {
+        id, expectedRevision: value.expectedRevision as number | null,
+        name: boundedText(value.name, "Project name", DISPLAY_NAME_MAX_LENGTH).trim(),
+        primaryProfileId, additionalProfileIds,
+      });
+    }
     case "inspection.save": {
       assertRecord(candidate.payload, "Inspection save payload");
       assertExactKeys(candidate.payload, ["settings"], "Inspection save payload");
@@ -164,6 +187,12 @@ function invokeHandler(
 ): Promise<HelarcProductCommandResultMap[HelarcProductCommandKind]>
   | HelarcProductCommandResultMap[HelarcProductCommandKind] {
   switch (command.kind) {
+    case "project.save":
+      return handlers[command.kind](command.payload);
+    case "project.select":
+      return handlers[command.kind](command.payload);
+    case "project.chooseFolder":
+      return handlers[command.kind](command.payload);
     case "instructions.save":
       return handlers[command.kind](command.payload);
     case "inspection.save":
@@ -378,6 +407,9 @@ function assertHandlers(handlers: HelarcProductCommandHandlers): void {
 }
 
 const PRODUCT_COMMAND_KINDS = [
+  "project.save",
+  "project.select",
+  "project.chooseFolder",
   "workspace.choose",
   "workspace.select",
   "provider.save",

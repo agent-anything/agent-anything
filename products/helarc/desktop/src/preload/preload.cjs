@@ -6,6 +6,9 @@ const workScope = (input) => ({ threadId: input?.threadId, productRunId: input?.
 const taskScope = (input) => ({ ...workScope(input), runId: input?.runId });
 
 const channels = Object.freeze({
+  saveProject: "helarc:save-project",
+  selectProject: "helarc:select-project",
+  chooseProjectFolder: "helarc:choose-project-folder",
   getInspectionSettings: "helarc:get-inspection-settings",
   saveInspectionSettings: "helarc:save-inspection-settings",
   getInstructionSettings: "helarc:get-instruction-settings",
@@ -25,6 +28,12 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
+  saveProject: (input) => ipcRenderer.invoke(channels.saveProject, productCommand("project.save", input?.commandId, {
+    id: input?.id, expectedRevision: input?.expectedRevision, name: input?.name,
+    primaryProfileId: input?.primaryProfileId, additionalProfileIds: input?.additionalProfileIds,
+  })),
+  selectProject: (input) => ipcRenderer.invoke(channels.selectProject, productCommand("project.select", input?.commandId, { projectId: input?.projectId })),
+  chooseProjectFolder: (input) => ipcRenderer.invoke(channels.chooseProjectFolder, productCommand("project.chooseFolder", input?.commandId, {})),
   readConversation: (input) => ipcRenderer.invoke("helarc:read-conversation", {threadId:input?.threadId,position:input?.position?.kind === "before" ? {kind:"before",cursor:input.position.cursor} : {kind:input?.position?.kind}}),
   readCurrentWork: (input) => ipcRenderer.invoke("helarc:read-current-work", {...workScope(input),collection:input?.collection,cursor:input?.cursor}),
   readTaskDetails: (input) => ipcRenderer.invoke("helarc:read-task-details", taskScope(input)),

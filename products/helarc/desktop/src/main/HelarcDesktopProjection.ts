@@ -12,6 +12,12 @@ import { HELARC_CLARIFICATION_PROTOCOL } from "@agent-anything/helarc/interactio
 
 export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSnapshot {
   return {
+    projects: snapshot.projects.map((project) => ({
+      id: project.id, revision: project.revision, name: project.name,
+      primaryProfileId: project.primaryProfileId, additionalProfileIds: [...project.additionalProfileIds],
+      createdAt: project.createdAt, updatedAt: project.updatedAt,
+    })),
+    selectedProjectId: snapshot.selectedProjectId,
     status: snapshot.status,
     workspace: snapshot.workspace === null
       ? null
@@ -38,6 +44,7 @@ export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSna
       ? null
       : {
           id: snapshot.activeThread.id,
+          projectId: snapshot.activeThread.projectId,
           title: snapshot.activeThread.title,
           status: snapshot.activeThread.status,
           workspace: {
@@ -66,6 +73,7 @@ export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSna
           })),
         },
     threadSummaries: snapshot.threadSummaries.map((thread) => ({
+      projectId: thread.projectId,
       id: thread.id,
       title: thread.title,
       status: thread.status,

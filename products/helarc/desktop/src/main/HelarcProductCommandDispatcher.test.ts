@@ -15,6 +15,24 @@ import {
 } from "./HelarcProductCommandDispatcher.js";
 
 describe("Helarc Product command dispatcher", () => {
+  it("accepts Project references but rejects paths, duplicates and invalid revisions", async () => {
+    const handlers = createHandlers();
+    const dispatcher = createHelarcProductCommandDispatcher({ handlers });
+    const payload = { id: null, expectedRevision: null, name: "Example", primaryProfileId: "primary", additionalProfileIds: ["additional"] };
+    for (const [index, invalid] of [
+      { ...payload, primaryPath: "D:/forged" },
+      { ...payload, additionalProfileIds: ["primary"] },
+      { ...payload, id: "project", expectedRevision: null },
+      { ...payload, expectedRevision: 1 },
+    ].entries()) {
+      expect(await dispatcher.dispatch(command("project.save", `invalid-${index}`, invalid), "project.save")).toMatchObject({ status: "rejected" });
+    }
+    expect(handlers["project.save"]).not.toHaveBeenCalled();
+    const valid = command("project.save", "valid", payload);
+    expect(await dispatcher.dispatch(valid, "project.save")).toMatchObject({ status: "handled" });
+    await dispatcher.dispatch(valid, "project.save");
+    expect(handlers["project.save"]).toHaveBeenCalledOnce();
+  });
   it("validates exact envelopes and route kinds before invoking an owner", async () => {
     const handlers = createHandlers();
     const dispatcher = createHelarcProductCommandDispatcher({ handlers });
@@ -180,6 +198,9 @@ function createHandlers(
 ): HelarcProductCommandHandlers {
   return {
     "workspace.choose": vi.fn(() => snapshot()),
+    "project.select": vi.fn(() => snapshot()),
+    "project.save": vi.fn(() => ({ ok: true, error: null, snapshot: snapshot() })),
+    "project.chooseFolder": vi.fn(() => ({ profile: null, error: null, snapshot: snapshot() })),
     "workspace.select": vi.fn(() => snapshot()),
     "provider.save": vi.fn(() => snapshot()),
     "instructions.save": vi.fn(({ settings }) => ({ settings, defaults: createDefaultHelarcInstructionSettings() })),
@@ -219,6 +240,8 @@ function snapshot(
     status,
     workspace: null,
     workspaceProfiles: [],
+    projects: [],
+    selectedProjectId: null,
     provider: {
       configured: false,
       nativeToolInteraction: { supported: false },
