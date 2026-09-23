@@ -1,4 +1,9 @@
 export type { Provider, ProviderCallResult } from "./Provider.js";
+export { ProviderDeliverySession, publishProviderDelivery } from "./ProviderDelivery.js";
+export type {
+  ProviderDeliveryOptions, ProviderDeliveryObserver, ProviderDeliveryProgress,
+  ProviderDeliveryEvent, ProviderResponsePartMapping,
+} from "./ProviderDelivery.js";
 export {
   createProviderAttemptInterruption,
   providerResultFromInterruption,

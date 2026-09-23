@@ -234,38 +234,6 @@ export type HelarcPendingInteractionSnapshot =
 
 export type HelarcProductPhaseSnapshot = { readonly kind: "none" };
 
-export type HelarcRunLineageSnapshot =
-  | {
-      readonly kind: "root";
-      readonly rootRunId: string;
-      readonly depth: 0;
-    }
-  | {
-      readonly kind: "descendant";
-      readonly rootRunId: string;
-      readonly parentRunId: string;
-      readonly parentRunActionId: string;
-      readonly relationId: string;
-      readonly depth: number;
-    };
-
-export interface HelarcRunActivitySourceSnapshot {
-  readonly runId: string;
-  readonly eventSequence: number;
-  readonly lineage: HelarcRunLineageSnapshot;
-}
-
-export interface HelarcRunActivitySnapshot {
-  readonly id: string;
-  readonly sequence: number;
-  readonly source: HelarcRunActivitySourceSnapshot;
-  readonly timestamp: string;
-  readonly kind: string;
-  readonly title: string;
-  readonly detail: string | null;
-  readonly metadata: Readonly<Record<string, unknown>>;
-}
-
 export type HelarcRunTreeNodeStatusSnapshot =
   | "initializing"
   | "running"
@@ -945,8 +913,17 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
+  readConversation(input: import("./HelarcWorkbench.js").ConversationQuery): Promise<import("./HelarcWorkbench.js").ConversationPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readCurrentWork(input: import("./HelarcWorkbench.js").CurrentWorkQuery): Promise<import("./HelarcWorkbench.js").CurrentWorkPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readTaskDetails(input: import("./HelarcWorkbench.js").WorkbenchScope): Promise<import("./HelarcWorkbench.js").TaskDetailsPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readWorkHistory(input: import("./HelarcWorkbench.js").WorkHistoryQuery): Promise<import("./HelarcWorkbench.js").WorkHistoryPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readArtifactContent(input: import("./HelarcWorkbench.js").ArtifactContentQuery): Promise<import("./HelarcWorkbench.js").ArtifactContentRead>;
+  readResponsePreview(input: import("./HelarcWorkbench.js").ResponsePreviewQuery): Promise<import("./HelarcWorkbench.js").ResponsePreviewRead>;
+  subscribeResponseProgress(input: import("./HelarcWorkbench.js").WorkScope,
+    listener: (frame: import("./HelarcWorkbench.js").ResponseProgressFrame) => void): Promise<
+      {readonly status:"subscribed"; readonly dispose:() => void} | import("./HelarcWorkbench.js").WorkbenchRejected>;
   listThreadRuns(input: { threadId: string }): Promise<{ status: "page"; runs: readonly import("./HelarcWorkbench.js").ThreadRunSummary[] } | import("./HelarcWorkbench.js").WorkbenchRejected>;
-  readRunWorkbench(input: import("./HelarcWorkbench.js").WorkbenchQuery): Promise<import("./HelarcWorkbench.js").WorkbenchPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readCommandDetails(input: import("./HelarcWorkbench.js").WorkbenchScope & {executionId:string}): Promise<{status:"page";command:import("./HelarcWorkbench.js").HelarcCommandProgress;live:boolean} | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readWorkbenchItem(input: import("./HelarcWorkbench.js").WorkbenchItemQuery): Promise<import("./HelarcWorkbench.js").WorkbenchItemPage>;
   readCommandOutput(input: import("./HelarcWorkbench.js").CommandOutputQuery): Promise<import("./HelarcWorkbench.js").CommandOutputPage>;
   openExternalLink(input: { url: string }): Promise<{ ok: boolean }>;

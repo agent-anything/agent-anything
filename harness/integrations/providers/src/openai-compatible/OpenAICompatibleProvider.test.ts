@@ -599,6 +599,16 @@ describe("OpenAICompatibleProvider", () => {
   });
 });
 
+it("rejects streaming for structured generation before dispatch", async () => {
+  const fetch = vi.fn();
+  const provider = new OpenAICompatibleProvider(config(), fetch);
+  expect(await provider.send(request(provider), context(), { mode: "streaming", invocationId: "unsupported" }))
+    .toMatchObject({ kind: "failed", failure: { code: "provider_streaming_unsupported" } });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(new OpenAICompatibleProvider({ ...config(), nativeToolInteraction: { supported: false } }).descriptor.capabilities.streaming)
+    .toEqual({ supported: false });
+});
+
 function config() {
   return {
     baseUrl: "https://provider.local/v1",

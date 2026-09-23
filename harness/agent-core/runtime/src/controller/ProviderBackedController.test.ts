@@ -6,7 +6,8 @@ import type {
   ProviderResponse,
   ModelToolCall,
 } from "@agent-anything/model-interaction";
-import { providerGeneratedOutput } from "@agent-anything/model-interaction";
+import { providerGeneratedOutput, ProviderDeliverySession, createNativeToolTurnInteraction } from "@agent-anything/model-interaction";
+import type { ControllerResponseObservation } from "./ControllerResponseObservation.js";
 import { createFakeProviderContext, FakeProvider } from "@agent-anything/test-support";
 import {
   composeModelInput,
@@ -1226,6 +1227,160 @@ describe("ProviderBackedController", () => {
           maxProviderOutputLength: 0,
         }),
     ).toThrow("maxProviderOutputLength must be a positive integer.");
+  });
+});
+
+describe("ProviderBackedController native streaming", () => {
+  function setup(input: {
+    readonly send: Provider["send"];
+    readonly events: ControllerResponseObservation[];
+    readonly continuation?: boolean;
+    readonly parseResponse?: (response: ProviderResponse) => ControllerDecision<TestOutput>;
+  }) {
+    const base = new FakeProvider({ results: [] });
+    const provider: Provider = {
+      descriptor: { ...base.descriptor, capabilities: { ...base.descriptor.capabilities,
+        continuation: input.continuation ? { supported: true, mechanism: "response_chaining", supportsCompaction: false }
+          : { supported: false },
+        streaming: { supported: true }, nativeToolInteraction: {
+          supported: true, callableDefinitions: true, modelCalls: true, resultMessages: true,
+          multipleCalls: true, callCorrelation: "adapter_assigned",
+        },
+      } },
+      modelContext: base.modelContext, requestBodyTransportLimit: base.requestBodyTransportLimit,
+      send: input.send,
+    };
+    return new ProviderBackedController<TestOutput>({
+      provider, responseProtocol: { kind: "native_tool_turn" },
+      delivery: { mode: "streaming", observer: { observe(event) { input.events.push(event); } } },
+      buildRequest(input, context) {
+        return accountTestRequest({ ...request("Continue"), interaction: createNativeToolTurnInteraction([
+          { name: "Read", description: "Read a file.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+        ]) }, provider, input, context);
+      },
+      parseResponse: input.parseResponse ?? ((response) => {
+        if (response.kind !== "native_tool_turn") throw new Error("Expected native turn");
+        return { kind: "propose_completion", output: { summary: "Done" }, modelItems: createControllerModelItems(response.turn) };
+      }),
+      retryExecutor: createSystemRetryExecutor(), retryClock: systemRetryClock,
+    });
+  }
+  function complete(request: ProviderRequest): ProviderCallResult {
+    return { kind: "succeeded", response: { kind: "native_tool_turn", continuation: null, metadata: {}, turn: {
+      turnId: "stream-turn", assistant: { role: "assistant", content: [{ kind: "text", text: "Done" }] },
+      finish: { kind: "normal" }, usage: null,
+      responseRef: { providerId: "fake-provider", requestId: request.requestId, responseId: null },
+    } } };
+  }
+
+  it("does not interpret partial output and maps accepted text to validated model items", async () => {
+    const events: ControllerResponseObservation[] = [];
+    const release = Promise.withResolvers<void>();
+    const parse = vi.fn((response: ProviderResponse): ControllerDecision<TestOutput> => {
+      if (response.kind !== "native_tool_turn") throw new Error("Expected native turn");
+      return { kind: "propose_completion", output: { summary: "Done" }, modelItems: createControllerModelItems(response.turn) };
+    });
+    const controller = setup({ events, parseResponse: parse, async send(request, _context, options) {
+      expect(options?.mode).toBe("streaming");
+      const delivery = new ProviderDeliverySession(options!, request);
+      delivery.start(); delivery.text("Do");
+      await release.promise;
+      delivery.text("ne");
+      const result = complete(request);
+      delivery.settle(result);
+      return result;
+    } });
+    const pending = controller.next(createControllerInput(), callContext());
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(events.some((event) => event.kind === "delivery" && event.progress.kind === "text_delta")).toBe(true));
+    expect(parse).not.toHaveBeenCalled();
+    release.resolve();
+    expect((await pending).kind).toBe("propose_completion");
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(events.at(-1)).toMatchObject({ kind: "interpretation", disposition: "validated", parts: [
+      { partId: "text:0", turnId: "stream-turn", contentBlockOrdinal: 0, modelItemId: "stream-turn:content:0" },
+    ] });
+  });
+
+  it("retries transport interruptions under separate invocation identities without combining previews", async () => {
+    const events: ControllerResponseObservation[] = [];
+    const retries: Record<string, unknown>[] = [];
+    const ids: string[] = [];
+    const controller = setup({ events, async send(request, _context, options) {
+      ids.push(options!.invocationId);
+      const delivery = new ProviderDeliverySession(options!, request);
+      delivery.start(); delivery.text(ids.length === 1 ? "Discarded" : "Done");
+      const result: ProviderCallResult = ids.length === 1
+        ? { kind: "failed", failure: { category: "transport", code: "provider_response_incomplete", message: "EOF", metadata: {} } }
+        : complete(request);
+      delivery.settle(result);
+      return result;
+    } });
+    await controller.next(createControllerInput(), callContext(undefined, { maxRetries: 1, retryableCategories: ["transport"], events: retries }));
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(JSON.stringify(retries)).toContain(ids[0]);
+    expect(JSON.stringify(retries)).toContain(ids[1]);
+    expect(events.filter((event) => event.kind === "delivery" && event.progress.kind === "settled")
+      .map((event) => event.kind === "delivery" && event.progress.kind === "settled" && event.progress.disposition))
+      .toEqual(["interrupted", "completed"]);
+    expect(events.filter((event) => event.kind === "interpretation")).toMatchObject([
+      { disposition: "validated", invocationId: ids[1] },
+    ]);
+  });
+
+  it("rejects a complete Provider response without making its preview authoritative", async () => {
+    const events: ControllerResponseObservation[] = [];
+    const controller = setup({ events, parseResponse() { throw new Error("invalid Product decision"); },
+      async send(request, _context, options) {
+        const delivery = new ProviderDeliverySession(options!, request);
+        delivery.start(); delivery.text("Done");
+        const result = complete(request); delivery.settle(result); return result;
+      },
+    });
+    await expect(controller.next(createControllerInput(), callContext())).rejects.toBeDefined();
+    expect(events.at(-1)).toMatchObject({ kind: "interpretation", disposition: "rejected", parts: [] });
+  });
+
+  it("allocates a new native invocation when existing continuation is reset", async () => {
+    const events: ControllerResponseObservation[] = [];
+    const ids: string[] = [];
+    const controller = setup({ events, continuation: true, async send(request, _context, options) {
+      ids.push(options!.invocationId);
+      const delivery = new ProviderDeliverySession(options!, request);
+      delivery.start();
+      if (ids.length === 2) {
+        expect(request.continuation).not.toBeNull();
+        const result: ProviderCallResult = { kind: "continuation_rejected", continuationId: request.continuation!.id, providerCode: "expired" };
+        delivery.settle(result); return result;
+      }
+      expect(request.continuation).toBeNull();
+      const base = complete(request);
+      if (base.kind !== "succeeded" || base.response.kind !== "native_tool_turn") throw new Error("Expected native turn");
+      const result: ProviderCallResult = { ...base, response: { ...base.response,
+        continuation: { kind: "opaque_provider_state", handle: `state-${ids.length}`, sensitivity: "restricted" },
+        turn: { ...base.response.turn, responseRef: { ...base.response.turn.responseRef, responseId: `response-${ids.length}` } },
+      } };
+      delivery.text("Done"); delivery.settle(result); return result;
+    } });
+    await controller.next(createControllerInput(), callContext());
+    await controller.next(createControllerInput(), callContext());
+    expect(ids).toHaveLength(3);
+    expect(ids[1]).not.toBe(ids[2]);
+    expect(ids[2]).toContain(":provider-request:2:attempt:1");
+    expect(events.at(-1)).toMatchObject({ kind: "interpretation", invocationId: ids[2], disposition: "validated" });
+  });
+
+  it("keeps structured generation buffered and rejects opt-in for an unsupported Provider", async () => {
+    const provider = new FakeProvider({ results: [succeededResult({ summary: "Done" })] });
+    const send = vi.spyOn(provider, "send");
+    await createController(provider).next(createControllerInput(), callContext());
+    expect(send.mock.calls[0]?.[2]).toMatchObject({ mode: "buffered", invocationId: expect.any(String) });
+    expect(() => new ProviderBackedController({
+      provider, buildRequest: () => { throw new Error("unused"); }, parseResponse: () => finalDecision({ summary: "Done" }),
+      responseProtocol: { kind: "native_tool_turn" }, delivery: { mode: "streaming" },
+      retryExecutor: createSystemRetryExecutor(), retryClock: systemRetryClock,
+    })).toThrow("streaming-capable Provider");
   });
 });
 

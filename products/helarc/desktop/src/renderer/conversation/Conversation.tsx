@@ -1,300 +1,366 @@
 import * as React from "react";
-import { useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown, FileText, Wrench } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowDown, MoreHorizontal } from "lucide-react";
+import type { HelarcMainSnapshot } from "../../shared/HelarcDesktopApi.js";
 import type {
-  HelarcMainSnapshot,
-  HelarcArtifactSnapshot,
-  HelarcThreadMessageSnapshot,
-} from "../../shared/HelarcDesktopApi.js";
-import type {
-  HelarcRunPresentationRecord,
-  ThreadRunSummary,
+  ConversationEntry,
+  ConversationPage,
   WorkbenchScope,
 } from "../../shared/HelarcWorkbench.js";
-import { useWorkbench } from "../workbench/useWorkbench.js";
 import { CopyButton, MarkdownContent } from "./MarkdownContent.js";
+import { useResponsePreview } from "./useResponsePreview.js";
+import { ResultLinks } from "../work/ResultContent.js";
 
-export function isRepresentedFinal(
-  message: HelarcThreadMessageSnapshot,
-  records: readonly HelarcRunPresentationRecord[],
-): boolean {
-  const source = message.outputSource;
-  return (
-    source?.kind === "model_text" &&
-    source.modelItemIds.length > 0 &&
-    source.modelItemIds.every((id) =>
-      records.some(
-        (record) =>
-          record.content.kind === "assistant_text" &&
-          record.content.modelItemId === id,
-      ),
-    )
-  );
-}
 export function Conversation({
   snapshot,
-  runs,
+  scope,
   onInspect,
+  visible,
 }: {
   snapshot: HelarcMainSnapshot;
-  runs: readonly ThreadRunSummary[];
-  onInspect: (run: ThreadRunSummary) => void;
+  scope: WorkbenchScope | null;
+  onInspect: (scope: WorkbenchScope) => void;
+  visible: boolean;
 }) {
-  const viewport = useRef<HTMLDivElement>(null);
-  const content = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
+  const threadId = snapshot.activeThread?.id ?? "";
+  const viewport = useRef<HTMLDivElement>(null),
+    content = useRef<HTMLDivElement>(null);
+  const following = useRef(true),
+    generation = useRef(0),
+    reading = useRef(false);
+  const anchor = useRef<{ id: string; offset: number } | null>(null);
+  const [page, setPage] = useState<ConversationPage | null>(null),
+    [error, setError] = useState<string | null>(null);
+  const [newContent, setNewContent] = useState(false),
+    [busy, setBusy] = useState(false);
+  const live =
+    !!snapshot.run &&
+    !snapshot.run.display.terminal &&
+    snapshot.run.productRunId === scope?.productRunId;
+  const previews = useResponsePreview(
+    scope,
+    live,
+    snapshot.activeThread?.revision ?? 0,
+  );
+  const commitKey = previews.attempts
+    .filter((a) => a.state === "committed")
+    .map((a) => `${a.invocationId}:${a.revision}`)
+    .join("|");
+  function saveAnchor() {
+    const node = viewport.current;
+    if (!node || following.current) {
+      anchor.current = null;
+      return;
+    }
+    const top = node.getBoundingClientRect().top;
+    const element = [
+      ...node.querySelectorAll<HTMLElement>("[data-entry]"),
+    ].find((e) => e.getBoundingClientRect().bottom > top);
+    anchor.current = element
+      ? {
+          id: element.dataset.entry!,
+          offset: element.getBoundingClientRect().top - top,
+        }
+      : null;
+  }
+  function restore() {
+    const node = viewport.current;
+    if (!node) return;
+    if (following.current) {
+      node.scrollTop = node.scrollHeight;
+      return;
+    }
+    const selected = anchor.current;
+    const element =
+      selected &&
+      [...node.querySelectorAll<HTMLElement>("[data-entry]")].find(
+        (e) => e.dataset.entry === selected.id,
+      );
+    if (element && selected)
+      node.scrollTop +=
+        element.getBoundingClientRect().top -
+        node.getBoundingClientRect().top -
+        selected.offset;
+  }
+  useLayoutEffect(restore, [page, previews.attempts, visible]);
+  useEffect(() => {
+    if (
+      !following.current &&
+      previews.attempts.some((attempt) => attempt.state === "receiving")
+    ) {
+      setNewContent(true);
+    }
+  }, [previews.attempts]);
   useLayoutEffect(() => {
     if (!content.current) return;
-    const observer = new ResizeObserver(() => {
-      if (following.current && viewport.current)
-        viewport.current.scrollTop = viewport.current.scrollHeight;
-    });
+    const observer = new ResizeObserver(restore);
     observer.observe(content.current);
     return () => observer.disconnect();
   }, []);
-  useLayoutEffect(() => {
-    if (following.current && viewport.current)
-      viewport.current.scrollTop = viewport.current.scrollHeight;
+  useEffect(() => {
+    generation.current++;
+    following.current = true;
+    setPage(null);
+    setNewContent(false);
+  }, [threadId]);
+  async function load(older = false) {
+    if (!threadId || (older && !page?.previousCursor)) return;
+    const gen = ++generation.current;
+    reading.current = true;
+    setBusy(true);
+    saveAnchor();
+    try {
+      const result = await window.helarc.readConversation({
+        threadId,
+        position: older
+          ? { kind: "before", cursor: page!.previousCursor! }
+          : { kind: "latest" },
+      });
+      if (gen !== generation.current) return;
+      if (result.status !== "page") {
+        setError(
+          result.code === "stale_cursor"
+            ? "Earlier content changed. Return to latest messages."
+            : "Conversation unavailable.",
+        );
+        return;
+      }
+      if (older) {
+        following.current = false;
+        const entries = [...result.entries, ...(page?.entries ?? [])];
+        const bounded: ConversationEntry[] = [];
+        let chars = 0;
+        for (const entry of entries) {
+          if (
+            bounded.length >= 300 ||
+            chars + entry.content.length > 1024 * 1024
+          )
+            break;
+          bounded.push(entry);
+          chars += entry.content.length;
+        }
+        setPage({ ...result, entries: bounded });
+        setNewContent(true);
+      } else if (following.current || !page || page.threadId !== threadId) {
+        setPage(result);
+        setNewContent(false);
+      } else setNewContent(true);
+      setError(null);
+    } catch {
+      if (gen === generation.current)
+        setError("Conversation could not be read.");
+    } finally {
+      if (gen === generation.current) {
+        reading.current = false;
+        setBusy(false);
+      }
+    }
+  }
+  useEffect(() => {
+    void load();
   }, [
+    threadId,
     snapshot.activeThread?.revision,
     snapshot.run?.product.presentationRevision,
+    commitKey,
   ]);
-  const thread = snapshot.activeThread;
-  const displayed = new Set<string>();
+  const entries = page?.threadId === threadId ? page.entries : [];
+  const committed = new Set(entries.flatMap((e) => e.modelItemIds));
   return (
-    <div
-      className="wb-conversation-scroll"
-      ref={viewport}
-      onScroll={() => {
-        const node = viewport.current;
-        if (node)
+    <div className="wb-conversation-body">
+      <div
+        className="wb-conversation-scroll"
+        ref={viewport}
+        onScroll={() => {
+          if (!viewport.current || reading.current) return;
+          const v = viewport.current;
           following.current =
-            node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-      }}
-    >
-      <div ref={content}>
-        {!thread?.messages.length && (
-          <div className="wb-empty">
-            <h1>Helarc</h1>
-            <span>No conversation yet</span>
-          </div>
-        )}
-        {thread?.messages.map((message) => {
-          if (
-            message.role === "assistant" &&
-            message.relatedRunIds.some((id) =>
-              runs.some((run) => run.productRunId === id && run.harnessRunId),
-            )
-          )
-            return null;
-          const related = runs.filter(
-            (run) =>
-              run.harnessRunId &&
-              message.relatedRunIds.includes(run.productRunId) &&
-              !displayed.has(run.productRunId),
-          );
-          related.forEach((run) => displayed.add(run.productRunId));
-          return (
-            <React.Fragment key={message.id}>
-              <article className={`wb-message wb-message-${message.role}`}>
-                <header>
-                  <strong>
-                    {message.role === "user"
-                      ? "You"
-                      : message.role === "assistant"
-                        ? "Helarc"
-                        : message.role}
-                  </strong>
-                  <time>
-                    {new Date(message.createdAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </time>
-                  <CopyButton text={message.content} />
-                </header>
-                <MarkdownContent text={message.content} />
-              </article>
-              {related.map((run) => (
-                <RunConversation
-                  key={run.productRunId}
-                  scope={{
-                    threadId: thread.id,
-                    productRunId: run.productRunId,
-                    runId: run.harnessRunId!,
-                  }}
-                  revision={
-                    snapshot.run?.productRunId === run.productRunId
-                      ? snapshot.run.product.presentationRevision
-                      : 0
-                  }
-                  finalMessages={thread.messages.filter(
-                    (item) =>
-                      item.role === "assistant" &&
-                      item.relatedRunIds.includes(run.productRunId),
+            v.scrollHeight - v.scrollTop - v.clientHeight < 64 && !newContent;
+          saveAnchor();
+        }}
+      >
+        <div ref={content}>
+          {page?.previousCursor && (
+            <button
+              className="wb-link"
+              disabled={busy}
+              onClick={() => void load(true)}
+            >
+              Load earlier messages
+            </button>
+          )}
+          {!!page?.omittedRecords && (
+            <p className="wb-muted">
+              Some earlier content is no longer retained.
+            </p>
+          )}
+          {!threadId && (
+            <div className="wb-empty">
+              <h1>Helarc</h1>
+              <span>No conversation yet</span>
+            </div>
+          )}
+          {entries.map((entry) => (
+            <article
+              key={entry.id}
+              data-entry={entry.id}
+              className={`wb-message wb-message-${entry.role}`}
+            >
+              <header>
+                <strong>
+                  {entry.role === "user"
+                    ? "You"
+                    : entry.role === "assistant"
+                      ? "Helarc"
+                      : "Status"}
+                </strong>
+                {entry.disposition && (
+                  <small>{entry.disposition.replaceAll("_", " ")}</small>
+                )}
+                <CopyButton text={entry.content} />
+                {entry.productRunId && entry.runId && (
+                  <details className="wb-message-menu">
+                    <summary aria-label="Message options">
+                      <MoreHorizontal size={16} />
+                    </summary>
+                    <button
+                      className="wb-link"
+                      onClick={() =>
+                        onInspect({
+                          threadId,
+                          productRunId: entry.productRunId!,
+                          runId: entry.runId!,
+                        })
+                      }
+                    >
+                      Work details
+                    </button>
+                  </details>
+                )}
+              </header>
+              <MessageText entry={entry} />
+              <ResultLinks
+                snapshot={snapshot}
+                artifactIds={entry.artifactIds}
+              />
+            </article>
+          ))}
+          {previews.attempts.map((attempt) =>
+            attempt.parts
+              .filter(
+                (p) =>
+                  p.kind === "text" &&
+                  p.text &&
+                  !(p.modelItemId && committed.has(p.modelItemId)),
+              )
+              .map((part) => (
+                <article
+                  className="wb-message wb-preview"
+                  data-entry={part.id}
+                  key={`${attempt.invocationId}:${part.id}`}
+                >
+                  <header>
+                    <strong>Helarc</strong>
+                    <span className="wb-muted">
+                      {attempt.state === "receiving"
+                        ? "Responding"
+                        : attempt.state === "committed"
+                          ? "Recorded response"
+                          : attempt.state === "received" ||
+                              attempt.state === "validated"
+                            ? "Processing response"
+                            : `${attempt.state} response`}
+                    </span>
+                  </header>
+                  <MarkdownContent text={part.text} />
+                  {part.omittedBytes > 0 && (
+                    <p className="wb-muted">Preview shortened.</p>
                   )}
-                  artifacts={thread.artifacts.filter(
-                    (item) => item.runId === run.productRunId,
-                  )}
-                  onInspect={() => onInspect(run)}
-                />
-              ))}
-            </React.Fragment>
-          );
-        })}
+                  {attempt.code && <p className="wb-warning">{attempt.code}</p>}
+                </article>
+              )),
+          )}
+          {previews.omitted > 0 && (
+            <p className="wb-muted">Earlier response previews omitted.</p>
+          )}
+          {previews.error && (
+            <button className="wb-link" onClick={previews.refresh}>
+              {previews.error} Reload
+            </button>
+          )}
+          {error && (
+            <button
+              className="wb-link"
+              onClick={() => {
+                following.current = true;
+                void load();
+              }}
+            >
+              {error} Reload
+            </button>
+          )}
+        </div>
       </div>
+      <button
+        className={`wb-latest ${newContent ? "has-new" : ""}`}
+        onClick={() => {
+          following.current = true;
+          void load();
+        }}
+      >
+        <ArrowDown size={14} />
+        Latest messages{newContent ? " (new content)" : ""}
+      </button>
     </div>
   );
 }
-function RunConversation({
-  scope,
-  revision,
-  finalMessages,
-  artifacts,
-  onInspect,
-}: {
-  scope: WorkbenchScope;
-  revision: number;
-  finalMessages: readonly HelarcThreadMessageSnapshot[];
-  artifacts: readonly HelarcArtifactSnapshot[];
-  onInspect: () => void;
-}) {
-  const { page, error, loadMore, busy } = useWorkbench(scope, revision);
-  return (
-    <section className="wb-run-conversation" aria-label="Run conversation">
-      <button className="wb-link" onClick={onInspect} type="button">
-        Execution <ChevronDown size={13} />
-      </button>
-      {page?.records.map((record) =>
-        record.content.kind === "assistant_text" ? (
-          <AssistantBlock key={record.id} record={record} scope={scope} />
-        ) : record.content.kind === "tool_call" ? (
-          <details className="wb-tool-row" key={record.id}>
-            <summary>
-              <Wrench size={13} />
-              <strong>{record.content.name}</strong>
-              <span>{record.content.settlement ?? "Requested"}</span>
-            </summary>
-            <pre>
-              {JSON.stringify(
-                { input: record.content.input, result: record.content.result },
-                null,
-                2,
-              )}
-            </pre>
-          </details>
-        ) : record.content.kind === "plan_update" ? (
-          <div className="wb-plan-marker" key={record.id}>
-            Plan updated
-          </div>
-        ) : null,
-      )}
-      {page?.omittedRecords ? (
-        <p className="wb-muted">
-          {page.omittedRecords} earlier display records are no longer retained.
-        </p>
-      ) : null}
-      {page?.nextCursor && (
-        <button
-          className="wb-link"
-          type="button"
-          disabled={busy}
-          onClick={() => void loadMore()}
-        >
-          Load more activity
-        </button>
-      )}
-      {error && <p className="wb-muted">Activity unavailable: {error}</p>}
-      {finalMessages
-        .filter((message) => !isRepresentedFinal(message, page?.records ?? []))
-        .map((message) => (
-          <article className="wb-message" key={message.id}>
-            <header>
-              <strong>Helarc</strong>
-              <CopyButton text={message.content} />
-            </header>
-            <MarkdownContent text={message.content} />
-          </article>
-        ))}
-      {artifacts.map((artifact) => (
-        <details className="wb-tool-row" key={artifact.id}>
-          <summary>
-            <FileText size={13} />
-            <strong>{artifact.title}</strong>
-            <span>{artifact.kind}</span>
-          </summary>
-          <p>{artifact.summary ?? "No summary recorded"}</p>
-          <button className="wb-link" type="button" onClick={onInspect}>
-            Inspect execution
-          </button>
-        </details>
-      ))}
-    </section>
-  );
-}
-export function AssistantBlock({
-  record,
-  scope,
-}: {
-  record: HelarcRunPresentationRecord;
-  scope: WorkbenchScope;
-}) {
-  const [fullText, setFullText] = useState<string | null>(null);
-  const [retainedOmission, setRetainedOmission] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const [readError, setReadError] = useState(false);
-  if (record.content.kind !== "assistant_text") return null;
-  const content = record.content;
-  async function readFull() {
+function MessageText({ entry }: { entry: ConversationEntry }) {
+  const [full, setFull] = useState<{
+      text: string;
+      next: number | null;
+      omitted: number;
+    } | null>(null),
+    [error, setError] = useState(false),
+    [busy, setBusy] = useState(false);
+  async function read() {
+    if (!entry.detail) return;
     setBusy(true);
-    setReadError(false);
     try {
-      let text = "",
-        offset: number | null = 0;
-      while (offset !== null) {
-        const result = await window.helarc.readWorkbenchItem({
-          ...scope,
-          itemId: record.id,
-          offset,
+      const page = await window.helarc.readWorkbenchItem({
+        ...entry.detail,
+        offset: full?.next ?? 0,
+      });
+      if (page.status === "page") {
+        setFull({
+          text: page.text,
+          next: page.nextOffset,
+          omitted: page.omittedBytes,
         });
-        if (result.status !== "page") {
-          setReadError(true);
-          return;
-        }
-        text += result.text;
-        setRetainedOmission(result.omittedBytes);
-        offset = result.nextOffset;
-      }
-      setFullText(text);
+        setError(false);
+      } else setError(true);
     } catch {
-      setReadError(true);
+      setError(true);
     } finally {
       setBusy(false);
     }
   }
   return (
-    <article className="wb-message">
-      <header>
-        <strong>Helarc</strong>
-        <CopyButton text={fullText ?? content.text} />
-      </header>
-      <MarkdownContent text={fullText ?? content.text} />
-      {content.omittedBytes > 0 && fullText === null && (
-        <button
-          type="button"
-          className="wb-link"
-          disabled={busy}
-          onClick={() => void readFull()}
-        >
+    <>
+      <MarkdownContent text={full?.text ?? entry.content} />
+      {entry.omittedBytes > 0 && !full && entry.detail && (
+        <button className="wb-link" disabled={busy} onClick={() => void read()}>
           Read retained text
         </button>
       )}
-      {readError && <p className="wb-muted">Retained text unavailable.</p>}
-      {fullText !== null && retainedOmission > 0 && (
-        <p className="wb-muted">
-          {retainedOmission} bytes were not retained in this display.
-        </p>
+      {full?.next != null && (
+        <button className="wb-link" disabled={busy} onClick={() => void read()}>
+          Next text page
+        </button>
       )}
-    </article>
+      {!!full?.omitted && (
+        <p className="wb-muted">Some text was not retained.</p>
+      )}
+      {error && <p className="wb-warning">Retained text unavailable.</p>}
+    </>
   );
 }

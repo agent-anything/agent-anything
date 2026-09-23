@@ -545,9 +545,10 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     async send(
       request: ProviderRequest,
       context: Parameters<Provider["send"]>[1],
+      delivery: Parameters<Provider["send"]>[2],
     ) {
       providerRequests.push(request);
-      const result = await selectedProvider.send(request, context);
+      const result = await selectedProvider.send(request, context, delivery);
       providerResults.push(result);
       return result;
     },

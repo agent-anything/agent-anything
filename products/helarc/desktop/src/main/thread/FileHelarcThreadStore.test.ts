@@ -362,7 +362,8 @@ function projectionCommit(
       },
       product: {
         runId: "run-1",
-        presentation: { revision: 0, nextSequence: 1, records: [], labels: [], plans: {}, sourceSequences: {}, omittedRecords: 0, retainedBytes: 0 },
+        presentation: { revision: 0, nextSequence: 1, records: [], activeCalls: [], omittedActiveCalls: 0, labels: [], plans: {}, sourceSequences: {}, omittedRecords: 0, retainedBytes: 0 },
+        responses: { revision: 0, omittedAttempts: 0, retainedBytes: 0, attempts: [] },
         sequence,
         phase: { kind: "none" },
         qualification: qualificationProjection(),

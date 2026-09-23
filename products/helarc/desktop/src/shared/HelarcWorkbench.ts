@@ -1,5 +1,4 @@
 import type {
-  HelarcRunActivitySnapshot,
   HelarcRunSnapshot,
 } from "./HelarcDesktopApi.js";
 
@@ -54,6 +53,14 @@ export interface HelarcRunPresentationRecord {
       }
     | { readonly kind: "plan_update"; readonly plan: HelarcPresentationValue }
     | {
+        readonly kind: "steering";
+        readonly commandId: string;
+        readonly instruction: string;
+        readonly origin: "user" | "host" | "model";
+        readonly disposition: string;
+        readonly omittedBytes: number;
+      }
+    | {
         readonly kind: "interaction" | "lifecycle";
         readonly title: string;
         readonly detail: HelarcPresentationValue;
@@ -93,6 +100,184 @@ export interface WorkbenchScope {
   readonly productRunId: string;
   readonly runId: string;
 }
+export interface WorkScope {
+  readonly threadId: string;
+  readonly productRunId: string;
+}
+export interface CurrentWorkQuery extends WorkScope {
+  readonly collection?: "tasks" | "calls" | "commands";
+  readonly cursor?: string | null;
+}
+export interface ConversationQuery {
+  readonly threadId: string;
+  readonly position:
+    | { readonly kind: "latest" }
+    | { readonly kind: "before"; readonly cursor: string };
+}
+export interface ConversationEntry {
+  readonly id: string;
+  readonly revision: number;
+  readonly position: readonly [number, number];
+  readonly role: "user" | "assistant" | "system" | "product";
+  readonly kind: "message" | "assistant_text" | "steering";
+  readonly content: string;
+  readonly omittedBytes: number;
+  readonly productRunId: string | null;
+  readonly runId: string | null;
+  readonly sourceId: string;
+  readonly modelItemIds: readonly string[];
+  readonly detail: WorkbenchItemQuery | null;
+  readonly artifactIds: readonly string[];
+  readonly disposition: string | null;
+}
+export interface ConversationPage {
+  readonly status: "page";
+  readonly threadId: string;
+  readonly revision: number;
+  readonly entries: readonly ConversationEntry[];
+  readonly latestPosition: readonly [number, number] | null;
+  readonly previousCursor: string | null;
+  readonly omittedRecords: number;
+}
+export interface TaskSummary {
+  readonly runId: string;
+  readonly parentRunId: string | null;
+  readonly label: string;
+  readonly objective: string | null;
+  readonly status: string;
+  readonly terminalCode: string | null;
+  readonly hasPlan: boolean;
+}
+export interface CurrentWorkPage {
+  readonly status: "page";
+  readonly scope: WorkScope;
+  readonly live: boolean;
+  readonly revision: number;
+  readonly rootRunId: string;
+  readonly workStatus: string;
+  readonly tasks: readonly TaskSummary[];
+  readonly plan: HelarcPresentationValue;
+  readonly activeCalls: readonly HelarcRunPresentationRecord[];
+  readonly commands: readonly HelarcCommandProgress[];
+  readonly attention: readonly {
+    readonly runId: string;
+    readonly request: HelarcRunSnapshot["host"]["pendingInteractions"][number]["request"];
+    readonly phase: string;
+  }[];
+  readonly context: {
+    readonly model: string | null;
+    readonly provider: string | null;
+    readonly permissionPreset: string;
+    readonly enforcement: string;
+    readonly source: "bound_run";
+    readonly effectiveGrants: "not_projected";
+  };
+  readonly omitted: {
+    readonly tasks: number;
+    readonly calls: number;
+    readonly commands: number;
+  };
+  readonly nextCursors: {
+    readonly tasks: string | null;
+    readonly calls: string | null;
+    readonly commands: string | null;
+  };
+  readonly retainedFinishedCount: number;
+  readonly artifactIds: readonly string[];
+}
+export interface TaskDetailsPage {
+  readonly status: "page";
+  readonly scope: WorkbenchScope;
+  readonly live: boolean;
+  readonly task: TaskSummary;
+  readonly plan: HelarcPresentationValue;
+  readonly retries: HelarcPresentationValue;
+  readonly artifactIds: readonly string[];
+  readonly diagnostics: HelarcPresentationValue;
+}
+export interface WorkHistoryQuery extends WorkbenchScope {
+  readonly collection: "operations" | "assistant" | "commands";
+  readonly cursor: string | null;
+}
+export interface WorkHistoryPage {
+  readonly status: "page";
+  readonly scope: WorkbenchScope;
+  readonly collection: "operations" | "assistant" | "commands";
+  readonly records: readonly HelarcRunPresentationRecord[];
+  readonly commands: readonly HelarcCommandProgress[];
+  readonly previousCursor: string | null;
+  readonly omittedRecords: number;
+}
+export interface ArtifactContentQuery {
+  readonly threadId: string;
+  readonly artifactId: string;
+  readonly cursor: string | null;
+}
+export type ArtifactContentRead =
+  | WorkbenchRejected
+  | {
+      readonly status: "unavailable";
+      readonly reason: "restricted" | "unsupported_reference";
+    }
+  | {
+      readonly status: "page";
+      readonly artifactId: string;
+      readonly revision: string;
+      readonly mediaType: string;
+      readonly text: string;
+      readonly nextCursor: string | null;
+      readonly completeness: string;
+      readonly integrity: HelarcPresentationValue;
+      readonly limitations: readonly string[];
+      readonly projected: boolean;
+    };
+
+export interface ResponsePreviewPart {
+  readonly id: string;
+  readonly kind: "text" | "tool_call";
+  readonly name: string | null;
+  readonly text: string;
+  readonly offset: number;
+  readonly nextOffset: number | null;
+  readonly receivedLength: number;
+  readonly omittedBytes: number;
+  readonly modelItemId: string | null;
+  readonly turnId: string | null;
+  readonly committedRecordId: string | null;
+}
+export interface ResponsePreviewSummary {
+  readonly runId: string;
+  readonly requestId: string;
+  readonly controllerRequestId: string;
+  readonly invocationId: string;
+  readonly revision: number;
+  readonly state: string;
+  readonly code: string | null;
+  readonly parts: readonly ResponsePreviewPart[];
+}
+export interface ResponsePreviewQuery extends WorkbenchScope {
+  readonly invocationId: string | null;
+  readonly cursor: string | null;
+}
+export type ResponsePreviewRead =
+  | WorkbenchRejected
+  | {
+      readonly status: "page";
+      readonly scope: WorkbenchScope;
+      readonly live: boolean;
+      readonly revision: number;
+      readonly attempts: readonly ResponsePreviewSummary[];
+      readonly omittedAttempts: number;
+      readonly nextCursor: string | null;
+    };
+export interface ResponseProgressFrame {
+  readonly subscriptionId: string;
+  readonly scope: WorkScope;
+  readonly sequence: number;
+  readonly previewRevision: number;
+  readonly attempt: ResponsePreviewSummary;
+  readonly resyncRequired: boolean;
+}
 export type WorkbenchRejected = {
   readonly status: "rejected";
   readonly code: "invalid_query" | "not_found" | "stale_cursor" | "read_failed";
@@ -105,27 +290,6 @@ export interface ThreadRunSummary {
   readonly status: string;
   readonly live: boolean;
   readonly objective: string;
-}
-export interface WorkbenchQuery extends WorkbenchScope {
-  readonly includeDescendants: boolean;
-  readonly cursor: string | null;
-  readonly limit?: number;
-}
-export interface WorkbenchPage {
-  readonly status: "page";
-  readonly scope: WorkbenchScope;
-  readonly live: boolean;
-  readonly revision: number;
-  readonly recordedAt: string;
-  readonly run: HelarcRunSnapshot;
-  readonly labels: readonly HelarcRunLabel[];
-  readonly plans: Readonly<Record<string, HelarcPresentationValue>>;
-  readonly records: readonly HelarcRunPresentationRecord[];
-  readonly commands: readonly HelarcCommandProgress[];
-  readonly activity: readonly HelarcRunActivitySnapshot[];
-  readonly nextCursor: string | null;
-  readonly omittedRecords: number;
-  readonly finalSource: HelarcOutputSource;
 }
 export interface WorkbenchItemQuery extends WorkbenchScope {
   readonly itemId: string;

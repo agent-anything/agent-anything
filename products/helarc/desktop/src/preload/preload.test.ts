@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import type { HelarcDesktopApi } from "../shared/HelarcDesktopApi.js";
 
 interface ExposedHelarcApi {
   getInstructionSettings(): Promise<unknown>;
@@ -10,6 +11,55 @@ interface ExposedHelarcApi {
 }
 
 describe("Helarc preload bridge", () => {
+  it("registers response delivery before acknowledgement and filters scope without exposing Electron events", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let api!: HelarcDesktopApi;
+    let deliver!: (event: unknown, frame: unknown) => void;
+    const order: string[] = [];
+    const on = vi.fn((_channel, listener) => { order.push("listen"); deliver = listener; });
+    const removeListener = vi.fn();
+    const listener = vi.fn();
+    const scope = {threadId:"thread", productRunId:"work"};
+    const invoke = vi.fn(async (channel: string, input: Record<string, unknown>) => {
+      order.push(channel);
+      if (channel === "helarc:subscribe-response-progress") {
+        deliver({secret:"electron-event"}, {subscriptionId:input.subscriptionId,scope,sequence:1});
+        return {status:"subscribed"};
+      }
+      return {status:"page"};
+    });
+    runInNewContext(source, {require:() => ({
+      contextBridge:{exposeInMainWorld:(_key: string,value:HelarcDesktopApi) => {api=value;}},
+      ipcRenderer:{invoke,on,removeListener},
+    })});
+    const result = await api.subscribeResponseProgress(scope,listener);
+    expect(order.slice(0,2)).toEqual(["listen","helarc:subscribe-response-progress"]);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith({subscriptionId:"response-1",scope,sequence:1});
+    deliver({}, {subscriptionId:"response-1",scope:{...scope,threadId:"foreign"}});
+    deliver({}, {subscriptionId:"foreign",scope});
+    expect(listener).toHaveBeenCalledOnce();
+    await api.readResponsePreview({...scope,runId:"child",invocationId:null,cursor:null});
+    expect(invoke).toHaveBeenLastCalledWith("helarc:read-response-preview",{...scope,runId:"child",invocationId:null,cursor:null});
+    if (result.status !== "subscribed") throw new Error("Subscription failed");
+    result.dispose();result.dispose();
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenLastCalledWith("helarc:unsubscribe-response-progress",{subscriptionId:"response-1"});
+    deliver({}, {subscriptionId:"response-1",scope});
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("removes response listeners when subscription is refused", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let api!: HelarcDesktopApi;
+    const removeListener = vi.fn();
+    runInNewContext(source,{require:() => ({
+      contextBridge:{exposeInMainWorld:(_key:string,value:HelarcDesktopApi) => {api=value;}},
+      ipcRenderer:{on:vi.fn(),removeListener,invoke:async () => ({status:"rejected",code:"not_found"})},
+    })});
+    expect(await api.subscribeResponseProgress({threadId:"thread",productRunId:"missing"},vi.fn())).toMatchObject({code:"not_found"});
+    expect(removeListener).toHaveBeenCalledOnce();
+  });
   it("forwards instruction settings without interpreting enabled flags", async () => {
     const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
     let api: ExposedHelarcApi | undefined;

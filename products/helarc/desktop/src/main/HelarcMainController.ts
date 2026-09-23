@@ -285,6 +285,7 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  responseDelivery?: "buffered" | "streaming";
   commandOutputRegistry?: CommandOutputRegistry;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   instructionSettings?: HelarcInstructionSettings;
@@ -321,6 +322,7 @@ type DesktopActiveRunSlot =
     };
 
 export class HelarcMainController {
+  private readonly responseDelivery: "buffered" | "streaming";
   readonly workbench: HelarcWorkbenchQueries;
   private readonly commandOutputRegistry: CommandOutputRegistry;
   private readonly inspection: import("./inspection/HelarcInspection.js").HelarcInspection | undefined;
@@ -380,6 +382,7 @@ export class HelarcMainController {
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput = {}) {
+    this.responseDelivery = input.responseDelivery ?? "buffered";
     this.commandOutputRegistry = input.commandOutputRegistry ?? new CommandOutputRegistry();
     this.workbench = new HelarcWorkbenchQueries({
       loadThread: async threadId => this.currentThreadRecord?.thread.id === threadId ? this.currentThreadRecord : this.threadStore.loadThread(threadId),
@@ -464,6 +467,13 @@ export class HelarcMainController {
     return () => {
       this.snapshotSubscribers.delete(subscriber);
     };
+  }
+
+  subscribeResponsePreviews(scope: import("../shared/HelarcWorkbench.js").WorkScope,
+    listener: Parameters<HelarcHostActiveRun["subscribeResponsePreviews"]>[0]): (() => void) | null {
+    const slot = this.activeRunSlot;
+    if (slot.kind !== "active" || scope.threadId !== slot.threadId || scope.productRunId !== slot.productRunId) return null;
+    return slot.handle.subscribeResponsePreviews(listener);
   }
 
   dispatchHostCommand(
@@ -616,6 +626,7 @@ export class HelarcMainController {
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
       const preparedHostRun = await prepareHelarcHostRun({
+        responseDelivery: this.responseDelivery,
         retainCommandOutput: async (harnessRunId, executionId, paths) => {
           const roots = [threadWorkspace.primary, ...threadWorkspace.additional];
           let recorded = false;

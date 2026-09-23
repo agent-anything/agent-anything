@@ -19,7 +19,7 @@ export interface ProviderObservation {
   readonly request: ProviderRequest | null;
   readonly result: ProviderCallResult | null;
   readonly body: ModelJsonValue | null;
-  readonly representation: "semantic" | "encoded_json" | "parsed_json" | "error_diagnostic" | "normalized" | null;
+  readonly representation: "semantic" | "encoded_json" | "parsed_json" | "assembled_stream" | "error_diagnostic" | "normalized" | null;
   readonly contentUnavailable: boolean;
 }
 export interface ProviderObserver { observe(observation: ProviderObservation): void }

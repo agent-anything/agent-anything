@@ -1,15 +1,11 @@
-import { randomUUID } from "node:crypto";
 import type { ProviderCallResult, ProviderRequest } from "@agent-anything/model-interaction";
 import { publishProviderObservation, snapshotProviderDiagnostic, type ProviderObserver, type ProviderObservation } from "@agent-anything/model-interaction/transport";
 
 export class ProviderExchangeObservation {
-  private readonly attemptId: string | null;
   private endpoint: string | null = null;
   private httpStatus: number | null = null;
   private encodedBytes: number | null = null;
-  constructor(private readonly observer: ProviderObserver | undefined, private readonly providerId: string, private readonly model: string, private readonly request: ProviderRequest) {
-    this.attemptId = observer ? randomUUID() : null;
-  }
+  constructor(private readonly observer: ProviderObserver | undefined, private readonly providerId: string, private readonly model: string, private readonly request: ProviderRequest, private readonly attemptId: string) {}
   validated(request: ProviderRequest): void { this.emit("request", "accepted", { request, representation: "semantic" }); }
   dispatched(endpoint: string, encodedBody: string): void {
     if (!this.observer) return;
@@ -18,7 +14,7 @@ export class ProviderExchangeObservation {
     this.emit("dispatch", "dispatched", { body: encodedBody, representation: "encoded_json" });
   }
   received(status: number): void { this.httpStatus = status; this.emit("http_response", "received"); }
-  consumed(body: unknown, representation: "parsed_json" | "error_diagnostic"): void { this.emit("response_body", "consumed", { body, representation }); }
+  consumed(body: unknown, representation: "parsed_json" | "assembled_stream" | "error_diagnostic"): void { this.emit("response_body", "consumed", { body, representation }); }
   settled(result: ProviderCallResult): void { this.emit("settled", result.kind, { result, representation: "normalized", code: "failure" in result ? result.failure.code : null }); }
   threw(): void { this.emit("settled", "threw", { code: "provider_unhandled_failure" }); }
   private emit(stage: ProviderObservation["stage"], status: string, data: { request?: ProviderRequest; result?: ProviderCallResult; body?: unknown; representation?: ProviderObservation["representation"]; code?: string | null } = {}): void {

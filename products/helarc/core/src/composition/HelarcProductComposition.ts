@@ -5,6 +5,7 @@ import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import { appendHelarcRunPresentation, labelHelarcRunPresentation } from "../run/presentation/HelarcRunPresentation.js";
+import { HelarcResponsePreviewStore, type HelarcResponsePreview, type HelarcResponsePreviews } from "../run/presentation/HelarcResponsePreviews.js";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
 import {
   createDefaultHelarcInstructionSettings,
@@ -98,6 +99,7 @@ type HelarcProductProjectionUpdatePayload =
     : never;
 
 export interface CreateHelarcProductCompositionInput {
+  readonly responseDelivery?: "buffered" | "streaming";
   readonly executionFlow?: ExecutionFlowContext;
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
@@ -128,6 +130,8 @@ export interface HelarcProductComposition {
   readonly taskFulfillment: HelarcTaskFulfillmentHook;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
+  getResponsePreviews(): HelarcResponsePreviews;
+  subscribeResponsePreviews(listener: (value: HelarcResponsePreviews, attempt: HelarcResponsePreview) => void): () => void;
   recordTranscript(record: RunTranscriptRecord): void;
   recordRunLineage(runId: string, lineage: RunLineage): void;
   recordCommandProgress(command:import("../run/HelarcRunProjection.js").HelarcCommandProgress):void;
@@ -229,6 +233,9 @@ export async function createHelarcProductComposition(
       }
     }
   };
+  const previews = new HelarcResponsePreviewStore(responses => {
+    if (!productProjection.result) publishProductUpdate({kind:"responses_observed", responses});
+  });
   const continuation = new ModelContinuationLifecycle({
     store: input.modelContinuationStore,
     now: input.now,
@@ -244,6 +251,7 @@ export async function createHelarcProductComposition(
   const tracedController = new HelarcTracingController(
     new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
+      delivery: {mode:input.responseDelivery ?? "buffered", observer:{observe:event => previews.observe(event)}},
       buildRequest: (controllerInput, context) =>
         buildHelarcProviderRequest(
           controllerInput,
@@ -307,10 +315,13 @@ export async function createHelarcProductComposition(
     getProductProjection(): HelarcProductRunProjection {
       return productProjection;
     },
+    getResponsePreviews: () => previews.snapshot(),
+    subscribeResponsePreviews: (listener: (value: HelarcResponsePreviews, attempt: HelarcResponsePreview) => void) => previews.subscribe(listener),
     recordTranscript(record: RunTranscriptRecord): void {
       if (productProjection.result) return;
       const presentation = appendHelarcRunPresentation(productProjection.presentation, record);
       if (presentation !== productProjection.presentation) publishProductUpdate({ kind: "presentation_observed", presentation });
+      previews.committed(record);
     },
     recordRunLineage(runId: string, lineage: RunLineage): void {
       if (productProjection.result) return;
@@ -357,6 +368,7 @@ export async function createHelarcProductComposition(
       runResult: RunResult<HelarcAgentOutput>,
       selectedEnforcement: SandboxEnforcement,
     ): HelarcProductResult {
+      previews.close();
       const flow = new ExecutionFlowPath(HELARC_RESULT_EXECUTION_FLOW, input.executionFlow ?? {}, runResult.runId, [{owner:"runtime",kind:"run",id:runResult.runId,revision:null}]);
       const inputRef = flow.material("Run result for Product projection", "received", runResult);
       flow.advance("result", {status:runResult.status}, [inputRef]);

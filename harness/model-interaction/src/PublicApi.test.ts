@@ -7,6 +7,7 @@ import * as api from "./index.js";
 describe("Model Interaction public API", () => {
   it("exposes focused Model Interaction runtime values from their owner paths", () => {
     expect(Object.keys(api).sort()).toEqual([
+      "ProviderDeliverySession",
       "accountProviderTransport",
       "assessModelContext",
       "createModelCallRef",
@@ -23,6 +24,7 @@ describe("Model Interaction public API", () => {
       "providerInteractionsEqual",
       "providerResponseUsage",
       "providerResultFromInterruption",
+      "publishProviderDelivery",
       "snapshotModelCallRef",
       "snapshotModelCallableDefinition",
       "snapshotModelCallableDefinitions",

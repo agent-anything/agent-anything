@@ -447,6 +447,7 @@ const expectedLowerValueExports = {
     "createControllerTurnTraceOperationId",
   ],
   "@agent-anything/model-interaction": [
+    "ProviderDeliverySession",
     "accountProviderTransport",
     "assessModelContext",
     "createModelCallRef",
@@ -463,6 +464,7 @@ const expectedLowerValueExports = {
     "providerInteractionsEqual",
     "providerResponseUsage",
     "providerResultFromInterruption",
+    "publishProviderDelivery",
     "snapshotModelCallRef",
     "snapshotModelCallableDefinition",
     "snapshotModelCallableDefinitions",

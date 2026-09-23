@@ -688,6 +688,16 @@ describe("OllamaProvider", () => {
   });
 });
 
+it("rejects streaming for structured generation before dispatch", async () => {
+  const fetch = vi.fn();
+  const provider = new OllamaProvider(config(), fetch);
+  expect(await provider.send(request(provider), context(), { mode: "streaming", invocationId: "unsupported" }))
+    .toMatchObject({ kind: "failed", failure: { code: "provider_streaming_unsupported" } });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(new OllamaProvider({ ...config(), nativeToolInteraction: { supported: false } }).descriptor.capabilities.streaming)
+    .toEqual({ supported: false });
+});
+
 function config() {
   return {
     baseUrl: "http://localhost:11434/",

@@ -36,6 +36,25 @@ const call = {
 };
 
 describe("Run presentation", () => {
+  it("keeps active calls independently from history retention and settles them by exact call identity",()=>{
+    let state=appendHelarcRunPresentation(createHelarcRunPresentation(),record(1,{kind:"controller_turn",modelItems:[call]}));
+    state={...state,records:[],retainedBytes:0,omittedRecords:1};
+    expect(state.activeCalls).toHaveLength(1);
+    state=appendHelarcRunPresentation(state,record(2,{kind:"run_action",action:{ref:{id:"action"},
+      provenance:{kind:"controller",modelCallRef:{id:"call"}},subject:{kind:"operation",invocationId:"invocation"}}}));
+    expect(state.activeCalls[0]?.content).toMatchObject({runActionId:"action",invocationId:"invocation"});
+    state=appendHelarcRunPresentation(state,record(3,{kind:"model_call_settlement",result:{modelCallRef:{id:"call"},settlement:"succeeded",content:"done"}}));
+    expect(state.activeCalls).toEqual([]);expect(state.records[0]?.content).toMatchObject({settlement:"succeeded"});
+  });
+  it("records applied user steering and typed retry waits without impersonating other origins",()=>{
+    let state=appendHelarcRunPresentation(createHelarcRunPresentation(),record(1,{kind:"state_transition",transition:"steering",
+      steering:{status:"applied",command:{commandId:"steer-1",instruction:"Read only",attribution:{origin:"user"}}}}));
+    state=appendHelarcRunPresentation(state,record(2,{kind:"state_transition",transition:"steering",
+      steering:{status:"cancelled",command:{commandId:"steer-2",instruction:"Host change",attribution:{origin:"host"}}}}));
+    state=appendHelarcRunPresentation(state,record(3,{kind:"retry_transition",transition:"ready",pending:{kind:"retry_wait"}}));
+    expect(state.records.map(r=>r.content)).toMatchObject([{kind:"steering",origin:"user",disposition:"applied"},
+      {kind:"steering",origin:"host",disposition:"cancelled"},{kind:"interaction",title:"retry_wait: ready"}]);
+  });
   it("uses exact sources, preserves nonfinal text and updates the requested call with settlement", () => {
     let state = appendHelarcRunPresentation(
       createHelarcRunPresentation(),

@@ -51,6 +51,8 @@ export interface HelarcRunPresentationRecord {
         readonly result: HelarcPresentationValue;
       }
     | { readonly kind: "plan_update"; readonly plan: HelarcPresentationValue }
+    | { readonly kind: "steering"; readonly commandId: string; readonly instruction: string;
+        readonly origin: "user" | "host" | "model"; readonly disposition: string; readonly omittedBytes: number }
     | {
         readonly kind: "interaction" | "lifecycle";
         readonly title: string;
@@ -72,6 +74,8 @@ export interface HelarcRunPresentation {
   readonly omittedRecords: number;
   readonly retainedBytes: number;
   readonly records: readonly HelarcRunPresentationRecord[];
+  readonly activeCalls: readonly HelarcRunPresentationRecord[];
+  readonly omittedActiveCalls: number;
   readonly labels: readonly HelarcRunLabel[];
   readonly plans: Readonly<Record<string, HelarcPresentationValue>>;
   readonly sourceSequences: Readonly<Record<string, number>>;
@@ -84,6 +88,8 @@ export function createHelarcRunPresentation(): HelarcRunPresentation {
     omittedRecords: 0,
     retainedBytes: 0,
     records: [],
+    activeCalls: [],
+    omittedActiveCalls: 0,
     labels: [],
     plans: {},
     sourceSequences: {},
@@ -176,7 +182,7 @@ export function labelHelarcRunPresentation(
   const parentRunId = lineage.kind === "descendant" ? lineage.parent.id : null;
   const parentRunActionId =
     lineage.kind === "descendant" ? lineage.parentRunAction.id : null;
-  const call = current.records.find(
+  const call = [...current.activeCalls, ...current.records].find(
     (record) =>
       record.runId === parentRunId &&
       record.content.kind === "tool_call" &&
@@ -227,6 +233,8 @@ export function appendHelarcRunPresentation(
   const item = record.item;
   const payload = item.payload;
   let records = [...current.records];
+  let activeCalls = [...current.activeCalls];
+  let omittedActiveCalls = current.omittedActiveCalls;
   let nextSequence = current.nextSequence;
   let plans = current.plans;
   const source = {
@@ -236,7 +244,7 @@ export function appendHelarcRunPresentation(
     sequence: record.sequence,
   };
   const add = (id: string, content: HelarcRunPresentationRecord["content"]) => {
-    records.push({
+    const entry: HelarcRunPresentationRecord = {
       id,
       runId: record.runId,
       sequence: nextSequence++,
@@ -244,7 +252,10 @@ export function appendHelarcRunPresentation(
       observedAt: item.createdAt,
       source,
       content,
-    });
+    };
+    records.push(entry);
+    if (content.kind === "tool_call") activeCalls.push({...entry, content:{...content,
+      input:projectHelarcPresentationValue(content.input, 1024)}});
   };
   if (payload.kind === "controller_turn") {
     for (const model of payload.modelItems) {
@@ -279,7 +290,7 @@ export function appendHelarcRunPresentation(
         : payload.action.provenance.kind === "controller"
           ? payload.action.provenance.modelCallRef.id
           : null;
-    records = records.map((entry) => {
+    const updateCall = (entry: HelarcRunPresentationRecord): HelarcRunPresentationRecord => {
       if (
         entry.runId !== record.runId ||
         entry.content.kind !== "tool_call" ||
@@ -305,7 +316,13 @@ export function appendHelarcRunPresentation(
               }),
         },
       };
-    });
+    };
+    if (payload.kind === "model_call_settlement") {
+      const active = activeCalls.find(entry => entry.runId === record.runId && entry.content.kind === "tool_call" && entry.content.callId === callId);
+      if (active && !records.some(entry => entry.id === active.id && entry.runId === active.runId)) records.push(active);
+    }
+    records = records.map(updateCall).sort((a,b) => a.sequence-b.sequence);
+    activeCalls = activeCalls.map(updateCall).filter(entry => entry.content.kind === "tool_call" && entry.content.settlement === null);
   } else if (
     payload.kind === "state_transition" &&
     payload.transition === "plan"
@@ -313,14 +330,19 @@ export function appendHelarcRunPresentation(
     const plan = projectHelarcPresentationValue(payload.plan);
     plans = { ...plans, [record.runId]: plan };
     add(item.ref.id, { kind: "plan_update", plan });
-  } else if (payload.kind === "pending_transition") {
+  } else if (payload.kind === "state_transition" && payload.transition === "steering") {
+    const command = payload.steering.command;
+    const text = boundedPresentationText(command.instruction);
+    add(item.ref.id, {kind:"steering", commandId:command.commandId, instruction:text.text,
+      omittedBytes:text.omittedBytes, origin:command.attribution.origin, disposition:payload.steering.status});
+  } else if (payload.kind === "pending_transition" || payload.kind === "retry_transition") {
     add(item.ref.id, {
       kind: "interaction",
       title: `${payload.pending.kind}: ${payload.transition}`,
       detail: projectHelarcPresentationValue({
         kind: payload.pending.kind,
         transition: payload.transition,
-        recordRef: payload.recordRef,
+        recordRef: payload.kind === "pending_transition" ? payload.recordRef : null,
       }),
     });
   } else if (
@@ -374,11 +396,18 @@ export function appendHelarcRunPresentation(
     retainedBytes -= encoder.encode(JSON.stringify(removed)).length;
     omittedRecords++;
   }
+  let activeBytes = activeCalls.reduce((n, entry) => n + encoder.encode(JSON.stringify(entry)).length, 0);
+  while (activeCalls.length > 2048 || activeBytes > 4 * 1024 * 1024) {
+    activeBytes -= encoder.encode(JSON.stringify(activeCalls.shift())).length;
+    omittedActiveCalls++;
+  }
   return {
     ...current,
     revision: current.revision + 1,
     nextSequence,
     records,
+    activeCalls,
+    omittedActiveCalls,
     plans,
     retainedBytes,
     omittedRecords,

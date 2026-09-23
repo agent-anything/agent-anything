@@ -16,8 +16,8 @@ describe("Helarc workbench shell", () => {
 
     expect(html).toContain("Helarc");
     expect(html).toContain("No workspace selected");
-    expect(html).toContain("No Run selected");
-    expect(html).toContain("Requests 0");
+    expect(html).toContain("No work yet");
+    expect(html).not.toContain("Requests 0");
     expect(html).toContain("Conversation");
     expect(html).toContain("Threads");
     expect(html).toContain("Settings");

@@ -27,6 +27,9 @@ export {
 } from "./ModelInteractionProjection.js";
 export { createControllerModelItems } from "./ControllerModelItems.js";
 export type {
+  ControllerResponseObservation, ControllerResponseObserver, ControllerResponseDeliveryOptions,
+} from "./ControllerResponseObservation.js";
+export type {
   ModelInputRecoveryCapability,
   ModelInputRecoveryInput,
   ModelInputRecoveryPort,

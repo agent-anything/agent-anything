@@ -1,5 +1,6 @@
 import type { HostRunProjection } from "@agent-anything/host/projection";
 import { createHelarcRunPresentation, type HelarcRunPresentation } from "./presentation/HelarcRunPresentation.js";
+import { createHelarcResponsePreviews, type HelarcResponsePreviews } from "./presentation/HelarcResponsePreviews.js";
 import type {
   HelarcActivityItem,
   HelarcProductResult,
@@ -42,6 +43,7 @@ export interface HelarcProductRunProjection {
   readonly activity: readonly HelarcActivityItem[];
   readonly commands:readonly HelarcCommandProgress[];
   readonly presentation: HelarcRunPresentation;
+  readonly responses: HelarcResponsePreviews;
   readonly continuation: HelarcModelContinuationProjection | null;
   readonly result: HelarcProductResult | null;
 }
@@ -72,6 +74,7 @@ export interface HelarcModelContinuationProjectionUpdate
 }
 
 export type HelarcProductRunProjectionUpdate =
+  | HelarcProductProjectionUpdateBase<"responses_observed"> & { readonly responses: HelarcResponsePreviews }
   | HelarcProductProjectionUpdateBase<"presentation_observed"> & { readonly presentation: HelarcRunPresentation }
   | HelarcProductProjectionUpdateBase<"command_observed"> & {readonly command:HelarcCommandProgress}
   | HelarcProductActivityProjectionUpdate
@@ -148,6 +151,7 @@ export function createHelarcProductRunProjection(
     activity: Object.freeze([]),
     commands:Object.freeze([]),
     presentation: createHelarcRunPresentation(),
+    responses: createHelarcResponsePreviews(),
     continuation: null,
     result: null,
   });
@@ -172,6 +176,9 @@ export function reduceHelarcProductRunProjection(
 
   try {
     switch (update.kind) {
+      case "responses_observed":
+        if (update.responses.revision <= current.responses.revision) return rejectProduct(current, "stale_sequence");
+        return appliedProduct(Object.freeze({...current, sequence:update.sequence, responses:update.responses}));
       case "presentation_observed":
         if (update.presentation.revision <= current.presentation.revision) return rejectProduct(current, "stale_sequence");
         return appliedProduct(Object.freeze({ ...current, sequence: update.sequence, presentation: update.presentation }));

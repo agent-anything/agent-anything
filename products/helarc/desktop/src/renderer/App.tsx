@@ -23,7 +23,8 @@ import type {
 import { SettingsPage } from "./SettingsPage.js";
 import { Conversation } from "./conversation/Conversation.js";
 import { AttentionPanel } from "./interactions/AttentionPanel.js";
-import { ExecutionPanel } from "./execution/ExecutionPanel.js";
+import { CurrentWorkPanel, displayStatus } from "./work/CurrentWorkPanel.js";
+import { useRead } from "./workbench/useRead.js";
 
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
@@ -51,8 +52,13 @@ export function App() {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [settings, setSettings] = useState(false);
   const [threads, setThreads] = useState(false);
-  const [execution, setExecution] = useState(true);
-  const [requests, setRequests] = useState(false);
+  const [execution, setExecution] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 1100,
+  );
+  const [attentionTarget, setAttentionTarget] = useState<{
+    runId: string;
+    sequence: number;
+  } | null>(null);
   const [draft, setDraft] = useState("");
   const [steering, setSteering] = useState("");
   const [newThread, setNewThread] = useState(false);
@@ -107,16 +113,7 @@ export function App() {
         if (disposed || result.status !== "page") return;
         setRuns(result.runs);
         setSelected((previous) =>
-          previous?.threadId === threadId &&
-          result.runs.some((run) => run.productRunId === previous.productRunId)
-            ? previous
-            : result.runs.at(-1)?.harnessRunId
-              ? {
-                  threadId,
-                  productRunId: result.runs.at(-1)!.productRunId,
-                  runId: result.runs.at(-1)!.harnessRunId!,
-                }
-              : null,
+          previous?.threadId === threadId ? previous : null,
         );
       })
       .catch(() => {
@@ -248,41 +245,71 @@ export function App() {
       }
     });
   }
-  function inspect(run: ThreadRunSummary) {
-    if (run.harnessRunId && snapshot.activeThread)
-      setSelected({
-        threadId: snapshot.activeThread.id,
-        productRunId: run.productRunId,
-        runId: run.harnessRunId,
-      });
+  const latest = runs.at(-1);
+  const currentScope: WorkbenchScope | null =
+    snapshot.activeThread &&
+    (snapshot.run?.harnessRunId || latest?.harnessRunId)
+      ? {
+          threadId: snapshot.activeThread.id,
+          productRunId: snapshot.run?.productRunId ?? latest!.productRunId,
+          runId: snapshot.run?.harnessRunId ?? latest!.harnessRunId!,
+        }
+      : null;
+  const currentRead = useRead(
+    currentScope ? JSON.stringify(currentScope) : "",
+    (snapshot.activeThread?.revision ?? 0) +
+      (snapshot.run?.product.presentationRevision ?? 0),
+    () => window.helarc.readCurrentWork(currentScope!),
+  );
+  const current =
+    currentRead.value?.status === "page" ? currentRead.value : null;
+  function inspect(scope: WorkbenchScope) {
+    setSelected(scope);
     setExecution(true);
   }
   const executionView = (
-    <ExecutionPanel
+    <CurrentWorkPanel
       snapshot={snapshot}
-      runs={runs}
-      selected={selected}
-      onSelect={setSelected}
+      scope={selected ?? currentScope}
+      currentScope={currentScope}
       visible={execution && !settings}
       onClose={() => setExecution(false)}
+      onCurrent={() => setSelected(null)}
       onResume={(delegation) => void resume(delegation)}
+      onAttention={(runId) => {
+        if (!wide) setExecution(false);
+        setAttentionTarget((previous) => ({
+          runId,
+          sequence: (previous?.sequence ?? 0) + 1,
+        }));
+      }}
     />
   );
   const conversation = (
     <section className="wb-conversation" aria-label="Conversation">
-      <Conversation snapshot={snapshot} runs={runs} onInspect={inspect} />
+      <Conversation
+        snapshot={snapshot}
+        scope={currentScope}
+        onInspect={inspect}
+        visible={!settings}
+      />
+      <AttentionPanel
+        key={snapshot.activeThread?.id ?? "none"}
+        snapshot={snapshot}
+        onSnapshot={setSnapshot}
+        target={attentionTarget}
+        tasks={current?.tasks ?? []}
+      />
       <form className="wb-composer" onSubmit={submit}>
         <div className="wb-composer-heading">
           <label htmlFor="task-input">
-            {runActive
-              ? "Message active Run"
-              : newThread
-                ? "New thread"
-                : "Message"}
+            {runActive ? "Message" : newThread ? "New thread" : "Message"}
           </label>
           {snapshot.run && (
             <span className={`wb-status ${snapshot.run.display.status}`}>
-              {snapshot.run.display.status.replaceAll("_", " ")}
+              {attentionCount
+                ? "Needs your input"
+                : displayStatus(snapshot.run.display.status)}
             </span>
           )}
         </div>
@@ -304,8 +331,8 @@ export function App() {
             <button
               type="button"
               className="wb-icon danger"
-              title="Cancel run"
-              aria-label="Cancel run"
+              title="Stop work"
+              aria-label="Stop work"
               disabled={busy || snapshot.run?.display.status === "cancelling"}
               onClick={() => void cancel()}
             >
@@ -315,8 +342,8 @@ export function App() {
           <button
             type="submit"
             className="wb-send"
-            title={runActive ? "Send guidance" : "Start run"}
-            aria-label={runActive ? "Send guidance" : "Start run"}
+            title={runActive ? "Send guidance" : "Send message"}
+            aria-label={runActive ? "Send guidance" : "Send message"}
             disabled={
               busy ||
               !(runActive ? steering : draft).trim() ||
@@ -327,6 +354,40 @@ export function App() {
             <ArrowUp size={19} />
           </button>
         </div>
+        <details className="wb-context">
+          <summary>
+            {runActive
+              ? (current?.context.model ?? "Current model")
+              : (snapshot.provider.activeProfile?.model ??
+                "Model not configured")}
+            {runActive &&
+              ` / ${current?.context.permissionPreset?.replaceAll("_", " ") ?? "Access"}`}
+          </summary>
+          <p>
+            {runActive
+              ? "Bound to current work"
+              : "Configuration for next work"}
+          </p>
+          {runActive && current && (
+            <p>
+              Enforcement: {current.context.enforcement}. Additional grants are
+              not shown here.
+            </p>
+          )}
+          <button
+            type="button"
+            className="wb-link"
+            onClick={() => setSettings(true)}
+          >
+            Settings
+          </button>
+        </details>
+        {snapshot.run?.display.status === "failed" && (
+          <p className="wb-warning" role="status">
+            {snapshot.run.product.result?.output.safeErrors.at(-1)?.message ??
+              "Work could not continue."}
+          </p>
+        )}
         {(error || snapshot.error) && (
           <p className="wb-warning" role="alert">
             {error ?? snapshot.error?.message}
@@ -389,16 +450,9 @@ export function App() {
           </button>
           <button
             type="button"
-            className={`wb-request-toggle ${attentionCount ? "has-requests" : ""}`}
-            onClick={() => setRequests((value) => !value)}
-          >
-            Requests {attentionCount}
-          </button>
-          <button
-            type="button"
             className="wb-icon"
-            title="Execution"
-            aria-label="Toggle execution"
+            title="Current work"
+            aria-label="Toggle work"
             aria-pressed={execution}
             onClick={() => setExecution((value) => !value)}
           >
@@ -428,7 +482,7 @@ export function App() {
           </button>
         </header>
         <main className="wb-main">
-          {wide ? (
+          {
             <Group
               key={layoutKey}
               defaultLayout={layout}
@@ -442,39 +496,35 @@ export function App() {
                 }
               }}
             >
-              <Panel id="conversation" minSize="520px">
+              <Panel id="conversation" minSize={wide ? "520px" : 0}>
                 {conversation}
               </Panel>
-              {execution && (
-                <>
-                  <Separator
-                    className="wb-separator"
-                    aria-label="Resize execution panel"
-                  />
-                  <Panel
-                    id="execution"
-                    defaultSize="380px"
-                    minSize="320px"
-                    maxSize="50%"
-                  >
-                    {executionView}
-                  </Panel>
-                </>
+              {wide && execution && (
+                <Separator
+                  className="wb-separator"
+                  aria-label="Resize work panel"
+                />
               )}
+              <Panel
+                id="execution"
+                defaultSize="380px"
+                minSize={wide && execution ? "320px" : 0}
+                maxSize={wide && execution ? "50%" : 0}
+                style={{ overflow: wide ? "hidden" : "visible" }}
+              >
+                <Overlay
+                  active={execution}
+                  docked={wide}
+                  label="Current work"
+                  side="right"
+                  onClose={() => setExecution(false)}
+                >
+                  {executionView}
+                </Overlay>
+              </Panel>
             </Group>
-          ) : (
-            conversation
-          )}
+          }
         </main>
-        {!wide && execution && (
-          <Overlay
-            label="Execution panel"
-            onClose={() => setExecution(false)}
-            side="right"
-          >
-            {executionView}
-          </Overlay>
-        )}
         {threads && (
           <Overlay
             label="Threads"
@@ -525,31 +575,6 @@ export function App() {
             </div>
           </Overlay>
         )}
-        <Overlay
-          active={requests}
-          label="Requests"
-          onClose={() => setRequests(false)}
-          side="right"
-        >
-          <header className="wb-panel-header">
-            <strong>Requests {attentionCount}</strong>
-            <button
-              className="wb-icon"
-              title="Close requests"
-              aria-label="Close requests"
-              onClick={() => setRequests(false)}
-            >
-              <X size={17} />
-            </button>
-          </header>
-          <div className="wb-drawer-scroll">
-            {attentionCount === 0 ? (
-              <p className="wb-muted">No pending requests</p>
-            ) : (
-              <AttentionPanel snapshot={snapshot} onSnapshot={setSnapshot} />
-            )}
-          </div>
-        </Overlay>
       </div>
       {settings && (
         <SettingsPage
@@ -570,36 +595,39 @@ function Overlay({
   onClose,
   children,
   active = true,
+  docked = false,
 }: {
   label: string;
   side: "left" | "right";
   onClose: () => void;
   children: React.ReactNode;
   active?: boolean;
+  docked?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!active) return;
+    if (!active || docked) return;
     const previous = document.activeElement as HTMLElement | null;
     ref.current?.focus();
     return () => previous?.focus();
-  }, [active]);
+  }, [active, docked]);
   return (
     <div
       hidden={!active}
-      className={`wb-overlay wb-overlay-${side}`}
+      className={docked ? "wb-docked" : `wb-overlay wb-overlay-${side}`}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (!docked && event.target === event.currentTarget) onClose();
       }}
     >
       <div
-        className="wb-drawer"
-        role="dialog"
-        aria-modal="true"
+        className={docked ? "wb-docked-body" : "wb-drawer"}
+        role={docked ? undefined : "dialog"}
+        aria-modal={docked ? undefined : true}
         aria-label={label}
         tabIndex={-1}
         ref={ref}
         onKeyDown={(event) => {
+          if (docked) return;
           if (event.key === "Escape") onClose();
           if (event.key === "Tab") {
             const items = ref.current?.querySelectorAll<HTMLElement>(

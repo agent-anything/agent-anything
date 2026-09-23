@@ -2,6 +2,7 @@ export interface FetchResponseLike {
   readonly ok: boolean;
   readonly status: number;
   readonly headers?: HttpResponseHeadersLike;
+  readonly body?: ReadableStream<Uint8Array> | null;
   json(): Promise<unknown>;
 }
 

@@ -13,10 +13,21 @@ import type {
 } from "./provider/HelarcProviderProfileStore.js";
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
+import { HelarcResponseProgress } from "./workbench/HelarcResponseProgress.js";
+import { readToken, workScopeValid } from "./workbench/WorkbenchReadLimits.js";
 
 export const HELARC_IPC_CHANNELS = {
+  readConversation: "helarc:read-conversation",
+  readCurrentWork: "helarc:read-current-work",
+  readTaskDetails: "helarc:read-task-details",
+  readWorkHistory: "helarc:read-work-history",
+  readArtifactContent: "helarc:read-artifact-content",
+  readResponsePreview: "helarc:read-response-preview",
+  subscribeResponseProgress: "helarc:subscribe-response-progress",
+  unsubscribeResponseProgress: "helarc:unsubscribe-response-progress",
+  responseProgress: "helarc:response-progress",
   listThreadRuns: "helarc:list-thread-runs",
-  readRunWorkbench: "helarc:read-run-workbench",
+  readCommandDetails: "helarc:read-command-details",
   readWorkbenchItem: "helarc:read-workbench-item",
   readCommandOutput: "helarc:read-command-output",
   openExternalLink: "helarc:open-external-link",
@@ -51,12 +62,38 @@ export interface RegisterHelarcIpcInput {
 export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   const trustedSender = (event: IpcMainInvokeEvent) => event.sender === input.window.webContents &&
     event.senderFrame === input.window.webContents.mainFrame && event.senderFrame?.url === input.window.webContents.getURL();
-  for (const method of ["listThreadRuns", "readRunWorkbench", "readWorkbenchItem", "readCommandOutput"] as const) {
+  for (const method of ["listThreadRuns", "readCommandDetails", "readWorkbenchItem", "readCommandOutput",
+    "readConversation", "readCurrentWork", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
     ipcMain.handle(HELARC_IPC_CHANNELS[method], (event, query) => {
       if (!trustedSender(event)) return { status: "rejected", code: "invalid_query" };
       return input.controller.workbench[method](query);
     });
   }
+  const subscriptions = new Map<string,() => void>();
+  const clearResponseSubscriptions = () => { for (const dispose of subscriptions.values()) dispose(); subscriptions.clear(); };
+  input.window.once("closed", clearResponseSubscriptions);
+  input.window.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) clearResponseSubscriptions();
+  });
+  input.window.webContents.on("render-process-gone", clearResponseSubscriptions);
+  ipcMain.handle(HELARC_IPC_CHANNELS.subscribeResponseProgress, (event, query) => {
+    const subscriptionId: unknown = query?.subscriptionId;
+    if (!trustedSender(event) || !workScopeValid(query) || !readToken(subscriptionId) ||
+      subscriptions.size >= 8 || subscriptions.has(subscriptionId)) return {status:"rejected",code:"invalid_query"};
+    const scope = {threadId:query.threadId,productRunId:query.productRunId};
+    const publisher = new HelarcResponseProgress(subscriptionId,scope,frame => {
+      if (!input.window.isDestroyed()) input.window.webContents.send(HELARC_IPC_CHANNELS.responseProgress,frame);
+    });
+    const detach = input.controller.subscribeResponsePreviews(scope,(state,attempt) => publisher.observe(state,attempt));
+    if (!detach) {publisher.dispose(); return {status:"rejected",code:"not_found"};}
+    subscriptions.set(subscriptionId,() => {detach();publisher.dispose();});
+    return {status:"subscribed"};
+  });
+  ipcMain.handle(HELARC_IPC_CHANNELS.unsubscribeResponseProgress, (event, query) => {
+    if (!trustedSender(event) || !readToken(query?.subscriptionId)) return {status:"rejected",code:"invalid_query"};
+    subscriptions.get(query.subscriptionId)?.();subscriptions.delete(query.subscriptionId);
+    return {status:"unsubscribed"};
+  });
   ipcMain.handle(HELARC_IPC_CHANNELS.openExternalLink, async (event, inputLink: unknown) => {
     if (!trustedSender(event) || !inputLink || typeof inputLink !== "object" || !("url" in inputLink) || typeof inputLink.url !== "string" || inputLink.url.length > 8192) return { ok: false };
     try { const url = new URL(inputLink.url); if (!["http:", "https:"].includes(url.protocol)) return { ok: false }; await shell.openExternal(url.href); return { ok: true }; }

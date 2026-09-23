@@ -34,7 +34,8 @@
   },
   "dependencies": {
     "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/model-interaction": "workspace:*"
+    "@agent-anything/model-interaction": "workspace:*",
+    "eventsource-parser": "4.1.1"
   },
   "license": "Apache-2.0",
   "private": true

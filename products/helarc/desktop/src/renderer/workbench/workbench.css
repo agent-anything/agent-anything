@@ -93,19 +93,6 @@
   max-width: 100%;
   font-size: 11px !important;
 }
-.wb-request-toggle {
-  border: 0;
-  color: #69736d;
-  background: transparent;
-  font-size: 12px !important;
-  white-space: nowrap;
-}
-.wb-request-toggle.has-requests {
-  color: #80580d;
-  background: #fff5d5;
-  border-radius: 4px;
-  padding: 6px 8px;
-}
 .wb-main {
   flex: 1;
   min-height: 0;
@@ -145,12 +132,6 @@
 .wb-empty h1 {
   color: #315942;
   font-size: 24px;
-}
-.wb-message,
-.wb-run-conversation {
-  max-width: 960px;
-  margin: 0 auto 20px;
-  overflow-wrap: anywhere;
 }
 .wb-message header {
   display: flex;
@@ -220,28 +201,6 @@
 .wb-markdown a {
   color: #27648d;
 }
-.wb-tool-row {
-  margin: 4px 0;
-  border-left: 2px solid #d6e5dc;
-  padding: 5px 10px;
-  color: #627067;
-}
-.wb-tool-row summary {
-  display: flex;
-  gap: 7px;
-  cursor: pointer;
-  align-items: center;
-  font-size: 12px;
-}
-.wb-tool-row summary span {
-  margin-left: auto;
-  font-size: 11px;
-}
-.wb-tool-row pre,
-.wb-activity pre {
-  max-height: 380px;
-  overflow: auto;
-}
 .wb-link {
   color: #42725b;
   border: 0;
@@ -251,11 +210,6 @@
   align-items: center;
   padding: 5px 0;
   font-size: 12px !important;
-}
-.wb-plan-marker {
-  font-size: 11px;
-  color: #838b85;
-  padding: 7px 12px;
 }
 .wb-composer {
   border-top: 1px solid #e1e6e2;
@@ -306,7 +260,7 @@
   display: grid;
   place-items: center;
 }
-.wb-execution {
+.wb-work {
   background: #fafbf9;
   height: 100%;
   display: flex;
@@ -324,29 +278,6 @@
 .wb-panel-header strong {
   flex: 1;
   font-size: 13px;
-}
-.wb-execution-scope {
-  padding: 10px 14px 5px;
-}
-.wb-execution-scope select,
-.wb-drawer-scroll > select {
-  width: 100%;
-  padding: 6px;
-  border: 1px solid #dce2dc;
-  border-radius: 4px;
-  color: #5b665e;
-  background: #fff;
-}
-.wb-scope-status {
-  padding: 8px 14px;
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-}
-.wb-scope-status strong {
-  flex: 1;
 }
 .wb-status {
   font-size: 11px;
@@ -367,67 +298,7 @@
 .wb-status.suspended {
   color: #9e7721;
 }
-.wb-tree {
-  border-bottom: 1px solid #e1e6e1;
-  padding-bottom: 6px;
-}
-.wb-tree > summary {
-  cursor: pointer;
-  padding: 7px 14px;
-  font-size: 12px;
-  color: #68746b;
-}
-.wb-tree > summary svg {
-  vertical-align: middle;
-  margin-right: 6px;
-}
-.wb-tree > summary span {
-  float: right;
-}
-.wb-tree > div {
-  max-height: 240px;
-  overflow: auto;
-}
-.wb-tree-row {
-  width: 100%;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  border: 0;
-  background: transparent;
-  padding: 6px 14px;
-  text-align: left;
-  color: #485c4c;
-}
-.wb-tree-row[aria-pressed="true"] {
-  background: #e5eee8;
-}
-.wb-tree-row span {
-  flex: 1;
-  overflow-wrap: anywhere;
-}
-.wb-tree-row small {
-  font-size: 10px;
-  color: #858b83;
-}
-.wb-tabs {
-  display: flex;
-  border-bottom: 1px solid #dce2dc;
-  padding: 0 10px;
-}
-.wb-tabs button {
-  background: none;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  padding: 10px;
-  color: #748077;
-  font-size: 12px;
-}
-.wb-tabs button[aria-pressed="true"] {
-  color: #2b523a;
-  border-color: #3c7253;
-}
-.wb-execution-scroll {
+.wb-work-scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -477,33 +348,10 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
-.wb-descendants {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: #7e8779;
-  font-size: 11px;
-  margin-bottom: 12px;
-}
 .wb-command {
   border-bottom: 1px solid #dfe5dc;
   padding-bottom: 14px;
   margin-bottom: 14px;
-}
-.wb-command-heading {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  width: 100%;
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  text-align: left;
-  color: #455b47;
-}
-.wb-command-heading span {
-  margin-left: auto;
-  font-size: 11px;
 }
 .wb-command-text {
   margin: 8px 0;
@@ -544,20 +392,6 @@
   max-height: 280px;
   overflow: auto;
   margin: 0 0 4px;
-}
-.wb-activity {
-  border-bottom: 1px solid #e4e8e0;
-  padding: 8px 0;
-}
-.wb-activity summary {
-  font-size: 12px;
-  cursor: pointer;
-}
-.wb-activity time {
-  display: block;
-  font-size: 10px;
-  color: #8b9585;
-  margin-top: 3px;
 }
 .wb-overlay {
   position: fixed;
@@ -659,9 +493,6 @@
   }
 }
 @media (max-width: 540px) {
-  .wb-request-toggle {
-    font-size: 10px !important;
-  }
   .wb-title strong {
     font-size: 12px;
   }
@@ -671,5 +502,302 @@
   .wb-header .wb-icon {
     width: 27px;
     flex-basis: 27px;
+  }
+}
+.wb-conversation {
+  min-height: 0;
+}
+.wb-docked,
+.wb-docked-body {
+  height: 100%;
+  min-height: 0;
+}
+.wb-docked[hidden] {
+  display: none;
+}
+.wb-conversation-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.wb-conversation-scroll {
+  overflow-anchor: none;
+}
+.wb-latest {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #fff;
+  border: 1px solid #dfe4e0;
+  border-radius: 4px;
+  padding: 5px 10px;
+  color: #65746a;
+  margin: 0 0 6px;
+  font-size: 11px !important;
+}
+.wb-latest.has-new {
+  color: #265b82;
+  border-color: #b6cddd;
+}
+.wb-message {
+  max-width: 960px;
+  margin: 0 auto 24px;
+  overflow-wrap: anywhere;
+}
+.wb-message-menu {
+  position: relative;
+}
+.wb-message-menu > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  padding: 4px;
+}
+.wb-message-menu[open] > button {
+  position: absolute;
+  right: 0;
+  top: 25px;
+  width: 110px;
+  padding: 8px;
+  background: white;
+  border: 1px solid #dfe4e0;
+  z-index: 2;
+}
+.wb-message-product,
+.wb-message-system {
+  border-left: 2px solid #b1bec8;
+  padding-left: 12px;
+}
+.wb-markdown pre {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.wb-attention {
+  flex: 0 1 auto;
+  max-height: 40%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fbfcfa;
+  border-top: 1px solid #d8dfd2;
+}
+.wb-attention-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 24px;
+  gap: 12px;
+}
+.wb-attention-heading h2 {
+  margin: 0;
+  font-size: 13px;
+  color: #755c17;
+}
+.wb-attention-heading h2 span {
+  font-weight: 400;
+  padding-left: 8px;
+}
+.wb-attention-body {
+  overflow: auto;
+  min-height: 0;
+  padding: 0 24px;
+  scrollbar-gutter: stable;
+}
+.wb-attention-body[hidden],
+.wb-attention [hidden] {
+  display: none;
+}
+.wb-request-list {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #e5e9e3;
+}
+.wb-request-list [aria-pressed="true"] {
+  font-weight: 600;
+  color: #374c37;
+}
+.wb-request {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.wb-request > header {
+  justify-content: space-between;
+  margin: 8px 0 0;
+}
+.wb-request .permission-panel,
+.wb-request .clarification-panel {
+  margin: 0;
+  border: 0;
+  background: none;
+  padding: 8px 0;
+  gap: 8px;
+}
+.wb-request .permission-panel > svg,
+.wb-request .clarification-panel > svg {
+  display: none;
+}
+.wb-request .permission-actions {
+  position: sticky;
+  bottom: 0;
+  padding: 8px 0;
+  background: #fbfcfa;
+  z-index: 1;
+}
+.wb-context {
+  font-size: 11px;
+  color: #738073;
+  margin: 7px 0 0;
+}
+.wb-context summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.wb-work {
+  min-height: 0;
+}
+.wb-work h2 {
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.wb-work-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 4px;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: #344b3d;
+  border-radius: 3px;
+}
+.wb-work-row:hover {
+  background: #edf1ed;
+}
+.wb-work-row > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: #788778;
+}
+.wb-work-row > span {
+  min-width: 0;
+  flex: 1;
+}
+.wb-work-row strong {
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.wb-work-row small {
+  display: block;
+  font-size: 11px;
+  color: #788079;
+  margin-top: 4px;
+}
+.wb-section h3 {
+  display: flex;
+  justify-content: space-between;
+  color: #526157;
+  font-weight: 600;
+}
+.wb-plan {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wb-plan li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12px;
+  padding: 7px 0;
+  line-height: 1.5;
+}
+.wb-plan li > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.wb-plan .completed {
+  color: #6e8173;
+}
+.wb-plan .in_progress {
+  color: #27648d;
+}
+.wb-task-branches {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.wb-task-branches .wb-task-branches {
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid #dbe2d9;
+}
+.wb-task-branches summary {
+  font-size: 11px;
+  color: #788079;
+  cursor: pointer;
+  padding: 3px 7px;
+}
+.wb-finished {
+  border-top: 1px solid #dfe5df;
+  margin-top: 12px;
+  padding: 12px 0;
+}
+.wb-finished summary {
+  cursor: pointer;
+  color: #727f75;
+  font-size: 12px;
+  padding: 5px 0;
+}
+.wb-results > details {
+  margin: 8px 0;
+}
+.wb-results summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  color: #426f58;
+  font-size: 12px;
+}
+.wb-results pre,
+.wb-task-detail pre {
+  max-height: 400px;
+  overflow: auto;
+}
+.wb-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wb-work-scroll > section > pre {
+  max-height: 500px;
+  overflow: auto;
+}
+.wb-secondary pre {
+  max-height: 300px;
+  overflow: auto;
+}
+@media (max-width: 540px) {
+  .wb-attention-heading {
+    padding: 8px 12px;
+  }
+  .wb-attention-body {
+    padding: 0 12px;
+  }
+  .wb-composer textarea {
+    max-height: 130px;
   }
 }

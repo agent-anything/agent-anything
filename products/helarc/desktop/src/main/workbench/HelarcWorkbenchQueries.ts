@@ -1,13 +1,8 @@
 import {
   createHelarcRunProjection,
   type HelarcRunProjection,
-  type HelarcRunPresentationRecord,
 } from "@agent-anything/helarc/run";
 import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
-import {
-  projectRun,
-  projectWorkbenchActivity,
-} from "../HelarcDesktopProjection.js";
 import type { HelarcHostActiveRun } from "../run/HelarcHostRunComposition.js";
 import type {
   CommandOutputPage,
@@ -15,12 +10,12 @@ import type {
   ThreadRunSummary,
   WorkbenchItemPage,
   WorkbenchItemQuery,
-  WorkbenchPage,
-  WorkbenchQuery,
   WorkbenchRejected,
   WorkbenchScope,
 } from "../../shared/HelarcWorkbench.js";
 import type { CommandOutputRegistry } from "./CommandOutputRegistry.js";
+import { HelarcCollaborationQueries } from "./HelarcCollaborationQueries.js";
+import { fitsPage, textPage, validOffset } from "./WorkbenchReadLimits.js";
 
 export interface WorkbenchQuerySources {
   loadThread(threadId: string): Promise<HelarcThreadRecord | null>;
@@ -31,7 +26,16 @@ export interface WorkbenchQuerySources {
   readonly outputs: CommandOutputRegistry;
 }
 export class HelarcWorkbenchQueries {
-  constructor(private readonly sources: WorkbenchQuerySources) {}
+  readonly collaboration: HelarcCollaborationQueries;
+  constructor(private readonly sources: WorkbenchQuerySources) {
+    this.collaboration = new HelarcCollaborationQueries(sources, scope => this.resolve(scope));
+  }
+  readConversation = (query: Parameters<HelarcCollaborationQueries["readConversation"]>[0]) => this.collaboration.readConversation(query);
+  readCurrentWork = (query: Parameters<HelarcCollaborationQueries["readCurrentWork"]>[0]) => this.collaboration.readCurrentWork(query);
+  readTaskDetails = (query: Parameters<HelarcCollaborationQueries["readTaskDetails"]>[0]) => this.collaboration.readTaskDetails(query);
+  readWorkHistory = (query: Parameters<HelarcCollaborationQueries["readWorkHistory"]>[0]) => this.collaboration.readWorkHistory(query);
+  readArtifactContent = (query: Parameters<HelarcCollaborationQueries["readArtifactContent"]>[0]) => this.collaboration.readArtifactContent(query);
+  readResponsePreview = (query: Parameters<HelarcCollaborationQueries["readResponsePreview"]>[0]) => this.collaboration.readResponsePreview(query);
   async listThreadRuns(input: {
     threadId: string;
   }): Promise<
@@ -68,161 +72,15 @@ export class HelarcWorkbenchQueries {
       return rejected("read_failed");
     }
   }
-  async readRunWorkbench(
-    query: WorkbenchQuery,
-  ): Promise<WorkbenchPage | WorkbenchRejected> {
-    if (
-      !scopeValid(query) ||
-      typeof query.includeDescendants !== "boolean" ||
-      (query.cursor !== null && !token(query.cursor)) ||
-      (query.limit !== undefined &&
-        (!Number.isSafeInteger(query.limit) ||
-          query.limit < 1 ||
-          query.limit > 200))
-    )
-      return rejected("invalid_query");
+  async readCommandDetails(query: WorkbenchScope & { executionId: string }) {
+    if (!scopeValid(query) || !token(query.executionId)) return rejected("invalid_query");
     try {
       const resolved = await this.resolve(query);
-      if (!resolved) return rejected("not_found");
-      const { projection, live, recordedAt } = resolved;
-      const presentation = projection.product.presentation;
-      const identity = [
-        query.threadId,
-        query.productRunId,
-        query.runId,
-        query.includeDescendants,
-      ];
-      let after = 0;
-      let commandOffset = 0;
-      let activityOffset = 0;
-      const revision = projection.product.sequence;
-      if (query.cursor) {
-        const cursor = decode(query.cursor);
-        if (
-          !cursor ||
-          JSON.stringify(cursor.identity) !== JSON.stringify(identity) ||
-          cursor.revision !== revision ||
-          !Number.isSafeInteger(cursor.after) ||
-          (cursor.after as number) < 0 ||
-          !Number.isSafeInteger(cursor.commandOffset) ||
-          (cursor.commandOffset as number) < 0 ||
-          !Number.isSafeInteger(cursor.activityOffset) ||
-          (cursor.activityOffset as number) < 0
-        )
-          return rejected("stale_cursor");
-        after = cursor.after as number;
-        commandOffset = cursor.commandOffset as number;
-        activityOffset = cursor.activityOffset as number;
-      }
-      const runIds = new Set([query.runId]);
-      if (query.includeDescendants) {
-        for (let pass = 0; pass < projection.host.runTree.nodes.length; pass++)
-          for (const node of projection.host.runTree.nodes)
-            if (node.parentRunId && runIds.has(node.parentRunId))
-              runIds.add(node.runId);
-      }
-      const records: HelarcRunPresentationRecord[] = [];
-      const commands: WorkbenchPage["commands"][number][] = [];
-      const activity: WorkbenchPage["activity"][number][] = [];
-      const page: WorkbenchPage = {
-        status: "page",
-        scope: {
-          threadId: query.threadId,
-          productRunId: query.productRunId,
-          runId: query.runId,
-        },
-        live,
-        recordedAt,
-        revision,
-        run: projectRun(projection),
-        labels: presentation.labels,
-        plans: Object.fromEntries(
-          Object.entries(presentation.plans).filter(([id]) => runIds.has(id)),
-        ),
-        records,
-        commands,
-        activity,
-        nextCursor: null,
-        omittedRecords: presentation.omittedRecords,
-        finalSource: projection.product.result?.output.source ?? {
-          kind: "product_status",
-        },
-      };
-      // Reserve space for the exact continuation cursor, including encoded scope identity.
-      let remaining =
-        256 * 1024 - Buffer.byteLength(JSON.stringify(page)) - 24 * 1024;
-      if (remaining <= 0) return rejected("read_failed");
-      const take = <T>(source: readonly T[], target: T[], budget: number) => {
-        let used = 0;
-        for (const item of source) {
-          const bytes = Buffer.byteLength(JSON.stringify(item)) + 1;
-          if (used + bytes > budget || target.length >= (query.limit ?? 100))
-            break;
-          target.push(item);
-          used += bytes;
-        }
-        remaining -= used;
-      };
-      const commandCandidates = projection.product.commands
-        .filter((command) => runIds.has(command.runId))
-        .slice(commandOffset);
-      const activityCandidates = projection.product.activity
-        .filter((item) => runIds.has(item.source.runId))
-        .slice(-100)
-        .map(projectWorkbenchActivity)
-        .slice(activityOffset);
-      take(commandCandidates, commands, Math.floor(remaining / 3));
-      take(activityCandidates, activity, Math.floor(remaining / 4));
-      const candidates = presentation.records.filter(
-        (item) => runIds.has(item.runId) && item.sequence > after,
-      );
-      for (const entry of candidates) {
-        const preview =
-          entry.content.kind === "assistant_text" &&
-          entry.content.text.length > 8192
-            ? {
-                ...entry,
-                content: {
-                  ...entry.content,
-                  text: entry.content.text.slice(0, 8192),
-                  omittedBytes:
-                    entry.content.omittedBytes +
-                    Buffer.byteLength(entry.content.text.slice(8192)),
-                },
-              }
-            : entry;
-        const bytes = Buffer.byteLength(JSON.stringify(preview));
-        if (records.length >= (query.limit ?? 100) || bytes + 1 > remaining)
-          break;
-        records.push(preview);
-        remaining -= bytes + 1;
-      }
-      // A large individual command may consume the remaining page after other content.
-      if (commands.length === 0 && commandCandidates.length)
-        take(commandCandidates, commands, remaining);
-      if (activity.length === 0 && activityCandidates.length)
-        take(activityCandidates, activity, remaining);
-      const more =
-        candidates.length > records.length ||
-        commandCandidates.length > commands.length ||
-        activityCandidates.length > activity.length;
-      if (more && records.length + commands.length + activity.length === 0)
-        return rejected("read_failed");
-      return {
-        ...page,
-        nextCursor: more
-          ? encode({
-              identity,
-              revision,
-              after: records.at(-1)?.sequence ?? after,
-              commandOffset: commandOffset + commands.length,
-              activityOffset: activityOffset + activity.length,
-            })
-          : null,
-      };
-    } catch {
-      return rejected("read_failed");
-    }
+      const command = resolved?.projection.product.commands.find(c => c.runId === query.runId && c.executionId === query.executionId);
+      if (!command) return rejected("not_found");
+      const page = { status: "page" as const, command, live: resolved!.live };
+      return fitsPage(page) ? page : rejected("read_failed");
+    } catch { return rejected("read_failed"); }
   }
   async readWorkbenchItem(
     query: WorkbenchItemQuery,
@@ -236,6 +94,19 @@ export class HelarcWorkbenchQueries {
       return rejected("invalid_query");
     try {
       const resolved = await this.resolve(query);
+      if (!resolved) return rejected("not_found");
+      if (query.itemId.startsWith("message:")) {
+        const thread = await this.sources.loadThread(query.threadId);
+        const message = thread?.messages.find(m => `message:${m.id}` === query.itemId &&
+          m.correlation.runId === query.productRunId);
+        if (!message || query.runId !== resolved.projection.harnessRunId) return rejected("not_found");
+        const offset = query.offset ?? 0;
+        if (!validOffset(message.content,offset)) return rejected("invalid_query");
+        const page = textPage(message.content,offset,16*1024,
+          64*1024-Buffer.byteLength(JSON.stringify(query.itemId))-256);
+        return {status:"page",itemId:query.itemId,text:page.text,
+          nextOffset:page.end < message.content.length ? page.end : null,omittedBytes:0};
+      }
       const record = resolved?.projection.product.presentation.records.find(
         (item) => item.id === query.itemId && item.runId === query.runId,
       );
@@ -243,19 +114,19 @@ export class HelarcWorkbenchQueries {
       const value =
         record.content.kind === "assistant_text"
           ? record.content.text
+          : record.content.kind === "steering" ? record.content.instruction
           : JSON.stringify(record, null, 2);
       const offset = query.offset ?? 0;
-      if (offset > value.length) return rejected("invalid_query");
-      // UTF-16 slicing bounded to at most 64 KiB of UTF-8, without splitting surrogate pairs.
-      let end = Math.min(value.length, offset + 16 * 1024);
-      if (end < value.length && /[\uD800-\uDBFF]/u.test(value[end - 1]!)) end--;
+      if (!validOffset(value,offset)) return rejected("invalid_query");
+      const page = textPage(value,offset,16*1024,
+        64*1024-Buffer.byteLength(JSON.stringify(query.itemId))-256);
       return {
         status: "page",
         itemId: query.itemId,
-        text: value.slice(offset, end),
-        nextOffset: end < value.length ? end : null,
+        text: page.text,
+        nextOffset: page.end < value.length ? page.end : null,
         omittedBytes:
-          record.content.kind === "assistant_text"
+          record.content.kind === "assistant_text" || record.content.kind === "steering"
             ? record.content.omittedBytes
             : 0,
       };
@@ -345,6 +216,7 @@ export class HelarcWorkbenchQueries {
   }
   private async resolve(scope: WorkbenchScope) {
     const thread = await this.sources.loadThread(scope.threadId);
+    if (!thread || thread.thread.id !== scope.threadId) return null;
     const stored = thread?.runs.find((run) => run.id === scope.productRunId);
     if (!stored) return null;
     const active = stored.terminal

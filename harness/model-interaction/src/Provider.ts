@@ -4,6 +4,7 @@ import type { ProviderRequest } from "./ProviderRequest.js";
 import type { ProviderFailure, ProviderResponse } from "./ProviderResponse.js";
 import type { ProviderModelContext } from "./context/index.js";
 import type { ProviderTransportLimit } from "./transport/index.js";
+import type { ProviderDeliveryOptions } from "./ProviderDelivery.js";
 
 export type ProviderCallResult =
   | {
@@ -35,5 +36,6 @@ export interface Provider {
   send(
     request: ProviderRequest,
     context: InvocationInterruptionContext,
+    delivery?: ProviderDeliveryOptions,
   ): Promise<ProviderCallResult>;
 }

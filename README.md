@@ -19,7 +19,7 @@ initial code-agent desktop stage.
   Run state and result, planning, cancellation, Retry coordination, limits,
   and terminalization.
 - `model-interaction` owns Provider-neutral request, response, capability,
-  interruption, and Retry-scheduler ownership Contracts.
+  interruption, delivery/progress, and Retry-scheduler ownership Contracts.
 - `context` owns active Context transitions, Observations, Evidence, and
   owner-defined Evidence persistence.
 - `action-execution` provides the trusted Action preparation, assessment,
@@ -37,6 +37,9 @@ initial code-agent desktop stage.
 - Native model Tool calling preserves complete Model Turns and exact call/result
   correlation. Scheduling, explicit Composite prerequisites and descendant Run
   progression remain separate responsibilities.
+- Native Controller turns stream through Ollama and OpenAI-compatible Chat
+  Completions. Incremental text is display-only; Tool calls and control decisions
+  are processed only after the complete response has been validated.
 - Independent Inspection records owner facts, protected content and local OTel
   traces/logs in SQLite. Agent Inspector provides linked historical views without
   becoming part of the execution path.
@@ -62,10 +65,14 @@ supports OpenAI-compatible providers and Ollama through editable provider profil
 Current Helarc capabilities include:
 
 - Electron desktop host with a React renderer
-- Conversation-led workbench with a resizable execution area, separate Settings,
-  collapsible Run hierarchy and independently editable pending requests
-- Attributable assistant/Tool/Plan activity, retained Run details and independent
-  paged stdout/stderr inspection without affecting model observations
+- Conversation-led workbench with direct approval/question forms, latest-first
+  history, preserved reading position and a resizable Current work area
+- Recorded Plan progress, collapsible delegated tasks, current commands and
+  on-demand results/details without requiring execution-record navigation
+- Root and Child streaming previews with exact final-message reconciliation,
+  separate interrupted attempts and retained history
+- Independent paged stdout/stderr reads without affecting model observations;
+  separate Settings and conversation navigation
 - Workspace and task setup for local development work
 - Provider profile management for OpenAI-compatible APIs and Ollama
 - Local credential storage for provider API keys
@@ -277,6 +284,21 @@ readiness. The desktop package's `package:check` only validates existing output:
 pnpm helarc:package:check
 ```
 
+Run focused browser and isolated Electron checks against built artifacts:
+
+```powershell
+pnpm --filter @agent-anything/helarc-desktop test:ui
+```
+
+The live local-model smoke is opt-in. It uses temporary user data and a temporary
+workspace without changing the desktop profile or history:
+
+```powershell
+$env:HELARC_LIVE_OLLAMA_ENDPOINT = "http://localhost:11435"
+$env:HELARC_LIVE_OLLAMA_MODEL = "gemma4:e4b"
+pnpm --filter @agent-anything/helarc-desktop exec playwright test tests/local-model.spec.ts
+```
+
 ## Provider Configuration
 
 Helarc desktop stores provider profiles locally and supports these provider kinds:
@@ -293,6 +315,12 @@ The default Ollama context window is 163840 tokens, with a maximum output of
 
 HTTP provider URLs are accepted only for loopback addresses.
 Provider timeout values use positive whole-second increments expressed in milliseconds.
+
+Native Controller requests use streaming; optional structured Stop requests stay
+buffered. An HTTP proxy must forward response chunks as they arrive to make
+incremental output visible. A buffering proxy can delay all content until the
+end even when the request contains `stream: true`; Helarc does not synthesize
+streaming from the completed response.
 
 ## Agent Inspector
 

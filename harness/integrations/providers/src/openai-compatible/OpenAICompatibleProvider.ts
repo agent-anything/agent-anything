@@ -1,4 +1,8 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { randomUUID } from "node:crypto";
+import { ProviderDeliverySession, type ProviderDeliveryOptions } from "@agent-anything/model-interaction";
+import { ProviderStreamError } from "../http/ProviderResponseStream.js";
+import { readOpenAIResponseStream } from "./OpenAIResponseStream.js";
 import { ProviderExchangeObservation } from "../http/ProviderExchangeObservation.js";
 import type { ProviderObserver } from "@agent-anything/model-interaction/transport";
 import {
@@ -101,7 +105,7 @@ export class OpenAICompatibleProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "openai-compatible.chat-completions.adapter.v4",
+      adapterRevision: "openai-compatible.chat-completions.adapter.v5",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -137,7 +141,7 @@ export class OpenAICompatibleProvider implements Provider {
             })
           : Object.freeze({ supported: false as const }),
         structuredGeneration: Object.freeze({ supported: true as const }),
-        streaming: Object.freeze({ supported: false as const }),
+        streaming: Object.freeze({ supported: this.config.nativeToolInteraction.supported }),
         modelContext: Object.freeze({ capacity, requestedOutput, inputPreservation }),
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
@@ -157,16 +161,28 @@ export class OpenAICompatibleProvider implements Provider {
   async send(
     request: ProviderRequest,
     context: InvocationInterruptionContext,
+    options: ProviderDeliveryOptions = { mode: "buffered", invocationId: randomUUID() },
   ): Promise<ProviderCallResult> {
-    const exchange = new ProviderExchangeObservation(this.observer, PROVIDER_ID, this.config.model, request);
-    try { const result = await this.sendAttempt(request, context, exchange); exchange.settled(result); return result; }
-    catch (error) { exchange.threw(); throw error; }
+    const delivery = new ProviderDeliverySession(options, request);
+    const exchange = new ProviderExchangeObservation(this.observer, PROVIDER_ID, this.config.model, request, options.invocationId);
+    delivery.start();
+    try {
+      const result = await this.sendAttempt(request, context, exchange, delivery);
+      exchange.settled(result);
+      delivery.settle(result);
+      return result;
+    } catch (error) {
+      exchange.threw();
+      delivery.settle(failed("response", "provider_unhandled_failure", "Provider invocation failed."));
+      throw error;
+    }
   }
 
   private async sendAttempt(
     request: ProviderRequest,
     context: InvocationInterruptionContext,
     exchange: ProviderExchangeObservation,
+    delivery: ProviderDeliverySession,
   ): Promise<ProviderCallResult> {
     try {
       request = snapshotProviderRequest(request);
@@ -178,6 +194,10 @@ export class OpenAICompatibleProvider implements Provider {
         "Provider request does not satisfy the model-interaction Contract.",
         { metadata: { causeName: error instanceof Error ? error.name : null } },
       );
+    }
+    if (delivery.options.mode === "streaming" && request.interaction.kind !== "native_tool_turn") {
+      return failed("unsupported", "provider_streaming_unsupported",
+        "Streaming is supported for native Tool turns only.");
     }
     if (request.continuation !== null) {
       return failed(
@@ -202,6 +222,7 @@ export class OpenAICompatibleProvider implements Provider {
       request,
       endpoint,
       this.requestBodyTransportLimit,
+      delivery.options.mode === "streaming",
     );
     if (encoded.kind === "failed") return encoded.result;
 
@@ -277,9 +298,17 @@ export class OpenAICompatibleProvider implements Provider {
 
       let body: unknown;
       try {
-        body = await response.json();
-        exchange.consumed(body, "parsed_json");
-      } catch {
+        body = delivery.options.mode === "streaming"
+          ? await readOpenAIResponseStream(response, attempt.signal, delivery)
+          : await response.json();
+        exchange.consumed(body, delivery.options.mode === "streaming" ? "assembled_stream" : "parsed_json");
+      } catch (error) {
+        const interruption = providerResultFromInterruption(attempt.cause);
+        if (interruption !== null) return interruption;
+        if (error instanceof ProviderStreamError) return { kind: "failed", failure: error.failure };
+        if (delivery.options.mode === "streaming") {
+          return failed("transport", "provider_request_failed", "Provider response stream failed.");
+        }
         return providerResultFromInterruption(attempt.cause) ?? failed(
           "response",
           "provider_response_malformed",
@@ -321,6 +350,7 @@ function prepareEncodedRequest(
   request: ProviderRequest,
   endpoint: string,
   limit: ProviderTransportLimit,
+  streaming: boolean,
 ): { readonly kind: "encoded"; readonly body: string; readonly accounting: ProviderTransportAccounting } |
   { readonly kind: "failed"; readonly result: ProviderCallResult } {
   if (request.modelContext.assessment === null) {
@@ -340,6 +370,7 @@ function prepareEncodedRequest(
       request.instructions,
       request.messages,
       request.interaction,
+      streaming,
     );
     const accounting = accountProviderTransport({
       encodedBody: body,
@@ -386,6 +417,7 @@ function encodeOpenAIRequest(
   instructions: ModelInstructions,
   messages: readonly ModelMessage[],
   interaction: ProviderInteraction,
+  streaming: boolean,
 ): string {
   return JSON.stringify({
     model,
@@ -399,7 +431,7 @@ function encodeOpenAIRequest(
           content: renderGenerationText(message),
           })),
         ],
-    stream: false,
+    stream: streaming,
     ...(interaction.kind === "native_tool_turn"
       ? {
           tools: interaction.callables.map((callable) => ({

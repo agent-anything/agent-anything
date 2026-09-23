@@ -124,6 +124,7 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly responseDelivery?: "buffered" | "streaming";
   readonly retainCommandOutput?: (runId: string, executionId: string, paths: import("@agent-anything/helarc-local-environment/command").ProcessOutputPaths) => Promise<void>;
   readonly inspection?: import("../inspection/HelarcInspection.js").HelarcInspection;
   readonly instructionSettings?: HelarcInstructionSettings;
@@ -179,6 +180,9 @@ export interface PreparedHelarcHostRun {
 }
 
 export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
+  getResponsePreviews(): import("@agent-anything/helarc/run").HelarcResponsePreviews;
+  subscribeResponsePreviews(listener:(state:import("@agent-anything/helarc/run").HelarcResponsePreviews,
+    attempt:import("@agent-anything/helarc/run").HelarcResponsePreview) => void): () => void;
   readCommandOutput(runId: string, executionId: string, cursor?: string): ReturnType<import("@agent-anything/helarc-local-environment/command").RunProcessManager["readOutput"]>;
   getProductProjection(): HelarcProductRunProjection;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
@@ -260,6 +264,7 @@ export async function prepareHelarcHostRun(
     now,
   });
   const product = await createHelarcProductComposition({
+    responseDelivery: input.responseDelivery,
     runId: input.productRunId,
     task: input.task,
     workspace: runWorkspace,
@@ -502,6 +507,8 @@ export async function prepareHelarcHostRun(
         hostActiveRun,
         product.getProductProjection,
         product.subscribeProductProjection,
+        product.getResponsePreviews,
+        product.subscribeResponsePreviews,
         commandActions.processes,
       );
 
@@ -533,6 +540,8 @@ function createHelarcHostActiveRun(
   subscribeProductProjection: (
     listener: HelarcProductRunProjectionListener,
   ) => () => void,
+  getResponsePreviews: HelarcHostActiveRun["getResponsePreviews"],
+  subscribeResponsePreviews: HelarcHostActiveRun["subscribeResponsePreviews"],
   processes: import("@agent-anything/helarc-local-environment/command").RunProcessManager,
 ): HelarcHostActiveRun {
   return Object.freeze({
@@ -552,6 +561,8 @@ function createHelarcHostActiveRun(
     getResult: () => host.getResult(),
     getProductProjection,
     subscribeProductProjection,
+    getResponsePreviews,
+    subscribeResponsePreviews,
     readCommandOutput: (runId: string, executionId: string, cursor?: string) => processes.readOutput(runId, executionId, cursor),
   });
 }

@@ -697,6 +697,7 @@ function normalizeTerminalRecord(
     (terminal.finalProjection !== null && (!terminal.finalProjection ||
       terminal.finalProjection.host.runId !== run.harnessRunId ||
       terminal.finalProjection.product.runId !== run.id ||
+      !hasProductDisplayState(terminal.finalProjection.product) ||
       terminal.finalProjection.host.terminal?.status !== host.status))
   ) {
     return reject("run_terminal_invalid", "Run terminal record is invalid.");
@@ -1138,9 +1139,22 @@ function isProductRunProjection(value: unknown): value is HelarcProductRunProjec
     isModelQualificationSafeProjection(projection.qualification) &&
     Array.isArray(projection.activity) &&
     Array.isArray(projection.commands) &&
-    projection.presentation !== null && typeof projection.presentation === "object" &&
-    Array.isArray(projection.presentation.records) &&
+    hasProductDisplayState(projection) &&
     projection.phase !== null && typeof projection.phase === "object";
+}
+
+function hasProductDisplayState(projection: Partial<HelarcProductRunProjection>): boolean {
+  return projection.presentation !== null && typeof projection.presentation === "object" &&
+    Array.isArray(projection.presentation.records) &&
+    Array.isArray(projection.presentation.activeCalls) &&
+    Number.isSafeInteger(projection.presentation.omittedActiveCalls) &&
+    projection.presentation.omittedActiveCalls >= 0 &&
+    projection.responses !== null && typeof projection.responses === "object" &&
+    Array.isArray(projection.responses.attempts) &&
+    Number.isSafeInteger(projection.responses.revision) &&
+    projection.responses.revision >= 0 &&
+    Number.isSafeInteger(projection.responses.omittedAttempts) &&
+    projection.responses.omittedAttempts >= 0;
 }
 
 function isCompatibleProductTerminal(

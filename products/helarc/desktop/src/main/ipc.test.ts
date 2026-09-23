@@ -29,17 +29,49 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  it("authorizes named reads and clears scoped response subscriptions on navigation without cancelling work", async () => {
+    const frame = {url:"file:///helarc/index.html"};
+    const callbacks = new Map<string,(...args:unknown[]) => void>();
+    const contents = {mainFrame:frame,getURL:() => frame.url,send:vi.fn(),
+      on:vi.fn((name:string,callback:(...args:unknown[]) => void) => callbacks.set(name,callback))};
+    const detach = vi.fn();
+    const subscribeResponsePreviews = vi.fn((scope:{threadId:string;productRunId:string}) => scope.threadId === "thread" ? detach : null);
+    const names = ["readConversation","readCurrentWork","readTaskDetails","readWorkHistory","readArtifactContent","readResponsePreview"] as const;
+    const workbench = Object.fromEntries(names.map(name => [name,vi.fn(async () => ({status:"page"}))]));
+    const controller = controllerDouble(mainSnapshot(),{workbench,subscribeResponsePreviews});
+    registerHelarcIpc({window:windowDouble({webContents:contents}),controller});
+    const event = {sender:contents,senderFrame:frame};
+    for (const name of names) {
+      expect(await requiredHandler(HELARC_IPC_CHANNELS[name])({sender:{},senderFrame:frame},{})).toMatchObject({code:"invalid_query"});
+      expect(await requiredHandler(HELARC_IPC_CHANNELS[name])(event,{})).toEqual({status:"page"});
+      expect(workbench[name]).toHaveBeenCalledOnce();
+    }
+    const subscribe = requiredHandler(HELARC_IPC_CHANNELS.subscribeResponseProgress);
+    const query = {threadId:"thread",productRunId:"work",subscriptionId:"subscription"};
+    expect(subscribe({...event,senderFrame:{}},query)).toMatchObject({code:"invalid_query"});
+    expect(subscribe(event,{...query,threadId:"foreign"})).toMatchObject({code:"not_found"});
+    expect(subscribe(event,query)).toEqual({status:"subscribed"});
+    expect(subscribe(event,query)).toMatchObject({code:"invalid_query"});
+    callbacks.get("did-start-navigation")!({},"file:///next",false,false);
+    expect(detach).not.toHaveBeenCalled();
+    callbacks.get("did-start-navigation")!({},"file:///next",false,true);
+    expect(detach).toHaveBeenCalledOnce();
+    expect(subscribe(event,query)).toEqual({status:"subscribed"});
+    callbacks.get("render-process-gone")!();
+    expect(detach).toHaveBeenCalledTimes(2);
+    expect(controller.dispatchHostCommand).not.toHaveBeenCalled();
+  });
   it("restricts workbench reads to the registered main frame and does not route invalid senders", async () => {
     const frame = { url: "file:///helarc/index.html" };
-    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn() };
-    const readRunWorkbench = vi.fn(async () => ({ status: "rejected", code: "not_found" }));
-    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller: controllerDouble(mainSnapshot(), { workbench: { readRunWorkbench } }) });
-    const read = requiredHandler(HELARC_IPC_CHANNELS.readRunWorkbench);
+    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on:vi.fn() };
+    const readCurrentWork = vi.fn(async () => ({ status: "rejected", code: "not_found" }));
+    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller: controllerDouble(mainSnapshot(), { workbench: { readCurrentWork } }) });
+    const read = requiredHandler(HELARC_IPC_CHANNELS.readCurrentWork);
     expect(await read({ sender: {}, senderFrame: frame }, {})).toMatchObject({ status: "rejected", code: "invalid_query" });
     expect(await read({ sender: contents, senderFrame: { ...frame } }, {})).toMatchObject({ status: "rejected", code: "invalid_query" });
-    expect(readRunWorkbench).not.toHaveBeenCalled();
+    expect(readCurrentWork).not.toHaveBeenCalled();
     expect(await read({ sender: contents, senderFrame: frame }, {})).toMatchObject({ code: "not_found" });
-    expect(readRunWorkbench).toHaveBeenCalledOnce();
+    expect(readCurrentWork).toHaveBeenCalledOnce();
     expect(await requiredHandler(HELARC_IPC_CHANNELS.openExternalLink)({ sender: contents, senderFrame: frame }, { url: "file:///private" })).toEqual({ ok: false });
   });
   const PRIVATE_RESULT = "private-main-command-result";
@@ -215,7 +247,7 @@ describe("Helarc IPC", () => {
     });
     publish(snapshot);
     expect(window.webContents.send).toHaveBeenCalledOnce();
-    closedListeners[0]?.();
+    for (const listener of closedListeners) listener();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(controller.dispatchHostCommand).not.toHaveBeenCalled();
     expect(controller.queryRunStatus).toHaveBeenCalledTimes(2);
@@ -529,7 +561,7 @@ function windowDouble(
   return {
     isDestroyed: vi.fn(() => false),
     once: vi.fn(),
-    webContents: { send: vi.fn() },
+    webContents: { send: vi.fn(), on:vi.fn() },
     ...overrides,
   } as unknown as BrowserWindow;
 }

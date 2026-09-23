@@ -10,6 +10,7 @@ import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import {
+  ProviderDeliverySession,
   createModelCallRef,
   createModelTurnId,
   snapshotModelJsonValue,
@@ -30,6 +31,63 @@ import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
 type InteractionRequestRef = NonNullable<HelarcMainSnapshot["run"]>["host"]["pendingInteractions"][number]["request"];
 
 describe("HelarcMainController", () => {
+  it("persists display checkpoints and final provenance through one ordered writer with Inspector disabled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-response-checkpoint-"));
+    const store = new FileHelarcThreadStore(join(directory,"threads.json"));
+    const terminalCommit = vi.spyOn(store, "commitRunTerminal");
+    const baseline = new CompleteProvider();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {release=resolve;});
+    let delivery!: ProviderDeliverySession;
+    const send = vi.fn<Provider["send"]>(async (request,context,options) => {
+      delivery = new ProviderDeliverySession(options!,request);
+      delivery.start();delivery.text("No changes ");
+      await gate;
+      delivery.text("needed.");
+      const result = await baseline.send(request,context);
+      delivery.settle(result);
+      return result;
+    });
+    const provider:Provider = {...baseline,descriptor:{...baseline.descriptor,capabilities:{...baseline.descriptor.capabilities,
+      streaming:{supported:true}}},send};
+    const controller = new HelarcMainController({provider,threadStore:store,responseDelivery:"streaming"});
+    controller.selectWorkspacePath(directory);
+    const completed = waitForProductResult(controller,"completed");
+    const started = await controller.startRun({taskText:"Inspect workspace",target:{kind:"new_thread"}});
+    expect(started.ok).toBe(true);
+    await vi.waitFor(() => expect(delivery).toBeDefined());
+    expect(send.mock.calls[0]?.[2]?.mode).toBe("streaming");
+    expect(send.mock.calls[0]?.[0].instructions.content).toHaveLength(0);
+    const active = controller.getSnapshot();
+    const scope = {threadId:active.activeThread!.id,productRunId:active.run!.productRunId,runId:active.run!.harnessRunId};
+    const listener=vi.fn();
+    const detach=controller.subscribeResponsePreviews(scope,listener)!;
+    const before=active.run!.product.sequence;
+    expect(await controller.workbench.readResponsePreview({...scope,invocationId:null,cursor:null})).toMatchObject({status:"page",attempts:[{state:"receiving"}]});
+    expect(controller.getSnapshot().run!.product.sequence).toBe(before);
+    await vi.waitFor(async () => expect((await store.loadThread(scope.threadId))?.runs[0]?.lastProjection?.product.responses.attempts[0]?.state).toBe("receiving"),{timeout:3000});
+    release();
+    await completed;
+    await vi.waitFor(() => expect(terminalCommit).toHaveBeenCalledOnce(), { timeout: 5000 });
+    const terminalWrite = await terminalCommit.mock.results[0]!.value;
+    expect(terminalWrite).not.toMatchObject({ status: "rejected" });
+    expect((await store.loadThread(scope.threadId))?.runs[0]?.terminal?.host.status).toBe("completed");
+    detach();
+    const stored = (await store.loadThread(scope.threadId))!;
+    const preview = stored.runs[0]!.terminal!.finalProjection!.product.responses.attempts[0]!;
+    expect(preview.state).toBe("committed");
+    const record = stored.runs[0]!.terminal!.finalProjection!.product.presentation.records.find(r => r.id === preview.parts[0]?.committedRecordId);
+    expect(record?.content).toMatchObject({kind:"assistant_text",text:"No changes needed."});
+    const reopened = new HelarcMainController({threadStore:new FileHelarcThreadStore(join(directory,"threads.json"))});
+    expect(await reopened.workbench.readResponsePreview({...scope,invocationId:null,cursor:null})).toMatchObject({status:"page",live:false,attempts:[{state:"committed"}]});
+    const conversation=await reopened.workbench.readConversation({threadId:scope.threadId,position:{kind:"latest"}});
+    expect(conversation.status).toBe("page");
+    if(conversation.status==="page") expect(conversation.entries.filter(e=>e.role==="assistant")).toHaveLength(1);
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    expect((await store.loadThread(scope.threadId))?.runs[0]?.terminal?.finalProjection?.product.responses).toEqual(stored.runs[0]?.terminal?.finalProjection?.product.responses);
+    expect(send).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalled();
+  });
   it("retains attributable read-only workbench content after settlement and rejects unrelated scopes", async () => {
     const store = new InMemoryHelarcThreadStore();
     const controller = new HelarcMainController({ provider: new CompleteProvider(), threadStore: store });
@@ -39,33 +97,27 @@ describe("HelarcMainController", () => {
     expect(started.ok).toBe(true);
     const snapshot = await completed;
     const scope = { threadId: snapshot.activeThread!.id, productRunId: snapshot.run!.productRunId, runId: snapshot.run!.harnessRunId };
-    const query = { ...scope, includeDescendants: false, cursor: null };
+    const query = { ...scope, collection: "assistant" as const, cursor: null };
     await vi.waitFor(async () => expect((await store.loadThread(scope.threadId))?.runs[0]?.terminal?.host.status).toBe("completed"));
-    const page = await controller.workbench.readRunWorkbench(query);
+    const page = await controller.workbench.readWorkHistory(query);
     expect(page.status).toBe("page");
     if (page.status !== "page") return;
-    expect(page.run.display.terminal).toBe(true);
+
     expect(page.records.some(record => record.content.kind === "assistant_text")).toBe(true);
-    expect(page.finalSource.kind).toBe("model_text");
+
     const text = page.records.find(record => record.content.kind === "assistant_text")!;
     expect(await controller.workbench.readWorkbenchItem({ ...scope, itemId: text.id })).toMatchObject({ status: "page" });
-    expect(await controller.workbench.readRunWorkbench({ ...query, runId: "unrelated" })).toMatchObject({ status: "rejected", code: "not_found" });
-    expect(await controller.workbench.readRunWorkbench({ ...query, cursor: "invalid" })).toMatchObject({ status: "rejected", code: "stale_cursor" });
+    expect(await controller.workbench.readWorkHistory({ ...query, runId: "unrelated" })).toMatchObject({ status: "rejected", code: "not_found" });
+    expect(await controller.workbench.readWorkHistory({ ...query, cursor: "invalid" })).toMatchObject({ status: "rejected", code: "stale_cursor" });
     expect(await controller.workbench.readCommandOutput({ ...scope, executionId: "orphan", cursor: null })).toMatchObject({ status: "rejected", code: "not_found" });
-    const first = await controller.workbench.readRunWorkbench({ ...query, limit: 1 });
-    if (first.status === "page" && first.nextCursor) {
-      const next = await controller.workbench.readRunWorkbench({ ...query, cursor: first.nextCursor });
-      expect(next.status === "page" && next.records.every(record => record.id !== first.records[0]?.id)).toBe(true);
-    }
     expect(controller.getSnapshot().run?.product.presentation).toEqual(snapshot.run?.product.presentation);
     const reopened = new HelarcMainController({ provider: new CompleteProvider(), threadStore: store });
-    const retained = await reopened.workbench.readRunWorkbench(query);
+    const retained = await reopened.workbench.readWorkHistory(query);
     expect(retained.status).toBe("page");
     if (retained.status === "page") {
-      expect(retained.live).toBe(false);
-      expect(retained.run.display.terminal).toBe(true);
+
       expect(retained.records).toEqual(page.records);
-      expect(retained.finalSource).toEqual(page.finalSource);
+
     }
     const record = (await store.loadThread(scope.threadId))!;
     const terminal = record.runs[0]!.terminal!;
@@ -86,16 +138,18 @@ describe("HelarcMainController", () => {
     const seen: string[] = [];
     let cursor: string | null = null;
     do {
-      const bounded = await queries.readRunWorkbench({ ...query, cursor });
+      const bounded = await queries.readWorkHistory({ ...query, collection: "commands", cursor });
       expect(bounded.status).toBe("page");
       if (bounded.status !== "page") break;
       expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(256 * 1024);
-      expect(bounded.commands.length + bounded.records.length + bounded.activity.length).toBeGreaterThan(0);
+      expect(bounded.commands.length).toBeGreaterThan(0);
       seen.push(...bounded.commands.map(command => command.executionId));
-      cursor = bounded.nextCursor;
+      cursor = bounded.previousCursor;
       expect(seen.length).toBeLessThanOrEqual(32);
     } while (cursor);
     expect(seen).toEqual(commands.map(command => command.executionId));
+    expect(await queries.readCommandDetails({...scope,executionId:"execution-1"})).toMatchObject({status:"page",command:{command:"x".repeat(20_000)}});
+    expect(await queries.readCommandDetails({...scope,runId:"other",executionId:"execution-1"})).toMatchObject({status:"rejected"});
   });
   it("keeps workspace authority in main state", () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });

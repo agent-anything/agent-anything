@@ -1,4 +1,5 @@
 import { RetryInvocationInvalidatedError } from "../retry/RetryWaitControl.js";
+import { ControllerResponseDelivery, type ControllerResponseDeliveryOptions } from "./ControllerResponseObservation.js";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { MODEL_TURN_EXECUTION_FLOW } from "./ModelTurnExecutionFlow.js";
 import { MODEL_CONTEXT_EXECUTION_FLOW } from "./ModelContextExecutionFlow.js";
@@ -116,6 +117,7 @@ export interface ProviderBackedControllerInput<TOutput = unknown> {
   readonly retryClock: RetryClock;
   readonly continuation?: ModelContinuationLifecycle;
   readonly modelInputRecovery?: ModelInputRecoveryPort;
+  readonly delivery?: ControllerResponseDeliveryOptions;
 }
 
 type ProviderRetryCategory =
@@ -179,6 +181,10 @@ export class ProviderBackedController<TOutput = unknown>
   }
 
   constructor(private readonly input: ProviderBackedControllerInput<TOutput>) {
+    if (input.delivery?.mode === "streaming" &&
+        (input.responseProtocol.kind !== "native_tool_turn" || !input.provider.descriptor.capabilities.streaming.supported)) {
+      throw new TypeError("Streaming requires native Tool interaction and a streaming-capable Provider.");
+    }
     this.continuation = input.continuation ?? new ModelContinuationLifecycle();
     this.modelInputRecovery = input.modelInputRecovery ?? unsupportedModelInputRecovery;
     if (typeof input.retryExecutor?.execute !== "function") {
@@ -232,6 +238,10 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
     flow: ExecutionFlowPath,
   ): Promise<ControllerDecision<TOutput>> {
+    const delivery = new ControllerResponseDelivery(controllerInput.runId,
+      controllerInput.toolExposure.controllerRequestId, this.input.delivery ?? { mode: "buffered" });
+    let providerRequestNumber = 0;
+    try {
     const build = flow.advance("build", {controllerRequestId: controllerInput.toolExposure.controllerRequestId},
       [{owner: "runtime", kind: "request", id: controllerInput.toolExposure.controllerRequestId, revision: null}]);
     const request = await this.buildRequest(controllerInput, Object.freeze({
@@ -249,7 +259,9 @@ export class ProviderBackedController<TOutput = unknown>
       request,
       controllerInput,
       {...callContext, executionFlow: flow.callContext},
-      () => 1,
+      () => ++providerRequestNumber,
+      0,
+      delivery,
     );
     const responseRef = flow.material("Normalized Provider response", "received", response, "provider");
     send.output(responseRef);
@@ -266,7 +278,14 @@ export class ProviderBackedController<TOutput = unknown>
       decision,
       controllerInput.toolExposure.controllerRequestId,
     );
+    throwIfCancelled(callContext);
+    delivery.finish("validated", decision.modelItems);
     return decision;
+    } catch (error) {
+      delivery.finish(callContext.cancellation.signal.aborted ? "cancelled"
+        : error instanceof RetryInvocationInvalidatedError ? "interrupted" : "rejected");
+      throw error;
+    }
   }
 
   private async executeStructuredOutput(
@@ -511,6 +530,7 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
     nextProviderRequestNumber: () => number,
     modelInputRecoveryAttempt = 0,
+    delivery?: ControllerResponseDelivery,
   ): Promise<ProviderResponse> {
     const assessedRequest = await this.prepareModelContextRequest(
       request,
@@ -531,6 +551,7 @@ export class ProviderBackedController<TOutput = unknown>
         controllerInput,
         callContext,
         nextProviderRequestNumber(),
+        delivery,
       );
     } catch (error) {
       await this.recordContinuationInterruption(preparation, callContext, error);
@@ -547,6 +568,7 @@ export class ProviderBackedController<TOutput = unknown>
           callContext,
           nextProviderRequestNumber,
           modelInputRecoveryAttempt + 1,
+          delivery,
         );
       }
       throw error;
@@ -596,6 +618,7 @@ export class ProviderBackedController<TOutput = unknown>
           controllerInput,
           callContext,
           nextProviderRequestNumber(),
+          delivery,
         );
       } catch (error) {
         await this.recordContinuationInterruption(resetPreparation, callContext, error);
@@ -810,6 +833,7 @@ export class ProviderBackedController<TOutput = unknown>
     controllerInput: ControllerInput<TOutput>,
     callContext: ControllerCallContext,
     providerRequestNumber: number,
+    delivery?: ControllerResponseDelivery,
   ): Promise<ProviderRequestSettlement> {
     const operation = createProviderRetryOperation(
       controllerInput,
@@ -840,6 +864,9 @@ export class ProviderBackedController<TOutput = unknown>
           const providerResult = await this.input.provider.send(
             recreateProviderRequest(request),
             createInvocationInterruptionContext(callContext, attempt),
+            delivery?.invocation(attempt.attempt.attemptId, request.requestId, attempt.signal) ?? {
+              mode: "buffered", invocationId: attempt.attempt.attemptId,
+            },
           );
           return providerAttemptResult(
             providerResult,

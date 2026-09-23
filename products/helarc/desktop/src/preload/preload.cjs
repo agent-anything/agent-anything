@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const COMMAND_VERSION = 1;
+let responseSubscriptionNumber = 0;
+const workScope = (input) => ({ threadId: input?.threadId, productRunId: input?.productRunId });
+const taskScope = (input) => ({ ...workScope(input), runId: input?.runId });
 
 const channels = Object.freeze({
   getInspectionSettings: "helarc:get-inspection-settings",
@@ -22,8 +25,34 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
+  readConversation: (input) => ipcRenderer.invoke("helarc:read-conversation", {threadId:input?.threadId,position:input?.position?.kind === "before" ? {kind:"before",cursor:input.position.cursor} : {kind:input?.position?.kind}}),
+  readCurrentWork: (input) => ipcRenderer.invoke("helarc:read-current-work", {...workScope(input),collection:input?.collection,cursor:input?.cursor}),
+  readTaskDetails: (input) => ipcRenderer.invoke("helarc:read-task-details", taskScope(input)),
+  readWorkHistory: (input) => ipcRenderer.invoke("helarc:read-work-history", {...taskScope(input),collection:input?.collection,cursor:input?.cursor}),
+  readArtifactContent: (input) => ipcRenderer.invoke("helarc:read-artifact-content", {threadId:input?.threadId,artifactId:input?.artifactId,cursor:input?.cursor}),
+  readResponsePreview: (input) => ipcRenderer.invoke("helarc:read-response-preview", {...taskScope(input),invocationId:input?.invocationId,cursor:input?.cursor}),
+  subscribeResponseProgress: async (input, listener) => {
+    const scope = workScope(input);
+    const subscriptionId = `response-${++responseSubscriptionNumber}`;
+    let disposed = false;
+    const safeListener = (_event, frame) => {
+      if (!disposed && frame?.subscriptionId === subscriptionId && frame?.scope?.threadId === scope.threadId &&
+        frame?.scope?.productRunId === scope.productRunId && typeof listener === "function") listener(frame);
+    };
+    ipcRenderer.on("helarc:response-progress", safeListener);
+    const remove = () => {disposed = true;ipcRenderer.removeListener("helarc:response-progress",safeListener);};
+    try {
+      const receipt = await ipcRenderer.invoke("helarc:subscribe-response-progress", {...scope,subscriptionId});
+      if (receipt.status !== "subscribed") {remove();return receipt;}
+      return {status:"subscribed",dispose:() => {
+        if (disposed) return;
+        remove();
+        void ipcRenderer.invoke("helarc:unsubscribe-response-progress",{subscriptionId}).catch(() => {});
+      }};
+    } catch { remove();return {status:"rejected",code:"read_failed"}; }
+  },
   listThreadRuns: (input) => ipcRenderer.invoke("helarc:list-thread-runs", { threadId: input?.threadId }),
-  readRunWorkbench: (input) => ipcRenderer.invoke("helarc:read-run-workbench", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, includeDescendants: input?.includeDescendants, cursor: input?.cursor, limit: input?.limit }),
+  readCommandDetails: (input) => ipcRenderer.invoke("helarc:read-command-details", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, executionId: input?.executionId }),
   readWorkbenchItem: (input) => ipcRenderer.invoke("helarc:read-workbench-item", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, itemId: input?.itemId, offset: input?.offset }),
   readCommandOutput: (input) => ipcRenderer.invoke("helarc:read-command-output", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, executionId: input?.executionId, cursor: input?.cursor }),
   openExternalLink: (input) => ipcRenderer.invoke("helarc:open-external-link", { url: input?.url }),
