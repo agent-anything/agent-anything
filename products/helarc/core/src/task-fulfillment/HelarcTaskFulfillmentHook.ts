@@ -26,7 +26,7 @@ import {
 } from "./HelarcTaskFulfillment.js";
 
 export const HELARC_TASK_FULFILLMENT_HOOK_REVISION =
-  "helarc.task-fulfillment-stop-hook.v3";
+  "helarc.task-fulfillment-stop-hook.v4";
 
 const hookRef = Object.freeze({
   owner: "helarc",
@@ -45,7 +45,7 @@ const interaction = Object.freeze({
     kind: "json_schema" as const,
     name: "helarc_task_fulfillment",
     schemaId: "helarc.task-fulfillment-assessment",
-    schemaRevision: "2",
+    schemaRevision: "3",
     schema: Object.freeze({
       type: "object",
       additionalProperties: false,
@@ -56,13 +56,19 @@ const interaction = Object.freeze({
         disposition: Object.freeze({
           type: "string",
           enum: Object.freeze(["allow", "continue"]),
-          description: "Allow this processing to end, or request useful actionable continuation. Incomplete or uncertain fulfillment alone does not require continuation.",
+          description: "Independently allow this processing to end or request concrete useful follow-up described in rationale. Any fulfillment status may accompany either disposition: fulfilled can still require follow-up, while incomplete or uncertain alone does not require continuation.",
         }),
         status: Object.freeze({
           type: "string",
           enum: Object.freeze(["fulfilled", "incomplete", "uncertain"]),
+          description: "Assessment of the original Task outcomes from the current evidence, not a Run terminal state or a Stop disposition. Later evidence may change this conclusion. Plan maintenance alone is not a missing Task outcome.",
         }),
-        rationale: Object.freeze({ type: "string" }),
+        rationale: Object.freeze({
+          type: "string",
+          minLength: 1,
+          maxLength: 8_192,
+          description: "Explain the assessment and disposition. For continue, identify the concrete useful next work, including follow-up when status is fulfilled.",
+        }),
         missingOutcomes: Object.freeze({
           type: "array",
           maxItems: 16,
@@ -131,9 +137,7 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
       ? Object.freeze({ disposition: "allow" as const })
       : Object.freeze({
           disposition: "continue" as const,
-          code: assessment.status === "incomplete"
-            ? "task_fulfillment_incomplete"
-            : "task_fulfillment_uncertain",
+          code: "stop_instructions_continue",
           message: assessment.feedback!,
         });
   }
@@ -348,9 +352,6 @@ function parseCandidate(value: ModelJsonValue): HelarcFulfillmentCandidate {
   if (record.disposition !== "allow" && record.disposition !== "continue") {
     throw new TypeError("Task Fulfillment Stop disposition is invalid.");
   }
-  if (record.status === "fulfilled" && record.disposition !== "allow") {
-    throw new TypeError("Fulfilled work cannot require fulfillment continuation.");
-  }
   const unsupportedClaims = boundedTextArray(record.unsupportedClaims, "unsupportedClaims");
   if (record.status === "fulfilled" && (missingOutcomes.length > 0 || unsupportedClaims.length > 0)) {
     throw new TypeError("A fulfilled Task response cannot carry unresolved outcomes or claims.");
@@ -417,11 +418,8 @@ function buildFeedback(
   candidate: HelarcFulfillmentCandidate,
   findings: readonly HelarcTaskFulfillmentFinding[],
 ): string {
-  const prefix = candidate.status === "incomplete"
-    ? "The proposed completion does not yet fulfill the original task."
-    : "Task fulfillment is uncertain from the settled trajectory.";
   const details = findings.map((finding) => finding.message).join(" ");
-  const feedback = `${prefix} ${candidate.rationale} ${details}`.trim();
+  const feedback = `${candidate.rationale} ${details}`.trim();
   return feedback.length <= 4_096 ? feedback : `${feedback.slice(0, 4_093)}...`;
 }
 

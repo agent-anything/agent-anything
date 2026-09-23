@@ -44,14 +44,18 @@ export function snapshotHelarcTaskFulfillmentAssessment(
   if (!Array.isArray(input.findings) || input.findings.length > 32) {
     throw new TypeError("Helarc Task Fulfillment findings must be bounded.");
   }
-  if (input.status === "fulfilled" && (input.findings.length > 0 || input.feedback !== null)) {
-    throw new TypeError("A fulfilled Helarc Task assessment cannot carry unresolved findings or feedback.");
+  if (input.status === "fulfilled" && input.findings.length > 0) {
+    throw new TypeError("A fulfilled Helarc Task assessment cannot carry unresolved Task findings.");
   }
   if (input.disposition !== "allow" && input.disposition !== "continue") {
     throw new TypeError("Helarc Stop disposition is unsupported.");
   }
   if ((input.disposition === "continue") !== (input.feedback !== null)) {
     throw new TypeError("Only a continuation disposition requires feedback.");
+  }
+  if (input.feedback !== null &&
+      (typeof input.feedback !== "string" || input.feedback.trim().length === 0)) {
+    throw new TypeError("Continuation feedback must be non-empty text.");
   }
   return deepFreeze({
     ...input,

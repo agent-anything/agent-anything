@@ -21,7 +21,16 @@ export interface HelarcControllerControlGuidance {
 const ENTRIES = Object.freeze([
   Object.freeze({
     name: "update_plan" as const,
-    modelDescription: "Create or replace the current Run Plan when an explicit multi-step representation materially improves coordination, progress tracking, or recovery. A Plan is optional and may be created or revised at any turn; do not create one for a simple direct task. Every call replaces the complete visible Plan, so retain still-relevant steps, mark established work completed, keep future work pending, and use at most one in_progress step. The Plan records intended progression but grants no Tool, Permission, or execution authority and does not prove that a step succeeded.",
+    modelDescription: [
+      "Create or replace the current Run Plan when an explicit multi-step representation materially improves coordination, progress tracking, or recovery.",
+      "A Plan is optional and may be created or revised at any turn; do not create one for a simple direct task.",
+      "Every call replaces the complete visible Plan, so retain still-relevant steps, mark established work completed, keep future work pending, and use at most one in_progress step.",
+      "Once a Plan exists, update it promptly after a step's outcome is established, when work moves to another step, or when the scope or approach changes.",
+      "Before your final response, reconcile the existing Plan with actual progress and call update_plan if it is stale.",
+      "Keep still-relevant unfinished work visible and use explanation to describe unresolved or changed work. Never mark unfinished steps completed merely because the Run is ending.",
+      "Do not create a Plan solely to close the Run or repeat an unchanged update.",
+      "The Plan records intended progression but grants no Tool, Permission, or execution authority and does not prove that a step succeeded.",
+    ].join(" "),
   }),
 ]);
 

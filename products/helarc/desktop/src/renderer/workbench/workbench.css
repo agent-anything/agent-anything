@@ -279,6 +279,17 @@
   flex: 1;
   font-size: 13px;
 }
+.wb-work-heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.wb-work-heading strong {
+  flex: 0 1 auto;
+}
 .wb-status {
   font-size: 11px;
   color: #707a73;
@@ -517,7 +528,7 @@
 }
 .wb-conversation-body {
   flex: 1;
-  min-height: 0;
+  min-height: 96px;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -733,6 +744,57 @@
 }
 .wb-plan .in_progress {
   color: #27648d;
+}
+.wb-plan li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wb-conversation-plan {
+  flex: 0 0 auto;
+  border-top: 1px solid #e1e6e2;
+  padding: 0 24px;
+}
+.wb-conversation-plan > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+.wb-conversation-plan > summary::-webkit-details-marker {
+  display: none;
+}
+.wb-plan-chevron {
+  flex: 0 0 auto;
+}
+.wb-conversation-plan[open] .wb-plan-chevron {
+  transform: rotate(90deg);
+}
+.wb-plan-count {
+  color: #6e8173;
+  white-space: nowrap;
+}
+.wb-plan-current {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #526157;
+}
+.wb-plan-steps {
+  max-height: min(180px, 25dvh);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-bottom: 8px;
+}
+@media (max-width: 1099px) {
+  .wb-conversation-plan {
+    padding: 0 12px;
+  }
 }
 .wb-task-branches {
   list-style: none;

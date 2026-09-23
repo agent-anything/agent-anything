@@ -45,4 +45,20 @@ describe("Helarc Controller Control Guidance", () => {
       .toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(Object.isFrozen(HELARC_CONTROLLER_CONTROL_GUIDANCE.entries)).toBe(true);
   });
+
+  it("guides timely and truthful Plan updates without requiring closure bookkeeping", () => {
+    const [definition] = createHelarcControllerControlDefinitions(
+      HELARC_CONTROLLER_CONTROL_GUIDANCE,
+      { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 },
+    );
+
+    expect(definition?.description).toContain("after a step's outcome is established");
+    expect(definition?.description).toContain("when work moves to another step");
+    expect(definition?.description).toContain("when the scope or approach changes");
+    expect(definition?.description).toContain("Before your final response");
+    expect(definition?.description).toContain("call update_plan if it is stale");
+    expect(definition?.description).toContain("Keep still-relevant unfinished work visible");
+    expect(definition?.description).toContain("Never mark unfinished steps completed merely because the Run is ending");
+    expect(definition?.description).toContain("Do not create a Plan solely to close the Run or repeat an unchanged update");
+  });
 });

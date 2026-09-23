@@ -243,7 +243,8 @@ async function setup(
       };
       let listener: (value: unknown) => void = () => {};
       (window as any).calls = [];
-      (window as any).emitWorkbench = (mutate: string) => {
+      (window as any).emitWorkbench = (mutate: string, update?: (value: any) => void) => {
+        update?.(snapshot);
         if (mutate === "revision") {
           snapshot.run.product.presentationRevision++;
           snapshot.activeThread.revision++;
@@ -552,6 +553,86 @@ test("conversation and final answer use one source; wide layout stays bounded", 
   ).toBe(true);
   await page.screenshot({ path: info.outputPath("wide.png") });
 });
+test("current work updates automatically and offers Retry only after a read failure", async ({
+  page,
+}) => {
+  await setup(page);
+  const work = page.getByRole("complementary", {
+    name: "Current work",
+    exact: true,
+  });
+  await expect(work.getByRole("button", { name: "Refresh work" })).toHaveCount(0);
+  await expect(
+    work.getByRole("button", { name: "Retry", exact: true }),
+  ).toHaveCount(0);
+  await page.evaluate(() => {
+    const api = (window as any).helarc;
+    const read = api.readCurrentWork;
+    (window as any).workReadCount = 0;
+    api.readCurrentWork = async (query: any) => {
+      (window as any).workReadCount++;
+      if ((window as any).failNextWorkRead) {
+        (window as any).failNextWorkRead = false;
+        throw new Error("Read unavailable");
+      }
+      const value = await read(query);
+      return {
+        ...value,
+        commands: value.commands.map((command: any) => ({
+          ...command,
+          command: "echo updated",
+        })),
+      };
+    };
+    (window as any).emitWorkbench("revision");
+  });
+  await expect(work.getByRole("button", { name: /echo updated/ })).toBeVisible();
+  await page.evaluate(() => {
+    (window as any).failNextWorkRead = true;
+    (window as any).emitWorkbench("revision");
+  });
+  const error = work.getByRole("alert");
+  await expect(error).toContainText("Content could not be read.");
+  await expect(work.getByRole("button", { name: /echo updated/ })).toBeVisible();
+  const reads = await page.evaluate(() => (window as any).workReadCount);
+  await error.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(error).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).workReadCount)).toBe(
+    reads + 1,
+  );
+  await expect(
+    work.getByRole("button", { name: "Retry", exact: true }),
+  ).toHaveCount(0);
+});
+test("overall work status stays in the header rather than the operation list", async ({
+  page,
+}, info) => {
+  await setup(page);
+  const work = page.getByRole("complementary", { name: "Current work", exact: true });
+  const status = work.locator(".wb-work-heading .wb-status");
+  await expect(status).toHaveText("Working");
+  await expect(work.getByRole("heading", { name: "Now", exact: true })).toBeVisible();
+  await expect(work.getByRole("button", { name: /echo hello/ })).toBeVisible();
+  await page.evaluate(() => {
+    const api = (window as any).helarc;
+    const read = api.readCurrentWork;
+    api.readCurrentWork = async (query: any) => ({
+      ...(await read(query)),
+      commands: [],
+    });
+    (window as any).emitWorkbench("revision");
+  });
+  await expect(work.getByRole("heading", { name: "Now", exact: true })).toHaveCount(0);
+  await expect(status).toHaveText("Working");
+  await page.screenshot({ path: info.outputPath("work-status-wide.png") });
+  await page.setViewportSize({ width: 480, height: 720 });
+  await expect(status).toBeVisible();
+  expect(await work.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath("work-status-narrow.png") });
+  await work.getByRole("button", { name: /Inspect dependencies.*Completed/ }).click();
+  await expect(status).toHaveCount(0);
+  await expect(work.getByRole("heading", { name: "Inspect dependencies" })).toBeVisible();
+});
 test("Child inspection does not retarget steering", async ({ page }) => {
   await setup(page);
   await page
@@ -761,11 +842,11 @@ test("finished replies expose retained results without inventing Plan completion
   await expect(
     result.getByRole("heading", { name: "Findings", exact: true }),
   ).toBeVisible();
+  const plan = page.locator(".wb-conversation-plan");
+  await expect(plan.locator("summary")).toContainText("1/2");
+  await plan.locator("summary").click();
   await expect(
-    page.locator(".wb-plan li.in_progress").filter({hasText:"Report findings"}),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Plan 1 of 2", exact: true }),
+    plan.locator("li.in_progress").filter({ hasText: "Report findings" }),
   ).toBeVisible();
   await expect(page.locator(".wb-finished")).not.toHaveAttribute("open");
   expect(await page.evaluate(() => (window as any).calls)).toEqual([
@@ -774,6 +855,119 @@ test("finished replies expose retained results without inventing Plan completion
       query: { threadId: "thread", artifactId: "result", cursor: null },
     },
   ]);
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await expect(plan).toHaveCount(0);
+});
+
+test("conversation Plan expands and updates independently of selected task details", async ({ page }, info) => {
+  await setup(page);
+  const plan = page.locator(".wb-conversation > .wb-conversation-plan");
+  const summary = plan.locator("summary");
+  const work = page.getByRole("complementary", { name: "Current work", exact: true });
+  await expect(summary).toContainText("Plan");
+  await expect(summary).toContainText("1/2");
+  await expect(summary).toContainText("Report findings");
+  await expect(plan).not.toHaveAttribute("open");
+  await expect(work.locator(".wb-plan")).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("plan-collapsed.png") });
+  await summary.click();
+  await expect(plan.locator("li")).toHaveCount(2);
+  await page.evaluate(() => {
+    const api = (window as any).helarc;
+    const read = api.readCurrentWork;
+    api.readCurrentWork = async (q: any) => ({
+      ...(await read(q)),
+      plan: { steps: [
+        { description: "Inspect sources", status: "completed" },
+        { description: "Check recorded findings", status: "in_progress" },
+      ] },
+    });
+    const detail = api.readTaskDetails;
+    api.readTaskDetails = async (q: any) => ({
+      ...(await detail(q)),
+      plan: { steps: [{ description: "Child investigation", status: "in_progress" }] },
+    });
+    (window as any).emitWorkbench("host", (snapshot: any) => snapshot.run.host.runRevision++);
+  });
+  await expect(summary).toContainText("Check recorded findings");
+  await expect(plan).toHaveAttribute("open", "");
+  await page.getByRole("button", { name: /Inspect dependencies.*Completed/ }).click();
+  await expect(work.locator(".wb-plan")).toContainText("Child investigation");
+  await expect(plan).not.toContainText("Child investigation");
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
+  await expect(plan).toHaveAttribute("open", "");
+  await page.getByRole("button", { name: "Close work" }).click();
+  await expect(plan).toBeVisible();
+});
+
+test("conversation Plan clears on absent plans and resets expansion for new work", async ({ page }) => {
+  await setup(page);
+  const plan = page.locator(".wb-conversation-plan");
+  await plan.locator("summary").click();
+  await page.evaluate(() => {
+    const api = (window as any).helarc;
+    const read = api.readCurrentWork;
+    api.readCurrentWork = async (q: any) => ({
+      ...(await read(q)),
+      plan: q.productRunId.endsWith("-empty") ? null : {
+        steps: [{ description: "New task step", status: "pending" }],
+      },
+    });
+    (window as any).emitWorkbench("revision", (snapshot: any) => {
+      snapshot.run.productRunId += "-next";
+      snapshot.run.harnessRunId += "-next";
+      snapshot.run.host.runId = snapshot.run.harnessRunId;
+    });
+  });
+  await expect(plan).toContainText("New task step");
+  await expect(plan).not.toHaveAttribute("open");
+  await expect(plan.locator("summary")).toContainText("0/1");
+  await page.evaluate(() => {
+    (window as any).emitWorkbench("revision", (snapshot: any) => {
+      snapshot.run.productRunId += "-empty";
+      snapshot.run.harnessRunId += "-empty";
+      snapshot.run.host.runId = snapshot.run.harnessRunId;
+    });
+  });
+  await expect(plan).toHaveCount(0);
+});
+
+test("expanded Plan stays bounded with approvals on wide and narrow layouts", async ({ page }, info) => {
+  await setup(page, "approval");
+  await page.evaluate(() => {
+    const api = (window as any).helarc;
+    const read = api.readCurrentWork;
+    api.readCurrentWork = async (q: any) => ({
+      ...(await read(q)),
+      plan: { steps: Array.from({ length: 20 }, (_, i) => ({
+        description: `${i + 1}. ${"Long plan step text ".repeat(8)}`,
+        status: i === 0 ? "in_progress" : "pending",
+      })) },
+    });
+    (window as any).emitWorkbench("revision");
+  });
+  const plan = page.locator(".wb-conversation-plan");
+  await expect(plan.locator("summary")).toContainText("0/20");
+  await plan.locator("summary").click();
+  await expect(plan.locator("li")).toHaveCount(20);
+  await expect(plan.locator(".wb-plan-steps")).toHaveCSS("overflow-y", "auto");
+  for (const [width, height] of [[1440, 900], [480, 720]]) {
+    await page.setViewportSize({ width: width!, height: height! });
+    if (width === 480) await page.getByRole("button", { name: "Close work" }).click();
+    await expect(plan).toBeVisible();
+    const bounds = await plan.boundingBox();
+    const attention = await page.getByRole("region", { name: "Needs your input" }).boundingBox();
+    const composer = await page.locator(".wb-composer").boundingBox();
+    const latest = await page.locator(".wb-latest").boundingBox();
+    expect(bounds!.height).toBeLessThanOrEqual(220);
+    expect(latest!.y + latest!.height).toBeLessThanOrEqual(bounds!.y);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(attention!.y + 1);
+    expect(attention!.y + attention!.height).toBeLessThanOrEqual(composer!.y + 1);
+    expect(composer!.y + composer!.height).toBeLessThanOrEqual(height! + 1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`plan-expanded-${width}.png`) });
+  }
 });
 
 test("nested delegated tasks retain ancestry without changing root controls", async ({

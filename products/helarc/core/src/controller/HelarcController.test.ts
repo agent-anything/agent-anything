@@ -381,6 +381,15 @@ describe("Helarc native Tool controller", () => {
     expect(request.instructions.content).toEqual([]);
     expect(request.messages).toEqual(baselineRequest.messages);
     expect(request.interaction).toEqual(baselineRequest.interaction);
+    expect(request.interaction).toMatchObject({
+      kind: "native_tool_turn",
+      callables: expect.arrayContaining([
+        expect.objectContaining({
+          name: "update_plan",
+          description: HELARC_CONTROLLER_CONTROL_GUIDANCE.entries[0]!.modelDescription,
+        }),
+      ]),
+    });
     expect(request.composition?.sections.some(({ role }) => role === "instruction")).toBe(false);
     const customProtocol = createHelarcControllerProtocolComposition({
       toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance,

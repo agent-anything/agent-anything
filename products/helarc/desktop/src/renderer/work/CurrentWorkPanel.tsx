@@ -2,12 +2,8 @@ import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
-  Check,
   ChevronRight,
-  Circle,
   FileText,
-  Play,
-  RefreshCw,
   Terminal,
   Wrench,
   X,
@@ -33,6 +29,7 @@ import {
 import { useResponsePreview } from "../conversation/useResponsePreview.js";
 import { CommandOutput } from "./CommandOutput.js";
 import { ResultLinks } from "./ResultContent.js";
+import { PlanView } from "../plan/PlanView.js";
 
 type Detail =
   | { kind: "task"; scope: WorkbenchScope }
@@ -88,6 +85,15 @@ export function CurrentWorkPanel({
     setExpanded(null);
   }, [read.value]);
   const page = expanded ?? (read.value?.status === "page" ? read.value : null);
+  const hasCurrentActivity =
+    !!page &&
+    (page.commands.length > 0 ||
+      page.activeCalls.length > 0 ||
+      page.attention.length > 0 ||
+      page.omitted.calls > 0 ||
+      page.omitted.commands > 0 ||
+      !!page.nextCursors.calls ||
+      !!page.nextCursors.commands);
   const previous =
     (detail?.scope ?? scope)?.productRunId !== currentScope?.productRunId;
   async function more(collection: "tasks" | "calls" | "commands") {
@@ -141,15 +147,19 @@ export function CurrentWorkPanel({
   return (
     <aside className="wb-work" aria-label="Current work">
       <header className="wb-panel-header">
-        <strong>{previous ? "Previous work" : "Current work"}</strong>
-        <button
-          className="wb-icon"
-          title="Refresh work"
-          aria-label="Refresh work"
-          onClick={read.refresh}
-        >
-          <RefreshCw size={15} />
-        </button>
+        <div className="wb-work-heading">
+          <strong>{previous ? "Previous work" : "Current work"}</strong>
+          {page && !detail && !read.error && (
+            <span
+              className={`wb-status ${page.workStatus}`}
+              aria-label="Work status"
+            >
+              {page.workStatus === "inactive"
+                ? "Not active"
+                : displayStatus(page.workStatus)}
+            </span>
+          )}
+        </div>
         <button
           className="wb-icon"
           title="Close work"
@@ -160,6 +170,14 @@ export function CurrentWorkPanel({
         </button>
       </header>
       <div className="wb-work-scroll">
+        {read.error && (
+          <div role="alert">
+            <p className="wb-warning">{read.error}</p>
+            <button className="wb-link" onClick={read.refresh}>
+              Retry
+            </button>
+          </div>
+        )}
         {previous && (
           <button
             className="wb-link"
@@ -212,7 +230,7 @@ export function CurrentWorkPanel({
           </>
         ) : page && scope ? (
           <>
-            <section className="wb-section">
+            <section className="wb-section" hidden={!hasCurrentActivity}>
               <h3>Now</h3>
               {page.commands.map((c) => (
                 <WorkRow
@@ -251,15 +269,6 @@ export function CurrentWorkPanel({
                     onClick={() => operation(r)}
                   />
                 ))}
-              {!page.commands.length && !page.activeCalls.length && (
-                <p className="wb-muted">
-                  {page.live
-                    ? displayStatus(page.workStatus)
-                    : page.workStatus === "inactive"
-                      ? "No active work. Showing retained information."
-                      : "Work ended"}
-                </p>
-              )}
               {page.attention.map((a) => (
                 <button
                   className="wb-link"
@@ -282,7 +291,6 @@ export function CurrentWorkPanel({
                 </React.Fragment>
               ))}
             </section>
-            <PlanView value={page.plan} />
             {page.tasks.length > 1 && (
               <section className="wb-section">
                 <h3>Delegated tasks</h3>
@@ -348,16 +356,15 @@ export function CurrentWorkPanel({
               Details
             </button>
           </>
-        ) : (
+        ) : !read.error ? (
           <p className="wb-muted">
-            {read.error ||
-              (read.value?.status === "rejected"
-                ? "Work details unavailable."
-                : scope
-                  ? "Loading work..."
-                  : "No work yet")}
+            {read.value?.status === "rejected"
+              ? "Work details unavailable."
+              : scope
+                ? "Loading work..."
+                : "No work yet"}
           </p>
-        )}
+        ) : null}
       </div>
     </aside>
   );
@@ -475,50 +482,6 @@ function TaskBranches({
           );
         })}
     </ul>
-  );
-}
-export function PlanView({ value }: { value: HelarcPresentationValue }) {
-  const plan = value as {
-    steps?: { description?: string; title?: string; status?: string }[];
-  } | null;
-  const [showCompleted, setShowCompleted] = useState(false);
-  if (!plan?.steps?.length) return null;
-  const completed = plan.steps.filter((s) => s.status === "completed").length;
-  return (
-    <section className="wb-section">
-      <h3>
-        Plan{" "}
-        <span>
-          {completed} of {plan.steps.length}
-        </span>
-      </h3>
-      <ol className="wb-plan">
-        {plan.steps.map((step, i) =>
-          plan.steps!.length > 6 &&
-          step.status === "completed" &&
-          !showCompleted ? null : (
-            <li key={i} className={step.status}>
-              {step.status === "completed" ? (
-                <Check size={15} />
-              ) : step.status === "in_progress" ? (
-                <Play size={15} />
-              ) : (
-                <Circle size={13} />
-              )}
-              <span>
-                {step.description ?? step.title}
-                <small>{step.status?.replaceAll("_", " ")}</small>
-              </span>
-            </li>
-          ),
-        )}
-      </ol>
-      {plan.steps.length > 6 && completed > 0 && (
-        <button className="wb-link" onClick={() => setShowCompleted((v) => !v)}>
-          {showCompleted ? "Hide" : "Show"} completed steps
-        </button>
-      )}
-    </section>
   );
 }
 function TaskDetail({

@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { HELARC_TASK_KIND } from "../task/index.js";
 import { createDefaultHelarcInstructionSettings } from "../instructions/HelarcInstructionSettings.js";
 import { HelarcTaskFulfillmentHook } from "./HelarcTaskFulfillmentHook.js";
+import { snapshotHelarcTaskFulfillmentAssessment } from "./HelarcTaskFulfillment.js";
 
 const NOW = "2026-08-28T00:00:00.000Z";
 
@@ -75,10 +76,10 @@ describe("HelarcTaskFulfillmentHook", () => {
 
     expect(decision).toMatchObject({
       disposition: "continue",
-      code: "task_fulfillment_incomplete",
+      code: "stop_instructions_continue",
     });
     if (decision.disposition === "continue") {
-      expect(decision.message).toContain("does not yet fulfill the original task");
+      expect(decision.message).toContain("The response explains the work but does not show execution.");
       expect(decision.message).toContain("No settled command result");
     }
     expect(hook.getAssessments()).toMatchObject([{
@@ -87,9 +88,81 @@ describe("HelarcTaskFulfillmentHook", () => {
     }]);
   });
 
-  it("surfaces contradictory Provider output as a non-decision Hook error", async () => {
+  it.each(["root", "descendant"] as const)("allows fulfilled %s work to request truthful Plan follow-up", async (runKind) => {
+    const rationale = "The requested work is complete. Update the existing Plan to reflect the settled results before the final response.";
     const provider = new StructuredProvider({
-      status: "fulfilled", disposition: "allow",
+      status: "fulfilled", disposition: "continue", rationale,
+      missingOutcomes: [], unsupportedClaims: [],
+    });
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
+    const event = {
+      ...createEvent(), runKind,
+      plan: {
+        id: "plan-1", version: 1, status: "active" as const,
+        steps: [{ step: "Inspect settled results", status: "in_progress" as const }],
+      },
+    };
+
+    await expect(hook.handle(event, context())).resolves.toEqual({
+      disposition: "continue", code: "stop_instructions_continue", message: rationale,
+    });
+    const assessment = hook.getAssessments()[0]!;
+    expect(assessment).toMatchObject({
+      status: "fulfilled", disposition: "continue", findings: [], feedback: rationale,
+    });
+    expect(event.plan.steps[0]!.status).toBe("in_progress");
+    const message = provider.requests[0]!.messages[0]!;
+    if (message.role !== "user" || message.content[0]?.kind !== "text") {
+      throw new TypeError("Expected Stop assessment material in a user message.");
+    }
+    expect(JSON.parse(message.content[0].text).completionBasis.plan).toEqual(event.plan);
+    expect(JSON.stringify(provider.requests[0]!.instructions)).toContain("If a Plan exists, check whether it reflects the settled work");
+    expect(provider.requests[0]!.interaction).toMatchObject({
+      kind: "structured_generation",
+      outputFormat: { schemaRevision: "3" },
+    });
+    for (const feedback of [null, "", " \t "]) {
+      expect(() => snapshotHelarcTaskFulfillmentAssessment({ ...assessment, feedback })).toThrow();
+    }
+    expect(() => snapshotHelarcTaskFulfillmentAssessment({ ...assessment, disposition: "allow" })).toThrow();
+  });
+
+  it("reassesses later candidates without making fulfilled sticky or rewriting history", async () => {
+    const outputs: ModelJsonValue[] = [
+      { status: "fulfilled", disposition: "continue", rationale: "Synchronize the stale Plan.", missingOutcomes: [], unsupportedClaims: [] },
+      { status: "incomplete", disposition: "continue", rationale: "New evidence reveals an omitted requested check. Perform that check.", missingOutcomes: ["The requested check has not run."], unsupportedClaims: [] },
+      { status: "uncertain", disposition: "continue", rationale: "The check returned ambiguous output. Inspect the retained result.", missingOutcomes: [], unsupportedClaims: [] },
+      { status: "fulfilled", disposition: "allow", rationale: "The new results establish the requested outcomes and no useful follow-up remains.", missingOutcomes: [], unsupportedClaims: [] },
+    ];
+    let index = 0;
+    const provider = new StructuredProvider(() => outputs[index++]!);
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
+    await expect(hook.handle(createEvent(1), context())).resolves.toMatchObject({ disposition: "continue" });
+    const firstSnapshot = hook.getAssessments();
+    const firstRecord = JSON.stringify(firstSnapshot[0]);
+    for (let iteration = 2; iteration <= 4; iteration++) {
+      await expect(hook.handle(createEvent(iteration), context())).resolves.toMatchObject({
+        disposition: iteration === 4 ? "allow" : "continue",
+      });
+    }
+
+    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests.map(request => request.metadata.completionCandidateId))
+      .toEqual(["proposal-1", "proposal-2", "proposal-3", "proposal-4"]);
+    const assessments = hook.getAssessments();
+    expect(assessments.map(({ status }) => status)).toEqual(["fulfilled", "incomplete", "uncertain", "fulfilled"]);
+    expect(new Set(assessments.map(({ id }) => id)).size).toBe(4);
+    expect(firstSnapshot).toHaveLength(1);
+    expect(assessments[0]).toBe(firstSnapshot[0]);
+    expect(JSON.stringify(firstSnapshot[0])).toBe(firstRecord);
+    expect(Object.isFrozen(firstSnapshot)).toBe(true);
+    expect(assessments.every(assessment => Object.isFrozen(assessment) && Object.isFrozen(assessment.findings))).toBe(true);
+    expect(assessments.at(-1)).toMatchObject({ disposition: "allow", feedback: null });
+  });
+
+  it.each(["allow", "continue"] as const)("rejects contradictory fulfilled outcomes even with disposition %s", async (disposition) => {
+    const provider = new StructuredProvider({
+      status: "fulfilled", disposition,
       rationale: "The Task is complete.",
       missingOutcomes: ["The requested process was not executed."],
       unsupportedClaims: [],
@@ -99,6 +172,16 @@ describe("HelarcTaskFulfillmentHook", () => {
     await expect(hook.handle(createEvent(), context())).rejects.toThrow(
       "A fulfilled Task response cannot carry unresolved outcomes or claims.",
     );
+    expect(hook.getAssessments()).toEqual([]);
+  });
+
+  it("rejects empty continuation rationale without recording an assessment", async () => {
+    const provider = new StructuredProvider({
+      status: "fulfilled", disposition: "continue", rationale: " \n ",
+      missingOutcomes: [], unsupportedClaims: [],
+    });
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
+    await expect(hook.handle(createEvent(), context())).rejects.toThrow("rationale must be bounded non-empty text");
     expect(hook.getAssessments()).toEqual([]);
   });
 
@@ -156,7 +239,7 @@ class StructuredProvider implements Provider {
   });
   readonly requests: ProviderRequest[] = [];
 
-  constructor(private readonly output: ModelJsonValue) {
+  constructor(private readonly output: ModelJsonValue | (() => ModelJsonValue)) {
     const inputPreservation = Object.freeze({
       providerId: "task-fulfillment-provider",
       model: "test-model",
@@ -224,7 +307,7 @@ class StructuredProvider implements Provider {
       kind: "succeeded" as const,
       response: Object.freeze({
         kind: "structured_generation" as const,
-        output: this.output,
+        output: typeof this.output === "function" ? this.output() : this.output,
         responseId: "task-fulfillment-response-1",
         continuation: null,
         usage: null,
@@ -234,14 +317,14 @@ class StructuredProvider implements Provider {
   }
 }
 
-function createEvent(): AgentStopEvent<{ readonly summary: string }> {
+function createEvent(iteration = 1): AgentStopEvent<{ readonly summary: string }> {
   const run = Object.freeze({ id: "run-1" });
   return Object.freeze({
     ref: Object.freeze({
       run,
-      id: "run-1:stop:1",
-      sequence: 1,
-      revision: "1",
+      id: `run-1:stop:${iteration}`,
+      sequence: iteration,
+      revision: String(iteration),
     }),
     point: "Stop" as const,
     run,
@@ -254,10 +337,10 @@ function createEvent(): AgentStopEvent<{ readonly summary: string }> {
       createdAt: NOW,
       metadata: Object.freeze({}),
     }),
-    controllerRequestId: "controller-request-1",
-    iteration: 1,
+    controllerRequestId: `controller-request-${iteration}`,
+    iteration,
     candidate: Object.freeze({
-      ref: Object.freeze({ id: "proposal-1", revision: "1" }),
+      ref: Object.freeze({ id: `proposal-${iteration}`, revision: String(iteration) }),
       kind: "complete" as const,
       output: Object.freeze({ summary: "Here is how to create the application." }),
     }),

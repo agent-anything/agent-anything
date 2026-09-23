@@ -22,6 +22,7 @@ import type {
 } from "../shared/HelarcWorkbench.js";
 import { SettingsPage } from "./SettingsPage.js";
 import { Conversation } from "./conversation/Conversation.js";
+import { ConversationPlan } from "./plan/PlanView.js";
 import { AttentionPanel } from "./interactions/AttentionPanel.js";
 import { CurrentWorkPanel, displayStatus } from "./work/CurrentWorkPanel.js";
 import { useRead } from "./workbench/useRead.js";
@@ -258,7 +259,8 @@ export function App() {
   const currentRead = useRead(
     currentScope ? JSON.stringify(currentScope) : "",
     (snapshot.activeThread?.revision ?? 0) +
-      (snapshot.run?.product.presentationRevision ?? 0),
+      (snapshot.run?.product.presentationRevision ?? 0) +
+      (snapshot.run?.host.runRevision ?? 0),
     () => window.helarc.readCurrentWork(currentScope!),
   );
   const current =
@@ -293,6 +295,12 @@ export function App() {
         onInspect={inspect}
         visible={!settings}
       />
+      {!newThread && currentScope && (
+        <ConversationPlan
+          key={`${currentScope.threadId}:${currentScope.productRunId}`}
+          value={current?.plan ?? null}
+        />
+      )}
       <AttentionPanel
         key={snapshot.activeThread?.id ?? "none"}
         snapshot={snapshot}
