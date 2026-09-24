@@ -29,6 +29,7 @@ import {
   type HelarcModelCallableCatalog,
 } from "./HelarcModelCallableCatalog.js";
 import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
+import { createHelarcUnknownCallableRejection } from "./HelarcModelCallFeedback.js";
 import type {
   HelarcModelQualificationResolution,
 } from "../model-qualification/index.js";
@@ -238,7 +239,13 @@ function interpretResponse(
   const modelItems = createControllerModelItems(
     response.turn,
     createControllerTraceMetadata(response, input, catalog, qualification),
-  );
+  ).map(item => item.kind === "model_tool_call" ? Object.freeze({
+    ...item,
+    metadata: Object.freeze({
+      ...item.metadata,
+      helarcCallableBinding: findHelarcModelCallableBinding(catalog, item.call.name) ?? null,
+    }),
+  }) : item);
   const calls = response.turn.assistant.content.flatMap((block) =>
     block.kind === "model_tool_call" ? [block.call] : []
   );
@@ -288,7 +295,7 @@ function bindModelCall(
 ): ProgressionCandidate {
   const binding = findHelarcModelCallableBinding(catalog, call.name);
   if (binding === undefined) {
-    return rejectedCall(call, "model_callable_unknown", "The requested callable is not in the active catalog.");
+    return createHelarcUnknownCallableRejection(call, catalog);
   }
   if (binding.kind === "tool") {
     return Object.freeze({
@@ -308,16 +315,6 @@ function bindModelCall(
       transition: "plan_update",
       input: call.input,
       modelCallRef: call.modelCallRef,
-  });
-}
-
-function rejectedCall(call: ModelToolCall, code: string, message: string): ProgressionCandidate {
-  return Object.freeze({
-    kind: "model_call_rejection",
-    name: call.name,
-    code,
-    message,
-    modelCallRef: call.modelCallRef,
   });
 }
 

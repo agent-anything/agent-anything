@@ -1,4 +1,4 @@
-import { open, type FileHandle } from "node:fs/promises";
+import { open, rm, type FileHandle } from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import type { ProcessStream } from "./ProcessBackend.js";
 import type { ProcessOutputSlice } from "./ProcessObservation.js";
@@ -40,9 +40,11 @@ export class ProcessOutputStore {
   static async create(executionId: string, paths: ProcessOutputPaths, maximumBytes: number): Promise<ProcessOutputStore> {
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) throw new TypeError("Invalid process output limit.");
     const handles: FileHandle[] = [];
+    const created: string[] = [];
     try {
       for (const path of [paths.stdout, paths.stderr, paths.stdoutText, paths.stderrText, paths.manifest]) {
-        handles.push(await open(path, "wx"));
+        handles.push(await open(path, "wx", 0o600));
+        created.push(path);
       }
       const state = (raw: FileHandle, text: FileHandle): StreamState => ({ received: 0, retained: 0, projected: 0,
         omitted: 0, pending: Buffer.alloc(0), segments: [], projection: null, decoder: null, strictDecoder: null,
@@ -52,6 +54,7 @@ export class ProcessOutputStore {
       }, handles[4]!);
     } catch (error) {
       await Promise.all(handles.map((handle) => handle.close().catch(() => {})));
+      for (const path of created) await rm(path, { force: true });
       throw error;
     }
   }

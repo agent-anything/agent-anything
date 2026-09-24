@@ -294,6 +294,7 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  commandOutputDirectory: string;
   projects?: readonly HelarcProject[];
   responseDelivery?: "buffered" | "streaming";
   commandOutputRegistry?: CommandOutputRegistry;
@@ -332,6 +333,7 @@ type DesktopActiveRunSlot =
     };
 
 export class HelarcMainController {
+  private readonly commandOutputDirectory: string;
   private readonly responseDelivery: "buffered" | "streaming";
   readonly workbench: HelarcWorkbenchQueries;
   private readonly commandOutputRegistry: CommandOutputRegistry;
@@ -393,7 +395,8 @@ export class HelarcMainController {
   });
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
-  constructor(input: HelarcMainControllerInput = {}) {
+  constructor(input: HelarcMainControllerInput) {
+    this.commandOutputDirectory = input.commandOutputDirectory;
     this.responseDelivery = input.responseDelivery ?? "buffered";
     this.commandOutputRegistry = input.commandOutputRegistry ?? new CommandOutputRegistry();
     this.workbench = new HelarcWorkbenchQueries({
@@ -665,18 +668,11 @@ export class HelarcMainController {
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
       const preparedHostRun = await prepareHelarcHostRun({
+        commandOutputDirectory: this.commandOutputDirectory,
         responseDelivery: this.responseDelivery,
         retainCommandOutput: async (harnessRunId, executionId, paths) => {
-          const roots = [threadWorkspace.primary, ...threadWorkspace.additional];
-          let recorded = false;
-          for (const root of roots) {
-            try {
-              await this.commandOutputRegistry.register({ threadId, productRunId: runId, runId: harnessRunId }, executionId, root.path, paths);
-              recorded = true;
-              break;
-            } catch { /* Try only the explicitly selected workspace roots. */ }
-          }
-          if (!recorded) throw new Error("Command output could not be retained.");
+          await this.commandOutputRegistry.register({ threadId, productRunId: runId, runId: harnessRunId },
+            executionId, this.commandOutputDirectory, paths);
         },
         instructionSettings,
         task: preparedStart.prepared.task,

@@ -6,7 +6,7 @@ import {
   type ModelJsonSchema,
 } from "@agent-anything/model-interaction";
 import type { PlanLimits } from "@agent-anything/agent-runtime/plan";
-import { toolRevisionKey, type ToolRevisionRef } from "@agent-anything/tools/identity";
+import { toolRevisionKey, type ToolRevisionRef, type ToolBindingRef } from "@agent-anything/tools/identity";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import type { ResolvedHelarcToolGuidance } from "../tools/guidance/index.js";
 import {
@@ -20,6 +20,7 @@ export type HelarcModelCallableBinding =
       readonly callableName: string;
       readonly toolName: string;
       readonly tool: ToolRevisionRef;
+      readonly binding: ToolBindingRef;
     }
   | {
       readonly kind: "control";
@@ -57,6 +58,7 @@ export function createHelarcModelCallableCatalog(input: {
       callableName: portableToolCallableName(tool.name, tool.fingerprint),
       toolName: tool.name,
       tool: tool.ref,
+      binding: tool.binding,
     }),
   );
   const controlBindings: readonly HelarcModelCallableBinding[] = Object.freeze([

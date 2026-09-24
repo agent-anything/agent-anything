@@ -36,6 +36,59 @@ const call = {
 };
 
 describe("Run presentation", () => {
+  it("retains Tool binding kind and interaction protocol without changing callable semantics", () => {
+    const protocol = { owner: "helarc", kind: "clarification", revision: "1" };
+    const bindings = [
+      { kind: "tool", toolName: "Ask", binding: { kind: "interaction", protocol } },
+      { kind: "tool", toolName: "AskUserQuestion", binding: { kind: "operation" } },
+      { kind: "tool", toolName: "Agent", binding: { kind: "descendant_agent" } },
+      { kind: "tool", toolName: "SendMessage", binding: { kind: "descendant_message" } },
+      { kind: "tool", toolName: "Unknown", binding: { kind: "unknown" } },
+    ];
+    const state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {
+      kind: "controller_turn", modelItems: bindings.map((binding, i) => ({
+        ...call, id: `call-${i}`, metadata: { helarcCallableBinding: binding },
+        call: { ...call.call, name: `callable-${i}`, modelCallRef: { id: `call-${i}`, turnId: "turn" } },
+      })),
+    }));
+    expect(state.records.map(r => r.content)).toMatchObject([
+      { callableKind: "tool", toolBindingKind: "interaction", interactionProtocol: protocol },
+      { callableKind: "tool", toolBindingKind: "operation", interactionProtocol: null },
+      { callableKind: "tool", toolBindingKind: "descendant_agent", interactionProtocol: null },
+      { callableKind: "tool", toolBindingKind: "descendant_message", interactionProtocol: null },
+      { callableKind: "tool", toolBindingKind: null, interactionProtocol: null },
+    ]);
+  });
+  it("records the resolved binding without interpreting a model-callable name", () => {
+    const state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {
+      kind: "controller_turn", modelItems: [
+        { ...call, metadata: { helarcCallableBinding: { kind: "tool", toolName: "Agent" } },
+          call: { ...call.call, name: "Agent_abc123" } },
+        { ...call, id: "unknown", call: { ...call.call, name: "Agent_not_registered" } },
+        { ...call, id: "plan", metadata: { helarcCallableBinding: { kind: "control", control: "update_plan" } },
+          call: { ...call.call, modelCallRef: { id: "plan", turnId: "turn" }, name: "plan_alias" } },
+        { ...call, id: "named-tool", metadata: { helarcCallableBinding: { kind: "tool", toolName: "update_plan" } },
+          call: { ...call.call, name: "update_plan" } },
+        { ...call, id: "missing-binding", call: { ...call.call, name: "update_plan" } },
+        { ...call, id: "invalid-binding", metadata: { helarcCallableBinding: { kind: "control" } } },
+      ],
+    }));
+    expect(state.records.map(r => r.content)).toMatchObject([
+      { name: "Agent_abc123", callableKind: "tool", resolvedName: "Agent" },
+      { name: "Agent_not_registered", callableKind: "unresolved", resolvedName: null },
+      { name: "plan_alias", callableKind: "control", resolvedName: "update_plan" },
+      { name: "update_plan", callableKind: "tool", resolvedName: "update_plan" },
+      { name: "update_plan", callableKind: "unresolved", resolvedName: null },
+      { name: "Agent", callableKind: "unresolved", resolvedName: null },
+    ]);
+    const settled = appendHelarcRunPresentation(state, record(2, {
+      kind: "model_call_settlement", result: { modelCallRef: { id: "plan" }, settlement: "succeeded", content: { kind: "plan_update" } },
+    }));
+    expect(settled.records.find(r => r.id === "plan")?.content).toMatchObject({
+      callableKind: "control", resolvedName: "update_plan", settlement: "succeeded",
+    });
+    expect(settled.activeCalls.some(r => r.id === "plan")).toBe(false);
+  });
   it("keeps active calls independently from history retention and settles them by exact call identity",()=>{
     let state=appendHelarcRunPresentation(createHelarcRunPresentation(),record(1,{kind:"controller_turn",modelItems:[call]}));
     state={...state,records:[],retainedBytes:0,omittedRecords:1};

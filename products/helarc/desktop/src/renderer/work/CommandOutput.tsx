@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, RotateCcw } from "lucide-react";
+import { RefreshCw, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
 import type {
   CommandOutputPage,
   WorkbenchScope,
@@ -26,10 +26,12 @@ export function CommandOutput({
   scope,
   executionId,
   active,
+  compact = false,
 }: {
   scope: WorkbenchScope;
   executionId: string;
   active: boolean;
+  compact?: boolean;
 }) {
   const [stdout, setStdout] = useState("");
   const [stderr, setStderr] = useState("");
@@ -38,6 +40,7 @@ export function CommandOutput({
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [follow, setFollow] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const cursor = useRef<string | null>(null);
   const flight = useRef(false);
   const generation = useRef(0);
@@ -46,7 +49,7 @@ export function CommandOutput({
     if (follow && output.current)
       for (const pre of output.current.querySelectorAll("pre"))
         pre.scrollTop = pre.scrollHeight;
-  }, [stdout, stderr, follow]);
+  }, [stdout, stderr, follow, expanded]);
   useEffect(() => {
     const version = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -111,17 +114,23 @@ export function CommandOutput({
     refresh,
   ]);
   return (
-    <div className="wb-output" ref={output}>
+    <div className={`wb-output${compact ? " wb-output-compact" : ""}${expanded ? " is-expanded" : ""}`} ref={output}>
       <div className="wb-output-toolbar">
-        <label>
+        {compact && <button className="wb-icon" type="button"
+          title={expanded ? "Collapse output" : "Expand output"}
+          aria-label={expanded ? "Collapse output" : "Expand output"}
+          onClick={() => setExpanded(value => !value)}>
+          {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>}
+        {(!compact || expanded) && <label>
           <input
             type="checkbox"
             checked={follow}
             onChange={(event) => setFollow(event.target.checked)}
           />
           Follow output
-        </label>
-        <button
+        </label>}
+        {(!compact || page?.status === "rejected" || page?.status === "unavailable") && <button
           className="wb-icon"
           type="button"
           title="Refresh output"
@@ -130,8 +139,8 @@ export function CommandOutput({
           onClick={() => setRefresh((value) => value + 1)}
         >
           <RefreshCw size={14} />
-        </button>
-        <button
+        </button>}
+        {(!compact || expanded) && <button
           className="wb-icon"
           type="button"
           title="Read from beginning"
@@ -146,10 +155,10 @@ export function CommandOutput({
           }}
         >
           <RotateCcw size={14} />
-        </button>
-        <span>
+        </button>}
+        {!compact && <span>
           {page?.status === "page" ? page.source : busy ? "Reading" : ""}
-        </span>
+        </span>}
       </div>
       {page?.status === "unavailable" ? (
         <p className="wb-warning">Output unavailable: {page.reason}</p>
@@ -161,21 +170,26 @@ export function CommandOutput({
           Earlier mounted output omitted; read from beginning to inspect it.
         </p>
       )}
-      {(["stdout", "stderr"] as const).map((stream) => (
+      {(["stdout", "stderr"] as const).filter(stream => !compact || stream === "stdout" || stderr ||
+        (page?.status === "page" && (page.stderr.omittedBytes > 0 || page.stderr.replacementCount > 0))).map((stream) => (
         <section className="wb-output-stream" key={stream}>
           <header>
             <strong>{stream}</strong>
             <CopyButton text={stream === "stdout" ? stdout : stderr} />
           </header>
-          <pre>
-            {(stream === "stdout" ? stdout : stderr) ||
+          <pre onScroll={event => {
+            if (follow && event.currentTarget.scrollHeight - event.currentTarget.clientHeight - event.currentTarget.scrollTop > 8)
+              setFollow(false);
+          }}>
+            {(compact && !expanded ? outputPreview(stream === "stdout" ? stdout : stderr) : (stream === "stdout" ? stdout : stderr)) ||
               (page?.status === "page"
                 ? page.settled && !page.hasMore
                   ? "(empty)"
                   : "(no output yet)"
                 : "")}
           </pre>
-          {page?.status === "page" && (
+          {page?.status === "page" && (!compact || page[stream].omittedBytes > 0 ||
+            page[stream].replacementCount > 0 || page[stream].integrity !== "exact") && (
             <small className="wb-muted">
               {page[stream].encoding ?? "Encoding unknown"} /{" "}
               {page[stream].integrity}
@@ -201,4 +215,9 @@ export function CommandOutput({
       )}
     </div>
   );
+}
+
+function outputPreview(text: string): string {
+  const tail = text.split(/\r?\n/).slice(-4).join("\n");
+  return tail.length > 800 ? `...${tail.slice(-800)}` : tail;
 }

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Folder, FolderPlus, MessageSquare, Plus, Settings2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, FolderPlus, LoaderCircle, MessageSquare, Plus, Settings2, X } from "lucide-react";
 import type { HelarcMainSnapshot, HelarcProjectSnapshot, HelarcThreadSummarySnapshot } from "../../shared/HelarcDesktopApi.js";
 
 export function ProjectNavigation({ snapshot, busy, active, onOpen, onNew, onEdit, onClose }: {
@@ -10,10 +10,15 @@ export function ProjectNavigation({ snapshot, busy, active, onOpen, onNew, onEdi
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   function conversation(thread: HelarcThreadSummarySnapshot) {
+    const isWorking = snapshot.activeThread?.id === thread.id && !!snapshot.run &&
+      !snapshot.run.display.terminal &&
+      (snapshot.run.display.status === "starting" || snapshot.run.display.status === "running" || snapshot.run.display.status === "cancelling");
     return <button key={thread.id} type="button" className="project-conversation"
-      title={thread.title} aria-current={snapshot.activeThread?.id === thread.id ? "page" : undefined}
+      title={isWorking ? `${thread.title} (In progress)` : thread.title}
+      aria-busy={isWorking} aria-current={snapshot.activeThread?.id === thread.id ? "page" : undefined}
       disabled={busy || (active && snapshot.activeThread?.id !== thread.id)} onClick={() => onOpen(thread.id)}>
-      <MessageSquare size={14} /><span>{thread.title}</span>
+      {isWorking ? <LoaderCircle size={14} className="project-conversation-spinner" aria-hidden="true" /> : <MessageSquare size={14} aria-hidden="true" />}
+      <span>{thread.title}</span>
     </button>;
   }
   return <nav className="project-navigation" aria-label="Projects and conversations">

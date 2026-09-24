@@ -11,6 +11,18 @@ interface ExposedHelarcApi {
 }
 
 describe("Helarc preload bridge", () => {
+  it("forwards owned operation sections through the read-only detail route", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let api!: HelarcDesktopApi;
+    const invoke = vi.fn(async () => ({ status: "page" }));
+    runInNewContext(source, { require: () => ({
+      contextBridge: { exposeInMainWorld: (_key: string, value: HelarcDesktopApi) => { api = value; } },
+      ipcRenderer: { invoke, on: vi.fn(), removeListener: vi.fn() },
+    }) });
+    const query = { threadId: "thread", productRunId: "work", runId: "child", itemId: "call", section: "request", offset: 8192 };
+    await api.readWorkbenchItem(query);
+    expect(invoke).toHaveBeenCalledWith("helarc:read-workbench-item", query);
+  });
   it("forwards Project identity and folder references through named commands", async () => {
     const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
     let api!: HelarcDesktopApi;

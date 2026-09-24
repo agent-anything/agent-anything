@@ -6,6 +6,9 @@ import type {
 import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
 import type { WorkbenchQuerySources } from "./HelarcWorkbenchQueries.js";
 import type * as D from "../../shared/HelarcWorkbench.js";
+import { isWorkbenchOperation, workbenchOperationTitle } from "./WorkbenchOperationPresentation.js";
+import { workbenchActivity } from "./WorkbenchActivityPresentation.js";
+import { workbenchInteractionText } from "./WorkbenchInteractionPresentation.js";
 import {
   decodePosition,
   encodePosition,
@@ -50,6 +53,7 @@ export class HelarcCollaborationQueries {
         const rootRunId = work?.harnessRunId ?? null;
         return {
           id: `message:${m.id}`,
+          title: null,
           revision: m.sequence,
           position: [m.sequence, 0],
           role: m.role,
@@ -105,6 +109,19 @@ export class HelarcCollaborationQueries {
           }),
         );
         for (const record of presentation.records) {
+          const interaction = workbenchInteractionText(record, projection);
+          if (interaction) {
+            const text = textPage(interaction.text);
+            all.push({
+              id: `interaction:${work.id}:${record.runId}:${record.id}`, title: interaction.title,
+              revision: record.revision, position: [anchor.sequence, record.sequence],
+              role: "product", kind: "interaction", content: text.text, omittedBytes: text.omittedBytes,
+              productRunId: work.id, runId: record.runId, sourceId: record.id, modelItemIds: [],
+              detail: { threadId: query.threadId, productRunId: work.id, runId: record.runId, itemId: record.id },
+              artifactIds: [], disposition: interaction.status,
+            });
+            continue;
+          }
           if (record.runId !== root) continue;
           const c = record.content;
           if (
@@ -119,6 +136,7 @@ export class HelarcCollaborationQueries {
           );
           all.push({
             id: `record:${work.id}:${record.id}`,
+            title: null,
             revision: record.revision,
             position: [anchor.sequence, record.sequence],
             role: c.kind === "steering" ? "user" : "assistant",
@@ -232,6 +250,7 @@ export class HelarcCollaborationQueries {
         revision: p.product.sequence,
         rootRunId: p.host.runId,
         workStatus: live || work.terminal ? p.host.status : "inactive",
+        activity: workbenchActivity(p, live),
         tasks: [],
         plan: displayValue(p.product.presentation.plans[p.host.runId] ?? null),
         activeCalls: [],
@@ -259,7 +278,7 @@ export class HelarcCollaborationQueries {
         nextCursors: { tasks: null, calls: null, commands: null },
         retainedFinishedCount: p.product.presentation.records.filter(
           (r) =>
-            r.content.kind === "tool_call" && r.content.settlement !== null,
+            isWorkbenchOperation(r) && r.content.settlement !== null,
         ).length,
         artifactIds: thread.artifacts
           .filter((a) => a.runId === work.id)
@@ -274,7 +293,7 @@ export class HelarcCollaborationQueries {
       const activeCalls = currentCollectionPage(
         query,
         "calls",
-        p.product.presentation.activeCalls.map(recordPreview),
+        p.product.presentation.activeCalls.filter(isWorkbenchOperation).map(recordPreview),
         64 * 1024,
       );
       const commands = currentCollectionPage(
@@ -328,8 +347,7 @@ export class HelarcCollaborationQueries {
         live: resolved.live,
         task: taskSummary(p, query.runId, resolved.live),
         plan: displayValue(p.product.presentation.plans[query.runId] ?? null),
-        retries:
-          query.runId === p.host.runId ? displayValue(p.host.retry) : null,
+        problem: taskProblem(p, query.runId),
         artifactIds: thread.artifacts
           .filter(
             (a) =>
@@ -340,10 +358,6 @@ export class HelarcCollaborationQueries {
                 )),
           )
           .map((a) => a.id),
-        diagnostics: displayValue({
-          qualification: p.product.qualification,
-          continuation: p.product.continuation,
-        }),
       };
       return fitsPage(page) ? page : readRejected("read_failed");
     } catch {
@@ -399,7 +413,7 @@ export class HelarcCollaborationQueries {
             (!cursor || r.sequence < (cursor.before as number)) &&
             (query.collection === "assistant"
               ? r.content.kind === "assistant_text"
-              : r.content.kind === "tool_call" &&
+              : isWorkbenchOperation(r) &&
                 r.content.settlement !== null),
         )
         .reverse();
@@ -680,11 +694,42 @@ function taskSummary(
   return {
     runId,
     parentRunId: node.parentRunId,
-    label: label?.label ?? "Delegated work",
-    objective: label?.objective ?? null,
+    label: node.parentRunId === null
+      ? label?.objective?.trim().slice(0, 160) || "Main task"
+      : label?.label ?? "Delegated work",
+    objective: node.parentRunId === null ? label?.objective ?? null : null,
     status: !live && node.terminal === null ? "inactive" : node.status,
     terminalCode: node.terminal?.code ?? null,
     hasPlan: p.product.presentation.plans[runId] != null,
+    hasFinishedWork: p.product.commands.some(c => c.runId === runId && c.phase === "settled") ||
+      p.product.presentation.records.some(r => r.runId === runId && isWorkbenchOperation(r) && r.content.settlement !== null),
+  };
+}
+function taskProblem(p: HelarcRunProjection, runId: string): D.TaskDetailsPage["problem"] {
+  const node = p.host.runTree.nodes.find(node => node.runId === runId);
+  const terminal = node?.terminal;
+  if (node?.status !== "failed" || !terminal) return null;
+  const error = runId === p.host.runId
+    ? p.product.result?.output.safeErrors.find(error => error.code === terminal.code)
+    : null;
+  let message = error?.message;
+  for (const record of [...p.product.presentation.records].reverse()) {
+    if (message || record.runId !== node.parentRunId || record.content.kind !== "tool_call") continue;
+    const result = record.content.result;
+    if (!result || typeof result !== "object" || Array.isArray(result) ||
+        !("childRunId" in result) || result.childRunId !== runId ||
+        !("kind" in result) || !["descendant_run", "descendant_progress", "descendant_result_transfer"].includes(String(result.kind)) ||
+        !("failure" in result)) continue;
+    const failure = result.failure;
+    if (failure && typeof failure === "object" && !Array.isArray(failure) &&
+        "code" in failure && failure.code === terminal.code &&
+        "message" in failure && typeof failure.message === "string" && failure.message.trim()) {
+      message = failure.message;
+    }
+  }
+  return {
+    message: message ?? "This task ended with an error. A detailed explanation is not available.",
+    code: terminal.code,
   };
 }
 function currentCollectionPage<T>(
@@ -756,10 +801,11 @@ function recordPreview(
       content: {
         ...c,
         input: displayValue(c.input, 2048),
+        title: workbenchOperationTitle(c),
         result: displayValue(c.result, 2048),
       },
     };
-  return record;
+  return { ...record, content: c };
 }
 // Explicit display projection, with depth, field and string bounds, not arbitrary object forwarding.
 function displayValue(

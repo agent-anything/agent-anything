@@ -208,11 +208,11 @@ export function Conversation({
             >
               <header>
                 <strong>
-                  {entry.role === "user"
+                  {entry.title ?? (entry.role === "user"
                     ? "You"
                     : entry.role === "assistant"
                       ? "Helarc"
-                      : "Status"}
+                      : "Status")}
                 </strong>
                 {entry.disposition && (
                   <small>{entry.disposition.replaceAll("_", " ")}</small>
@@ -346,7 +346,9 @@ function MessageText({ entry }: { entry: ConversationEntry }) {
   }
   return (
     <>
-      <MarkdownContent text={full?.text ?? entry.content} />
+      {entry.kind === "interaction"
+        ? <div className="wb-interaction-text">{full?.text ?? entry.content}</div>
+        : <MarkdownContent text={full?.text ?? entry.content} />}
       {entry.omittedBytes > 0 && !full && entry.detail && (
         <button className="wb-link" disabled={busy} onClick={() => void read()}>
           Read retained text

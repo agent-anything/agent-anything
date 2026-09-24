@@ -124,6 +124,7 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly commandOutputDirectory: string;
   readonly responseDelivery?: "buffered" | "streaming";
   readonly retainCommandOutput?: (runId: string, executionId: string, paths: import("@agent-anything/helarc-local-environment/command").ProcessOutputPaths) => Promise<void>;
   readonly inspection?: import("../inspection/HelarcInspection.js").HelarcInspection;
@@ -248,6 +249,8 @@ export async function prepareHelarcHostRun(
   });
   let reportCommand:(fact:import("@agent-anything/helarc-local-environment/command").ProcessExecutionFact)=>void=()=>{};
   const commandActions = await createHelarcLocalCommandActionCapability({
+    commandOutputDirectory: input.commandOutputDirectory,
+    retainCommandOutput: input.retainCommandOutput,
     workspace: runWorkspace,
     platform,
     shellOperation: HELARC_PROCESS_START_OPERATION,
@@ -300,9 +303,6 @@ export async function prepareHelarcHostRun(
       shell:commandActions.processes.getDisplayDescriptor(s.ref.runId,s.ref.executionId).shell ?? undefined,
       cwd:s.initialCwd,startedAt:s.startedAt,completedAt:s.finishedAt,exitCode:s.rootExit?.code ?? null,
       invocationId:s.origin?.invocationId ?? null,attemptId:s.origin?.attemptId ?? null});
-    if (fact.kind === "settled" && s.output.persistence === "complete") {
-      void input.retainCommandOutput?.(s.ref.runId, s.ref.executionId, commandActions.processes.getOutputPaths(s.ref.runId, s.ref.executionId)).catch(() => {});
-    }
   };
   const configurationFingerprint = await createCanonicalSha256Digest(
     "agent-anything.helarc.local-environment.v1",
@@ -406,6 +406,14 @@ export async function prepareHelarcHostRun(
     resourceFinalizers: Object.freeze([Object.freeze({
       async finalize(context: RunFinalizationContext) {
         const cleanup = await commandActions.processes.finalizeRun(context);
+        if (cleanup.executions.some(execution => execution.limitations.includes("process_output_retention_failed"))) {
+          return createRunFailureCause("runtime", Object.freeze({
+            code: "runtime_process_output_retention_failed",
+            message: "Command output could not be retained for historical reading.",
+            retryable: false,
+            metadata: Object.freeze({ runId: context.runId, cleanup }),
+          }));
+        }
         return cleanup.completed ? null : createRunFailureCause("runtime", Object.freeze({
           code: "runtime_process_cleanup_failed",
           message: "Run-owned command cleanup could not be confirmed.",

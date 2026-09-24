@@ -81,9 +81,10 @@ async function createWindow(): Promise<void> {
     contextManifestStore.listManifests(),
   ]);
   const controller = new HelarcMainController({
+    commandOutputDirectory: join(userDataPath, "command-output"),
     projects: await projectStore.listProjects(),
     responseDelivery: "streaming",
-    commandOutputRegistry: new CommandOutputRegistry(join(userDataPath, "command-output-locators.json")),
+    commandOutputRegistry: new CommandOutputRegistry(join(userDataPath, "command-output", "locators.json")),
     inspection: inspectionSource,
     instructionSettings: await instructionSettingsStore.load(),
     provider: providerConfig.ok ? createHelarcProvider(providerConfig.config, inspectionSource.providerObserver) : null,

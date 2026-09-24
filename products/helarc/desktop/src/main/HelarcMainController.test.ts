@@ -19,16 +19,19 @@ import {
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createFakeProviderContext } from "@agent-anything/test-support";
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
 import { FileHelarcThreadStore, InMemoryHelarcThreadStore } from "./thread/index.js";
 import { HelarcWorkbenchQueries } from "./workbench/HelarcWorkbenchQueries.js";
 import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
 
 type InteractionRequestRef = NonNullable<HelarcMainSnapshot["run"]>["host"]["pendingInteractions"][number]["request"];
+const commandOutputDirectory = mkdtempSync(join(tmpdir(), "helarc-controller-output-"));
+afterAll(() => rm(commandOutputDirectory, { recursive: true, force: true }));
 
 describe("HelarcMainController", () => {
   it("binds Project folders per Run and applies edits only to subsequent work", async () => {
@@ -41,7 +44,7 @@ describe("HelarcMainController", () => {
     const profiles = [firstPath, secondPath].map((path, index) => ({ id: index ? "second" : "first", displayName: index ? "Second" : "First", path, lastOpenedAt: at, trustState: "trusted" as const }));
     const provider = new DeferredCompleteProvider();
     const store = new FileHelarcThreadStore(join(directory, "threads.json"));
-    const controller = new HelarcMainController({ provider, threadStore: store, projects: [project], workspaceProfiles: profiles });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider, threadStore: store, projects: [project], workspaceProfiles: profiles });
     expect(controller.selectProject(project.id).workspace?.path).toBe(firstPath);
     const first = await controller.startRun({ taskText: "Inspect", target: { kind: "new_thread" } });
     if (!first.ok) throw new Error(first.error.message);
@@ -69,7 +72,7 @@ describe("HelarcMainController", () => {
     expect(stored.runs[0]!.workspace).toEqual(before.workspace);
     expect(stored.runs.map((run) => run.project)).toEqual([{ id: project.id, revision: 1 }, { id: project.id, revision: 2 }]);
     expect(stored.runs[1]!.workspace).not.toEqual(before.workspace);
-    const reopened = new HelarcMainController({ projects: [changed], workspaceProfiles: profiles, threadStore: new FileHelarcThreadStore(join(directory, "threads.json")) });
+    const reopened = new HelarcMainController({ commandOutputDirectory, projects: [changed], workspaceProfiles: profiles, threadStore: new FileHelarcThreadStore(join(directory, "threads.json")) });
     expect((await reopened.openThread(first.threadId)).snapshot).toMatchObject({ selectedProjectId: project.id, workspace: { path: secondPath } });
   }, 20_000);
   it("persists display checkpoints and final provenance through one ordered writer with Inspector disabled", async () => {
@@ -91,7 +94,7 @@ describe("HelarcMainController", () => {
     });
     const provider:Provider = {...baseline,descriptor:{...baseline.descriptor,capabilities:{...baseline.descriptor.capabilities,
       streaming:{supported:true}}},send};
-    const controller = new HelarcMainController({provider,threadStore:store,responseDelivery:"streaming"});
+    const controller = new HelarcMainController({ commandOutputDirectory,provider,threadStore:store,responseDelivery:"streaming"});
     controller.selectWorkspacePath(directory);
     const completed = waitForProductResult(controller,"completed");
     const started = await controller.startRun({taskText:"Inspect workspace",target:{kind:"new_thread"}});
@@ -119,7 +122,7 @@ describe("HelarcMainController", () => {
     expect(preview.state).toBe("committed");
     const record = stored.runs[0]!.terminal!.finalProjection!.product.presentation.records.find(r => r.id === preview.parts[0]?.committedRecordId);
     expect(record?.content).toMatchObject({kind:"assistant_text",text:"No changes needed."});
-    const reopened = new HelarcMainController({threadStore:new FileHelarcThreadStore(join(directory,"threads.json"))});
+    const reopened = new HelarcMainController({ commandOutputDirectory,threadStore:new FileHelarcThreadStore(join(directory,"threads.json"))});
     expect(await reopened.workbench.readResponsePreview({...scope,invocationId:null,cursor:null})).toMatchObject({status:"page",live:false,attempts:[{state:"committed"}]});
     const conversation=await reopened.workbench.readConversation({threadId:scope.threadId,position:{kind:"latest"}});
     expect(conversation.status).toBe("page");
@@ -131,7 +134,7 @@ describe("HelarcMainController", () => {
   });
   it("retains attributable read-only workbench content after settlement and rejects unrelated scopes", async () => {
     const store = new InMemoryHelarcThreadStore();
-    const controller = new HelarcMainController({ provider: new CompleteProvider(), threadStore: store });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider(), threadStore: store });
     controller.selectWorkspacePath("D:/projects/agent-anything");
     const completed = waitForProductResult(controller, "completed");
     const started = await controller.startRun({ taskText: "Inspect workspace", target: { kind: "new_thread" } });
@@ -152,7 +155,7 @@ describe("HelarcMainController", () => {
     expect(await controller.workbench.readWorkHistory({ ...query, cursor: "invalid" })).toMatchObject({ status: "rejected", code: "stale_cursor" });
     expect(await controller.workbench.readCommandOutput({ ...scope, executionId: "orphan", cursor: null })).toMatchObject({ status: "rejected", code: "not_found" });
     expect(controller.getSnapshot().run?.product.presentation).toEqual(snapshot.run?.product.presentation);
-    const reopened = new HelarcMainController({ provider: new CompleteProvider(), threadStore: store });
+    const reopened = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider(), threadStore: store });
     const retained = await reopened.workbench.readWorkHistory(query);
     expect(retained.status).toBe("page");
     if (retained.status === "page") {
@@ -193,7 +196,7 @@ describe("HelarcMainController", () => {
     expect(await queries.readCommandDetails({...scope,runId:"other",executionId:"execution-1"})).toMatchObject({status:"rejected"});
   });
   it("keeps workspace authority in main state", () => {
-    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
 
     const snapshot = controller.selectWorkspacePath("D:/projects/agent-anything");
 
@@ -226,7 +229,7 @@ describe("HelarcMainController", () => {
   });
 
   it("isolates snapshot listener failures", () => {
-    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
     const delivered: HelarcMainSnapshot[] = [];
     controller.subscribeSnapshot(() => {
       throw new Error("Injected listener failure.");
@@ -238,7 +241,7 @@ describe("HelarcMainController", () => {
   });
 
   it("rejects renderer task text until main has a workspace", async () => {
-    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
 
     const result = await controller.startRun({
       taskText: "Update docs",
@@ -253,7 +256,7 @@ describe("HelarcMainController", () => {
   });
 
   it("rejects starting when provider configuration is missing", async () => {
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       providerConfigError: {
         code: "provider_config_missing",
         message: "Provider configuration is incomplete.",
@@ -289,7 +292,7 @@ describe("HelarcMainController", () => {
   });
 
   it("uses injected safe provider profile metadata without exposing secrets", () => {
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       providerProfile: {
         id: "env-provider",
@@ -348,7 +351,7 @@ describe("HelarcMainController", () => {
   });
 
   it("exposes recent workspace profiles and selects restored profiles", () => {
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       workspaceProfiles: [
         {
@@ -391,7 +394,7 @@ describe("HelarcMainController", () => {
   });
 
   it("runs a no-change read-only Run after native workspace selection", async () => {
-    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
     const completed = waitForProductResult(controller, "completed");
@@ -447,7 +450,7 @@ describe("HelarcMainController", () => {
 
   it("fails strict model qualification before Provider transport", async () => {
     const provider = new CountingCompleteProvider();
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider,
       providerProfile: desktopProviderProfile("require_qualified"),
     });
@@ -471,7 +474,7 @@ describe("HelarcMainController", () => {
 
   it("keeps active Run qualification immutable when later settings change", async () => {
     const provider = new DeferredCompleteProvider();
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider,
       providerProfile: desktopProviderProfile("allow_experimental"),
     });
@@ -510,7 +513,7 @@ describe("HelarcMainController", () => {
   it("persists completed Runs in Thread work context for history review", async () => {
     const storePath = await threadFilePath();
     const threadStore = new FileHelarcThreadStore(storePath);
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       providerProfile: {
         id: "provider-a",
@@ -556,7 +559,7 @@ describe("HelarcMainController", () => {
     expect(JSON.stringify(snapshot.activeThread)).not.toContain("pendingApproval");
 
     const restoredStore = new FileHelarcThreadStore(storePath);
-    const restoredController = new HelarcMainController({
+    const restoredController = new HelarcMainController({ commandOutputDirectory,
       providerConfigError: {
         code: "provider_config_missing",
         message: "Provider configuration is incomplete.",
@@ -578,7 +581,7 @@ describe("HelarcMainController", () => {
     vi.spyOn(threadStore, "commitRunTerminal").mockRejectedValue(
       new Error("sentinel-thread-store-secret"),
     );
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       threadStore,
     });
@@ -651,7 +654,7 @@ describe("HelarcMainController", () => {
       return result;
     });
 
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       threadStore,
     });
@@ -684,7 +687,7 @@ describe("HelarcMainController", () => {
 
   it("does not expose trusted failure text or trusted-only objects in Renderer snapshots", async () => {
     const secret = "sentinel-desktop-provider-secret";
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new SecretFailingProvider(secret),
     });
     controller.selectWorkspacePath("D:/projects/agent-anything");
@@ -729,7 +732,7 @@ describe("HelarcMainController", () => {
   it("persists work context thread, trigger message, and run records", async () => {
     const storePath = await threadFilePath();
     const threadStore = new FileHelarcThreadStore(storePath);
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       providerProfile: {
         id: "provider-a",
@@ -880,7 +883,7 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-recovered-command-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const threadStore = new FileHelarcThreadStore(await threadFilePath());
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new ScriptedProvider([
         shellToolCall(
           process.platform === "win32"
@@ -962,7 +965,7 @@ describe("HelarcMainController", () => {
   it("correlates versioned approval submissions and preserves a decline", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-"));
     const markerPath = join(workspaceRoot, "marker.txt");
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
         {
@@ -1100,7 +1103,7 @@ describe("HelarcMainController", () => {
   it("accepts one explicit approval request and completes the same run", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-allow-"));
     const markerPath = join(workspaceRoot, "marker.txt");
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
         {
@@ -1170,7 +1173,7 @@ describe("HelarcMainController", () => {
   it("cancels while an explicit approval request is pending", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
       ]),
@@ -1253,7 +1256,7 @@ describe("HelarcMainController", () => {
   it("keeps owner-defined approval options separate from Run cancellation", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-approval-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new ScriptedProvider([commandToolCall(markerPath)]),
     });
     controller.selectWorkspacePath(workspaceRoot);
@@ -1300,7 +1303,7 @@ describe("HelarcMainController", () => {
   });
 
   it("rejects approval submissions and cancellation without an active Run", () => {
-    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
 
     expect(dispatchApprovalCommand(controller, {
       submissionId: "desktop-unknown-1",
@@ -1335,7 +1338,7 @@ describe("HelarcMainController", () => {
   it("rejects a stale cancellation without touching a newer active Run", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-stale-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
-    const controller = new HelarcMainController({
+    const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new ScriptedProvider([
         {
           kind: "completion",
@@ -1399,7 +1402,7 @@ describe("HelarcMainController", () => {
   });
 
   it("reserves the active slot before asynchronous preparation", async () => {
-    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
     const firstStart = controller.startRun({
@@ -1429,7 +1432,7 @@ describe("HelarcMainController", () => {
         },
       },
     });
-    const controller = new HelarcMainController({ provider, threadStore });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider, threadStore });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
     const result = await controller.startRun({
@@ -1448,7 +1451,7 @@ describe("HelarcMainController", () => {
   it("opens a persisted Thread through the safe Store query", async () => {
     const storePath = await threadFilePath();
     const threadStore = new FileHelarcThreadStore(storePath);
-    const first = new HelarcMainController({ provider: new CompleteProvider(), threadStore });
+    const first = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider(), threadStore });
     first.selectWorkspacePath("D:/projects/agent-anything");
     const completed = waitForSnapshot(
       first,
@@ -1461,7 +1464,7 @@ describe("HelarcMainController", () => {
     await completed;
 
     const restoredStore = new FileHelarcThreadStore(storePath);
-    const restored = new HelarcMainController({
+    const restored = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       threadStore: restoredStore,
       threadSummaries: await restoredStore.listThreadSummaries(),
@@ -1498,7 +1501,7 @@ describe("HelarcMainController", () => {
   it("opens a stored non-terminal Run as inactive work without recovering execution", async () => {
     const provider = new DeferredCompleteProvider();
     const threadStore = new InMemoryHelarcThreadStore();
-    const activeController = new HelarcMainController({ provider, threadStore });
+    const activeController = new HelarcMainController({ commandOutputDirectory, provider, threadStore });
     activeController.selectWorkspacePath("D:/projects/agent-anything");
     const started = await activeController.startRun({
       taskText: "Wait for external completion",
@@ -1511,7 +1514,7 @@ describe("HelarcMainController", () => {
       expect(provider.callCount).toBe(1);
     });
 
-    const observer = new HelarcMainController({
+    const observer = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       threadStore,
       threadSummaries: await threadStore.listThreadSummaries(),
@@ -1548,7 +1551,7 @@ describe("HelarcMainController", () => {
   it("continues the exact selected Thread with prior Message context", async () => {
     const provider = new RecordingCompleteProvider();
     const threadStore = new InMemoryHelarcThreadStore();
-    const controller = new HelarcMainController({ provider, threadStore });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider, threadStore });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
     const first = await controller.startRun({
@@ -1650,7 +1653,7 @@ describe("HelarcMainController", () => {
   it("rejects stale Thread continuation before persistence or execution", async () => {
     const provider = new RecordingCompleteProvider();
     const threadStore = new InMemoryHelarcThreadStore();
-    const controller = new HelarcMainController({ provider, threadStore });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider, threadStore });
     controller.selectWorkspacePath("D:/projects/agent-anything");
     const first = await controller.startRun({
       taskText: "Inspect files",
@@ -1685,7 +1688,7 @@ describe("HelarcMainController", () => {
   });
 
   it("rejects relative workspace paths", () => {
-    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
 
     const snapshot = controller.selectWorkspacePath("relative/project");
 

@@ -151,6 +151,7 @@ interface ApprovalDecisionRecord {
 interface HelarcEvaluationLeaseMaterial {
   readonly trialRef: EvaluationRecordRef;
   readonly caseDefinition: HelarcEvaluationCaseDefinition;
+  readonly environmentDirectory: string;
   readonly root: string;
   readonly before: HelarcEvaluationWorkspaceSnapshot;
 }
@@ -237,9 +238,11 @@ export function createHelarcEvaluationTargetAdapter(
           ),
         });
       }
-      let root: string | null = null;
+      let environmentDirectory: string | null = null;
       try {
-        root = await mkdtemp(join(tmpdir(), "agent-anything-helarc-eval-"));
+        environmentDirectory = await mkdtemp(join(tmpdir(), "agent-anything-helarc-eval-"));
+        const root = join(environmentDirectory, "workspace");
+        await mkdir(root);
         for (const file of caseDefinition.fixture.files) {
           const target = resolveFixturePath(root, file.path);
           await mkdir(dirname(target), { recursive: true });
@@ -253,6 +256,7 @@ export function createHelarcEvaluationTargetAdapter(
         leases.set(refKey(leaseRef), Object.freeze({
           trialRef: input.trial.ref,
           caseDefinition,
+          environmentDirectory,
           root,
           before,
         }));
@@ -270,8 +274,8 @@ export function createHelarcEvaluationTargetAdapter(
         });
         return Object.freeze({ status: "prepared" as const, lease });
       } catch {
-        if (root !== null) {
-          await rm(root, { recursive: true, force: true }).catch(() => undefined);
+        if (environmentDirectory !== null) {
+          await rm(environmentDirectory, { recursive: true, force: true }).catch(() => undefined);
         }
         return Object.freeze({
           status: "failed" as const,
@@ -302,7 +306,7 @@ export function createHelarcEvaluationTargetAdapter(
       }
       leases.delete(key);
       try {
-        await rm(material.root, { recursive: true, force: true });
+        await rm(material.environmentDirectory, { recursive: true, force: true });
         return Object.freeze({ status: "cleaned" as const });
       } catch {
         return Object.freeze({
@@ -402,9 +406,11 @@ export async function executeHelarcEvaluationCase<
   readonly maxActions?: number;
   readonly runTreeLimits?: RunTreeLimits;
 }): Promise<HelarcEvaluationRunMaterial<TCase>> {
-  let root: string | null = null;
+  let environmentDirectory: string | null = null;
   try {
-    root = await mkdtemp(join(tmpdir(), "agent-anything-helarc-product-eval-"));
+    environmentDirectory = await mkdtemp(join(tmpdir(), "agent-anything-helarc-product-eval-"));
+    const root = join(environmentDirectory, "workspace");
+    await mkdir(root);
     for (const file of input.caseDefinition.fixture.files) {
       const target = resolveFixturePath(root, file.path);
       await mkdir(dirname(target), { recursive: true });
@@ -416,6 +422,7 @@ export async function executeHelarcEvaluationCase<
       Object.freeze({
         trialRef: input.trial.ref,
         caseDefinition: input.caseDefinition,
+        environmentDirectory,
         root,
         before,
       }),
@@ -442,7 +449,7 @@ export async function executeHelarcEvaluationCase<
       },
     );
   } finally {
-    if (root !== null) await rm(root, { recursive: true, force: true });
+    if (environmentDirectory !== null) await rm(environmentDirectory, { recursive: true, force: true });
   }
 }
 
@@ -558,6 +565,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     now: clock.now,
   });
   const commandActions = await createHelarcLocalCommandActionCapability({
+    commandOutputDirectory: join(lease.environmentDirectory, "command-output"),
     workspace: runContext.workspace,
     platform: process.platform === "win32" ? "win32" : "posix",
     shellOperation: HELARC_PROCESS_START_OPERATION,

@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RunProcessManager, type ManagedProcessStart } from "./RunProcessManager.js";
+import { RunProcessManager, type ManagedProcessStart, type RunProcessManagerOptions } from "./RunProcessManager.js";
 import type { ProcessBackend, ProcessBackendEvent, ProcessBackendHandle } from "./ProcessBackend.js";
 import { ProcessOutputStore, type ProcessOutputPaths } from "./ProcessOutputStore.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
-async function setup(options: { instant?: boolean; observerThrows?: boolean } = {}) {
+async function setup(options: { instant?: boolean; observerThrows?: boolean; retainOutput?: RunProcessManagerOptions["retainOutput"] } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "helarc-process-test-")); directories.push(directory);
   const paths: ProcessOutputPaths = { stdout: join(directory, "stdout.raw"), stderr: join(directory, "stderr.raw"),
     stdoutText: join(directory, "stdout.txt"), stderrText: join(directory, "stderr.txt"), manifest: join(directory, "manifest.json") };
@@ -26,8 +26,9 @@ async function setup(options: { instant?: boolean; observerThrows?: boolean } = 
   const input: ManagedProcessStart = { runId: "run-1", executionId: "process-1", actionId: "action-1", environmentId: "test",
     executable: "test", args: [], cwd: directory, environment: {}, timeoutMs: 60_000,
     deadlineAt: new Date(Date.now() + 120_000).toISOString(), runSignal: controller.signal, paths,
-    displayFiles: { stdout: "stdout.txt", stderr: "stderr.txt" }, maximumOutputBytes: 100_000, background: false };
+    maximumOutputBytes: 100_000, background: false };
   const manager = new RunProcessManager({ backend, maximumActive: 2, maximumSettled: 2,
+    retainOutput: options.retainOutput,
     terminationTimeoutMs: 100, observer: options.observerThrows ? () => { throw new Error("observer"); } : undefined });
   const observe = (extra: Partial<Parameters<RunProcessManager["observe"]>[0]> = {}) => manager.observe({
     runId: input.runId, executionId: input.executionId, invocationId: "observation-1", waitMs: 0,
@@ -38,6 +39,28 @@ async function setup(options: { instant?: boolean; observerThrows?: boolean } = 
 }
 
 describe("RunProcessManager", () => {
+  it("awaits historical registration before settlement", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const registering = new Promise<void>(resolve => { entered = resolve; });
+    const retainOutput = vi.fn(async () => { entered(); await pending; });
+    const t = await setup({ instant: true, retainOutput });
+    await t.manager.start(t.input); await registering;
+    expect(t.manager.get(t.input.runId, t.input.executionId).phase).toBe("draining");
+    release(); await t.cleanup();
+    expect(retainOutput).toHaveBeenCalledTimes(1);
+    expect(t.manager.get(t.input.runId, t.input.executionId)).toMatchObject({ phase: "settled", output: { persistence: "complete" } });
+  });
+  it("records registration failure without replay or rewriting a successful exit", async () => {
+    const t = await setup({ instant: true, retainOutput: async () => { throw new Error("disk failure"); } });
+    await t.manager.start(t.input);
+    const cleanup = await t.cleanup();
+    expect(cleanup.completed).toBe(false);
+    expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    expect(t.manager.get(t.input.runId, t.input.executionId)).toMatchObject({ phase: "settled", outcome: "succeeded",
+      rootExit: { code: 0 }, output: { persistence: "failed" }, limitations: expect.arrayContaining(["process_output_retention_failed"]) });
+  });
   it("keeps Desktop reads independent of observation, cwd and process control", async () => {
     const t = await setup();
     const commit = vi.fn(async (path: string) => path);

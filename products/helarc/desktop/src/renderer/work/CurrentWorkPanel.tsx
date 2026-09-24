@@ -15,7 +15,6 @@ import type {
 import type {
   CurrentWorkPage,
   HelarcCommandProgress,
-  HelarcPresentationValue,
   HelarcRunPresentationRecord,
   TaskSummary,
   WorkbenchScope,
@@ -30,6 +29,8 @@ import { useResponsePreview } from "../conversation/useResponsePreview.js";
 import { CommandOutput } from "./CommandOutput.js";
 import { ResultLinks } from "./ResultContent.js";
 import { PlanView } from "../plan/PlanView.js";
+import { OperationDetail } from "./OperationDetail.js";
+import { isFinishedTask, selectWorkTasks, type WorkTaskGroup } from "./WorkTaskGroups.js";
 
 type Detail =
   | { kind: "task"; scope: WorkbenchScope }
@@ -85,11 +86,14 @@ export function CurrentWorkPanel({
     setExpanded(null);
   }, [read.value]);
   const page = expanded ?? (read.value?.status === "page" ? read.value : null);
+  const currentTasks = selectWorkTasks(page?.tasks ?? [], "current");
+  const finishedTasks = selectWorkTasks(page?.tasks ?? [], "finished");
   const hasCurrentActivity =
     !!page &&
     (page.commands.length > 0 ||
       page.activeCalls.length > 0 ||
       page.attention.length > 0 ||
+      currentTasks.tasks.length > 0 ||
       page.omitted.calls > 0 ||
       page.omitted.commands > 0 ||
       !!page.nextCursors.calls ||
@@ -149,7 +153,7 @@ export function CurrentWorkPanel({
       <header className="wb-panel-header">
         <div className="wb-work-heading">
           <strong>{previous ? "Previous work" : "Current work"}</strong>
-          {page && !detail && !read.error && (
+          {page && !detail && !read.error && page.workStatus !== "running" && page.workStatus !== "ready" && (
             <span
               className={`wb-status ${page.workStatus}`}
               aria-label="Work status"
@@ -225,13 +229,24 @@ export function CurrentWorkPanel({
                 record={detail.record}
                 scope={detail.scope}
                 revision={revision}
+                onTask={(runId) => setDetail({ kind: "task", scope: { ...detail.scope, runId } })}
               />
             )}
           </>
         ) : page && scope ? (
           <>
-            <section className="wb-section" hidden={!hasCurrentActivity}>
-              <h3>Now</h3>
+            <section className="wb-section" aria-label="Ongoing work" hidden={!hasCurrentActivity}>
+              <TaskBranches
+                tasks={currentTasks.tasks}
+                members={currentTasks.members}
+                group="current"
+                parentId={null}
+                depth={0}
+                attention={page.attention.map((a) => a.runId)}
+                onOpen={(id) =>
+                  setDetail({ kind: "task", scope: { ...scope, runId: id } })
+                }
+              />
               {page.commands.map((c) => (
                 <WorkRow
                   key={c.executionId}
@@ -291,70 +306,45 @@ export function CurrentWorkPanel({
                 </React.Fragment>
               ))}
             </section>
-            {page.tasks.length > 1 && (
-              <section className="wb-section">
-                <h3>Delegated tasks</h3>
-                <TaskBranches
-                  tasks={page.tasks}
-                  parentId={page.rootRunId}
-                  depth={0}
-                  attention={page.attention.map((a) => a.runId)}
-                  onOpen={(id) =>
-                    setDetail({ kind: "task", scope: { ...scope, runId: id } })
-                  }
-                />
-                {page.nextCursors.tasks && (
-                  <button
-                    className="wb-link"
-                    onClick={() => void more("tasks")}
-                  >
-                    Show more tasks
-                  </button>
-                )}
-                {page.omitted.tasks > 0 && (
-                  <p className="wb-muted">Some tasks are outside this view.</p>
-                )}
-              </section>
-            )}
-            <ResultLinks snapshot={snapshot} artifactIds={page.artifactIds} />
             <details
               className="wb-finished"
               open={finished}
               onToggle={(e) => setFinished(e.currentTarget.open)}
             >
               <summary>Finished work</summary>
-              {finished &&
-                page.tasks.map((task) => (
-                  <details
-                    key={task.runId}
-                    open={task.runId === page.rootRunId}
-                  >
-                    <summary>{taskLabel(page, task.runId)}</summary>
-                    <WorkHistory
-                      scope={{ ...scope, runId: task.runId }}
-                      collection="commands"
-                      revision={revision}
-                      enabled={visible}
-                      onCommand={command}
-                      onOperation={operation}
-                    />
-                    <WorkHistory
-                      scope={{ ...scope, runId: task.runId }}
-                      collection="operations"
-                      revision={revision}
-                      enabled={visible}
-                      onCommand={command}
-                      onOperation={operation}
-                    />
-                  </details>
-                ))}
+              {finished && <>
+                <TaskBranches
+                  tasks={finishedTasks.tasks}
+                  members={finishedTasks.members}
+                  group="finished"
+                  parentId={null}
+                  depth={0}
+                  attention={[]}
+                  onOpen={(runId) => setDetail({ kind: "task", scope: { ...scope, runId } })}
+                />
+                <WorkHistory
+                  scope={{ ...scope, runId: page.rootRunId }}
+                  collection="commands"
+                  revision={revision}
+                  enabled={visible}
+                  onCommand={command}
+                  onOperation={operation}
+                />
+                <WorkHistory
+                  scope={{ ...scope, runId: page.rootRunId }}
+                  collection="operations"
+                  revision={revision}
+                  enabled={visible}
+                  onCommand={command}
+                  onOperation={operation}
+                />
+                <ResultLinks snapshot={snapshot} artifactIds={page.artifactIds} />
+              </>}
             </details>
-            <button
-              className="wb-link wb-secondary"
-              onClick={() => setDetail({ kind: "task", scope })}
-            >
-              Details
-            </button>
+            {page.nextCursors.tasks && (
+              <button className="wb-link" onClick={() => void more("tasks")}>Show more tasks</button>
+            )}
+            {page.omitted.tasks > 0 && <p className="wb-muted">Some tasks are outside this view.</p>}
           </>
         ) : !read.error ? (
           <p className="wb-muted">
@@ -371,15 +361,7 @@ export function CurrentWorkPanel({
 }
 export function operationTitle(record: HelarcRunPresentationRecord): string {
   const c = record.content;
-  if (c.kind !== "tool_call") return "Operation";
-  const input =
-    c.input && typeof c.input === "object" && !Array.isArray(c.input)
-      ? (c.input as Record<string, HelarcPresentationValue>)
-      : {};
-  const label = ["command", "file_path", "path", "pattern", "description"]
-    .map((k) => input[k])
-    .find((v) => typeof v === "string");
-  return label ? `${c.name}: ${label}` : c.name;
+  return c.kind === "tool_call" ? c.title : "Response";
 }
 function taskLabel(page: CurrentWorkPage, id: string) {
   return id === page.rootRunId
@@ -436,12 +418,16 @@ function TaskBranches({
   depth,
   attention,
   onOpen,
+  members,
+  group,
 }: {
   tasks: readonly TaskSummary[];
-  parentId: string;
+  parentId: string | null;
   depth: number;
   attention: readonly string[];
   onOpen: (id: string) => void;
+  members?: ReadonlySet<string>;
+  group?: WorkTaskGroup;
 }) {
   return (
     <ul className="wb-task-branches">
@@ -449,19 +435,37 @@ function TaskBranches({
         .filter((t) => t.parentRunId === parentId)
         .map((task, index) => {
           const children = tasks.some((t) => t.parentRunId === task.runId);
+          const mainTask = task.parentRunId === null;
+          const contextOnly = members !== undefined && !members.has(task.runId);
           return (
             <li key={task.runId}>
-              <WorkRow
+              {contextOnly ? <button className="wb-task-context" onClick={() => onOpen(task.runId)}>
+                {task.label}<small>{mainTask ? "Main task" : "Parent task"} / {displayStatus(task.status)}</small>
+              </button> : <WorkRow
                 icon={<FileText size={15} />}
                 title={task.label || `Task ${index + 1}`}
+                attribution={mainTask ? "Main task" : undefined}
                 status={
-                  attention.includes(task.runId)
+                  group === "finished" && !isFinishedTask(task)
+                    ? "Earlier operations"
+                    : attention.includes(task.runId)
                     ? "Needs your input"
                     : task.status
                 }
                 onClick={() => onOpen(task.runId)}
-              />
-              {children && depth < 3 && (
+              />}
+              {children && mainTask && (
+                <TaskBranches
+                  tasks={tasks}
+                  parentId={task.runId}
+                  depth={depth}
+                  attention={attention}
+                  onOpen={onOpen}
+                  members={members}
+                  group={group}
+                />
+              )}
+              {children && !mainTask && depth < 3 && (
                 <details open={depth === 0}>
                   <summary>Subtasks</summary>
                   <TaskBranches
@@ -470,10 +474,12 @@ function TaskBranches({
                     depth={depth + 1}
                     attention={attention}
                     onOpen={onOpen}
+                    members={members}
+                    group={group}
                   />
                 </details>
               )}
-              {children && depth >= 3 && (
+              {children && !mainTask && depth >= 3 && (
                 <button className="wb-link" onClick={() => onOpen(task.runId)}>
                   View subtasks
                 </button>
@@ -525,15 +531,36 @@ function TaskDetail({
         (d) => d.child.id === scope.runId,
       )
     : null;
+  const subtask = page?.task.parentRunId != null;
+  const commands = work?.commands.filter(c => c.runId === scope.runId) ?? [];
+  const calls = work?.activeCalls.filter(r => r.runId === scope.runId &&
+    (r.content.kind !== "tool_call" || !commands.some(c =>
+      c.invocationId && r.content.kind === "tool_call" && c.invocationId === r.content.invocationId))) ?? [];
+  const hasSubtasks = work?.tasks.some(t => t.parentRunId === scope.runId);
+  const previewAttempts = preview.attempts.filter(a => a.state !== "committed" &&
+    a.parts.some(p => p.kind === "text" && p.text));
+  const artifactIds = page?.artifactIds.filter(id => snapshot.activeThread?.artifacts.some(a =>
+    a.id === id && a.kind !== "final-output")) ?? [];
   return (
     <div className="wb-task-detail">
       {page && (
         <>
-          <h2>{page.task.label}</h2>
-          <p>{page.task.objective}</p>
-          <p className="wb-muted">{displayStatus(page.task.status)}</p>
-          {page.task.terminalCode && (
-            <p className="wb-warning">{page.task.terminalCode}</p>
+          <header className="wb-task-heading">
+            <small>{subtask ? "Subtask" : "Main task"}</small>
+            <h2>{page.task.label}</h2>
+            <span className={`wb-status ${page.task.status}`}>{displayStatus(page.task.status)}</span>
+          </header>
+          {!subtask && page.task.objective && page.task.objective !== page.task.label && (
+            <details className="wb-task-request">
+              <summary>Request</summary><p>{page.task.objective}</p>
+            </details>
+          )}
+          {page.problem && (
+            <section className="wb-task-problem" aria-label="Problem">
+              <h3>Problem</h3><p>{page.problem.message}</p>
+              {page.problem.code && <details className="wb-secondary"><summary>Reference code</summary>
+                <code>{page.problem.code}</code></details>}
+            </section>
           )}
           {snapshot.run?.host.pendingInteractions.some(
             (i) => i.runId === scope.runId,
@@ -550,8 +577,9 @@ function TaskDetail({
               Resume task
             </button>
           )}
-          {work && (
-            <>
+          {hasSubtasks && work && (
+            <section className="wb-task-section" aria-label="Subtasks">
+              <h3>Subtasks</h3>
               <TaskBranches
                 tasks={work.tasks}
                 parentId={scope.runId}
@@ -559,9 +587,12 @@ function TaskDetail({
                 attention={work.attention.map((a) => a.runId)}
                 onOpen={onTask}
               />
-              {work.commands
-                .filter((c) => c.runId === scope.runId)
-                .map((c) => (
+            </section>
+          )}
+          {(commands.length > 0 || calls.length > 0) && (
+            <section className="wb-task-section" aria-label="In progress">
+              <h3>{page.live ? "In progress" : "Last observed work"}</h3>
+              {commands.map((c) => (
                   <WorkRow
                     key={c.executionId}
                     icon={<Terminal size={15} />}
@@ -570,33 +601,42 @@ function TaskDetail({
                     onClick={() => onCommand(c)}
                   />
                 ))}
-            </>
+              {calls.map(r => <WorkRow key={r.id} icon={<Wrench size={15} />}
+                title={operationTitle(r)} status={page.live ? "In progress" : "Last observed work"}
+                onClick={() => onOperation(r)} />)}
+            </section>
           )}
+          {(currentRead.error || currentRead.value?.status === "rejected") &&
+            <button className="wb-link" onClick={currentRead.refresh}>Current work unavailable. Retry</button>}
           <PlanView value={page.plan} />
-          <ResultLinks snapshot={snapshot} artifactIds={page.artifactIds} />
+          {artifactIds.length > 0 && <section className="wb-task-section" aria-label="Outputs">
+            <h3>Outputs</h3><ResultLinks snapshot={snapshot} artifactIds={artifactIds} />
+          </section>}
           <WorkHistory
+            title={subtask ? "Subtask findings and updates" : "Responses"}
             scope={scope}
             revision={revision}
             collection="assistant"
             enabled={visible}
             onOperation={onOperation}
             onCommand={onCommand}
-          />
-          {preview.attempts
-            .filter((a) => a.state !== "committed")
-            .map((a) => (
-              <div key={a.invocationId}>
+          >
+          {previewAttempts.length > 0 ? previewAttempts.map((a) => (
+              <div key={a.invocationId} className="wb-task-response">
                 {a.parts
                   .filter((p) => p.kind === "text" && p.text)
                   .map((p) => (
                     <div key={p.id}>
-                      <small>{a.state} response</small>
+                      <small>{a.state.replaceAll("_", " ")} response</small>
                       <MarkdownContent text={p.text} />
                     </div>
                   ))}
               </div>
-            ))}
+            )) : null}
+          </WorkHistory>
           <WorkHistory
+            title="Earlier commands"
+            collapsible
             scope={scope}
             revision={revision}
             collection="commands"
@@ -605,6 +645,8 @@ function TaskDetail({
             onCommand={onCommand}
           />
           <WorkHistory
+            title="Earlier operations"
+            collapsible
             scope={scope}
             revision={revision}
             collection="operations"
@@ -612,20 +654,6 @@ function TaskDetail({
             onOperation={onOperation}
             onCommand={onCommand}
           />
-          <details className="wb-secondary">
-            <summary>Technical details</summary>
-            <pre>
-              {JSON.stringify(
-                {
-                  identity: scope.runId,
-                  retry: page.retries,
-                  ...(page.diagnostics as object),
-                },
-                null,
-                2,
-              )}
-            </pre>
-          </details>
         </>
       )}
       {(read.error || read.value?.status === "rejected") && (
@@ -637,6 +665,9 @@ function TaskDetail({
   );
 }
 function WorkHistory({
+  title,
+  collapsible = false,
+  children,
   scope,
   collection,
   revision,
@@ -644,6 +675,9 @@ function WorkHistory({
   onCommand,
   onOperation,
 }: {
+  title?: string;
+  collapsible?: boolean;
+  children?: React.ReactNode;
   scope: WorkbenchScope;
   collection: WorkHistoryPage["collection"];
   revision: number;
@@ -659,7 +693,9 @@ function WorkHistory({
     enabled,
   );
   const page = read.value?.status === "page" ? read.value : null;
-  return (
+  if (title && page && !read.error && !page.commands.length && !page.records.length &&
+      !page.omittedRecords && !page.previousCursor && !cursor && !children) return null;
+  const content = (
     <div className="wb-history">
       {page?.commands.map((c) => (
         <WorkRow
@@ -694,6 +730,7 @@ function WorkHistory({
           />
         ),
       )}
+      {children}
       {!!page?.omittedRecords && (
         <p className="wb-muted">Earlier work is not fully retained.</p>
       )}
@@ -723,6 +760,12 @@ function WorkHistory({
       )}
     </div>
   );
+  if (!title) return content;
+  return collapsible ? <details className="wb-task-history">
+    <summary>{title}</summary>{content}
+  </details> : <section className="wb-task-section" aria-label={title}>
+    <h3>{title}</h3>{content}
+  </section>;
 }
 function CommandDetail({
   scope,
@@ -790,48 +833,6 @@ function CommandDetail({
             ? "Command unavailable."
             : "Loading command..."}
         </p>
-      )}
-    </section>
-  );
-}
-function OperationDetail({
-  scope,
-  record,
-  revision,
-}: {
-  scope: WorkbenchScope;
-  record: HelarcRunPresentationRecord;
-  revision: number;
-}) {
-  const [offset, setOffset] = useState(0);
-  const read = useRead(
-    JSON.stringify([scope, record.id, offset]),
-    revision,
-    () =>
-      window.helarc.readWorkbenchItem({ ...scope, itemId: record.id, offset }),
-  );
-  return (
-    <section>
-      <h2>{operationTitle(record)}</h2>
-      {read.value?.status === "page" ? (
-        <>
-          <CopyButton text={read.value.text} />
-          <pre>{read.value.text}</pre>
-          {read.value.nextOffset !== null && (
-            <button
-              className="wb-link"
-              onClick={() =>
-                setOffset(
-                  read.value?.status === "page" ? read.value.nextOffset! : 0,
-                )
-              }
-            >
-              Next content page
-            </button>
-          )}
-        </>
-      ) : (
-        <pre>{JSON.stringify(record.content, null, 2)}</pre>
       )}
     </section>
   );

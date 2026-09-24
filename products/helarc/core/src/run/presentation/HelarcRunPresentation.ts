@@ -1,5 +1,6 @@
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
+import type { ToolBindingRef } from "@agent-anything/tools/identity";
 
 export type HelarcOutputSource =
   | {
@@ -44,6 +45,10 @@ export interface HelarcRunPresentationRecord {
         readonly callId: string;
         readonly turnId: string;
         readonly name: string;
+        readonly callableKind: "tool" | "control" | "unresolved";
+        readonly resolvedName: string | null;
+        readonly toolBindingKind: ToolBindingRef["kind"] | null;
+        readonly interactionProtocol: { readonly owner: string; readonly kind: string; readonly revision: string } | null;
         readonly input: HelarcPresentationValue;
         readonly runActionId: string | null;
         readonly invocationId: string | null;
@@ -173,6 +178,28 @@ export function projectHelarcPresentationValue(
   return visit(value, 0);
 }
 
+function resolvedCallable(value: unknown): Pick<
+  Extract<HelarcRunPresentationRecord["content"], { kind: "tool_call" }>,
+  "callableKind" | "resolvedName" | "toolBindingKind" | "interactionProtocol"
+> {
+  const empty = { toolBindingKind: null, interactionProtocol: null };
+  const unresolved = { ...empty, callableKind: "unresolved" as const, resolvedName: null };
+  if (!value || typeof value !== "object") return unresolved;
+  const binding = value as Record<string, unknown>;
+  if (binding.kind === "tool" && typeof binding.toolName === "string" && binding.toolName) {
+    const tool = binding.binding as ToolBindingRef | undefined;
+    const kind = tool && ["operation", "interaction", "descendant_agent", "descendant_message"].includes(tool.kind)
+      ? tool.kind : null;
+    const protocol = tool?.kind === "interaction" ? tool.protocol : null;
+    return { callableKind: "tool", resolvedName: binding.toolName, toolBindingKind: kind,
+      interactionProtocol: protocol && [protocol.owner, protocol.kind, protocol.revision].every(v => typeof v === "string" && v.length > 0)
+        ? { owner: protocol.owner, kind: protocol.kind, revision: protocol.revision } : null };
+  }
+  if (binding.kind === "control" && typeof binding.control === "string" && binding.control)
+    return { ...empty, callableKind: "control", resolvedName: binding.control };
+  return unresolved;
+}
+
 export function labelHelarcRunPresentation(
   current: HelarcRunPresentation,
   runId: string,
@@ -273,6 +300,7 @@ export function appendHelarcRunPresentation(
           callId: model.call.modelCallRef.id,
           turnId: model.call.modelCallRef.turnId,
           name: model.call.name,
+          ...resolvedCallable(model.metadata?.helarcCallableBinding),
           input: projectHelarcPresentationValue(model.call.input),
           runActionId: null,
           invocationId: null,

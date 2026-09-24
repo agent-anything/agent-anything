@@ -73,7 +73,7 @@ describe("retained command output", () => {
       reason: "missing",
     });
   });
-  it("does not register paths outside the recorded workspace", async () => {
+  it("does not register paths outside the Host storage root", async () => {
     const { root, paths } = await capture();
     await expect(
       registerRetainedProcessOutput("execution", join(root, "another"), paths),

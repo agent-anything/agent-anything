@@ -1,12 +1,11 @@
 import * as React from "react";
-import { useState } from "react";
-import { Check, ChevronRight, Circle, Play } from "lucide-react";
+import { useId, useState } from "react";
+import { Check, ChevronDown, ChevronUp, Circle, Play } from "lucide-react";
 import type { HelarcPresentationValue } from "../../shared/HelarcWorkbench.js";
 
 interface PlanStep {
-  description?: string;
-  title?: string;
-  status?: string;
+  readonly step: string;
+  readonly status: "pending" | "in_progress" | "completed";
 }
 
 function stepsOf(value: HelarcPresentationValue): PlanStep[] {
@@ -26,8 +25,8 @@ function PlanSteps({ steps }: { steps: PlanStep[] }) {
             <Circle size={13} />
           )}
           <span>
-            {step.description ?? step.title}
-            <small>{step.status?.replaceAll("_", " ")}</small>
+            {step.step}
+            <small>{step.status.replaceAll("_", " ")}</small>
           </span>
         </li>
       ))}
@@ -36,29 +35,39 @@ function PlanSteps({ steps }: { steps: PlanStep[] }) {
 }
 
 export function ConversationPlan({ value }: { value: HelarcPresentationValue }) {
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
   const steps = stepsOf(value);
   if (!steps.length) return null;
   const completed = steps.filter((step) => step.status === "completed").length;
   const current = steps.find((step) => step.status === "in_progress");
-  const currentText = current?.description ?? current?.title;
+  const currentText = current?.step;
   return (
-    <details className="wb-conversation-plan">
-      <summary>
-        <ChevronRight size={15} className="wb-plan-chevron" />
-        <strong>Plan</strong>
-        <span className="wb-plan-count">
-          {completed}/{steps.length}
-        </span>
-        {currentText && (
-          <span className="wb-plan-current" title={currentText}>
-            {currentText}
+    <section className="wb-conversation-plan" aria-label="Plan">
+      <div className="wb-plan-body">
+        <div className="wb-plan-summary">
+          <span className="wb-plan-heading">
+            <strong>Plan</strong>
+            <span className="wb-plan-count">
+              {completed}/{steps.length}
+            </span>
           </span>
-        )}
-      </summary>
-      <div className="wb-plan-steps">
-        <PlanSteps steps={steps} />
+          {currentText && (
+            <span className="wb-plan-current" title={currentText}>
+              {currentText}
+            </span>
+          )}
+        </div>
+        <div id={contentId} className="wb-plan-steps" hidden={!open}>
+          <PlanSteps steps={steps} />
+        </div>
       </div>
-    </details>
+      <button type="button" className="wb-conversation-disclosure" aria-expanded={open} aria-controls={contentId}
+        aria-label={open ? "Collapse Plan" : "Expand Plan"} title={open ? "Collapse Plan" : "Expand Plan"}
+        onClick={() => setOpen(value => !value)}>
+        {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+      </button>
+    </section>
   );
 }
 

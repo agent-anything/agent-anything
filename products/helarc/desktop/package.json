@@ -23,6 +23,7 @@
     "debug:test": "vitest run --inspect-brk --pool forks --poolOptions.forks.singleFork",
     "debug:test:provider": "node ../../../scripts/run-pnpm.mjs --filter @agent-anything/provider-integrations debug:test",
     "clean:user-data": "node scripts/clear-user-data.mjs",
+    "clean:command-output": "node scripts/clear-user-data.mjs --command-output",
     "start": "electron ."
   },
   "agentAnything": {

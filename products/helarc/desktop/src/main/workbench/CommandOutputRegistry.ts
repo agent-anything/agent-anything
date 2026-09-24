@@ -28,14 +28,14 @@ export class CommandOutputRegistry {
   register(
     scope: WorkbenchScope,
     executionId: string,
-    workspace: string,
+    storageRoot: string,
     paths: ProcessOutputPaths,
   ): Promise<void> {
     const work = this.tail.then(async () => {
       await this.load();
       const locator = await registerRetainedProcessOutput(
         executionId,
-        workspace,
+        storageRoot,
         paths,
       );
       const entry = { scope: { ...scope }, executionId, locator };

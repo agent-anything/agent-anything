@@ -1,11 +1,11 @@
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
 import type { ProcessOutputPaths } from "./ProcessOutputStore.js";
+import { assertProcessOutputPath } from "./ProcessOutputRepository.js";
 
 export interface RetainedProcessOutputLocator {
   readonly executionId: string;
   readonly generation: number;
-  readonly workspace: string;
+  readonly storageRoot: string;
   readonly files: Readonly<
     Record<
       "stdout" | "stderr" | "manifest",
@@ -34,13 +34,14 @@ export class RetainedProcessOutputError extends Error {
 
 export async function registerRetainedProcessOutput(
   executionId: string,
-  workspace: string,
+  storageRoot: string,
   paths: ProcessOutputPaths,
 ): Promise<RetainedProcessOutputLocator> {
-  const canonicalRoot = await realpath(workspace);
+  const canonicalRoot = await realpath(storageRoot);
+  await assertProcessOutputPath(storageRoot, storageRoot, true);
   const capture = async (path: string) => {
     const canonicalPath = await realpath(path);
-    await checkPath(canonicalRoot, canonicalPath);
+    await checkPath(storageRoot, path);
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink())
       throw new RetainedProcessOutputError("source_changed");
@@ -53,16 +54,18 @@ export async function registerRetainedProcessOutput(
       mtimeMs: stat.mtimeMs,
     };
   };
-  return {
+  const locator: RetainedProcessOutputLocator = {
     executionId,
     generation: 1,
-    workspace: canonicalRoot,
+    storageRoot: canonicalRoot,
     files: {
       stdout: await capture(paths.stdoutText),
       stderr: await capture(paths.stderrText),
       manifest: await capture(paths.manifest),
     },
   };
+  await readRetainedProcessOutput(locator);
+  return locator;
 }
 
 export async function readRetainedProcessOutput(
@@ -73,7 +76,7 @@ export async function readRetainedProcessOutput(
   try {
     for (const key of ["stdout", "stderr", "manifest"] as const) {
       const file = locator.files[key];
-      await checkPath(locator.workspace, file.path);
+      await checkPath(locator.storageRoot, file.path);
       const handle = await open(file.path, "r");
       handles.push(handle);
       const stat = await handle.stat();
@@ -181,21 +184,10 @@ export async function readRetainedProcessOutput(
   }
 }
 
-async function checkPath(workspace: string, path: string): Promise<void> {
-  const rel = relative(workspace, resolve(path));
-  if (
-    !rel ||
-    rel === ".." ||
-    rel.startsWith("..\\") ||
-    rel.startsWith("../") ||
-    isAbsolute(rel)
-  )
+async function checkPath(storageRoot: string, path: string): Promise<void> {
+  try { await assertProcessOutputPath(storageRoot, path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
     throw new RetainedProcessOutputError("source_changed");
-  const canonical = await realpath(path);
-  const same =
-    process.platform === "win32"
-      ? canonical.toLowerCase() === resolve(path).toLowerCase()
-      : canonical === resolve(path);
-  if (!same || (await lstat(path)).isSymbolicLink())
-    throw new RetainedProcessOutputError("source_changed");
+  }
 }

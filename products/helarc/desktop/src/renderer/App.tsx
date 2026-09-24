@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
+import { Group, Panel, Separator, type Layout, type PanelImperativeHandle } from "react-resizable-panels";
 import {
   ArrowUp,
   CircleStop,
@@ -10,7 +10,6 @@ import {
   Settings,
   X,
   RotateCcw,
-  Plus,
 } from "lucide-react";
 import type {
   HelarcActiveDelegationSnapshot,
@@ -23,6 +22,8 @@ import type {
 } from "../shared/HelarcWorkbench.js";
 import { SettingsPage } from "./SettingsPage.js";
 import { Conversation } from "./conversation/Conversation.js";
+import { ConversationActivity } from "./conversation/ConversationActivity.js";
+import { RequestElapsed } from "./conversation/RequestElapsed.js";
 import { ConversationPlan } from "./plan/PlanView.js";
 import { AttentionPanel } from "./interactions/AttentionPanel.js";
 import { CurrentWorkPanel, displayStatus } from "./work/CurrentWorkPanel.js";
@@ -71,6 +72,7 @@ export function App() {
   const [steering, setSteering] = useState("");
   const [newThread, setNewThread] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [submissionStartedAt, setSubmissionStartedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<readonly ThreadRunSummary[]>([]);
   const [selected, setSelected] = useState<WorkbenchScope | null>(null);
@@ -88,6 +90,15 @@ export function App() {
     }
   });
   const [layoutKey, setLayoutKey] = useState(0);
+  const [navigationWidth, setNavigationWidth] = useState(() => {
+    try {
+      const width = Number(localStorage.getItem("helarc.workbench.navigationWidth"));
+      if (Number.isFinite(width) && width >= 180 && width <= 360) return width;
+    } catch { /* Storage is unavailable during server rendering. */ }
+    return 230;
+  });
+  const navigationPanel = useRef<PanelImperativeHandle | null>(null);
+  const workbenchPanel = useRef<PanelImperativeHandle | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const runActive = !!snapshot.run && !snapshot.run.display.terminal;
   const workInFlight = runActive || snapshot.status === "starting";
@@ -202,22 +213,27 @@ export function App() {
           setError(result.receipt.result.code);
         else setSteering("");
       } else {
-        const receipt = await window.helarc.startRun({
-          commandId: commandId("run.start"),
-          taskText: draft,
-          target:
-            snapshot.activeThread && !newThread
-              ? { kind: "continue_thread", threadId: snapshot.activeThread.id }
-              : { kind: "new_thread" },
-        });
-        if (receipt.status === "handled") {
-          setSnapshot(receipt.result.snapshot);
-          if (receipt.result.ok) {
-            setDraft("");
-            setNewThread(false);
-            setSelected(null);
-          } else setError(receipt.result.error.message);
-        } else setError(receipt.code);
+        setSubmissionStartedAt(new Date().toISOString());
+        try {
+          const receipt = await window.helarc.startRun({
+            commandId: commandId("run.start"),
+            taskText: draft,
+            target:
+              snapshot.activeThread && !newThread
+                ? { kind: "continue_thread", threadId: snapshot.activeThread.id }
+                : { kind: "new_thread" },
+          });
+          if (receipt.status === "handled") {
+            setSnapshot(receipt.result.snapshot);
+            if (receipt.result.ok) {
+              setDraft("");
+              setNewThread(false);
+              setSelected(null);
+            } else setError(receipt.result.error.message);
+          } else setError(receipt.code);
+        } finally {
+          setSubmissionStartedAt(null);
+        }
       }
     });
   }
@@ -300,6 +316,11 @@ export function App() {
       }}
     />
   );
+  const navigation = (
+    <ProjectNavigation snapshot={snapshot} busy={busy} active={workInFlight}
+      onOpen={(id) => void openThread(id)} onNew={(id) => void newConversation(id)}
+      onEdit={(project) => setProjectEditor({ project })} onClose={() => setThreads(false)}/>
+  );
   const conversation = (
     <section className="wb-conversation" aria-label="Conversation">
       <Conversation
@@ -308,6 +329,12 @@ export function App() {
         onInspect={inspect}
         visible={!settings}
       />
+      {!newThread && currentScope && (
+        <ConversationActivity key={`activity:${currentScope.threadId}:${currentScope.productRunId}`}
+          scope={currentScope} activity={current?.activity ?? null} revision={current?.revision ?? 0}
+          visible={!settings} error={!!currentRead.error || currentRead.value?.status === "rejected"}
+          onRetry={currentRead.refresh} />
+      )}
       {!newThread && currentScope && (
         <ConversationPlan
           key={`${currentScope.threadId}:${currentScope.productRunId}`}
@@ -326,13 +353,6 @@ export function App() {
           <label htmlFor="task-input">
             {runActive ? "Message" : newThread ? "New thread" : "Message"}
           </label>
-          {snapshot.run && (
-            <span className={`wb-status ${snapshot.run.display.status}`}>
-              {attentionCount
-                ? "Needs your input"
-                : displayStatus(snapshot.run.display.status)}
-            </span>
-          )}
         </div>
         <div className="wb-composer-row">
           <textarea
@@ -444,11 +464,21 @@ export function App() {
             <PanelLeft size={18} />
           </button>
           <div className="wb-title">
-            <strong>
-              {newThread
-                ? "New conversation"
-                : (snapshot.activeThread?.title ?? "Helarc")}
-            </strong>
+            <div className="wb-title-line">
+              <strong>
+                {newThread
+                  ? "New conversation"
+                  : (snapshot.activeThread?.title ?? "Helarc")}
+              </strong>
+              {!newThread && snapshot.run && (attentionCount > 0 || snapshot.run.display.status !== "running") && (
+                <span className={`wb-status ${snapshot.run.display.status}`}
+                  role="status" aria-label="Conversation status">
+                  {attentionCount ? "Needs your input" : displayStatus(snapshot.run.display.status)}
+                </span>
+              )}
+              <RequestElapsed snapshot={snapshot} submissionStartedAt={submissionStartedAt}
+                newConversation={newThread} visible={!settings} />
+            </div>
             <button
               type="button"
               className="wb-workspace"
@@ -471,23 +501,6 @@ export function App() {
           <button
             type="button"
             className="wb-icon"
-            title="New conversation"
-            aria-label="New conversation"
-            disabled={workInFlight || busy}
-            onClick={() => {
-              if (activeProject) void newConversation(activeProject.id);
-              else {
-                if (!navigationDocked) setExecution(false);
-                setThreads(true);
-                if (!snapshot.projects.length) setProjectEditor({ project: null });
-              }
-            }}
-          >
-            <Plus size={18} />
-          </button>
-          <button
-            type="button"
-            className="wb-icon"
             title="Current work"
             aria-label="Toggle work"
             aria-pressed={execution}
@@ -506,6 +519,9 @@ export function App() {
             onClick={() => {
               setLayout(undefined);
               localStorage.removeItem("helarc.workbench.layout");
+              setNavigationWidth(230);
+              localStorage.removeItem("helarc.workbench.navigationWidth");
+              navigationPanel.current?.resize(230);
               setLayoutKey((value) => value + 1);
             }}
           >
@@ -522,14 +538,31 @@ export function App() {
           </button>
         </header>
         <main className="wb-main">
-          {threads && <div className={navigationDocked ? "project-sidebar" : undefined}>
-            <Overlay label="Projects" side="left" docked={navigationDocked} onClose={() => setThreads(false)}>
-              <ProjectNavigation snapshot={snapshot} busy={busy} active={workInFlight}
-                onOpen={(id) => void openThread(id)} onNew={(id) => void newConversation(id)}
-                onEdit={(project) => setProjectEditor({ project })} onClose={() => setThreads(false)}/>
+          {threads && !navigationDocked && (
+            <Overlay label="Projects" side="left" onClose={() => setThreads(false)}>
+              {navigation}
             </Overlay>
-          </div>}
-          {
+          )}
+          <Group onLayoutChanged={(value, meta) => {
+            if (!meta.isUserInteraction || !navigationPanel.current || !workbenchPanel.current) return;
+            // The callback precedes DOM resizing; use its new ratio over the full panel area.
+            const panelArea = navigationPanel.current.getSize().inPixels + workbenchPanel.current.getSize().inPixels;
+            const width = Math.round(value.projects / 100 * panelArea);
+            setNavigationWidth(width);
+            localStorage.setItem("helarc.workbench.navigationWidth", String(width));
+          }}>
+            {threads && navigationDocked && (
+              <Panel id="projects" panelRef={navigationPanel} className="project-sidebar"
+                defaultSize={navigationWidth} minSize="180px" maxSize="360px"
+                groupResizeBehavior="preserve-pixel-size">
+                {navigation}
+              </Panel>
+            )}
+            {threads && navigationDocked && (
+              <Separator className="wb-separator" aria-label="Resize projects panel" />
+            )}
+            <Panel id="workbench" panelRef={workbenchPanel} minSize={wide && execution ? "845px" : navigationDocked ? "520px" : 0}
+              style={{ overflow: "visible" }}>
             <Group
               key={layoutKey}
               defaultLayout={layout}
@@ -570,7 +603,8 @@ export function App() {
                 </Overlay>
               </Panel>
             </Group>
-          }
+            </Panel>
+          </Group>
         </main>
         {projectEditor && <ProjectEditor project={projectEditor.project} snapshot={snapshot} onSnapshot={setSnapshot}
           onClose={() => setProjectEditor(null)} onSaved={(next, id) => {

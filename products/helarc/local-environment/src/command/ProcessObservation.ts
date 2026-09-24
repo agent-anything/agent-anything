@@ -30,7 +30,6 @@ export interface ProcessSnapshot {
     readonly persistence: "pending" | "complete" | "failed";
     readonly retainedBytes: number;
     readonly omittedBytes: number | null;
-    readonly files: Readonly<Record<ProcessStream, string>>;
   };
   readonly outcome: "succeeded" | "failed" | "cancelled" | "timed_out" | "unknown" | null;
   readonly limitations: readonly string[];

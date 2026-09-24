@@ -554,6 +554,11 @@ describe("Helarc native Tool controller", () => {
     if (decision.kind !== "advance") throw new Error("Expected advance decision.");
     expect(decision.candidates.map(({ modelCallRef }) => modelCallRef.contentBlockOrdinal))
       .toEqual([1, 2]);
+    expect(decision.modelItems.filter(item => item.kind === "model_tool_call")
+      .map(item => item.metadata.helarcCallableBinding)).toMatchObject([
+        { kind: "tool", callableName: read, toolName: "Read", binding: { kind: "operation" } },
+        { kind: "tool", callableName: write, toolName: "Write", binding: { kind: "operation" } },
+      ]);
     expect(decision.modelItems.map(({ kind }) => kind)).toEqual([
       "assistant_text",
       "model_tool_call",
@@ -643,15 +648,45 @@ describe("Helarc native Tool controller", () => {
       kind: "advance",
       candidates: [{ kind: "model_call_rejection", code: "model_callable_unknown" }],
     });
-    expect(parseHelarcProviderResponse(nativeResponse(input, [
+    const mixedResponse = nativeResponse(input, [
       { kind: "call", name: "stop", input: { reason: "Stop." } },
       { kind: "call", name: read, input: { file_path: "README.md" } },
-    ]), input)).toMatchObject({
+    ]);
+    const decision = parseHelarcProviderResponse(mixedResponse, input);
+    expect(decision).toMatchObject({
       kind: "advance",
       candidates: [
         { kind: "model_call_rejection", code: "model_callable_unknown" },
         { kind: "tool_request", tool: { name: "Read" } },
       ],
+    });
+    if (decision.kind !== "advance") throw new Error("Expected advance decision.");
+    const rejection = decision.candidates[0]!;
+    if (rejection.kind !== "model_call_rejection") throw new Error("Expected call rejection.");
+    expect(rejection.message).toContain(JSON.stringify(catalog.definitions.map(({ name }) => name)));
+    expect(rejection.message).toContain('Unknown function name "stop"');
+    expect(rejection.modelCallRef.contentBlockOrdinal).toBe(0);
+    expect(decision.candidates[1]!.modelCallRef.contentBlockOrdinal).toBe(1);
+    expect(decision.modelItems.filter(item => item.kind === "model_tool_call")
+      .map(item => item.metadata.helarcCallableBinding)).toMatchObject([
+        null,
+        { kind: "tool", callableName: read, toolName: "Read" },
+      ]);
+  });
+
+  it.each(["Read", "Read_obsolete"])("returns correction facts for %s without treating it as an alias", (name) => {
+    const input = createControllerInput();
+    const protocol = createTestControllerProtocol(input);
+    const catalog = protocol.createCallableCatalog(input.toolExposure, input.planLimits);
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [
+      { kind: "call", name, input: { file_path: "README.md" } },
+    ]), input);
+    expect(decision.kind).toBe("advance");
+    if (decision.kind !== "advance") throw new Error("Expected advance decision.");
+    expect(decision.candidates).toHaveLength(1);
+    expect(decision.candidates[0]).toMatchObject({
+      kind: "model_call_rejection", name, code: "model_callable_unknown",
+      message: expect.stringContaining(JSON.stringify(catalog.definitions.map(({ name }) => name))),
     });
   });
 

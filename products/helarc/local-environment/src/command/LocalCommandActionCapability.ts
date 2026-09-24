@@ -52,6 +52,8 @@ import {
   type NativeShellRuntimeProfile,
 } from "./CommandActionIdentity.js";
 import { RunProcessManager, ProcessManagerError } from "./RunProcessManager.js";
+import { ProcessOutputRepository } from "./ProcessOutputRepository.js";
+import type { ProcessOutputPaths } from "./ProcessOutputStore.js";
 import { WindowsJobProcessBackend, resolveWindowsProcessHelper } from "./WindowsJobProcessBackend.js";
 import { PosixProcessBackend } from "./PosixProcessBackend.js";
 import type { ProcessExecutionObserver } from "./ProcessObservation.js";
@@ -73,14 +75,16 @@ import {
 export const HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID = "helarc.local.shell.adapter";
 export const HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID = "helarc.local.task-stop.adapter";
 
-const SHELL_ADAPTER = Object.freeze({ id: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, version: "3", requestSchemaRevision: "1" });
+const SHELL_ADAPTER = Object.freeze({ id: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, version: "4", requestSchemaRevision: "1" });
 const STOP_ADAPTER = Object.freeze({ id: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID, version: "1", requestSchemaRevision: "1" });
-const SHELL_EXECUTOR = Object.freeze({ id: "helarc.local.shell.executor", version: "2", invocationContractVersion: "2", physicalPayloadSchemaRevision: "2" });
+const SHELL_EXECUTOR = Object.freeze({ id: "helarc.local.shell.executor", version: "3", invocationContractVersion: "2", physicalPayloadSchemaRevision: "3" });
 const STOP_EXECUTOR = Object.freeze({ id: "helarc.local.task-stop.executor", version: "1", invocationContractVersion: "1", physicalPayloadSchemaRevision: "1" });
 const MAX_CWD_CONTROL_BYTES = 32_768;
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 export interface CreateHelarcLocalCommandActionCapabilityInput {
+  readonly commandOutputDirectory: string;
+  readonly retainCommandOutput?: (runId: string, executionId: string, paths: ProcessOutputPaths) => Promise<void>;
   readonly workspace: WorkspaceSelection;
   readonly platform: "win32" | "posix";
   readonly shellOperation: OperationRevisionRef;
@@ -131,10 +135,6 @@ interface ShellPayload {
   readonly cwd: string;
   readonly cwdDisplay: string;
   readonly cwdBaseline: FileBaseline;
-  readonly outputPath: string;
-  readonly outputAbsolutePath: string;
-  readonly outputBaseline: FileBaseline;
-  readonly captureTargets: readonly {path:string;relativePath:string;baseline:FileBaseline}[];
   readonly timeoutMs: number;
   readonly runInBackground: boolean;
   readonly maxStdoutBytes: number;
@@ -163,7 +163,8 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
   const backend = input.platform === "win32"
     ? new WindowsJobProcessBackend(await resolveWindowsProcessHelper()) : new PosixProcessBackend();
   const processTasks = new RunProcessManager({backend, maximumActive:limits.maxActiveTasks,
-    maximumSettled:limits.maxSettledTasks, observer:input.processObserver, now});
+    maximumSettled:limits.maxSettledTasks, observer:input.processObserver, retainOutput:input.retainCommandOutput, now});
+  const outputs = new ProcessOutputRepository(input.commandOutputDirectory);
   const commandSemantics = new Map<string, {shell:"Bash"|"PowerShell";command:string}>();
   const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
   const sessions = new Map<string,ShellExecutionSession>();
@@ -178,7 +179,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     environment: environment.environment,
   });
   const registrations = createActionRegistrationSnapshot([
-    registration("helarc.local.shell.registration.v3", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process", "filesystem"]),
+    registration("helarc.local.shell.registration.v4", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process"]),
     registration("helarc.local.task-stop.registration.v1", input.taskStopOperation, input.taskStopBinding, STOP_ADAPTER, STOP_EXECUTOR, ["process"]),
   ]);
 
@@ -194,7 +195,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
       Object.freeze({ adapter: createTaskStopAdapter(processTasks) }),
     ]),
     executors: Object.freeze([
-      createShellExecutor(environment, processTasks, sessionFor, commandSemantics, now),
+      createShellExecutor(environment, processTasks, outputs, sessionFor, commandSemantics, now),
       createTaskStopExecutor(processTasks, now),
     ]),
     processes: processTasks,
@@ -246,13 +247,6 @@ function createShellAdapter(
           path: sessionSnapshot.relativePath,
           operation: "directory",
         });
-        const outputPath = `.helarc-process-${digestToken(context.action.id)}`;
-        const output = await prepareFileSystemTarget({ workspace, workspaceRoots: context.workspace.roots, platform: context.environment.platform, path: outputPath, operation: "write" });
-        const captureTargets = [output];
-        for (const suffix of [".stderr.raw", ".stdout.txt", ".stderr.txt", ".manifest.json"]) {
-          captureTargets.push(await prepareFileSystemTarget({workspace, workspaceRoots:context.workspace.roots,
-            platform:context.environment.platform,path:outputPath+suffix,operation:"write"}));
-        }
         const executable = await resolveCommandExecutable({ command: shell.command, cwd: cwd.canonicalTarget, platform: context.environment.platform, environment: environment.environment });
         const cwdControlPath = parsed.runInBackground
           ? null
@@ -273,8 +267,6 @@ function createShellAdapter(
           rootName: cwd.rootName, workspaceId: cwd.workspaceId,
           workspaceRoot: cwd.workspaceRoot, canonicalRoot: cwd.canonicalRoot, cwdPath: cwd.pathIdentity.path,
           cwd: cwd.canonicalTarget, cwdDisplay: `${cwd.rootName}:${cwd.relativePath}`, cwdBaseline: cwd.baseline,
-          outputPath: output.relativePath, outputAbsolutePath: output.canonicalTarget, outputBaseline: output.baseline,
-          captureTargets:captureTargets.map(target=>({path:target.canonicalTarget,relativePath:target.relativePath,baseline:target.baseline})),
           timeoutMs: parsed.timeoutMs, runInBackground: parsed.runInBackground,
           maxStdoutBytes: limits.maxStdoutBytes, maxStderrBytes: limits.maxStderrBytes,
           maxOutputFileBytes: limits.maxOutputFileBytes, environmentPolicyId: environment.id,
@@ -282,7 +274,7 @@ function createShellAdapter(
           runtimeEnvironmentPlatform: context.environment.platform,
           runtimeEnvironmentFingerprint: context.environment.configurationFingerprint,
         });
-        const data = await shellPreparedData(parsed.description, shell.toolName, payload, cwd, captureTargets, executable.identity, context.environment, context.now());
+        const data = await shellPreparedData(parsed.description, shell.toolName, payload, cwd, executable.identity, context.environment, context.now());
         return Object.freeze({ status: "prepared" as const, prepared: await createPreparedAction(binding, context, data) });
       } catch (error) {
         return invalidPreparation("shell_action_invalid", safeMessage(error, "Shell request or target is invalid."));
@@ -299,21 +291,12 @@ function createShellAdapter(
         ) return invalidated("shell_session_changed");
         const executableAssertion = assertions.find((candidate): candidate is Extract<TargetStateAssertion, { kind: "executable_identity" }> => candidate.kind === "executable_identity");
         const cwdAssertions = pathAssertions(assertions, payload.cwdPath);
-        const outputAssertions = pathAssertions(assertions, payload.outputAbsolutePath);
-        if (executableAssertion === undefined || cwdAssertions === null || outputAssertions === null) return invalidated("shell_assertion_missing");
+        if (executableAssertion === undefined || cwdAssertions === null) return invalidated("shell_assertion_missing");
         const cwd = await inspectTarget(payload, cwdAssertions, "directory", payload.cwd, payload.cwdBaseline);
-        const output = await inspectTarget(payload, outputAssertions, "write", payload.outputAbsolutePath, payload.outputBaseline);
-        for (const target of payload.captureTargets) {
-          const expected = pathAssertions(assertions, target.path);
-          if (expected === null) return invalidated("shell_capture_assertion_missing");
-          const actual = await inspectTarget(payload, expected, "write", target.path, target.baseline);
-          if (!sameFileBaseline(actual.baseline,target.baseline) || !sameCanonicalPathIdentity(actual.pathIdentity,expected.path.expected)) return invalidated("shell_capture_target_changed");
-        }
         const executable = await revalidateCommandExecutable({ originalCommand: payload.executableCommand, expectedPath: payload.executablePath, cwd: payload.cwd, platform: context.environment.platform });
         const actualExecutable = createCanonicalExecutableIdentity(executable.identity);
         if (!sameCanonicalPathIdentity(cwd.pathIdentity, cwdAssertions.path.expected) ||
-            !sameCanonicalPathIdentity(output.pathIdentity, outputAssertions.path.expected) ||
-            !sameFileBaseline(cwd.baseline, payload.cwdBaseline) || !sameFileBaseline(output.baseline, payload.outputBaseline) ||
+            !sameFileBaseline(cwd.baseline, payload.cwdBaseline) ||
             canonicalPathIdentityKey(actualExecutable.path) !== canonicalPathIdentityKey(executableAssertion.expected.path) ||
             !sameFileBaseline(actualExecutable.baseline, executableAssertion.expected.baseline) ||
             payload.environmentPolicyId !== environment.id || payload.environmentDigest !== environment.digest ||
@@ -332,7 +315,6 @@ async function shellPreparedData(
   shell: "Bash" | "PowerShell",
   payload: ShellPayload,
   cwd: PreparedFileSystemTarget,
-  outputs: readonly PreparedFileSystemTarget[],
   executable: Parameters<typeof createCanonicalExecutableIdentity>[0],
   runtimeEnvironment: CanonicalEnvironmentIdentity,
   createdAt: string,
@@ -342,18 +324,12 @@ async function shellPreparedData(
   return {
     effectSet: { kind: "effects", values: [
       { kind: "process", operation: "spawn", executable },
-      { kind: "file_system", operation: "write", targets: outputs.map(output=>output.pathIdentity) },
     ] },
     requestedAuthority: null,
     targetAssertions: [
-      ...[...new Map([cwd, ...outputs].map(target => [target.workspaceRootIdentity.rootId, target.workspaceRootIdentity])).values()]
-        .map(root => ({ kind: "workspace_root_identity" as const, expected: rootIdentityInput(root) })),
+      { kind: "workspace_root_identity", expected: rootIdentityInput(cwd.workspaceRootIdentity) },
       { kind: "canonical_path_identity", expected: cwd.pathIdentity },
       { kind: "file_baseline", path: cwd.pathIdentity, expected: cwd.baseline },
-      ...outputs.flatMap(output=>[
-        {kind:"canonical_path_identity" as const,expected:output.pathIdentity},
-        {kind:"file_baseline" as const,path:output.pathIdentity,expected:output.baseline},
-      ]),
       { kind: "executable_identity", expected: executable },
     ],
     approval: approval(runtimeEnvironment.environmentId, applicability, description ?? "Execute one native shell command.", [payload.executablePath, ...payload.args], commandDisplay, payload.cwd, payload.cwdDisplay, "Spawn one native shell process", createdAt),
@@ -372,6 +348,7 @@ async function shellPreparedData(
 function createShellExecutor(
   environment: CommandEnvironmentPolicySnapshot,
   tasks: RunProcessManager,
+  outputs: ProcessOutputRepository,
   sessionFor: (runId:string)=>ShellExecutionSession,
   semantics: Map<string,{shell:"Bash"|"PowerShell";command:string}>,
   now: () => string,
@@ -382,6 +359,7 @@ function createShellExecutor(
     async execute(invocation,context) {
       assertActionExecutorDispatchContext(context);
       const startedAt = now();
+      let allocation: Awaited<ReturnType<ProcessOutputRepository["allocate"]>> | null = null;
       try {
         const payload = readShellPayload(invocation);
         if (context.interruption.signal.aborted) return interrupted("none","shell_interrupted_before_dispatch");
@@ -392,21 +370,21 @@ function createShellExecutor(
         const executionId = context.attempt.action.id + ":process";
         semantics.set(executionId,{shell:payload.runtimeEnvironmentPlatform === "win32" ? "PowerShell":"Bash",command:payload.command});
         await removeCwdControlFile(payload.cwdControlPath);
-        const capture = payload.captureTargets;
+        allocation = await outputs.allocate(payload.runId, executionId);
         const snapshot = await tasks.start({runId:payload.runId,executionId,actionId:context.attempt.action.id,
           displayCommand: semantics.get(executionId),
           origin:{invocationId:payload.invocationId,runActionId:payload.runActionId,attemptId:context.attempt.id},
           environmentId:payload.runtimeEnvironmentId,executable:payload.executablePath,args:payload.args,cwd:payload.cwd,
           environment:environment.environment,timeoutMs:payload.timeoutMs,deadlineAt:context.deadlineAt,
           runSignal:context.interruption.signal,maximumOutputBytes:payload.maxOutputFileBytes,background:payload.runInBackground,
-          paths:{stdout:capture[0]!.path,stderr:capture[1]!.path,stdoutText:capture[2]!.path,stderrText:capture[3]!.path,manifest:capture[4]!.path},
-          displayFiles:{stdout:capture[2]!.relativePath,stderr:capture[3]!.relativePath},
+          paths:allocation.paths,
           consumeFinalCwd:()=>consumeFinalWorkingDirectory(payload.cwdControlPath),
           commitFinalCwd:async path=>(await sessionFor(payload.runId).commitFinalWorkingDirectory({expectedRevision:payload.sessionRevision,path}))?.canonicalPath ?? null,
         });
         return completed({task_id:executionId,run_id:payload.runId,snapshot,action_id:context.attempt.action.id,attempt_id:context.attempt.id},startedAt,now());
       } catch(error) {
         const snapshot = error instanceof ProcessManagerError ? error.snapshot : null;
+        if (snapshot === null) await allocation?.discard();
         return {status:"failed" as const,effectState:snapshot === null ? "none" as const : snapshot.containment.disposition === "empty" ? "settled" as const : "unknown" as const,
           failure:{code:error instanceof ProcessManagerError ? error.code : "shell_start_failed",
             message:safeMessage(error,"Command startup failed."),retryable:false,metadata:{process:snapshot}}};
@@ -511,7 +489,7 @@ async function inspectTarget(payload: ShellPayload, assertions: NonNullable<Retu
 function readShellPayload(invocation: PreparedActionInvocation): ShellPayload {
   if (invocation.executorId !== SHELL_EXECUTOR.id || !isRecord(invocation.payload)) throw new TypeError("Prepared shell invocation is invalid.");
   const value = invocation.payload as Record<string, any>;
-  if (!Array.isArray(value.args) || !value.args.every((entry) => typeof entry === "string") || !isBaseline(value.executableBaseline) || !isBaseline(value.cwdBaseline) || !isBaseline(value.outputBaseline)) throw new TypeError("Prepared shell payload is invalid.");
+  if (!Array.isArray(value.args) || !value.args.every((entry) => typeof entry === "string") || !isBaseline(value.executableBaseline) || !isBaseline(value.cwdBaseline)) throw new TypeError("Prepared shell payload is invalid.");
   return Object.freeze({
     runId: text(value.runId), invocationId:text(value.invocationId),runActionId:text(value.runActionId), executableCommand: text(value.executableCommand),
     executablePath: text(value.executablePath), executableBaseline: value.executableBaseline,
@@ -520,8 +498,6 @@ function readShellPayload(invocation: PreparedActionInvocation): ShellPayload {
     rootName: text(value.rootName),
     workspaceId: text(value.workspaceId), workspaceRoot: text(value.workspaceRoot), canonicalRoot: text(value.canonicalRoot),
     cwdPath: text(value.cwdPath), cwd: text(value.cwd), cwdDisplay: text(value.cwdDisplay), cwdBaseline: value.cwdBaseline,
-    outputPath: text(value.outputPath), outputAbsolutePath: text(value.outputAbsolutePath), outputBaseline: value.outputBaseline,
-    captureTargets: readCaptureTargets(value.captureTargets),
     timeoutMs: integer(value.timeoutMs), runInBackground: boolean(value.runInBackground), maxStdoutBytes: integer(value.maxStdoutBytes),
     maxStderrBytes: integer(value.maxStderrBytes), maxOutputFileBytes: integer(value.maxOutputFileBytes),
     environmentPolicyId: text(value.environmentPolicyId), environmentDigest: text(value.environmentDigest),
@@ -637,13 +613,6 @@ function bashLiteral(value: string): string {
   return value.replaceAll("'", "'\\''");
 }
 
-function readCaptureTargets(value:unknown):ShellPayload["captureTargets"] {
-  if (!Array.isArray(value) || value.length !== 5) throw new TypeError("Capture targets are invalid.");
-  return Object.freeze(value.map(entry=>{
-    if(!isRecord(entry) || !isBaseline(entry.baseline)) throw new TypeError("Capture target baseline is invalid.");
-    return Object.freeze({path:text(entry.path),relativePath:text(entry.relativePath),baseline:entry.baseline});
-  }));
-}
 function rootIdentityInput(root: CanonicalWorkspaceRootIdentity) {
   if (root.resolvedPath === null) throw new TypeError("Canonical Workspace root requires a resolved path.");
   return { rootId: root.rootId, platform: root.platform, path: root.canonicalPath, resolvedPath: root.resolvedPath, resolutionFingerprint: root.resolutionFingerprint };

@@ -16,6 +16,8 @@ import type {
 import type { CommandOutputRegistry } from "./CommandOutputRegistry.js";
 import { HelarcCollaborationQueries } from "./HelarcCollaborationQueries.js";
 import { fitsPage, textPage, validOffset } from "./WorkbenchReadLimits.js";
+import { isWorkbenchOperation, workbenchOperationDetail } from "./WorkbenchOperationPresentation.js";
+import { workbenchInteractionText } from "./WorkbenchInteractionPresentation.js";
 
 export interface WorkbenchQuerySources {
   loadThread(threadId: string): Promise<HelarcThreadRecord | null>;
@@ -88,6 +90,7 @@ export class HelarcWorkbenchQueries {
     if (
       !scopeValid(query) ||
       !token(query.itemId) ||
+      (query.section !== undefined && !token(query.section)) ||
       (query.offset !== undefined &&
         (!Number.isSafeInteger(query.offset) || query.offset < 0))
     )
@@ -96,6 +99,7 @@ export class HelarcWorkbenchQueries {
       const resolved = await this.resolve(query);
       if (!resolved) return rejected("not_found");
       if (query.itemId.startsWith("message:")) {
+        if (query.section !== undefined) return rejected("invalid_query");
         const thread = await this.sources.loadThread(query.threadId);
         const message = thread?.messages.find(m => `message:${m.id}` === query.itemId &&
           m.correlation.runId === query.productRunId);
@@ -104,18 +108,37 @@ export class HelarcWorkbenchQueries {
         if (!validOffset(message.content,offset)) return rejected("invalid_query");
         const page = textPage(message.content,offset,16*1024,
           64*1024-Buffer.byteLength(JSON.stringify(query.itemId))-256);
-        return {status:"page",itemId:query.itemId,text:page.text,
+        return {status:"page",itemId:query.itemId,title:message.role === "user" ? "Request" : "Response",text:page.text,
           nextOffset:page.end < message.content.length ? page.end : null,omittedBytes:0};
       }
-      const record = resolved?.projection.product.presentation.records.find(
+      const presentation = resolved.projection.product.presentation;
+      const record = [...presentation.records, ...presentation.activeCalls].find(
         (item) => item.id === query.itemId && item.runId === query.runId,
       );
       if (!record) return rejected("not_found");
+      const interaction = workbenchInteractionText(record, resolved.projection);
+      if (interaction) {
+        if (query.section !== undefined) return rejected("invalid_query");
+        const offset = query.offset ?? 0;
+        if (!validOffset(interaction.text, offset)) return rejected("invalid_query");
+        const page = textPage(interaction.text, offset, 16 * 1024, 64 * 1024 - Buffer.byteLength(JSON.stringify(query.itemId)) - 256);
+        return { status: "page", itemId: query.itemId, title: interaction.title, text: page.text,
+          nextOffset: page.end < interaction.text.length ? page.end : null, omittedBytes: 0 };
+      }
+      if (record.content.kind === "tool_call") {
+        if (!isWorkbenchOperation(record)) return rejected("not_found");
+        if (query.section === undefined && (query.offset ?? 0) !== 0) return rejected("invalid_query");
+        const detail = workbenchOperationDetail(record, resolved.projection, resolved.live, query);
+        if (!detail) return rejected("invalid_query");
+        const page = { status: "operation" as const, itemId: query.itemId, detail };
+        return fitsPage(page) ? page : rejected("read_failed");
+      }
+      if (query.section !== undefined) return rejected("invalid_query");
+      if (record.content.kind !== "assistant_text" && record.content.kind !== "steering") return rejected("not_found");
       const value =
         record.content.kind === "assistant_text"
           ? record.content.text
-          : record.content.kind === "steering" ? record.content.instruction
-          : JSON.stringify(record, null, 2);
+          : record.content.instruction;
       const offset = query.offset ?? 0;
       if (!validOffset(value,offset)) return rejected("invalid_query");
       const page = textPage(value,offset,16*1024,
@@ -123,6 +146,9 @@ export class HelarcWorkbenchQueries {
       return {
         status: "page",
         itemId: query.itemId,
+        title: record.content.kind === "steering" ? "Work update"
+          : resolved.projection.host.runTree.nodes.find(node => node.runId === query.runId)?.parentRunId
+            ? "Subtask response" : "Response",
         text: page.text,
         nextOffset: page.end < value.length ? page.end : null,
         omittedBytes:

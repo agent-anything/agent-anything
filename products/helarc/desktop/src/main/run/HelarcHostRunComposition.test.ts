@@ -22,16 +22,20 @@ import {
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createFakeProviderContext } from "@agent-anything/test-support";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
-import { access, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import { createHelarcProviderProfile } from "@agent-anything/helarc/configuration";
 import { createDefaultHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import { HelarcInspection } from "../inspection/HelarcInspection.js";
 import { InspectionQueryService } from "@agent-anything/inspection/query";
+import { workbenchInteractionText } from "../workbench/WorkbenchInteractionPresentation.js";
+import { isWorkbenchOperation } from "../workbench/WorkbenchOperationPresentation.js";
+import { CommandOutputRegistry } from "../workbench/CommandOutputRegistry.js";
 import {
   prepareHelarcHostRun,
   type PrepareHelarcHostRunInput,
@@ -48,7 +52,9 @@ type RunHelarcTestInput = Omit<
   | "identityResolver"
   | "identitySelection"
   | "providerProfile"
+  | "commandOutputDirectory"
 > & {
+  readonly commandOutputDirectory?: string;
   readonly workspace: WorkspaceSelection;
   readonly workspaceResolver?: HostWorkspaceResolver;
   readonly workspaceSelection?: HostWorkspaceSelection;
@@ -68,6 +74,9 @@ async function executeTestHostRun(input: RunHelarcTestInput) {
   return composition.result;
 }
 
+const commandOutputDirectory = mkdtempSync(join(tmpdir(), "helarc-host-output-"));
+afterAll(() => rm(commandOutputDirectory, { recursive: true, force: true }));
+
 async function prepareTestHostRun(input: RunHelarcTestInput) {
   const productRunId = input.productRunId ?? input.sessionId ?? input.task.id;
   const permissionPreset = input.permissionPreset ?? "ask_for_approval";
@@ -84,6 +93,7 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
   } = input;
   return prepareHelarcHostRun({
     ...hostInput,
+    commandOutputDirectory: input.commandOutputDirectory ?? commandOutputDirectory,
     workspaceResolver: workspaceResolver ??
       createStaticHostWorkspaceResolver(workspace),
     workspaceSelection: workspaceSelection ?? {
@@ -454,6 +464,12 @@ describe("Helarc Host Run composition", () => {
     expect(pending.presentation).toMatchObject({
       questions: [{ id: "scope", prompt: "Which package should be inspected?" }],
     });
+    const pendingQuestion = composition.activeRun.getProductProjection().presentation.activeCalls.find(record =>
+      record.content.kind === "tool_call" && record.content.toolBindingKind === "interaction");
+    expect(pendingQuestion?.content).toMatchObject({ callableKind: "tool", interactionProtocol: {
+      owner: "helarc", kind: "clarification", revision: "1",
+    } });
+    expect(pendingQuestion && isWorkbenchOperation(pendingQuestion)).toBe(false);
     expect(composition.activeRun.submitInteraction({
       request: pending.request,
       submissionId: "clarification-submission-1",
@@ -471,6 +487,11 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.interactions).toEqual([
       expect.objectContaining({ owner: "helarc", status: "resolved" }),
     ]);
+    const product = composition.activeRun.getProductProjection();
+    const exchange = product.presentation.records.find(record => record.id === pendingQuestion?.id)!;
+    expect(workbenchInteractionText(exchange, { product, host: composition.activeRun.getProjection() })).toMatchObject({
+      title: "Question", status: "Answered", text: expect.stringContaining("Which package should be inspected?\nYour answer:\nRuntime"),
+    });
     expect(result.runResult.items).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({
         kind: "observation",
@@ -831,6 +852,9 @@ describe("Helarc Host Run composition", () => {
   it("executes Full access commands through the explicit unisolated gateway", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-granted-"));
     const markerPath = join(workspaceRoot, "marker.txt");
+    const registryPath = join(commandOutputDirectory, "locators.json");
+    const registry = new CommandOutputRegistry(registryPath);
+    const retained: Array<{ threadId: string; productRunId: string; runId: string; executionId: string }> = [];
     const provider = new ScriptedProvider([
       {
         kind: "tool_call",
@@ -849,6 +873,11 @@ describe("Helarc Host Run composition", () => {
       provider,
       enableShell: true,
       permissionPreset: "full_access",
+      retainCommandOutput: async (runId, executionId, paths) => {
+        const scope = { threadId: "output-thread", productRunId: "output-work", runId, executionId };
+        await registry.register(scope, executionId, commandOutputDirectory, paths);
+        retained.push(scope);
+      },
     });
 
     expect(result.product.status, JSON.stringify(result, null, 2)).toBe("completed");
@@ -872,6 +901,12 @@ describe("Helarc Host Run composition", () => {
       },
     });
     await expect(access(markerPath)).resolves.toBeUndefined();
+    expect(await readdir(workspaceRoot)).toEqual(["marker.txt"]);
+    expect(retained).toHaveLength(1);
+    const reopened = new CommandOutputRegistry(registryPath);
+    expect(await reopened.read({ ...retained[0]!, cursor: null }, undefined)).toMatchObject({ status: "page", source: "retained" });
+    expect(commandResults.at(-1)?.output).toHaveProperty("output.persistence", "complete");
+    expect(commandResults.at(-1)?.output).not.toHaveProperty("output.files");
     expect(result.product.output.enforcement).toEqual({
       selected: "disabled",
       status: "unisolated",
@@ -1026,6 +1061,60 @@ describe("Helarc Host Run composition", () => {
     expect(updates.at(-1)?.steps).toEqual([{ step: "Inspect workspace", status }]);
     expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(1);
     expect(result.runResult.items.some(({ payload }) => payload.kind === "suspension_transition")).toBe(false);
+  });
+
+  it("delivers exact-name correction in Tool Results without system instructions or replaying valid siblings", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-call-feedback-"));
+    await writeFile(join(workspaceRoot, "first.txt"), "first result", "utf8");
+    await writeFile(join(workspaceRoot, "second.txt"), "second result", "utf8");
+    const provider = new ScriptedProvider([
+      {
+        kind: "tool_calls",
+        calls: [
+          { kind: "tool_call", callableName: "Read", input: { file_path: "first.txt" } },
+          { kind: "tool_call", toolName: "Read", input: { file_path: "second.txt" } },
+        ],
+      },
+      { kind: "tool_call", toolName: "Read", input: { file_path: "first.txt" } },
+      { kind: "completion", summary: "Both files were read." },
+    ]);
+    const result = await executeReadOnlyTestHostRun({
+      ...createTask(workspaceRoot), provider,
+      instructionSettings: createDefaultHelarcInstructionSettings(),
+    });
+
+    expect(result.runResult.status).toBe("completed");
+    expect(provider.requests).toHaveLength(3);
+    expect(provider.stopRequests).toHaveLength(0);
+    expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
+    const firstRequest = provider.requests[0]!;
+    if (firstRequest.interaction.kind !== "native_tool_turn") throw new Error("Expected native request.");
+    const names = firstRequest.interaction.callables.map(({ name }) => name);
+    const readName = names.find(name => name.startsWith("Read_"))!;
+    const nextRequest = provider.requests[1]!;
+    const toolResults = nextRequest.messages.flatMap(message =>
+      message.role === "tool" ? message.content.map(block => block.result) : []);
+    expect(toolResults).toHaveLength(2);
+    expect(toolResults[0]).toMatchObject({
+      name: "Read", settlement: "invalid",
+      content: { kind: "model_call_rejected", code: "model_callable_unknown",
+        message: expect.stringContaining(JSON.stringify(names)) },
+    });
+    expect(toolResults[1]).toMatchObject({ name: readName, settlement: "succeeded" });
+    const calls = nextRequest.messages.flatMap(message => message.role === "assistant"
+      ? message.content.flatMap(block => block.kind === "model_tool_call" ? [block.call] : []) : []);
+    expect(calls).toHaveLength(2);
+    expect(toolResults.map(({ modelCallRef, providerCallRef }) => ({ modelCallRef, providerCallRef })))
+      .toEqual(calls.map(({ modelCallRef, providerCallRef }) => ({ modelCallRef, providerCallRef })));
+    expect(JSON.stringify(toolResults[1]!.content)).toContain("second result");
+
+    const finalResults = provider.requests[2]!.messages.flatMap(message =>
+      message.role === "tool" ? message.content.map(block => block.result) : []);
+    expect(finalResults).toHaveLength(3);
+    expect(finalResults[2]).toMatchObject({ name: readName, settlement: "succeeded" });
+    expect(JSON.stringify(finalResults[2]!.content)).toContain("first result");
+    expect(operationResults(result)).toHaveLength(2);
+    expect(operationResults(result).every(operation => operation.status === "succeeded")).toBe(true);
   });
 
   it("allows bounded Controller correction after three rejected Actions", async () => {
@@ -1499,24 +1588,27 @@ function scriptedNativeProviderResult(
   const assistantText = Array.isArray(scripted.assistantTexts)
     ? scripted.assistantTexts.map((text) => ({ kind: "text" as const, text: String(text) }))
     : [];
+  const calls = scripted.kind === "tool_calls"
+    ? scripted.calls as Record<string, unknown>[]
+    : [scripted];
   const content = scripted.kind === "completion"
     ? [{ kind: "text" as const, text: String(scripted.summary) }]
-    : [...assistantText, Object.freeze({
+    : [...assistantText, ...calls.map((call, index) => Object.freeze({
         kind: "model_tool_call" as const,
         call: snapshotModelToolCall({
           modelCallRef: createModelCallRef({
             providerRequestId: request.requestId,
             controllerRequestId: request.correlation.controllerRequestId,
             turnId,
-            contentBlockOrdinal: assistantText.length,
+            contentBlockOrdinal: assistantText.length + index,
             branchId: request.correlation.branchId,
           }),
-          providerCallRef: { providerId, id: `${responseId}:call:0` },
-          name: scriptedCallableName(request, scripted),
-          input: scriptedCallInput(scripted),
-          ordinal: assistantText.length,
+          providerCallRef: { providerId, id: `${responseId}:call:${index}` },
+          name: scriptedCallableName(request, call),
+          input: scriptedCallInput(call),
+          ordinal: assistantText.length + index,
         }),
-      })];
+      }))];
 
   return {
     kind: "succeeded",
@@ -1539,6 +1631,7 @@ function scriptedCallableName(
   request: ProviderRequest,
   scripted: Record<string, unknown>,
 ): string {
+  if (typeof scripted.callableName === "string") return scripted.callableName;
   if (scripted.kind === "plan_update") return "update_plan";
   if (scripted.kind !== "tool_call" || typeof scripted.toolName !== "string") {
     return "unknown_scripted_callable";

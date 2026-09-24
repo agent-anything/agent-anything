@@ -19,7 +19,7 @@ export const HELARC_PROCESS_OBSERVATION_SCHEMA:ToolJsonObject=object({
   root_exit:nullable(object({code:nullable({type:"integer"}),signal:nullable(text),observedAt:text})),
   termination:nullable(object({reason:{enum:["model_stop","run_cancelled","execution_timeout","run_deadline","run_finalization","host_shutdown","backend_failure"]},requestedAt:text,method:{enum:["graceful","forced","none"]}})),
   containment:object({disposition:{enum:["active","empty","unknown"]},confirmedAt:nullable(text),kind:{enum:["windows_job","posix_process_group"]}}),
-  output:object({capture:{enum:["open","closed","incomplete"]},persistence:{enum:["pending","complete","failed"]},retainedBytes:integer,omittedBytes:nullable(integer),files:object({stdout:text,stderr:text})}),
+  output:object({capture:{enum:["open","closed","incomplete"]},persistence:{enum:["pending","complete","failed"]},retainedBytes:integer,omittedBytes:nullable(integer)}),
   initial_cwd:text,final_cwd:nullable(text),session_cwd:nullable(text),cwd_disposition:{enum:["eligible","committed","unchanged","detached","unavailable"]},
   limitations:{type:"array",items:text},
 });

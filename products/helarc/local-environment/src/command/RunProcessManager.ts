@@ -19,7 +19,6 @@ export interface ManagedProcessStart {
   readonly deadlineAt: string;
   readonly runSignal: AbortSignal;
   readonly paths: ProcessOutputPaths;
-  readonly displayFiles: { readonly stdout: string; readonly stderr: string };
   readonly maximumOutputBytes: number;
   readonly background: boolean;
   readonly displayCommand?: { readonly shell: string; readonly command: string };
@@ -54,6 +53,7 @@ export interface RunProcessManagerOptions {
   readonly startupTimeoutMs?: number;
   readonly terminationTimeoutMs?: number;
   readonly observer?: ProcessExecutionObserver;
+  readonly retainOutput?: (runId: string, executionId: string, paths: ProcessOutputPaths) => Promise<void>;
   readonly now?: () => string;
 }
 
@@ -88,7 +88,7 @@ export class RunProcessManager {
         startedAt: null, finishedAt: null, deadlineAt: null, initialCwd: input.cwd, finalCwd: null, sessionCwd: null,
         cwdDisposition: input.background ? "detached" : "eligible", rootExit: null, termination: null,
         containment: { disposition: "unknown", confirmedAt: null },
-        output: { capture: "open", persistence: "pending", retainedBytes: 0, omittedBytes: 0, files: input.displayFiles },
+        output: { capture: "open", persistence: "pending", retainedBytes: 0, omittedBytes: 0 },
         outcome: null, limitations: [...this.options.backend.descriptor.limitations] }),
     };
     this.executions.set(input.executionId, entry);
@@ -288,7 +288,17 @@ export class RunProcessManager {
       if (entry.terminationTimer !== null) clearTimeout(entry.terminationTimer);
       entry.input.runSignal.removeEventListener("abort", entry.abort);
       let persistence: "complete" | "failed" = "complete";
-      try { await entry.output?.close(); } catch { persistence = "failed"; }
+      try {
+        if (!entry.output) throw new Error("Output capture was not created.");
+        await entry.output.close();
+      } catch { persistence = "failed"; }
+      if (persistence === "complete" && this.options.retainOutput) {
+        try { await this.options.retainOutput(entry.input.runId, entry.input.executionId, entry.input.paths); }
+        catch {
+          persistence = "failed";
+          this.change(entry, { limitations: [...entry.snapshot.limitations, "process_output_retention_failed"] });
+        }
+      }
       let finalCwd: string | null = null;
       try { finalCwd = await entry.input.consumeFinalCwd?.() ?? null; }
       catch { this.change(entry, { limitations: [...entry.snapshot.limitations, "process_final_cwd_unavailable"] }); }

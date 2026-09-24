@@ -24,7 +24,7 @@ it("records independent process lifetimes and immutable observations before Run 
   const start=(id:string)=>manager.start({runId:"run",executionId:id,actionId:`${id}-action`,origin:{invocationId:`${id}-start`,runActionId:`${id}-run-action`,attemptId:`${id}-attempt`},
     environmentId:"local",executable:"fixture",args:[],cwd:directory,environment:{},timeoutMs:10000,deadlineAt:new Date(Date.now()+20000).toISOString(),runSignal:controller.signal,
     paths:{stdout:join(directory,`${id}.raw`),stderr:join(directory,`${id}.err`),stdoutText:join(directory,`${id}.txt`),stderrText:join(directory,`${id}.err.txt`),manifest:join(directory,`${id}.json`)},
-    displayFiles:{stdout:`${id}.txt`,stderr:`${id}.err.txt`},maximumOutputBytes:65536,background:true});
+    maximumOutputBytes:65536,background:true});
   try {
     await start("a");await start("b");
     const observed=await manager.observe({runId:"run",executionId:"a",invocationId:"initial",waitMs:0,signal:controller.signal,initial:true});

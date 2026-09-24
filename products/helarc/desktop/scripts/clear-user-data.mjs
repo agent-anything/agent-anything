@@ -2,6 +2,7 @@ import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { clearCommandOutput } from "./clear-command-output.mjs";
 
 if (isEntryPoint(import.meta.url, process.argv[1])) {
   await main();
@@ -14,6 +15,11 @@ async function main() {
   const productName = readProductName(packageJson);
   const appDataPath = resolveElectronAppDataPath(process.platform, process.env, homedir());
   const userDataPath = resolve(appDataPath, productName);
+  assertSafeUserDataPath(userDataPath, appDataPath, productName);
+  if (process.argv.includes("--command-output")) {
+    await clearCommandOutput(userDataPath, { dryRun: process.argv.includes("--dry-run") });
+    return;
+  }
 
   await clearUserData({
     userDataPath,

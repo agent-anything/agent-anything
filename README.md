@@ -277,6 +277,18 @@ directory:
 pnpm --filter @agent-anything/helarc-desktop clean:user-data
 ```
 
+Command output is stored under the application's `userData/command-output`, not
+in the selected workspace. To remove only retained command output and its index,
+close Helarc and run:
+
+```powershell
+pnpm --filter @agent-anything/helarc-desktop clean:command-output
+```
+
+This keeps settings and conversation records; historical command output becomes
+unavailable. Workspace files are not deleted. Output has no automatic age-based
+cleanup.
+
 Build Helarc and its workspace dependencies, then check desktop packaging
 readiness. The desktop package's `package:check` only validates existing output:
 

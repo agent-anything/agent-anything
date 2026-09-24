@@ -45,6 +45,10 @@ export interface HelarcRunPresentationRecord {
         readonly callId: string;
         readonly turnId: string;
         readonly name: string;
+        readonly callableKind: "tool" | "control" | "unresolved";
+        readonly toolBindingKind: "operation" | "interaction" | "descendant_agent" | "descendant_message" | null;
+        readonly interactionProtocol: { readonly owner: string; readonly kind: string; readonly revision: string } | null;
+        readonly title: string;
         readonly input: HelarcPresentationValue;
         readonly runActionId: string | null;
         readonly invocationId: string | null;
@@ -116,10 +120,11 @@ export interface ConversationQuery {
 }
 export interface ConversationEntry {
   readonly id: string;
+  readonly title: string | null;
   readonly revision: number;
   readonly position: readonly [number, number];
   readonly role: "user" | "assistant" | "system" | "product";
-  readonly kind: "message" | "assistant_text" | "steering";
+  readonly kind: "message" | "assistant_text" | "steering" | "interaction";
   readonly content: string;
   readonly omittedBytes: number;
   readonly productRunId: string | null;
@@ -147,6 +152,26 @@ export interface TaskSummary {
   readonly status: string;
   readonly terminalCode: string | null;
   readonly hasPlan: boolean;
+  readonly hasFinishedWork: boolean;
+}
+export interface WorkbenchActivityItem {
+  readonly id: string;
+  readonly runId: string;
+  readonly kind: "command" | "operation" | "response" | "attention";
+  readonly title: string;
+  readonly attribution: string | null;
+  readonly state: "ongoing" | "waiting" | "settled" | "inactive";
+  readonly status: string;
+  readonly startedAt: string | null;
+  readonly endedAt: string | null;
+  readonly detail: { readonly kind: "command"; readonly executionId: string }
+    | { readonly kind: "operation"; readonly itemId: string } | null;
+}
+export interface WorkbenchActivity {
+  readonly current: readonly WorkbenchActivityItem[];
+  readonly recent: readonly WorkbenchActivityItem[];
+  readonly omittedCurrent: number;
+  readonly omittedRecent: number;
 }
 export interface CurrentWorkPage {
   readonly status: "page";
@@ -155,6 +180,7 @@ export interface CurrentWorkPage {
   readonly revision: number;
   readonly rootRunId: string;
   readonly workStatus: string;
+  readonly activity: WorkbenchActivity;
   readonly tasks: readonly TaskSummary[];
   readonly plan: HelarcPresentationValue;
   readonly activeCalls: readonly HelarcRunPresentationRecord[];
@@ -191,9 +217,8 @@ export interface TaskDetailsPage {
   readonly live: boolean;
   readonly task: TaskSummary;
   readonly plan: HelarcPresentationValue;
-  readonly retries: HelarcPresentationValue;
   readonly artifactIds: readonly string[];
-  readonly diagnostics: HelarcPresentationValue;
+  readonly problem: { readonly message: string; readonly code: string | null } | null;
 }
 export interface WorkHistoryQuery extends WorkbenchScope {
   readonly collection: "operations" | "assistant" | "commands";
@@ -294,12 +319,30 @@ export interface ThreadRunSummary {
 export interface WorkbenchItemQuery extends WorkbenchScope {
   readonly itemId: string;
   readonly offset?: number;
+  readonly section?: string;
+}
+export interface WorkbenchOperationSection {
+  readonly id: string;
+  readonly label: string;
+  readonly format: "text" | "markdown" | "json";
+  readonly text: string;
+  readonly nextOffset: number | null;
+}
+export interface WorkbenchOperationDetail {
+  readonly title: string;
+  readonly summary: string | null;
+  readonly status: string;
+  readonly child: { readonly runId: string; readonly label: string; readonly status: string } | null;
+  readonly facts: readonly { readonly label: string; readonly value: string }[];
+  readonly sections: readonly WorkbenchOperationSection[];
 }
 export type WorkbenchItemPage =
   | WorkbenchRejected
+  | { readonly status: "operation"; readonly itemId: string; readonly detail: WorkbenchOperationDetail }
   | {
       readonly status: "page";
       readonly itemId: string;
+      readonly title: string;
       readonly text: string;
       readonly nextOffset: number | null;
       readonly omittedBytes: number;

@@ -4,10 +4,16 @@ import type {
 } from "@agent-anything/operation-catalog/identity";
 import type { PreparedAction } from "@agent-anything/action-execution/registration";
 import type { CanonicalActionSettlement } from "@agent-anything/canonical-action/settlement";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createHelarcLocalCommandActionCapability } from "./LocalCommandActionCapability.js";
 
 const NOW = "2026-08-29T00:00:00.000Z";
+const commandOutputDirectory = mkdtempSync(join(tmpdir(), "helarc-action-output-"));
+afterAll(() => rm(commandOutputDirectory, { recursive: true, force: true }));
 
 describe("createHelarcLocalCommandActionCapability", () => {
   it("binds the physical adapter to the Operation identity supplied by trusted composition", async () => {
@@ -29,6 +35,7 @@ describe("createHelarcLocalCommandActionCapability", () => {
     };
 
     const capability = await createHelarcLocalCommandActionCapability({
+      commandOutputDirectory,
       workspace: {
         primary: {
           id: "workspace",
@@ -54,7 +61,7 @@ describe("createHelarcLocalCommandActionCapability", () => {
     expect(capability.registrations.registrations[0]).toMatchObject({
       operation: shellOperation,
       binding: shellBinding,
-      effectFamilies: ["filesystem", "process"],
+      effectFamilies: ["process"],
       adapter: { id: capability.shellActionAdapterId },
     });
     expect(capability.registrations.registrations[1]).toMatchObject({
@@ -93,6 +100,7 @@ async function createCapability() {
     revision: "2",
   };
   return createHelarcLocalCommandActionCapability({
+    commandOutputDirectory,
     workspace: {
       primary: {
         id: "workspace",
