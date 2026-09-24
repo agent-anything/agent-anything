@@ -16,6 +16,8 @@ import {
   AgentHookController,
   type AgentHookExecutionStore,
 } from "@agent-anything/agent-hooks/execution";
+import { createAgentHookComposition } from "@agent-anything/agent-hooks/composition";
+import { createHelarcPlanSynchronizationHookComposition } from "../controller/HelarcPlanSynchronizationHook.js";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { HELARC_RESULT_EXECUTION_FLOW } from "./HelarcResultExecutionFlow.js";
@@ -172,6 +174,13 @@ export async function createHelarcProductComposition(
     (instructionSettings ?? createDefaultHelarcInstructionSettings()).stop,
     now,
   );
+  const planSynchronization = createHelarcPlanSynchronizationHookComposition();
+  const stopHooks = createAgentHookComposition({
+    id: "helarc.agent-hooks",
+    revision: `${planSynchronization.revision}:${taskFulfillment.composition.revision}`,
+    registrations: [...planSynchronization.registrations, ...taskFulfillment.composition.registrations],
+    bindings: [...planSynchronization.bindings, ...taskFulfillment.composition.bindings],
+  });
   const actions = createHelarcActionComposition({
     admittedAt,
     file: input.fileActions,
@@ -276,7 +285,7 @@ export async function createHelarcProductComposition(
   );
   const providerController = new AgentHookController<HelarcAgentOutput>({
     controller: tracedController,
-    composition: taskFulfillment.composition,
+    composition: stopHooks,
     rootRunId: input.runId,
     maxConsecutiveContinuations: 2,
     now,
@@ -309,7 +318,7 @@ export async function createHelarcProductComposition(
     interactions,
     delegation: descendant.delegation,
     agentHooks: providerController.store,
-    hookRegistrations: taskFulfillment.composition.registrations,
+    hookRegistrations: stopHooks.registrations,
     taskFulfillment: taskFulfillment.hook,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {

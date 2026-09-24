@@ -960,7 +960,7 @@ describe("Helarc Host Run composition", () => {
     expect(observations[0]?.lowerRefs[0]?.id).not.toBe(observations[1]?.lowerRefs[0]?.id);
   });
 
-  it("updates the Runner-owned plan and exposes it to the next controller turn", async () => {
+  it("keeps the recorded Plan when the model ignores one synchronization feedback and ends", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-update-"));
     const provider = new ScriptedProvider([
       {
@@ -987,9 +987,7 @@ describe("Helarc Host Run composition", () => {
     });
 
     expect(result.product.status).toBe("completed");
-    expect(provider.lastControllerInputPlans).toEqual([
-      null,
-      {
+    const recordedPlan = {
         id: `${result.harnessRunId}:plan:1`,
         version: 1,
         status: "active",
@@ -997,8 +995,37 @@ describe("Helarc Host Run composition", () => {
           { step: "Inspect workspace", status: "in_progress" },
           { step: "Finish task", status: "pending" },
         ],
-      },
+      };
+    expect(provider.lastControllerInputPlans).toEqual([null, recordedPlan, recordedPlan]);
+    expect(provider.stopRequests).toHaveLength(0);
+    expect(JSON.stringify(provider.requests[2]!.messages)).toContain("plan_synchronization_requested");
+    expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(1);
+    const updates = result.runResult.items.flatMap(({ payload }) => payload.kind === "state_transition" && payload.transition === "plan" ? [payload.plan] : []);
+    expect(updates).toHaveLength(2);
+    expect(updates.at(-1)).toMatchObject({ status: "abandoned", steps: recordedPlan.steps });
+    expect(result.product.output.agentSummary).toBe("Plan was recorded after reconciliation feedback.");
+  });
+
+  it.each(["completed", "pending"] as const)("accepts model Plan synchronization to %s without a separate assessment or repeated feedback", async (status) => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-sync-"));
+    const provider = new ScriptedProvider([
+      { kind: "plan_update", plan: [{ step: "Inspect workspace", status: "in_progress" }] },
+      { kind: "completion", summary: "Finished for now." },
+      { kind: "plan_update", explanation: status === "completed" ? "Work is done." : "Inspection remains pending; no more work can be performed now.", plan: [{ step: "Inspect workspace", status }] },
+      { kind: "completion", summary: "The Plan now records the actual state." },
     ]);
+    const result = await executeReadOnlyTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings: createDefaultHelarcInstructionSettings() });
+    expect(result.runResult.status).toBe("completed");
+    expect(provider.requests).toHaveLength(4);
+    expect(provider.stopRequests).toHaveLength(0);
+    expect(provider.requests.every((request) => request.interaction.kind === "native_tool_turn" && request.instructions.content.length === 0)).toBe(true);
+    expect(JSON.stringify(provider.requests[2]!.messages)).toContain("plan_synchronization_requested");
+    const updates = result.runResult.items.flatMap(({ payload }) => payload.kind === "state_transition" && payload.transition === "plan" ? [payload.plan] : []);
+    expect(updates).toHaveLength(status === "completed" ? 2 : 3);
+    expect(updates.at(-1)?.status).toBe(status === "completed" ? "completed" : "abandoned");
+    expect(updates.at(-1)?.steps).toEqual([{ step: "Inspect workspace", status }]);
+    expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(1);
+    expect(result.runResult.items.some(({ payload }) => payload.kind === "suspension_transition")).toBe(false);
   });
 
   it("allows bounded Controller correction after three rejected Actions", async () => {

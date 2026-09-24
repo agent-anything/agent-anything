@@ -88,13 +88,14 @@ describe("HelarcTaskFulfillmentHook", () => {
     }]);
   });
 
-  it.each(["root", "descendant"] as const)("allows fulfilled %s work to request truthful Plan follow-up", async (runKind) => {
+  it.each(["root", "descendant"] as const)("allows custom Stop Instructions to request truthful Plan follow-up for %s work", async (runKind) => {
     const rationale = "The requested work is complete. Update the existing Plan to reflect the settled results before the final response.";
     const provider = new StructuredProvider({
       status: "fulfilled", disposition: "continue", rationale,
       missingOutcomes: [], unsupportedClaims: [],
     });
-    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW);
+    const customInstructions = "Check whether the existing Plan reflects the settled work before ending.";
+    const hook = new HelarcTaskFulfillmentHook(provider, [{ id: "stop_instructions", enabled: true, content: customInstructions }], () => NOW);
     const event = {
       ...createEvent(), runKind,
       plan: {
@@ -116,7 +117,7 @@ describe("HelarcTaskFulfillmentHook", () => {
       throw new TypeError("Expected Stop assessment material in a user message.");
     }
     expect(JSON.parse(message.content[0].text).completionBasis.plan).toEqual(event.plan);
-    expect(JSON.stringify(provider.requests[0]!.instructions)).toContain("If a Plan exists, check whether it reflects the settled work");
+    expect(JSON.stringify(provider.requests[0]!.instructions)).toContain(customInstructions);
     expect(provider.requests[0]!.interaction).toMatchObject({
       kind: "structured_generation",
       outputFormat: { schemaRevision: "3" },

@@ -9,6 +9,7 @@ describe("Helarc Instruction settings", () => {
     expect(draft.protocol).toHaveLength(3);
     expect(draft.delegated).toHaveLength(1);
     expect(draft.stop).toHaveLength(1);
+    expect(draft.stop[0]!.content).not.toContain("If a Plan exists");
     for (const entries of Object.values(draft)) {
       expect(entries.every(section => !section.enabled && section.content.trim().length > 0)).toBe(true);
     }

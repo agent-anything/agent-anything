@@ -19,8 +19,6 @@ export const HELARC_DEFAULT_STOP_INSTRUCTIONS: readonly HelarcInstructionSection
       "Decide separately whether useful actionable work remains before this processing can end.",
       "Return disposition continue only when you can identify such work; explain that next work in rationale.",
       "A fulfilled task may still need concrete follow-up before ending; report fulfilled with disposition continue in that case, without inventing missing outcomes or unsupported claims.",
-      "If a Plan exists, check whether it reflects the settled work and proposed final response. When it is stale, identify the concrete progress update needed in rationale.",
-      "Do not require creating a Plan, marking unfinished steps completed, or repeating an already accurate update. Plan maintenance alone does not make the task incomplete or uncertain.",
       "Return disposition allow when no useful next action remains and the Agent either fulfills the task or honestly explains its limitations.",
       "Incomplete or uncertain fulfillment alone is not a reason to demand another turn.",
       "Do not infer that a file changed or a command ran from the proposal text alone.",
