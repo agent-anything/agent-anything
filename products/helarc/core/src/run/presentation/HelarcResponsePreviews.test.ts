@@ -3,6 +3,7 @@ import type { ControllerResponseObservation } from "@agent-anything/agent-runtim
 import type { ProviderDeliveryEvent } from "@agent-anything/model-interaction";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import { HelarcResponsePreviewStore } from "./HelarcResponsePreviews.js";
+import type { HelarcModelCallableCatalog } from "../../controller/HelarcModelCallableCatalog.js";
 
 function delivery(
   sequence: number,
@@ -47,6 +48,51 @@ function interpreted(
 }
 describe("response display previews", () => {
   afterEach(() => vi.useRealTimers());
+  it("streams only request-bound final controls and reconciles full arguments without calling them final", () => {
+    const store = new HelarcResponsePreviewStore(() => {});
+    store.bindRequest("root", "root:request", { bindings: [
+      { kind: "control", control: "final_result", callableName: "final_result" },
+    ] } as HelarcModelCallableCatalog);
+    store.observe(delivery(1, { kind: "started", mode: "streaming" }));
+    store.observe(delivery(2, { kind: "tool_call_delta", partId: "call:0", index: 0,
+      name: "final_result", argumentsDelta: '{"response":"Partial' }));
+    store.observe(delivery(3, { kind: "tool_call_delta", partId: "call:1", index: 1,
+      name: "final_result_unknown", argumentsDelta: '{"response":"Not bound"}' }));
+    expect(store.snapshot().attempts[0]).toMatchObject({ state: "receiving", parts: [
+      { kind: "final_response", text: "Partial", modelItemId: null },
+      { kind: "tool_call", text: "" },
+    ] });
+    store.observe(delivery(4, { kind: "settled", disposition: "completed", code: null, parts: [] }));
+    store.observe({ ...interpreted(), parts: [
+      { partId: "call:0", turnId: "turn-1", contentBlockOrdinal: 0, modelItemId: "final-item" },
+      { partId: "call:1", turnId: "turn-1", contentBlockOrdinal: 1, modelItemId: "other-item" },
+    ] });
+    store.committed({ runId: "root", item: { payload: { kind: "controller_turn", modelItems: [
+      { id: "final-item", kind: "model_tool_call", metadata: { helarcCallableBinding: { kind: "control", control: "final_result" } },
+        call: { input: { response: "  Reconciled final candidate  " } } },
+      { id: "other-item", kind: "model_tool_call" },
+    ] } } } as RunTranscriptRecord);
+    expect(store.snapshot().attempts[0]).toMatchObject({ state: "committed", parts: [
+      { kind: "final_response", text: "  Reconciled final candidate  ", committedRecordId: "final-item" },
+      { kind: "tool_call", text: "" },
+    ] });
+    store.close();
+  });
+  it("isolates final arguments across retries and excludes unbound child calls", () => {
+    const store = new HelarcResponsePreviewStore(() => {});
+    store.bindRequest("root", "root:request", { bindings: [
+      { kind: "control", control: "final_result", callableName: "final_result" },
+    ] } as HelarcModelCallableCatalog);
+    for (const [run, invocation, response] of [["root", "first", "old"], ["root", "retry", "new"], ["child", "child", "child"]]) {
+      store.observe(delivery(1, { kind: "started", mode: "streaming" }, run, invocation));
+      store.observe(delivery(2, { kind: "tool_call_delta", partId: "call:0", index: 0,
+        name: "final_result", argumentsDelta: JSON.stringify({ response }) }, run, invocation));
+      store.observe(delivery(3, { kind: "settled", disposition: "failed", code: "connection", parts: [] }, run, invocation));
+    }
+    expect(store.snapshot().attempts.map(a => a.parts[0]?.text)).toEqual(["old", "new", ""]);
+    expect(store.snapshot().attempts.every(a => a.state === "failed")).toBe(true);
+    store.close();
+  });
   it("coalesces many chunks and only reconciles the exact committed item", () => {
     vi.useFakeTimers();
     const checkpoint = vi.fn();

@@ -86,6 +86,23 @@ function createTestProviderProfile(
 }
 
 describe("HelarcProductComposition", () => {
+  it("registers only the instruction-driven Stop handler for root and descendant Runs", async () => {
+    const composition = await createHelarcProductComposition({
+      runId: "stop-composition-run",
+      ...createTask("D:/workspace"),
+      provider: new UnusedProvider(),
+      ...createLocalContributions(),
+      now: fixedNow,
+    });
+
+    expect(composition.hookRegistrations).toHaveLength(1);
+    expect(composition.hookRegistrations[0]).toMatchObject({
+      ref: { owner: "helarc", id: "helarc.task-fulfillment.stop" },
+      point: "Stop",
+      runKinds: ["root", "descendant"],
+    });
+  });
+
   it("fails closed before Run composition when exact qualification is absent", async () => {
     const provider = new UnusedProvider();
 

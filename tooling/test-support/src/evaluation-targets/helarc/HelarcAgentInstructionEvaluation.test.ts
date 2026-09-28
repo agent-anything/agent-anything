@@ -80,7 +80,7 @@ describe("Helarc Agent Instruction Evaluation", () => {
         providerFactory: () => new FakeNativeToolProvider({
           descriptor: { id: "instruction-evaluation-provider" },
           steps: [fakeNativeModelOutput(
-            { kind: "completion", summary: "The timeout is 4500 ms." },
+            { kind: "model_call", name: "final_result", input: {response: "The timeout is 4500 ms."} },
             { usage: {
                 inputTokens: 20,
                 outputTokens: 8,

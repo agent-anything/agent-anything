@@ -39,11 +39,11 @@ import {
   type FakeNativeToolProviderStep,
 } from "../../provider/FakeNativeToolProvider.js";
 
-export const HELARC_EVALUATION_TIME = "2026-09-05T00:00:00.000Z";
+export const HELARC_EVALUATION_TIME = "2026-09-29T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-run-owned-command-corpus-v1";
+  "helarc-explicit-final-result-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-run-owned-command-target-v1";
+  "helarc-explicit-final-result-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -355,7 +355,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v24-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v25-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -366,19 +366,19 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-run-owned-command-v1",
+    "product.revision": "helarc-product-explicit-final-result-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
     "agent.instructions.digest": `sha256:${agent.instructions.contentDigest.value}`,
     "prompt.revision": "helarc-prompt-v7",
-    "controller-protocol.revision": "helarc.provider-native-tool-interaction.v1",
-    "controller-control-set.revision": "helarc.controller-controls.v1",
+    "controller-protocol.revision": "helarc.provider-native-tool-interaction.v2",
+    "controller-control-set.revision": "helarc.controller-controls.v2",
     "model-interaction.protocol.revision": "provider-native-tool-interaction.v1",
     "run-interaction-records.revision": "model-turn-and-settlement.v1",
     "run-lifecycle.revision": "agent-runtime.run-lifecycle.v4",
     "run-settlement.revision": "agent-runtime.run-terminal-settlement.v2",
-    "agent-hooks.revision": "agent-hooks.stop-and-stop-failure.v1",
+    "agent-hooks.revision": "agent-hooks.post-settlement-stop.v1",
     "task-fulfillment-hook.revision": HELARC_TASK_FULFILLMENT_HOOK_REVISION,
     "tool-input-validation.revision": "tools.request-admission-and-dispatch-validation.v2",
     "agent-continuation.revision": "agent-runtime.opaque-agent-continuation.v1",
@@ -389,7 +389,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-run-owned-command-v1",
+    "source.revision": "helarc-explicit-final-result-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "helarc-baseline-tools-v4",
@@ -488,7 +488,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
           toolName: "Read",
           input: { file_path: "src/index.ts" },
         },
-        { kind: "completion", summary: "The fixture exports phase26Value with value 42." },
+        { kind: "model_call", name: "final_result", input: {response: "The fixture exports phase26Value with value 42."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -514,7 +514,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
           toolName: "Grep",
           input: { path: ".", pattern: "targetSymbol" },
         },
-        { kind: "completion", summary: "targetSymbol is declared in src/feature.ts." },
+        { kind: "model_call", name: "final_result", input: {response: "targetSymbol is declared in src/feature.ts."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -542,10 +542,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             content: "phase26\n",
           },
         },
-        {
-          kind: "completion",
-          summary: "Created the requested generated file.",
-        },
+        { kind: "model_call", name: "final_result", input: {response: "Created the requested generated file."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -576,7 +573,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             description: "Create the requested marker.",
           },
         },
-        { kind: "completion", summary: "The requested command was denied." },
+        { kind: "model_call", name: "final_result", input: {response: "The requested command was denied."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -605,7 +602,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             metadata: {},
           },
         }),
-        { kind: "completion", summary: "Recovered from an interrupted Provider response." },
+        { kind: "model_call", name: "final_result", input: {response: "Recovered from an interrupted Provider response."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -634,7 +631,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
           reason: "Create the second requested file.",
           input: { file_path: "beta.txt", content: "beta\n" },
         },
-        { kind: "completion", summary: "Created both requested files." },
+        { kind: "model_call", name: "final_result", input: {response: "Created both requested files."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -661,7 +658,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
               : "printf 'verification-ok\\n'",
           },
         },
-        { kind: "completion", summary: "The ordinary command check passed." },
+        { kind: "model_call", name: "final_result", input: {response: "The ordinary command check passed."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -698,7 +695,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
               : "printf 'recovered\\n'",
           },
         },
-        { kind: "completion", summary: "Recovered and completed the current check." },
+        { kind: "model_call", name: "final_result", input: {response: "Recovered and completed the current check."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -721,7 +718,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
           reason: "Replace the tracked file.",
           input: { file_path: "tracked.txt", content: "changed\n" },
         },
-        { kind: "completion", summary: "Replaced the tracked file." },
+        { kind: "model_call", name: "final_result", input: {response: "Replaced the tracked file."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -738,7 +735,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       prompt: "Create required.txt containing ready followed by a newline.",
       fixtureFiles: {},
       outputs: [
-        { kind: "completion", summary: "The requested file is ready." },
+        { kind: "model_call", name: "final_result", input: {response: "The requested file is ready."} },
       ],
       productStatus: "completed",
       runStatus: "completed",
@@ -772,7 +769,7 @@ function caseDefinition(input: {
     `helarc.phase26.fixture.${input.id}`,
     input.fixtureFiles,
   );
-  const scriptRef = ref(`helarc.phase26.script.${input.id}`);
+  const scriptRef = ref(`helarc.phase26.script.${input.id}`, "v2");
   const claimRef = ref(`helarc.phase26.claim.${input.id}`);
   const definition = createEvaluationCase({
     ref: caseRef,

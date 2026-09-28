@@ -26,6 +26,11 @@ export type HelarcModelCallableBinding =
       readonly kind: "control";
       readonly callableName: "update_plan";
       readonly control: "update_plan";
+    }
+  | {
+      readonly kind: "control";
+      readonly callableName: "final_result";
+      readonly control: "final_result";
     };
 
 export interface HelarcModelCallableCatalog {
@@ -62,6 +67,7 @@ export function createHelarcModelCallableCatalog(input: {
     }),
   );
   const controlBindings: readonly HelarcModelCallableBinding[] = Object.freeze([
+    Object.freeze({kind: "control" as const, callableName: "final_result" as const, control: "final_result" as const}),
     Object.freeze({
       kind: "control" as const,
       callableName: "update_plan" as const,

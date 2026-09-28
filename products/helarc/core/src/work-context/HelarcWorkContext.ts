@@ -357,8 +357,9 @@ export function createHelarcMessage(input: CreateHelarcMessageInput): CreateHela
     return reject("message_role_invalid", "Message role is invalid.");
   }
 
-  const content = normalizeRequiredString(input.content);
-  if (!content) {
+  const content = input.role === "assistant" && typeof input.content === "string"
+    ? input.content : normalizeRequiredString(input.content);
+  if (content === null || content === undefined || (input.role !== "assistant" && content.length === 0)) {
     return reject("message_content_required", "Message content is required.");
   }
 

@@ -34,7 +34,7 @@ for (const mode of ["retry", "cancel"] as const) {
             content:
               requests.length === 1
                 ? "Interrupted preview only."
-                : "Recovered response.",
+                : "Recovered commentary.",
           }),
         );
         if (requests.length === 1)
@@ -54,6 +54,9 @@ for (const mode of ["retry", "cancel"] as const) {
               ],
             }),
           );
+        if (requests.length > 1) res.write(sse({tool_calls:[{index:0,id:"final",type:"function",function:{
+          name:"final_result",arguments:JSON.stringify({response:"Recovered response."}),
+        }}]}));
       } else {
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
         res.write(

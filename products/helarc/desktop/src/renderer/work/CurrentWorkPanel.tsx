@@ -538,7 +538,7 @@ function TaskDetail({
       c.invocationId && r.content.kind === "tool_call" && c.invocationId === r.content.invocationId))) ?? [];
   const hasSubtasks = work?.tasks.some(t => t.parentRunId === scope.runId);
   const previewAttempts = preview.attempts.filter(a => a.state !== "committed" &&
-    a.parts.some(p => p.kind === "text" && p.text));
+    a.parts.some(p => (p.kind === "text" || p.kind === "final_response") && p.text));
   const artifactIds = page?.artifactIds.filter(id => snapshot.activeThread?.artifacts.some(a =>
     a.id === id && a.kind !== "final-output")) ?? [];
   return (
@@ -624,7 +624,7 @@ function TaskDetail({
           {previewAttempts.length > 0 ? previewAttempts.map((a) => (
               <div key={a.invocationId} className="wb-task-response">
                 {a.parts
-                  .filter((p) => p.kind === "text" && p.text)
+                  .filter((p) => (p.kind === "text" || p.kind === "final_response") && p.text)
                   .map((p) => (
                     <div key={p.id}>
                       <small>{a.state.replaceAll("_", " ")} response</small>
@@ -707,8 +707,11 @@ function WorkHistory({
         />
       ))}
       {page?.records.map((r) =>
-        r.content.kind === "assistant_text" ? (
+        r.content.kind === "assistant_text" || r.content.kind === "final_response" ? (
           <div key={r.id}>
+            {r.content.kind === "final_response" && r.content.disposition !== "completed" && <small>
+              {r.content.disposition === "accepted" || r.content.disposition === "proposed" ? "Awaiting completion" : "Not finalized"}
+            </small>}
             <MarkdownContent text={r.content.text} />
             {r.content.omittedBytes > 0 && (
               <button className="wb-link" onClick={() => onOperation(r)}>

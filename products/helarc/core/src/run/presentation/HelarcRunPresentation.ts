@@ -3,6 +3,9 @@ import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type { ToolBindingRef } from "@agent-anything/tools/identity";
 
 export type HelarcOutputSource =
+  | { readonly kind: "model_control"; readonly turnId: string; readonly modelItemId: string;
+      readonly modelCallRef: import("@agent-anything/model-interaction").ModelCallRef;
+      readonly control: "final_result"; readonly argumentPath: "/response" }
   | {
       readonly kind: "model_text";
       readonly turnId: string;
@@ -40,6 +43,9 @@ export interface HelarcRunPresentationRecord {
         readonly text: string;
         readonly omittedBytes: number;
       }
+    | { readonly kind: "final_response"; readonly turnId: string; readonly modelItemId: string;
+        readonly callId: string; readonly text: string; readonly omittedBytes: number;
+        readonly disposition: "proposed" | "accepted" | "declined" | "completed" | "failed" | "cancelled" }
     | {
         readonly kind: "tool_call";
         readonly callId: string;
@@ -294,7 +300,13 @@ export function appendHelarcRunPresentation(
           ordinal: model.contentBlockOrdinal,
           ...boundedPresentationText(model.text),
         });
-      if (model.kind === "model_tool_call")
+      if (model.kind === "model_tool_call") {
+        const binding = resolvedCallable(model.metadata?.helarcCallableBinding);
+        if (binding.callableKind === "control" && binding.resolvedName === "final_result" && typeof model.call.input.response === "string") {
+          add(model.id, {kind: "final_response", turnId: model.call.modelCallRef.turnId, modelItemId: model.id,
+            callId: model.call.modelCallRef.id, ...boundedPresentationText(model.call.input.response), disposition: "proposed"});
+          continue;
+        }
         add(model.id, {
           kind: "tool_call",
           callId: model.call.modelCallRef.id,
@@ -307,6 +319,7 @@ export function appendHelarcRunPresentation(
           settlement: null,
           result: null,
         });
+      }
     }
   } else if (
     payload.kind === "run_action" ||
@@ -319,6 +332,10 @@ export function appendHelarcRunPresentation(
           ? payload.action.provenance.modelCallRef.id
           : null;
     const updateCall = (entry: HelarcRunPresentationRecord): HelarcRunPresentationRecord => {
+      if (payload.kind === "model_call_settlement" && entry.runId === record.runId && entry.content.kind === "final_response" && entry.content.callId === callId) {
+        return {...entry, revision: item.committedInRevision, content: {...entry.content,
+          disposition: payload.result.settlement === "succeeded" ? "accepted" : payload.result.settlement === "cancelled" ? "cancelled" : "declined"}};
+      }
       if (
         entry.runId !== record.runId ||
         entry.content.kind !== "tool_call" ||
@@ -378,6 +395,11 @@ export function appendHelarcRunPresentation(
     payload.kind === "settlement_cause"
   ) {
     const cause = payload.cause;
+    if (payload.kind === "terminal_transition") records = records.map(entry => entry.runId === record.runId && entry.content.kind === "final_response" &&
+      (entry.content.disposition === "proposed" || entry.content.disposition === "accepted")
+      ? {...entry, revision: item.committedInRevision, content: {...entry.content,
+          disposition: payload.status === "completed" && entry.content.disposition === "accepted" ? "completed" : payload.status === "cancelled" ? "cancelled" : "failed"}}
+      : entry);
     add(item.ref.id, {
       kind: "lifecycle",
       title: payload.kind.replaceAll("_", " "),

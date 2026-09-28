@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_ACCEPTED_BASELINE, HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_BASELINE_ACCEPTANCE, verifyHelarcExplicitFinalResultOperationalAcceptedBaseline } from "./HelarcExplicitFinalResultOperationalBaseline.js";
 import { HELARC_RUN_OWNED_COMMAND_OPERATIONAL_ACCEPTED_BASELINE, HELARC_RUN_OWNED_COMMAND_OPERATIONAL_BASELINE_ACCEPTANCE, verifyHelarcRunOwnedCommandOperationalAcceptedBaseline } from "./HelarcRunOwnedCommandOperationalBaseline.js";
 import { HELARC_NORMAL_COMPLETION_OPERATIONAL_ACCEPTED_BASELINE, HELARC_NORMAL_COMPLETION_OPERATIONAL_BASELINE_ACCEPTANCE, verifyHelarcNormalCompletionOperationalAcceptedBaseline } from "./HelarcNormalCompletionOperationalBaseline.js";
 import {
@@ -30,7 +31,7 @@ import {
 } from "./HelarcRunLifecycleSettlementOperationalBaseline.js";
 
 describe("Helarc operational conformance Baseline", () => {
-  it("preserves earlier Reports while accepting only the exact Run-owned-command Report", async () => {
+  it("preserves earlier Reports while accepting only the exact explicit-final-result Report", async () => {
     const predecessorBefore = JSON.stringify(HELARC_OPERATIONAL_CONFORMANCE_ACCEPTED_BASELINE);
     const runStopPredecessorBefore = JSON.stringify(HELARC_RUN_STOP_OPERATIONAL_ACCEPTED_BASELINE);
     const lifecyclePredecessorBefore = JSON.stringify(HELARC_RUN_LIFECYCLE_SETTLEMENT_OPERATIONAL_ACCEPTED_BASELINE);
@@ -45,12 +46,16 @@ describe("Helarc operational conformance Baseline", () => {
     expect(() => verifyHelarcNormalStopOperationalAcceptedBaseline(candidate)).toThrow("does not match the accepted Baseline");
     expect(() => verifyHelarcNormalCompletionOperationalAcceptedBaseline(candidate))
       .toThrow("does not match the accepted Baseline");
-    expect(verifyHelarcRunOwnedCommandOperationalAcceptedBaseline(candidate))
-      .toBe(HELARC_RUN_OWNED_COMMAND_OPERATIONAL_ACCEPTED_BASELINE);
+    expect(() => verifyHelarcRunOwnedCommandOperationalAcceptedBaseline(candidate))
+      .toThrow("does not match the accepted Baseline");
+    expect(verifyHelarcExplicitFinalResultOperationalAcceptedBaseline(candidate))
+      .toBe(HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_ACCEPTED_BASELINE);
+    expect(HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
+      .toEqual(HELARC_RUN_OWNED_COMMAND_OPERATIONAL_ACCEPTED_BASELINE.acceptanceRef);
     expect(HELARC_RUN_OWNED_COMMAND_OPERATIONAL_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_NORMAL_COMPLETION_OPERATIONAL_ACCEPTED_BASELINE.acceptanceRef);
     expect(HELARC_NORMAL_COMPLETION_OPERATIONAL_BASELINE_ACCEPTANCE.predecessorAcceptanceRef).toEqual(HELARC_NORMAL_STOP_OPERATIONAL_ACCEPTED_BASELINE.acceptanceRef);
-    expect(HELARC_RUN_OWNED_COMMAND_OPERATIONAL_ACCEPTED_BASELINE).toMatchObject({
+    expect(HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_ACCEPTED_BASELINE).toMatchObject({
       status: "passed",
       trialCount: 7,
       completedTrialCount: 7,
@@ -84,7 +89,7 @@ describe("Helarc operational conformance Baseline", () => {
       digest: "0".repeat(64),
     };
 
-    expect(() => verifyHelarcRunOwnedCommandOperationalAcceptedBaseline(changed))
+    expect(() => verifyHelarcExplicitFinalResultOperationalAcceptedBaseline(changed))
       .toThrow("does not match the accepted Baseline");
   }, 180_000);
 });

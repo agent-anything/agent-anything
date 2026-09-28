@@ -107,7 +107,8 @@
     "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/operation-composition": "workspace:*",
     "@agent-anything/tools": "workspace:*",
-    "@agent-anything/workspace": "workspace:*"
+    "@agent-anything/workspace": "workspace:*",
+    "@streamparser/json": "0.0.26"
   },
   "devDependencies": {
     "@types/node": "^25.9.1"

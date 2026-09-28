@@ -134,9 +134,9 @@ export class HelarcWorkbenchQueries {
         return fitsPage(page) ? page : rejected("read_failed");
       }
       if (query.section !== undefined) return rejected("invalid_query");
-      if (record.content.kind !== "assistant_text" && record.content.kind !== "steering") return rejected("not_found");
+      if (record.content.kind !== "assistant_text" && record.content.kind !== "final_response" && record.content.kind !== "steering") return rejected("not_found");
       const value =
-        record.content.kind === "assistant_text"
+        record.content.kind !== "steering"
           ? record.content.text
           : record.content.instruction;
       const offset = query.offset ?? 0;
@@ -151,10 +151,7 @@ export class HelarcWorkbenchQueries {
             ? "Subtask response" : "Response",
         text: page.text,
         nextOffset: page.end < value.length ? page.end : null,
-        omittedBytes:
-          record.content.kind === "assistant_text" || record.content.kind === "steering"
-            ? record.content.omittedBytes
-            : 0,
+        omittedBytes: record.content.omittedBytes,
       };
     } catch {
       return rejected("read_failed");

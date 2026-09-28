@@ -1,6 +1,8 @@
 import type {
   Controller,
   ControllerCallContext,
+  ControllerCompletionInput,
+  ControllerCompletionDisposition,
   ControllerDecision,
   ControllerInput,
 } from "@agent-anything/agent-runtime/controller";
@@ -48,7 +50,7 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
     const flow = new ExecutionFlowPath(AGENT_HOOK_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId, []);
     try {
       const decision = await this.nextWithFlow(input, context, flow);
-      flow.advance("result", {decision:decision.kind}).output(flow.material("Hook-adjusted Controller decision", "returned", decision));
+      flow.advance("result", {decision:decision.kind}).output(flow.material("Controller decision", "returned", decision));
       flow.close("returned");
       return decision;
     } catch (error) { flow.close(context.cancellation.signal.aborted ? "cancelled" : "failed"); throw error; }
@@ -89,19 +91,47 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
 
     const decisionRef = flow.material("Controller candidate", "received", decision);
     controllerStep.output(decisionRef);
-    const candidateStep = flow.advance("candidate", {decision:decision.kind}, [decisionRef]);
-    candidateStep.check("normal_completion", decision.kind === "propose_completion" ? "passed" : "not_applicable");
     if (decision.kind !== "propose_completion") {
-      candidateStep.check("registered_handlers", "not_applicable", {reason: "not_a_completion_candidate"});
-      candidateStep.check("continuation_allowance", "not_applicable", {reason: "not_a_completion_candidate"});
       this.continuationCounts.delete(input.runId);
-      return decision;
     }
+    return decision;
+  }
+
+  async beforeCompletion(
+    notification: ControllerCompletionInput<TOutput>,
+    context: ControllerCallContext,
+  ): Promise<ControllerCompletionDisposition> {
+    const input = notification.current;
+    const flow = new ExecutionFlowPath(AGENT_HOOK_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId);
+    try {
+      flow.advance("before_completion", {stateRevision: notification.stateRevision}, [flow.material("Settled completion candidate", "received", notification)]);
+      const inherited = this.input.controller.beforeCompletion === undefined
+        ? {kind: "allow" as const}
+        : await this.input.controller.beforeCompletion(notification, {...context, executionFlow: flow.callContext});
+      if (inherited?.kind !== "allow" && inherited?.kind !== "continue_with_feedback") {
+        throw new TypeError("Controller completion disposition is invalid.");
+      }
+      const result = inherited?.kind === "continue_with_feedback"
+        ? inherited
+        : await this.dispatchStop(notification, context, flow);
+      flow.advance("result", {disposition: result.kind}).output(flow.material("Completion disposition", "returned", result));
+      flow.close("returned");
+      return result;
+    } catch (error) { flow.close(context.cancellation.signal.aborted ? "cancelled" : "failed"); throw error; }
+  }
+
+  private async dispatchStop(
+    notification: ControllerCompletionInput<TOutput>,
+    context: ControllerCallContext,
+    flow: ExecutionFlowPath,
+  ): Promise<ControllerCompletionDisposition> {
+    const input = notification.current;
+    const candidateStep = flow.advance("candidate", {stateRevision: notification.stateRevision});
     candidateStep.check("registered_handlers", this.input.composition?.registrations.length ? "passed" : "not_applicable", {registeredCount:this.input.composition?.registrations.length ?? 0});
     if (this.input.composition === undefined || this.input.composition.registrations.length === 0) {
       candidateStep.check("continuation_allowance", "not_applicable", {reason: "no_registered_handlers"});
       this.continuationCounts.delete(input.runId);
-      return decision;
+      return {kind: "allow"};
     }
 
     candidateStep.check("continuation_allowance", (this.continuationCounts.get(input.runId) ?? 0) >= this.maxConsecutiveContinuations ? "not_satisfied" : "passed", {used:this.continuationCounts.get(input.runId) ?? 0, maximum:this.maxConsecutiveContinuations});
@@ -109,14 +139,14 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
       this.store.recordDisposition({runId: input.runId, controllerRequestId: input.toolExposure.controllerRequestId,
         disposition: "continuation_limit_reached", feedbackCount: this.continuationCounts.get(input.runId) ?? 0,
         recordedAt: this.now()});
-      return decision;
+      return {kind: "allow"};
     }
 
     const event = createAgentStopEvent({
       sequence: this.nextSequence(input.runId),
       runKind: this.runKind(input.runId),
       controllerInput: input,
-      decision,
+      output: notification.output,
       emittedAt: this.now(),
     });
     const eventRef = flow.material("Agent Stop event", "emitted", event);
@@ -134,7 +164,7 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
     handlersStep.output(flow.material("Stop dispatch result", "settled", result));
     if (result.disposition === "allow") {
       this.continuationCounts.delete(input.runId);
-      return decision;
+      return {kind: "allow"};
     }
     const count = (this.continuationCounts.get(input.runId) ?? 0) + 1;
     this.continuationCounts.set(input.runId, count);
@@ -150,7 +180,6 @@ export class AgentHookController<TOutput = unknown> implements Controller<TOutpu
         code: result.codes.join("+") || "agent_stop_continuation_requested",
         message: result.message ?? "Agent Stop Handler requested another turn.",
       }),
-      modelItems: decision.modelItems,
     });
   }
 

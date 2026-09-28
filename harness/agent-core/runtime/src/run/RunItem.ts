@@ -110,6 +110,8 @@ export type RunItemPayload<TOutput = unknown> =
       readonly source: RunCauseSourceRef;
       readonly candidateId: string;
       readonly candidateRevision: string;
+      readonly completionSource: import("../controller/index.js").CompletionSource;
+      readonly basisRevision: number;
       readonly acceptedAt: string;
     }
   | {

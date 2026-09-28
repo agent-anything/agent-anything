@@ -75,6 +75,7 @@ void app
     const controller = new HelarcMainController(
       endpoint
         ? {
+            commandOutputDirectory: join(app.getPath("userData"), "command-output"),
             responseDelivery: "streaming",
             providerProfile: {
               id: "test-provider",

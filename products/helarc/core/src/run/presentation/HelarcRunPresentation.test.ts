@@ -36,6 +36,36 @@ const call = {
 };
 
 describe("Run presentation", () => {
+  it.each(["completed", "failed", "cancelled"])("retains final candidates separately from commentary until %s terminalization", terminal => {
+    let state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {
+      kind: "controller_turn", modelItems: [
+        { kind: "assistant_text", id: "commentary", turnId: "turn", text: "Same words", contentBlockOrdinal: 0 },
+        { ...call, id: "final", metadata: { helarcCallableBinding: { kind: "control", control: "final_result" } },
+          call: { ...call.call, modelCallRef: { id: "final", turnId: "turn" }, input: { response: "Same words" } } },
+      ],
+    }));
+    expect(state.records.map(r => r.content.kind)).toEqual(["assistant_text", "final_response"]);
+    expect(state.activeCalls).toEqual([]);
+    expect(state.records[1]?.content).toMatchObject({ disposition: "proposed", text: "Same words" });
+    state = appendHelarcRunPresentation(state, record(2, { kind: "model_call_settlement",
+      result: { modelCallRef: { id: "final" }, settlement: "succeeded", content: {} } }));
+    expect(state.records[1]?.content).toMatchObject({ disposition: "accepted" });
+    state = appendHelarcRunPresentation(state, record(3, { kind: "terminal_transition", status: terminal,
+      cause: { kind: "normal", code: "completed", source: "runtime", underlying: [], recordedAt: at }, settlement: { completedAt: at } }));
+    expect(state.records[1]?.content).toMatchObject({ disposition: terminal });
+    expect(state.records[0]?.content).toMatchObject({ kind: "assistant_text", text: "Same words" });
+  });
+  it("keeps a declined final distinct from a later accepted candidate", () => {
+    let state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {
+      kind: "controller_turn", modelItems: [{ ...call, metadata: { helarcCallableBinding: { kind: "control", control: "final_result" } },
+        call: { ...call.call, input: { response: "" } } }],
+    }));
+    state = appendHelarcRunPresentation(state, record(2, { kind: "model_call_settlement",
+      result: { modelCallRef: { id: "call" }, settlement: "invalidated", content: {} } }));
+    state = appendHelarcRunPresentation(state, record(3, { kind: "terminal_transition", status: "completed",
+      cause: { kind: "normal", code: "completed", source: "runtime", underlying: [], recordedAt: at }, settlement: { completedAt: at } }));
+    expect(state.records[0]?.content).toMatchObject({ kind: "final_response", text: "", disposition: "declined" });
+  });
   it("retains Tool binding kind and interaction protocol without changing callable semantics", () => {
     const protocol = { owner: "helarc", kind: "clarification", revision: "1" };
     const bindings = [

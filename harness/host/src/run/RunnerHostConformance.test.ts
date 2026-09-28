@@ -329,7 +329,7 @@ function completionDecision(
   summary: string,
 ): ControllerDecision<TestOutput> {
   const turnId = `${input.runId}:scripted-model-turn:${input.iteration}`;
-  return {
+  return { candidates: [], completionSource: {kind: "controller" as const},
     kind: "propose_completion",
     output: { summary },
     modelItems: createControllerModelItems({

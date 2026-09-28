@@ -85,9 +85,9 @@ describe("HelarcMainController", () => {
     let delivery!: ProviderDeliverySession;
     const send = vi.fn<Provider["send"]>(async (request,context,options) => {
       delivery = new ProviderDeliverySession(options!,request);
-      delivery.start();delivery.text("No changes ");
+      delivery.start();delivery.tool(0, "final_result", '{"response":"No changes ');
       await gate;
-      delivery.text("needed.");
+      delivery.tool(0, "final_result", 'needed."}');
       const result = await baseline.send(request,context);
       delivery.settle(result);
       return result;
@@ -121,7 +121,8 @@ describe("HelarcMainController", () => {
     const preview = stored.runs[0]!.terminal!.finalProjection!.product.responses.attempts[0]!;
     expect(preview.state).toBe("committed");
     const record = stored.runs[0]!.terminal!.finalProjection!.product.presentation.records.find(r => r.id === preview.parts[0]?.committedRecordId);
-    expect(record?.content).toMatchObject({kind:"assistant_text",text:"No changes needed."});
+    expect(record?.content).toMatchObject({kind:"final_response",text:"No changes needed.",disposition:"completed"});
+    expect(stored.messages.at(-1)?.metadata.outputSource).toMatchObject({kind:"model_control",control:"final_result",argumentPath:"/response"});
     const reopened = new HelarcMainController({ commandOutputDirectory,threadStore:new FileHelarcThreadStore(join(directory,"threads.json"))});
     expect(await reopened.workbench.readResponsePreview({...scope,invocationId:null,cursor:null})).toMatchObject({status:"page",live:false,attempts:[{state:"committed"}]});
     const conversation=await reopened.workbench.readConversation({threadId:scope.threadId,position:{kind:"latest"}});
@@ -147,9 +148,9 @@ describe("HelarcMainController", () => {
     expect(page.status).toBe("page");
     if (page.status !== "page") return;
 
-    expect(page.records.some(record => record.content.kind === "assistant_text")).toBe(true);
+    expect(page.records.some(record => record.content.kind === "final_response")).toBe(true);
 
-    const text = page.records.find(record => record.content.kind === "assistant_text")!;
+    const text = page.records.find(record => record.content.kind === "final_response")!;
     expect(await controller.workbench.readWorkbenchItem({ ...scope, itemId: text.id })).toMatchObject({ status: "page" });
     expect(await controller.workbench.readWorkHistory({ ...query, runId: "unrelated" })).toMatchObject({ status: "rejected", code: "not_found" });
     expect(await controller.workbench.readWorkHistory({ ...query, cursor: "invalid" })).toMatchObject({ status: "rejected", code: "stale_cursor" });
@@ -1959,12 +1960,7 @@ function createDesktopNativeResult(
   }
   const responseId = `${providerId}:response:${sequence}`;
   const turnId = createModelTurnId({ providerId, requestId: request.requestId, responseId });
-  const content = output.kind === "completion"
-    ? [Object.freeze({
-        kind: "text" as const,
-        text: typeof output.summary === "string" ? output.summary : "",
-      })]
-    : [Object.freeze({
+  const content = [Object.freeze({
         kind: "model_tool_call" as const,
         call: snapshotModelToolCall({
           modelCallRef: createModelCallRef({
@@ -2001,6 +1997,7 @@ function desktopCallableName(
   request: ProviderRequest,
   output: Readonly<Record<string, unknown>>,
 ): string {
+  if (output.kind === "completion") return "final_result";
   if (output.kind === "plan_update") return "update_plan";
   if (output.kind !== "tool_call" || typeof output.toolName !== "string") {
     return "unknown_scripted_callable";
@@ -2017,6 +2014,7 @@ function desktopCallableName(
 function desktopCallableInput(
   output: Readonly<Record<string, unknown>>,
 ): { readonly [key: string]: ModelJsonValue } {
+  if (output.kind === "completion") return snapshotDesktopObject({response: output.summary});
   if (output.kind === "plan_update") {
     return snapshotDesktopObject({
       ...(typeof output.explanation === "string" ? { explanation: output.explanation } : {}),

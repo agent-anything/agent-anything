@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-test("configured local model streams through actual Electron and retains one reply", async ({}, info) => {
+test("configured local model streams through Electron and retains one explicit final reply", async ({}, info) => {
   test.skip(
     !process.env.HELARC_LIVE_OLLAMA_ENDPOINT,
     "Opt-in local model acceptance",
@@ -66,7 +66,7 @@ test("configured local model streams through actual Electron and retains one rep
             (frame) => {
               evidence.frames++;
               if (
-                frame.attempt.parts.some((p) => p.kind === "text" && p.text)
+                frame.attempt.parts.some((p) => (p.kind === "text" || p.kind === "final_response") && p.text)
               ) {
                 evidence.textFrames++;
                 if (frame.attempt.state === "receiving")
@@ -84,7 +84,7 @@ test("configured local model streams through actual Electron and retains one rep
     await page
       .locator("#task-input")
       .fill(
-        "Describe the difference between a byte and a character in five short paragraphs. Reply directly without using tools.",
+        "Briefly explain the difference between a byte and a character. Do not read or change files.",
       );
     await page
       .getByRole("button", { name: "Send message", exact: true })
@@ -134,12 +134,13 @@ test("configured local model streams through actual Electron and retains one rep
     const transport = await app.evaluate(
       () => (globalThis as any).smokeTransportStats,
     );
-    expect(transport).toHaveLength(1);
-    expect(transport[0]).toMatchObject({ stream: true, systemMessages: 0 });
+    expect(transport.length).toBeGreaterThan(0);
+    expect(transport.every((request: any) => request.stream && request.systemMessages === 0)).toBe(true);
     const replies = page.locator(".wb-message-assistant");
-    await expect(replies).toHaveCount(1);
+    const replyCount = await replies.count();
+    expect(replyCount).toBeGreaterThan(0);
     const replyBody = replies.locator(":scope > .wb-markdown");
-    const reply = (await replyBody.textContent()) ?? "";
+    const reply = (await replyBody.last().textContent()) ?? "";
     expect(reply.length).toBeGreaterThan(100);
     await expect
       .poll(async () => {
@@ -149,9 +150,15 @@ test("configured local model streams through actual Electron and retains one rep
         return data.aggregates[0]?.record.runs[0]?.terminal?.host.status;
       })
       .toBe("completed");
+    const data = JSON.parse(await readFile(join(userData, "threads.json"), "utf8"));
+    const recorded = data.aggregates[0].record.runs[0].lastProjection.product.presentation.records;
+    const finals = recorded.filter((record: any) => record.content.kind === "final_response" && record.content.disposition === "completed");
+    expect(finals).toHaveLength(1);
+    expect(finals[0].content.text).toBeTruthy();
+    console.log("Local final-result evidence:", JSON.stringify({requests: transport.length, callId: finals[0].content.callId, characters: finals[0].content.text.length}));
     await page.reload();
-    await expect(replies).toHaveCount(1);
-    await expect(replyBody).toHaveText(reply);
+    await expect(replies).toHaveCount(replyCount);
+    await expect(replyBody.last()).toHaveText(reply);
     await page.screenshot({
       path: info.outputPath("local-model-completed.png"),
     });
@@ -163,7 +170,8 @@ test("configured local model streams through actual Electron and retains one rep
           userData,
           previewBeforeTerminal: true,
           finalReplyCharacters: reply.length,
-          retainedReplyCount: 1,
+          retainedFinalReplyCount: finals.length,
+          retainedAssistantEntryCount: replyCount,
           transport,
         },
         null,

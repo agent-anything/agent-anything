@@ -29,6 +29,7 @@ describe("Agent Core Runtime public API", () => {
       "StructuredOutputError",
       "createControllerModelItems",
       "projectModelInteraction",
+      "snapshotControllerFeedback",
       "unsupportedModelInputRecovery",
       "validateControllerDecision",
     ]);

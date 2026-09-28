@@ -1083,12 +1083,29 @@ export function validateControllerDecision<TOutput>(
       ? [[modelCallRefKey(item.call.modelCallRef), item.call] as const]
       : []
   ));
+  if (modelCalls.size !== modelItems.filter(item => item.kind === "model_tool_call").length) {
+    throw decisionContractError("controller_model_call_duplicated");
+  }
 
   switch (candidate.kind) {
     case "propose_completion": {
-      if (modelCalls.size !== 0) {
-        throw decisionContractError("controller_completion_with_model_calls");
+      if (!isRecord(candidate.completionSource)) {
+        throw decisionContractError("controller_completion_source_required");
       }
+      let completionSource: import("./Controller.js").CompletionSource;
+      const remainingCalls = new Map(modelCalls);
+      if (candidate.completionSource.kind === "model_call") {
+        const modelCallRef = snapshotModelCallRef(candidate.completionSource.modelCallRef);
+        if (!remainingCalls.delete(modelCallRefKey(modelCallRef))) {
+          throw decisionContractError("controller_completion_source_invalid");
+        }
+        completionSource = Object.freeze({ kind: "model_call", modelCallRef });
+      } else if (candidate.completionSource.kind === "controller") {
+        completionSource = Object.freeze({ kind: "controller" });
+      } else {
+        throw decisionContractError("controller_completion_source_invalid");
+      }
+      const candidates = validateCandidates(candidate.candidates, remainingCalls, true);
       let validation;
       try {
         validation = input.agent.output.validate(candidate.output);
@@ -1109,38 +1126,29 @@ export function validateControllerDecision<TOutput>(
 
       return Object.freeze({
         kind: "propose_completion",
+        candidates,
+        completionSource,
         output: validation.output,
         modelItems,
       });
     }
 
-    case "advance":
+    case "advance": {
+      const candidates = validateCandidates(candidate.candidates, modelCalls);
       return Object.freeze({
         kind: "advance",
-        candidates: validateCandidates(candidate.candidates, modelCalls),
+        candidates: candidates as readonly [ProgressionCandidate, ...ProgressionCandidate[]],
         modelItems,
       });
+    }
 
     case "continue_with_feedback": {
       if (modelCalls.size !== 0) {
         throw decisionContractError("controller_feedback_with_model_calls");
       }
-      if (!isRecord(candidate.feedback) || !isRecord(candidate.feedback.source)) {
-        throw decisionContractError("controller_feedback_invalid");
-      }
-      const source = candidate.feedback.source;
       return Object.freeze({
         kind: "continue_with_feedback",
-        feedback: Object.freeze({
-          source: Object.freeze({
-            owner: nonEmptyDecisionText(source.owner),
-            kind: nonEmptyDecisionText(source.kind),
-            id: nonEmptyDecisionText(source.id),
-            revision: nonEmptyDecisionText(source.revision),
-          }),
-          code: nonEmptyDecisionText(candidate.feedback.code),
-          message: boundedDecisionText(candidate.feedback.message, 8_192),
-        }),
+        feedback: snapshotControllerFeedback(candidate.feedback),
         modelItems,
       });
     }
@@ -1148,6 +1156,23 @@ export function validateControllerDecision<TOutput>(
     default:
       throw decisionContractError("controller_decision_kind_invalid");
   }
+}
+
+export function snapshotControllerFeedback(candidate: unknown): import("./Controller.js").ControllerFeedback {
+  if (!isRecord(candidate) || !isRecord(candidate.source)) {
+    throw decisionContractError("controller_feedback_invalid");
+  }
+  const source = candidate.source;
+  return Object.freeze({
+    source: Object.freeze({
+      owner: nonEmptyDecisionText(source.owner),
+      kind: nonEmptyDecisionText(source.kind),
+      id: nonEmptyDecisionText(source.id),
+      revision: nonEmptyDecisionText(source.revision),
+    }),
+    code: nonEmptyDecisionText(candidate.code),
+    message: boundedDecisionText(candidate.message, 8_192),
+  });
 }
 
 function validateModelItems(candidate: unknown): readonly ControllerModelItem[] {
@@ -1269,8 +1294,9 @@ function validateModelItems(candidate: unknown): readonly ControllerModelItem[] 
 function validateCandidates(
   candidate: unknown,
   modelCalls: ReadonlyMap<string, ModelToolCall>,
-): readonly [ProgressionCandidate, ...ProgressionCandidate[]] {
-  if (!Array.isArray(candidate) || candidate.length === 0) {
+  allowEmpty = false,
+): readonly ProgressionCandidate[] {
+  if (!Array.isArray(candidate) || (!allowEmpty && candidate.length === 0)) {
     throw decisionContractError("controller_candidates_required");
   }
 
@@ -1293,12 +1319,13 @@ function validateCandidates(
   ) {
     throw decisionContractError("controller_candidate_call_coverage_invalid");
   }
+  const orderedCalls = [...modelCalls.keys()];
+  if (candidateCallKeys.some((key, index) => key !== orderedCalls[index])) {
+    throw decisionContractError("controller_candidate_call_order_invalid");
+  }
 
   validateCandidateOrdering(candidates);
-  return Object.freeze(candidates) as unknown as readonly [
-    ProgressionCandidate,
-    ...ProgressionCandidate[],
-  ];
+  return Object.freeze(candidates);
 }
 
 function validateProgressionCandidate(
@@ -1427,7 +1454,7 @@ function assertProviderBackedDecisionProvenance<TOutput>(
   decision: ControllerDecision<TOutput>,
   controllerRequestId: string,
 ): void {
-  if (decision.kind !== "advance") return;
+  if (decision.kind === "continue_with_feedback") return;
   for (const candidate of decision.candidates) {
     if (
       candidate.kind === "tool_request" &&

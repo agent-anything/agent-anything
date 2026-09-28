@@ -53,7 +53,7 @@ describe("AgentHookController", () => {
     const input = controllerInput();
     expect(input.toolExposure.controllerRequestId).not.toBe(input.contextManifest.requestId);
     const normal = new AgentHookController({controller: new FakeController(() => complete("Done")), composition: stopComposition([handler("stop", stop)]), rootRunId: "run-1", now: () => NOW});
-    await normal.next(input, callContext());
+    await finish(normal, input, callContext());
     expect(stop.mock.calls[0]?.[0]).toMatchObject({controllerRequestId: input.toolExposure.controllerRequestId});
     const failed = new AgentHookController({controller: new FakeController(() => {throw new Error("Failed");}), composition: stopFailureComposition(failure), rootRunId: "run-1", now: () => NOW});
     await expect(failed.next(input, callContext())).rejects.toThrow("Failed");
@@ -63,11 +63,13 @@ describe("AgentHookController", () => {
     for (const decision of [complete("Done"), {kind: "advance" as const, candidates: [], modelItems: []}]) {
       const facts: ExecutionFlowObservation[] = [];
       const controller = new AgentHookController({controller: new FakeController(() => decision), rootRunId: "run-1"});
-      expect(await controller.next(controllerInput(), {...callContext(), executionFlow: {observer: {observe: fact => {facts.push(fact);}}}})).toBe(decision);
+      const context = {...callContext(), executionFlow: {observer: {observe: (fact: ExecutionFlowObservation) => {facts.push(fact);}}}};
+      expect(await controller.next(controllerInput(), context)).toBe(decision);
+      expect(controller.store.getProjection().invocationCount).toBe(0);
+      if (decision.kind === "propose_completion") await controller.beforeCompletion(completionInput(controllerInput(), decision), context);
       const checks = facts.filter(fact => fact.kind === "constraint" && fact.stepId === "candidate");
-      expect(checks.map(check => check.checkId)).toEqual(["normal_completion", "registered_handlers", "continuation_allowance"]);
-      expect(checks[2]?.disposition).toBe("not_applicable");
-      expect(facts.some(fact => fact.kind === "material" && fact.name === "Hook-adjusted Controller decision")).toBe(true);
+      expect(checks.map(check => check.checkId)).toEqual(decision.kind === "propose_completion" ? ["registered_handlers", "continuation_allowance"] : []);
+      expect(facts.some(fact => fact.kind === "material" && fact.name === "Controller decision")).toBe(true);
       expect(controller.store.getProjection().invocationCount).toBe(0);
     }
   });
@@ -81,8 +83,8 @@ describe("AgentHookController", () => {
         : { disposition: "allow" })]),
       rootRunId: "run-1", now: () => NOW,
     });
-    await expect(controller.next(controllerInput(), callContext())).resolves.toMatchObject({ kind: "continue_with_feedback" });
-    await expect(controller.next(controllerInput(2), callContext())).resolves.toBe(decision);
+    await expect(finish(controller, controllerInput(), callContext())).resolves.toMatchObject({ kind: "continue_with_feedback" });
+    await expect(finish(controller, controllerInput(2), callContext())).resolves.toEqual({kind: "allow"});
     expect(calls).toBe(2);
   });
   it("isolates projection listener failures from Agent execution", () => {
@@ -103,7 +105,17 @@ describe("AgentHookController", () => {
     });
 
     await expect(controller.next(controllerInput(), callContext())).resolves.toBe(decision);
+    await expect(controller.beforeCompletion(completionInput(controllerInput(), decision), callContext())).resolves.toEqual({kind: "allow"});
     expect(controller.store.getProjection().invocationCount).toBe(0);
+  });
+
+  it("does not turn an invalid inherited completion disposition into allow", async () => {
+    const underlying = Object.assign(new FakeController(() => complete("Done")), {
+      beforeCompletion: async () => undefined as unknown as import("@agent-anything/agent-runtime/controller").ControllerCompletionDisposition,
+    });
+    const controller = new AgentHookController({controller: underlying, rootRunId: "run-1"});
+    await expect(controller.beforeCompletion(completionInput(controllerInput(), complete("Done")), callContext()))
+      .rejects.toThrow("Controller completion disposition is invalid");
   });
 
   it("combines blocking Stop continuation results in registration order", async () => {
@@ -126,7 +138,7 @@ describe("AgentHookController", () => {
       now: () => NOW,
     });
 
-    await expect(controller.next(controllerInput(), callContext())).resolves.toMatchObject({
+    await expect(finish(controller, controllerInput(), callContext())).resolves.toMatchObject({
       kind: "continue_with_feedback",
       feedback: {
         code: "missing_write+missing_run",
@@ -151,14 +163,10 @@ describe("AgentHookController", () => {
       now: () => NOW,
     });
 
-    await expect(controller.next(controllerInput(), callContext())).resolves.toMatchObject({
+    await expect(finish(controller, controllerInput(), callContext())).resolves.toMatchObject({
       kind: "continue_with_feedback",
     });
-    await expect(controller.next(controllerInput(2), callContext())).resolves.toEqual({
-      kind: "propose_completion",
-      output: { summary: "Still premature" },
-      modelItems: [],
-    });
+    await expect(finish(controller, controllerInput(2), callContext())).resolves.toEqual({kind: "allow"});
     expect(next).toHaveBeenCalledTimes(2);
     expect(controller.store.getProjection().invocationCount).toBe(1);
     expect(controller.store.getProjection().recentDispositions).toMatchObject([{ disposition: "continuation_limit_reached" }]);
@@ -173,8 +181,8 @@ describe("AgentHookController", () => {
       rootRunId: "run-1",
       now: () => NOW,
     });
-    await expect(failing.next(controllerInput(), callContext())).resolves.toMatchObject({
-      kind: "propose_completion",
+    await expect(finish(failing, controllerInput(), callContext())).resolves.toMatchObject({
+      kind: "allow",
     });
     expect(failing.store.getProjection().recentInvocations[0]?.status).toBe("failed");
 
@@ -184,8 +192,8 @@ describe("AgentHookController", () => {
       rootRunId: "run-1",
       now: () => NOW,
     });
-    await expect(timedOut.next(controllerInput(), callContext())).resolves.toMatchObject({
-      kind: "propose_completion",
+    await expect(finish(timedOut, controllerInput(), callContext())).resolves.toMatchObject({
+      kind: "allow",
     });
     expect(timedOut.store.getProjection().recentInvocations[0]?.status).toBe("timed_out");
   });
@@ -201,8 +209,8 @@ describe("AgentHookController", () => {
       now: () => NOW,
     });
 
-    await expect(controller.next(controllerInput(), callContext())).resolves.toMatchObject({
-      kind: "propose_completion",
+    await expect(finish(controller, controllerInput(), callContext())).resolves.toMatchObject({
+      kind: "allow",
     });
     expect(observer).toHaveBeenCalledTimes(1);
     expect(controller.store.getProjection().invocationCount).toBe(0);
@@ -240,6 +248,17 @@ describe("AgentHookController", () => {
 
 type StopTestBinding =
   | { readonly registration: AgentHookRegistration; readonly binding: AgentHookBinding };
+
+function completionInput(current: ControllerInput<TestOutput>, decision: ControllerDecision<TestOutput>) {
+  if (decision.kind !== "propose_completion") throw new Error("Expected completion fixture.");
+  return {current, output: decision.output, completionSource: decision.completionSource, settlements: [], stateRevision: 10,
+    turn: {run: {id: current.runId}, id: "controller-turn", sequence: current.iteration}};
+}
+
+async function finish(controller: AgentHookController<TestOutput>, current: ControllerInput<TestOutput>, context: ControllerCallContext) {
+  const decision = await controller.next(current, context);
+  return controller.beforeCompletion(completionInput(current, decision), context);
+}
 
 function handler(
   id: string,
@@ -323,7 +342,7 @@ function stopFailureComposition(observe: AgentStopFailureObserver["observe"]) {
 }
 
 function complete(summary: string): ControllerDecision<TestOutput> {
-  return Object.freeze({
+  return Object.freeze({ candidates: [], completionSource: {kind: "controller" as const},
     kind: "propose_completion" as const,
     output: Object.freeze({ summary }),
     modelItems: Object.freeze([]),

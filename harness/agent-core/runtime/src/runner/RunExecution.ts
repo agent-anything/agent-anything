@@ -120,6 +120,7 @@ import {
 import {
   ControllerError,
   validateControllerDecision,
+  snapshotControllerFeedback,
   projectModelInteraction,
   type ControllerDecision,
   type ModelInteractionProjection,
@@ -528,6 +529,10 @@ export class RunExecution<TOutput> {
   private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
   private readonly decisionBasis = new RunDecisionBasis();
+  private pendingCompletionCall: {
+    readonly call: ModelToolCall;
+    readonly turn: ControllerTurnRef;
+  } | null = null;
   private readonly retryScopes = new Map<string, RunRetryWaitScope>();
   private readonly toolExposure: RunToolExposureCoordinator;
   private readonly transcript: RunTranscriptRecorder;
@@ -1181,11 +1186,17 @@ export class RunExecution<TOutput> {
         this.flow.enter("controller", {}, preparationInputs);
         const decision = await this.nextDecision();
         if (decision === null) continue;
+        if (decision.decision.kind === "propose_completion" && decision.decision.completionSource.kind === "model_call") {
+          const call = this.findModelToolCall(decision.decision.completionSource.modelCallRef);
+          if (call === null) throw new TypeError("Completion call was not recorded.");
+          this.pendingCompletionCall = { call, turn: decision.turn };
+        }
         const decisionRef = {owner:"runtime",kind:"contribution",id:`${decision.turn.id}:decision`,revision:String(decision.basisRevision)};
         this.flow.current?.output(decisionRef);
         const decisionStep = this.flow.enter("decision", {kind: decision.decision.kind, turnId: decision.turn.id, basisRevision: decision.basisRevision}, [decisionRef]);
         if (this.resourceFailure !== null) {
           for (const check of ["current_basis", "cancellation"]) decisionStep.check(check, "not_evaluated", {reason: "resource_failure"});
+          this.settleUnprocessedModelCalls(decision.decision, decision.turn, "invalidated", "run_resource_limit_before_model_calls");
           return await this.settleResourceFailure(this.resourceFailure);
         }
         const settlementsAfterDecision = this.drainInteractionSettlements();
@@ -1222,23 +1233,6 @@ export class RunExecution<TOutput> {
           this.commitControllerFeedback(decision.decision.feedback);
           continue;
         }
-        if (decision.decision.kind === "propose_completion") {
-          const completion = this.processCompletionCandidate(
-            decision.turn,
-          );
-          if (completion.kind === "completed") {
-            return await this.settle({
-              status: "completed",
-              output: decision.decision.output,
-              source: completion.source,
-            });
-          }
-          if (completion.kind === "cancelled") {
-            return await this.settle({ status: "cancelled" });
-          }
-          continue;
-        }
-
         const admissionStep = this.flow.enter("admission", {turnId: decision.turn.id, calls: decision.decision.candidates.length}, [decisionRef]);
         const basis: CandidateBasis<TOutput> = {
           turn: decision.turn,
@@ -1388,12 +1382,16 @@ export class RunExecution<TOutput> {
             break;
           }
         }
-        const joinStep = this.flow.enter("join", {}, decision.decision.candidates.map(candidate => ({owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null})));
+        const joinStep = this.flow.enter("join", {}, [decisionRef, ...decision.decision.candidates.map(candidate => ({owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null}))]);
         await this.waitForModelCallSettlements();
         joinStep.check("unsettled_calls", this.modelCallSettlementWaits.size === 0 ? "passed" : "not_satisfied", {
           remaining: this.modelCallSettlementWaits.size,
         });
         joinStep.output(...decision.decision.candidates.map(candidate => ({owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null})));
+        if (decision.decision.kind === "propose_completion") {
+          const completion = await this.processCompletionCandidate(decision.turn, decision.decision, decision.prepared, decision.basisRevision);
+          if (completion !== null) return await this.settle(completion);
+        }
       }
       return this.terminalResult;
     } catch (error) {
@@ -1462,29 +1460,142 @@ export class RunExecution<TOutput> {
     return true;
   }
 
-  private processCompletionCandidate(
+  private async processCompletionCandidate(
     turn: ControllerTurnRef,
-  ): { readonly kind: "completed"; readonly source: RunCauseSourceRef } | { readonly kind: "continue" | "cancelled" } {
-    const step = this.flow.enter("completion", {turnId: turn.id});
+    decision: Extract<ControllerDecision<TOutput>, { readonly kind: "propose_completion" }>,
+    original: PreparedControllerOperation<TOutput>,
+    basisRevision: number,
+  ): Promise<TerminalCandidate<TOutput> | null> {
+    const step = this.flow.enter("completion", {turnId: turn.id}, [
+      {owner: "runtime", kind: "contribution", id: `${turn.id}:decision`, revision: String(basisRevision)},
+      ...decision.candidates.map(candidate => ({owner: "runtime", kind: "call", id: candidate.modelCallRef.id, revision: null})),
+    ]);
     step.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
     if (this.config.cancellation.context.request !== null) {
-      for (const check of ["active_state", "descendant_obligations"]) step.check(check, "not_evaluated", {reason: "cancellation_requested"});
-      return { kind: "cancelled" };
+      return { status: "cancelled" };
     }
+    const terminal = this.completionLimitFailure();
+    if (terminal !== null) return terminal;
+    const changed = this.drainSteering("apply") > 0 || this.completionBasisChanged(turn);
     const current = this.writer.getSnapshot();
     step.check("active_state", current.status === "running" || current.status === "waiting" ? "passed" : "not_satisfied", {status: current.status, revision: current.revision});
-    if (current.status !== "running" && current.status !== "waiting") {
-      step.check("descendant_obligations", "not_evaluated", {reason: "inactive_state"});
-      return { kind: "continue" };
+    step.check("current_basis", changed ? "not_satisfied" : "passed");
+    if (changed || (current.status !== "running" && current.status !== "waiting")) {
+      this.declineCompletion(turn, "completion_basis_invalidated", "The ending proposal is no longer current. Use the updated Run state before proposing another final response.");
+      return null;
+    }
+    const keys = new Set(decision.candidates.map(candidate => modelCallRefKey(candidate.modelCallRef)));
+    const settlements = current.items.flatMap(item => item.payload.kind === "model_call_settlement" && keys.has(modelCallRefKey(item.payload.result.modelCallRef)) ? [item.payload.result] : []);
+    const failed = settlements.length !== keys.size || settlements.some(result => result.settlement !== "succeeded");
+    step.check("call_settlements", failed ? "not_satisfied" : "passed", {expected: keys.size, settled: settlements.length});
+    if (failed) {
+      this.declineCompletion(turn, "completion_calls_not_successful", "One or more requests accompanying this final response did not succeed. Read their returned results before choosing a new action or final response; do not repeat successful calls unnecessarily.");
+      return null;
     }
     const outstanding = this.hasUnsettledDescendantObligations();
     step.check("descendant_obligations", outstanding ? "not_satisfied" : "passed", {pendingDescendants: current.pending.filter(pending => pending.kind === "descendant_run").length});
-    if (outstanding) return { kind: "continue" };
-    return this.acceptRunCompletion({ id: turn.id, revision: String(turn.sequence) });
+    if (outstanding) {
+      this.settleCompletionCall("invalidated", "active_descendant_result_pending");
+      return null;
+    }
+    const controller = this.dependencies.controller;
+    if (controller.beforeCompletion !== undefined) {
+      this.synchronizeCurrentContext();
+      const state = this.writer.getSnapshot();
+      const prepared = prepareControllerOperation({
+        agent: this.activeAgent, instructionBinding: this.activeInstructionBinding,
+        runInput: this.input, config: this.config, state, iteration: turn.sequence,
+        exposure: original.input.toolExposure, contextProjection: this.dependencies.contextProjection,
+        requestedAt: this.now(), modelInteractionSeed: this.modelInteractionSeed,
+        descendants: this.projectDescendantTargets(), projectionRequestId: `${turn.id}:completion-context:${state.revision}`,
+      });
+      const notification = Object.freeze({turn, stateRevision: state.revision,
+        current: prepared.input, output: decision.output, completionSource: decision.completionSource,
+        settlements: Object.freeze(settlements)});
+      const notificationStep = this.flow.enter("before_completion", {turnId: turn.id, stateRevision: state.revision}, [
+        this.flow.invocation.material("Completion notification", "post_settlement", notification),
+      ]);
+      this.decisionBasis.capture(turn.id, state.revision);
+      const retry = this.createRetryScope(turn.id, state.revision);
+      try {
+        const disposition = await this.interruptionCoordinator.execute("controller", () => controller.beforeCompletion!(notification, {
+          executionFlow: this.flow.context, cancellation: this.config.cancellation.context,
+          retry: {waitControl: retry, providerRequest: this.config.retry.providerRequest, structuredOutput: this.config.retry.structuredOutput,
+            deadlineAt: state.deadlineAt, events: this.retryEvents()},
+        }), state.deadlineAt);
+        notificationStep.output(this.flow.invocation.material("Completion disposition", "returned", disposition));
+        const cancelled = this.config.cancellation.context.request !== null;
+        const invalidated = this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== state.revision ||
+          this.steeringQueue.length > 0 || this.interactionSettlements.length > 0;
+        const limitFailure = this.completionLimitFailure();
+        notificationStep.check("current_basis", invalidated ? "not_satisfied" : "passed");
+        notificationStep.check("cancellation", cancelled ? "not_satisfied" : "passed");
+        if (cancelled) return {status: "cancelled"};
+        if (limitFailure !== null) return limitFailure;
+        if (invalidated) {
+          this.declineCompletion(turn, "completion_basis_invalidated", "The Run changed while processing its ending proposal. Use the current state before proposing another final response.");
+          return null;
+        }
+        if (disposition?.kind === "continue_with_feedback") {
+          const feedback = snapshotControllerFeedback(disposition.feedback);
+          this.commitControllerFeedback(feedback);
+          this.settleCompletionCall("invalidated", feedback.code, feedback.source);
+          return null;
+        }
+        if (disposition?.kind !== "allow") throw new TypeError("Controller completion disposition is invalid.");
+      } catch (error) {
+        if (error instanceof RetryInvocationInvalidatedError) {
+          this.declineCompletion(turn, "completion_basis_invalidated", "The ending notification was interrupted by a Run change. Use the current state before proposing another final response.");
+          return null;
+        }
+        if (error instanceof ControllerError || this.config.cancellation.context.request !== null) throw error;
+        throw new ControllerError({kind: "model", failure: {code: "model_output_invalid", retryable: false, message: "Controller completion notification failed.", metadata: {error: error instanceof Error ? error.name : "unknown"}}});
+      } finally {
+        retry.dispose();
+        this.retryScopes.delete(turn.id);
+        this.decisionBasis.release(turn.id);
+      }
+    }
+    this.flow.enter("acceptance", {turnId: turn.id, revision: this.writer.getSnapshot().revision});
+    const accepted = this.acceptRunCompletion({ id: turn.id, revision: String(turn.sequence) }, decision.completionSource);
+    this.settleCompletionCall("succeeded", "completion_candidate_accepted", accepted.source);
+    return {status: "completed", output: decision.output, source: accepted.source};
+  }
+
+  private completionLimitFailure(): Extract<TerminalCandidate<TOutput>, {readonly status: "failed"}> | null {
+    if (this.resourceFailure !== null) return this.resourceFailureCandidate(this.resourceFailure);
+    const deadline = evaluateRunDeadline({deadlineAt: this.writer.getSnapshot().deadlineAt, now: this.now()});
+    return deadline === null ? null : {status: "failed", failure: runtimeFailure(deadline.code, deadline.message, deadline.metadata)};
+  }
+
+  private completionBasisChanged(turn: ControllerTurnRef): boolean {
+    const items = this.writer.getSnapshot().items;
+    const position = items.findIndex(item => item.payload.kind === "controller_turn" && item.payload.turn.id === turn.id);
+    return items.slice(position + 1).some(item => item.payload.kind === "state_transition" &&
+      (item.payload.transition === "steering" || item.payload.transition === "active_agent"));
+  }
+
+  private declineCompletion(turn: ControllerTurnRef, code: string, message: string): void {
+    this.commitControllerFeedback({source: {owner: "agent-runtime", kind: "completion", id: turn.id, revision: String(turn.sequence)}, code, message});
+    this.settleCompletionCall("invalidated", code);
+  }
+
+  private settleCompletionCall(settlement: ModelCallSettlementKind, code: string, source?: ModelToolResult["sourceRefs"][number]): void {
+    const pending = this.pendingCompletionCall;
+    if (pending === null) return;
+    if (!this.hasModelCallSettlement(pending.call)) {
+      this.commitLocalModelCallResult(pending.call, settlement, {status: settlement, code}, [source ? {
+        owner: source.owner, kind: source.kind, id: source.id, revision: source.revision,
+      } : {
+        owner: "agent-runtime", kind: "controller_turn", id: pending.turn.id, revision: String(pending.turn.sequence),
+      }]);
+    }
+    this.pendingCompletionCall = null;
   }
 
   private acceptRunCompletion(
     proposal: Readonly<{ readonly id: string; readonly revision: string }>,
+    completionSource: import("../controller/index.js").CompletionSource,
   ): { readonly kind: "completed"; readonly source: RunCauseSourceRef } {
     const state = this.writer.getSnapshot();
     const source: RunCauseSourceRef = Object.freeze({
@@ -1499,6 +1610,8 @@ export class RunExecution<TOutput> {
       source,
       candidateId: proposal.id,
       candidateRevision: proposal.revision,
+      completionSource,
+      basisRevision: state.revision,
       acceptedAt: this.now(),
     })]));
     return Object.freeze({ kind: "completed" as const, source });
@@ -1604,8 +1717,9 @@ export class RunExecution<TOutput> {
     settlement: "invalidated" | "cancelled",
     code: string,
   ): void {
-    if (decision.kind !== "advance") return;
+    if (decision.kind === "continue_with_feedback") return;
     this.settleCandidateRange(decision.candidates, 0, turn, settlement, code);
+    this.settleCompletionCall(settlement, code);
   }
 
   private settleCandidateRange(
@@ -5384,6 +5498,8 @@ export class RunExecution<TOutput> {
     this.drainSteering(candidate.status === "cancelled" ? "cancelled" : "run_settled");
     this.interactions.close();
     this.drainInteractionSettlements();
+    this.settleCompletionCall(candidate.status === "cancelled" ? "cancelled" : "invalidated",
+      candidate.status === "failed" ? candidate.failure.failure.code : "run_terminated_before_completion_acceptance");
     let terminal = candidate;
     const stateBeforeFinalization = this.writer.getSnapshot();
     if (stateBeforeFinalization.plan?.status === "active") {

@@ -1,5 +1,6 @@
 import type { Agent, AgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { ControllerTurnRef } from "@agent-anything/agent-core/control";
 import type { IdentityRef } from "@agent-anything/agent-core/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
@@ -23,6 +24,7 @@ import type {
   ModelCallRef,
   ModelMessage,
   ModelToolCall,
+  ModelToolResult,
   ModelTurnFinish,
   ProviderResponseRef,
   ProviderUsage,
@@ -81,6 +83,11 @@ export type StateTransitionCandidate =
       readonly transition: "handoff";
       readonly input: SameRunHandoffRequest;
     };
+
+export type PlanUpdateCandidate = Extract<
+  StateTransitionCandidate,
+  { readonly transition: "plan_update" }
+>;
 
 export interface SameRunHandoffRequest {
   readonly expectedRunRevision: number;
@@ -186,6 +193,8 @@ export interface ControllerFeedback {
 export type ControllerDecision<TOutput = unknown> =
   | {
       readonly kind: "propose_completion";
+      readonly candidates: readonly ProgressionCandidate[];
+      readonly completionSource: CompletionSource;
       readonly output: TOutput;
       readonly modelItems: readonly ControllerModelItem[];
     }
@@ -200,12 +209,33 @@ export type ControllerDecision<TOutput = unknown> =
       readonly modelItems: readonly ControllerModelItem[];
     };
 
+export type CompletionSource =
+  | { readonly kind: "model_call"; readonly modelCallRef: ModelCallRef }
+  | { readonly kind: "controller" };
+
+export interface ControllerCompletionInput<TOutput = unknown> {
+  readonly turn: ControllerTurnRef;
+  readonly stateRevision: number;
+  readonly current: ControllerInput<TOutput>;
+  readonly output: TOutput;
+  readonly completionSource: CompletionSource;
+  readonly settlements: readonly ModelToolResult[];
+}
+
+export type ControllerCompletionDisposition =
+  | { readonly kind: "allow" }
+  | { readonly kind: "continue_with_feedback"; readonly feedback: ControllerFeedback };
+
 export interface Controller<TOutput = unknown> {
   readonly resourceMetering: ControllerResourceMetering;
   next(
     input: ControllerInput<TOutput>,
     context: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>>;
+  beforeCompletion?(
+    input: ControllerCompletionInput<TOutput>,
+    context: ControllerCallContext,
+  ): Promise<ControllerCompletionDisposition>;
 }
 
 export interface ControllerResourceMetering {

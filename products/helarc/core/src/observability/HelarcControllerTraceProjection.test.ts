@@ -20,7 +20,7 @@ import {
 describe("Helarc controller trace projection", () => {
   it("records allowlisted controller trace metadata by Run and operation", async () => {
     const traceByOperationId = new Map<string, HelarcControllerTraceProjection>();
-    const controller = new HelarcTracingController(new FakeController({
+    const controller = new HelarcTracingController(new FakeController({ candidates: [], completionSource: {kind: "controller" as const},
       kind: "propose_completion",
       output: { kind: "complete", summary: "Inspection complete." },
       modelItems: [{

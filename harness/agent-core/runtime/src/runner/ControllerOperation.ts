@@ -57,6 +57,7 @@ export class ContextProjectionPreparationError extends ContextContractError {
 }
 
 export interface PrepareControllerOperationInput<TOutput> {
+  readonly projectionRequestId?: string;
   readonly agent: Agent<TOutput>;
   readonly instructionBinding: AgentInstructionBinding;
   readonly runInput: RunInput;
@@ -178,7 +179,7 @@ function createContextProjection<TOutput>(
 ): ReturnType<typeof projectActiveContext> {
   const allocation = input.contextProjection.allocate(baseInput);
   const request = Object.freeze({
-    id: `${input.state.run.id}:context-projection:${input.iteration}`,
+    id: input.projectionRequestId ?? `${input.state.run.id}:context-projection:${input.iteration}`,
     activeContext: input.state.context.ref,
     consumer: Object.freeze({ owner: "agent-core", kind: "controller", id: input.agent.id }),
     purpose: input.contextProjection.purpose,

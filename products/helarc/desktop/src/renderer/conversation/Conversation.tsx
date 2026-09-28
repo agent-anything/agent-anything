@@ -249,7 +249,7 @@ export function Conversation({
             attempt.parts
               .filter(
                 (p) =>
-                  p.kind === "text" &&
+                  (p.kind === "text" || p.kind === "final_response") &&
                   p.text &&
                   !(p.modelItemId && committed.has(p.modelItemId)),
               )
@@ -264,6 +264,8 @@ export function Conversation({
                     <span className="wb-muted">
                       {attempt.state === "receiving"
                         ? "Responding"
+                        : part.kind === "final_response" && ["received", "validated", "committed"].includes(attempt.state)
+                          ? "Awaiting completion"
                         : attempt.state === "committed"
                           ? "Recorded response"
                           : attempt.state === "received" ||

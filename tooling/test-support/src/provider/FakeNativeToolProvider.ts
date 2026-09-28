@@ -212,6 +212,7 @@ function callableName(
   request: ProviderRequest,
   output: Readonly<Record<string, unknown>>,
 ): string {
+  if (output.kind === "model_call" && typeof output.name === "string") return output.name;
   if (output.kind === "plan_update") return "update_plan";
   if (output.kind === "stop") return "stop";
   if (output.kind !== "tool_call" || typeof output.toolName !== "string") {

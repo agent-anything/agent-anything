@@ -290,7 +290,7 @@ function createInstructionConformanceCases(
             { step: "Summarize the result.", status: "completed" },
           ],
         },
-        { kind: "completion", summary: inspect.expectedClaim.agentSummary },
+        { kind: "model_call", name: "final_result", input: {response: inspect.expectedClaim.agentSummary} },
       ], ["Read"]),
       options: Object.freeze({}),
     }),
@@ -314,7 +314,7 @@ function createInstructionConformanceCases(
           toolName: "Write",
           input: { file_path: "src/generated.txt", content: "phase26\n" },
         },
-        { kind: "completion", summary: write.expectedClaim.agentSummary },
+        { kind: "model_call", name: "final_result", input: {response: write.expectedClaim.agentSummary} },
       ], ["AskUserQuestion", "Write"]),
       options: Object.freeze({ interactionAnswers: Object.freeze({ content: "phase26" }) }),
     }),
@@ -327,8 +327,8 @@ function createInstructionConformanceCases(
           toolName: "Agent",
           input: { prompt: "Inspect the declared source.", description: "Inspect source" },
         },
-        { kind: "completion", summary: "Child inspection complete." },
-        { kind: "completion", summary: inspect.expectedClaim.agentSummary },
+        { kind: "model_call", name: "final_result", input: {response: "Child inspection complete."} },
+        { kind: "model_call", name: "final_result", input: {response: inspect.expectedClaim.agentSummary} },
       ], ["Agent"]),
       options: Object.freeze({
         runTreeLimits: Object.freeze({

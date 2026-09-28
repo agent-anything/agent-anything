@@ -4,6 +4,7 @@ import {
   type AgentInstructions,
 } from "@agent-anything/agent-core/agent";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
+import { snapshotModelCallRef, type ModelCallRef } from "@agent-anything/model-interaction";
 import {
   HELARC_INSTRUCTION_CATALOG,
   resolveHelarcAgentInstructions,
@@ -97,6 +98,7 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
     }
     const source = candidate.source;
     if (!isRecord(source) || !(source.kind === "product_status" ||
+      validControlSource(source) ||
       (source.kind === "model_finish" && typeof source.turnId === "string") ||
       (source.kind === "model_text" && typeof source.turnId === "string" && Array.isArray(source.modelItemIds) && source.modelItemIds.every(id => typeof id === "string")))) {
       return { valid: false as const, message: "Helarc output requires explicit provenance." };
@@ -111,6 +113,14 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
     };
   },
 });
+
+function validControlSource(source: Record<string, unknown>): boolean {
+  if (source.kind !== "model_control" || source.control !== "final_result" || source.argumentPath !== "/response" ||
+      typeof source.turnId !== "string" || typeof source.modelItemId !== "string" || !source.modelItemId) return false;
+  try {
+    return snapshotModelCallRef(source.modelCallRef as ModelCallRef).turnId === source.turnId;
+  } catch { return false; }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

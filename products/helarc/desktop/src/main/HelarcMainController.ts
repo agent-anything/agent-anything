@@ -1350,7 +1350,7 @@ function createAssistantTerminalMessage(
   relatedArtifactIds: readonly string[],
 ): HelarcMessage | null {
   const content = createAssistantTerminalMessageContent(terminal, product);
-  if (!content) {
+  if (content === null) {
     return null;
   }
 
@@ -1385,7 +1385,7 @@ function createTerminalArtifacts(
   const safeOutput = product.output;
   const summary = safeOutput.agentSummary;
 
-  if (summary) {
+  if (summary !== null && summary !== undefined) {
     const artifact = createArtifact({
       id: `${run.id}-artifact-final-output`,
       threadId: record.thread.id,

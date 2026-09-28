@@ -123,6 +123,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/observability",
   ],
   "@agent-anything/helarc": [
+    "@streamparser/json",
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
     "@agent-anything/agent-hooks",

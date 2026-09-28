@@ -1,4 +1,5 @@
-export type { Controller, ControllerCallContext, ControllerDecision, ControllerFeedback, ControllerInput, ControllerPreProjectionInput, ControllerModelItem, ModelCallRejectionCandidate, ModelInteractionProjection, ControllerRetryContext, ControllerResourceMetering, InteractionRequestCandidate, OperationRequestCandidate, ToolRequestCandidate, ProgressionCandidate, SameRunHandoffRequest, StateTransitionCandidate } from "./Controller.js";
+export type { Controller, ControllerCallContext, ControllerDecision, ControllerFeedback, ControllerInput, ControllerPreProjectionInput, ControllerModelItem, ModelCallRejectionCandidate, ModelInteractionProjection, ControllerRetryContext, ControllerResourceMetering, InteractionRequestCandidate, OperationRequestCandidate, ToolRequestCandidate, PlanUpdateCandidate, ProgressionCandidate, SameRunHandoffRequest, StateTransitionCandidate } from "./Controller.js";
+export type { CompletionSource, ControllerCompletionInput, ControllerCompletionDisposition } from "./Controller.js";
 export type {
   BuildProviderRequest,
   ControllerFailure,
@@ -10,6 +11,7 @@ export {
   ControllerError,
   ProviderBackedController,
   validateControllerDecision,
+  snapshotControllerFeedback,
 } from "./ProviderBackedController.js";
 export type {
   ProviderRequestBuildContext,

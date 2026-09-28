@@ -1,10 +1,12 @@
 import type { ControllerResponseObservation } from "@agent-anything/agent-runtime/controller";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import { boundedPresentationText } from "./HelarcRunPresentation.js";
+import { HelarcFinalResponsePreview } from "./HelarcFinalResponsePreview.js";
+import type { HelarcModelCallableCatalog } from "../../controller/HelarcModelCallableCatalog.js";
 
 export interface HelarcResponsePreviewPart {
   readonly id: string;
-  readonly kind: "text" | "tool_call";
+  readonly kind: "text" | "tool_call" | "final_response";
   readonly text: string;
   readonly receivedLength: number;
   readonly omittedBytes: number;
@@ -49,6 +51,8 @@ export class HelarcResponsePreviewStore {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
   private closed = false;
+  private readonly finalBindings = new Map<string, ReadonlySet<string>>();
+  private readonly parsers = new Map<string, HelarcFinalResponsePreview>();
   private readonly listeners = new Set<
     (value: HelarcResponsePreviews, attempt: HelarcResponsePreview) => void
   >();
@@ -57,6 +61,11 @@ export class HelarcResponsePreviewStore {
   ) {}
   snapshot(): HelarcResponsePreviews {
     return this.state;
+  }
+  bindRequest(runId: string, requestId: string, catalog: HelarcModelCallableCatalog): void {
+    this.finalBindings.set(JSON.stringify([runId, requestId]), new Set(catalog.bindings.flatMap(binding =>
+      binding.kind === "control" && binding.control === "final_result" ? [binding.callableName] : [])));
+    while (this.finalBindings.size > 256) this.finalBindings.delete(this.finalBindings.keys().next().value!);
   }
   subscribe(
     listener: (
@@ -176,10 +185,20 @@ export class HelarcResponsePreviewStore {
           omittedBytes: part.omittedBytes + clipped.omittedBytes,
         };
       } else {
-        if (part.kind !== "tool_call") return;
-        // Argument fragments are not executable inputs and are not retained twice.
+        if (part.kind === "text") return;
+        const isFinal = this.finalBindings.get(JSON.stringify([event.runId, progress.requestId]))?.has(progress.name) === true;
+        const parserKey = JSON.stringify([event.runId, progress.invocationId, progress.partId]);
+        let decoded = {text: "", omittedBytes: 0};
+        if (isFinal) {
+          let parser = this.parsers.get(parserKey);
+          if (!parser) { parser = new HelarcFinalResponsePreview(); this.parsers.set(parserKey, parser); }
+          decoded = parser.write(progress.argumentsDelta);
+        }
+        // Argument fragments cannot dispatch work or become authoritative final output.
         part = {
           ...part,
+          kind: isFinal ? "final_response" : "tool_call",
+          ...decoded,
           name: progress.name.slice(0, 256),
           receivedLength: part.receivedLength + progress.argumentsDelta.length,
         };
@@ -202,12 +221,17 @@ export class HelarcResponsePreviewStore {
     for (const attempt of [...this.state.attempts]) {
       if (attempt.runId !== record.runId || attempt.state !== "validated")
         continue;
-      const parts = attempt.parts.map((part) =>
-        part.modelItemId !== null &&
-        items.some((item) => item.id === part.modelItemId)
-          ? { ...part, committedRecordId: part.modelItemId }
-          : part,
-      );
+      const parts = attempt.parts.map(part => {
+        const item = items.find(item => item.id === part.modelItemId);
+        if (!item) return part;
+        if (part.kind === "final_response") {
+          const binding = item.kind === "model_tool_call" ? item.metadata.helarcCallableBinding as {kind?: string; control?: string} | null : null;
+          if (item.kind !== "model_tool_call" || binding?.kind !== "control" || binding.control !== "final_result" || typeof item.call.input.response !== "string")
+            return {...part, text: "", committedRecordId: part.modelItemId};
+          return {...part, ...boundedPresentationText(item.call.input.response), committedRecordId: part.modelItemId};
+        }
+        return {...part, committedRecordId: part.modelItemId};
+      });
       if (!parts.some((part) => part.committedRecordId !== null)) continue;
       this.update(
         {
@@ -235,6 +259,8 @@ export class HelarcResponsePreviewStore {
         );
     }
     this.closed = true;
+    this.parsers.clear();
+    this.finalBindings.clear();
     this.flush();
   }
   private update(value: HelarcResponsePreview, flush: boolean): void {
@@ -267,6 +293,11 @@ export class HelarcResponsePreviewStore {
       omittedAttempts,
       attempts: Object.freeze(attempts),
     });
+    const retained = new Set(attempts.filter(attempt => attempt.state === "receiving").map(attempt => JSON.stringify([attempt.runId, attempt.invocationId])));
+    for (const key of this.parsers.keys()) {
+      const [runId, invocationId] = JSON.parse(key) as string[];
+      if (!retained.has(JSON.stringify([runId, invocationId]))) this.parsers.delete(key);
+    }
     this.dirty = true;
     for (const listener of this.listeners) {
       try {

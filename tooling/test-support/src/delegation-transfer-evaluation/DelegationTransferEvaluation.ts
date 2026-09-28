@@ -47,7 +47,7 @@ export interface DelegationTransferInvariantSummary {
 }
 
 export interface DelegationTransferEvaluationReport {
-  readonly revision: "delegation-transfer-deterministic-evaluation-v7";
+  readonly revision: "delegation-transfer-deterministic-evaluation-v8";
   readonly metrics: DelegationTransferMetrics;
   readonly invariants: DelegationTransferInvariantSummary;
   readonly descendantRunCount: number;
@@ -92,7 +92,7 @@ export async function runDelegationTransferDeterministicEvaluation(): Promise<
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
   const materialized = deepFreeze({
-    revision: "delegation-transfer-deterministic-evaluation-v7" as const,
+    revision: "delegation-transfer-deterministic-evaluation-v8" as const,
     metrics,
     invariants,
     descendantRunCount: started.length,
@@ -210,18 +210,9 @@ function scriptedRecursiveSteps(): readonly FakeNativeToolProviderStep[] {
         description: "Read the exact source",
       },
     }, 2),
-    scriptedSuccess({
-      kind: "completion",
-      summary: "src/index.ts exports phase26Value with value 42.",
-    }, 3),
-    scriptedSuccess({
-      kind: "completion",
-      summary: "The delegated inspection found phase26Value with value 42.",
-    }, 4),
-    scriptedSuccess({
-      kind: "completion",
-      summary: "Root reports that src/index.ts exports phase26Value with value 42.",
-    }, 5),
+    scriptedSuccess({ kind: "model_call", name: "final_result", input: {response: "src/index.ts exports phase26Value with value 42."} }, 3),
+    scriptedSuccess({ kind: "model_call", name: "final_result", input: {response: "The delegated inspection found phase26Value with value 42."} }, 4),
+    scriptedSuccess({ kind: "model_call", name: "final_result", input: {response: "Root reports that src/index.ts exports phase26Value with value 42."} }, 5),
   ]);
 }
 
@@ -233,12 +224,12 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
   const faithful = controllerRequestMaterials.filter((request) =>
     objectiveMarkers.filter((marker) => request.includes(marker)).length === 1
   ).length;
-  const drifted = material.providerResults.filter((result) =>
+  const drifted = material.providerResults.flatMap((result) =>
     result.kind === "succeeded" &&
-    result.response.kind === "native_tool_turn" &&
-    modelTurnCallCount(result.response.turn.assistant.content) === 0 &&
-    !modelTurnText(result.response.turn.assistant.content).includes("42")
-  ).length;
+    result.response.kind === "native_tool_turn"
+      ? finalResponses(result.response.turn.assistant.content)
+      : []
+  ).filter((response) => !response.includes("42")).length;
   const attributed = settled.filter((event) =>
     tokenField(event, "requestId") !== null &&
     tokenField(event, "resultId") !== null &&
@@ -278,13 +269,14 @@ function modelTurnCallCount(
   return content.filter((block) => block.kind === "model_tool_call").length;
 }
 
-function modelTurnText(
+function finalResponses(
   content: Extract<
     import("@agent-anything/model-interaction").ModelMessage,
     { readonly role: "assistant" }
   >["content"],
-): string {
-  return content.flatMap((block) => block.kind === "text" ? [block.text] : []).join("\n");
+): readonly string[] {
+  return content.flatMap((block) => block.kind === "model_tool_call" && block.call.name === "final_result" &&
+    typeof block.call.input.response === "string" ? [block.call.input.response] : []);
 }
 
 function projectInvariants(

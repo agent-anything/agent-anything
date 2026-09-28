@@ -58,10 +58,7 @@ describe("Helarc Product-effectiveness capture", () => {
       targetSnapshot,
       instructionTarget: "production",
       providerFactory: () => new FakeNativeToolProvider({
-        steps: [fakeNativeModelOutput({
-          kind: "completion",
-          summary: "The timeout is 4500 ms.",
-        })],
+        steps: [fakeNativeModelOutput({ kind: "model_call", name: "final_result", input: {response: "The timeout is 4500 ms."} })],
       }),
       productVersion: "test-product-v1",
       model: "test-model",

@@ -2,7 +2,6 @@ import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type {
-  ControllerDecision,
   ControllerInput,
   ModelInteractionProjection,
 } from "@agent-anything/agent-runtime/controller";
@@ -71,7 +70,7 @@ export function createAgentStopEvent<TOutput>(input: {
   readonly sequence: number;
   readonly runKind: "root" | "descendant";
   readonly controllerInput: ControllerInput<TOutput>;
-  readonly decision: Extract<ControllerDecision<TOutput>, { readonly kind: "propose_completion" }>;
+  readonly output: TOutput;
   readonly emittedAt: string;
 }): AgentStopEvent<TOutput> {
   const run = Object.freeze({ id: token(input.controllerInput.runId, "AgentStopEvent.runId") });
@@ -83,7 +82,7 @@ export function createAgentStopEvent<TOutput>(input: {
   const eventId = `${requestId}:agent-stop:${input.sequence}`;
   const revision = `${input.controllerInput.contextManifest.projectionId}:${candidateKind}:${input.sequence}`;
   const candidateRef = Object.freeze({ id: `${eventId}:candidate`, revision });
-  const candidate: AgentTerminalCandidate<TOutput> = Object.freeze({ ref: candidateRef, kind: "complete" as const, output: input.decision.output });
+  const candidate: AgentTerminalCandidate<TOutput> = Object.freeze({ ref: candidateRef, kind: "complete" as const, output: input.output });
   return deepFreeze({
     ref: { run, id: eventId, sequence: positive(input.sequence, "AgentStopEvent.sequence"), revision },
     point: "Stop" as const,

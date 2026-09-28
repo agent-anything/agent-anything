@@ -36,7 +36,7 @@ import type {
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
-  "helarc.provider-native-tool-interaction.v1";
+  "helarc.provider-native-tool-interaction.v2";
 export const HELARC_MODEL_CONTEXT_HEADROOM_TOKENS = 1_024;
 export type HelarcAgentOutput = { kind: "complete"; summary: string; source: import("../run/presentation/HelarcRunPresentation.js").HelarcOutputSource };
 
@@ -219,7 +219,7 @@ export function parseHelarcProviderResponse(
     const decision = interpretResponse(response, input, protocol, qualification);
     const decisionRef = flow.material("Interpreted Controller decision", "interpreted", decision);
     interpretation.output(decisionRef);
-    flow.advance("decision", {kind:decision.kind, candidates:decision.kind === "advance" ? decision.candidates.length : 0}, [decisionRef]).output(decisionRef);
+    flow.advance("decision", {kind:decision.kind, candidates:"candidates" in decision ? decision.candidates.length : 0}, [decisionRef]).output(decisionRef);
     flow.close("returned");
     return decision;
   } catch (error) { flow.close("failed"); throw error; }
@@ -257,6 +257,8 @@ function interpretResponse(
     if (calls.length > 0) return nativeTurnFailure("helarc_refusal_with_calls");
     return Object.freeze({
       kind: "propose_completion",
+      candidates: [],
+      completionSource: {kind: "controller" as const},
       output: Object.freeze({ kind: "complete", summary: response.turn.finish.reason ?? text,
         source: response.turn.finish.reason !== null
           ? { kind: "model_finish" as const, turnId: response.turn.turnId }
@@ -268,16 +270,39 @@ function interpretResponse(
     return nativeTurnFailure(`helarc_model_finish_${response.turn.finish.kind}`);
   }
   if (calls.length === 0) {
-    if (text.length === 0) return nativeTurnFailure("helarc_native_turn_empty");
     return Object.freeze({
-      kind: "propose_completion",
-      output: Object.freeze({ kind: "complete", summary: text,
-        source: { kind: "model_text" as const, turnId: response.turn.turnId, modelItemIds: modelItems.filter(item => item.kind === "assistant_text").map(item => item.id) } }),
+      kind: "continue_with_feedback",
+      feedback: {source: {owner: "helarc", kind: "controller_protocol", id: HELARC_NATIVE_TOOL_PROTOCOL_REVISION, revision: "2"},
+        code: "helarc_ending_signal_missing",
+        message: "This turn contained no function call. To end this Run, call final_result with your complete response. To continue working, call the functions supplied in this request. Ordinary text does not end the Run."},
       modelItems,
     });
   }
 
-  const candidates = calls.map((call) => bindModelCall(call, catalog, input));
+  const finals = calls.filter(call => {
+    const binding = findHelarcModelCallableBinding(catalog, call.name);
+    return binding?.kind === "control" && binding.control === "final_result";
+  });
+  const final = finals.length === 1 && validFinalInput(finals[0]!.input) ? finals[0]! : null;
+  const candidates = calls.filter(call => call !== final).map(call =>
+    finals.includes(call)
+      ? Object.freeze({kind: "model_call_rejection" as const, name: call.name,
+          code: finals.length > 1 ? "helarc_final_result_ambiguous" : "helarc_final_result_invalid",
+          message: "Submit exactly one final_result call with an object containing only response, a string (which may be empty). Other calls have their own results and must not be repeated merely to correct this call.",
+          modelCallRef: call.modelCallRef})
+      : bindModelCall(call, catalog, input));
+  if (final !== null) {
+    const item = modelItems.find(item => item.kind === "model_tool_call" && item.call.modelCallRef.id === final.modelCallRef.id)!;
+    return Object.freeze({
+      kind: "propose_completion",
+      candidates: Object.freeze(candidates),
+      completionSource: {kind: "model_call" as const, modelCallRef: final.modelCallRef},
+      output: {kind: "complete" as const, summary: (final.input as {response: string}).response,
+        source: {kind: "model_control" as const, turnId: response.turn.turnId, modelItemId: item.id,
+          modelCallRef: final.modelCallRef, control: "final_result" as const, argumentPath: "/response" as const}},
+      modelItems,
+    });
+  }
   return Object.freeze({
     kind: "advance",
     candidates: Object.freeze(candidates) as readonly [
@@ -286,6 +311,11 @@ function interpretResponse(
     ],
     modelItems,
   });
+}
+
+function validFinalInput(value: unknown): value is {response: string} {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length === 1 && typeof (value as Record<string, unknown>).response === "string";
 }
 
 function bindModelCall(
@@ -310,6 +340,7 @@ function bindModelCall(
       modelCallRef: call.modelCallRef,
     });
   }
+  if (binding.control !== "update_plan") throw new TypeError("Output control must be interpreted before candidate binding.");
   return Object.freeze({
       kind: "state_transition",
       transition: "plan_update",

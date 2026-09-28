@@ -3,6 +3,10 @@ import type {
 } from "./HelarcDesktopApi.js";
 
 export type HelarcOutputSource =
+  | { readonly kind: "model_control"; readonly turnId: string; readonly modelItemId: string;
+      readonly modelCallRef: {readonly id: string; readonly providerRequestId: string; readonly controllerRequestId: string;
+        readonly turnId: string; readonly contentBlockOrdinal: number; readonly branchId: string};
+      readonly control: "final_result"; readonly argumentPath: "/response" }
   | {
       readonly kind: "model_text";
       readonly turnId: string;
@@ -40,6 +44,9 @@ export interface HelarcRunPresentationRecord {
         readonly text: string;
         readonly omittedBytes: number;
       }
+    | { readonly kind: "final_response"; readonly turnId: string; readonly modelItemId: string;
+        readonly callId: string; readonly text: string; readonly omittedBytes: number;
+        readonly disposition: "proposed" | "accepted" | "declined" | "completed" | "failed" | "cancelled" }
     | {
         readonly kind: "tool_call";
         readonly callId: string;
@@ -124,7 +131,7 @@ export interface ConversationEntry {
   readonly revision: number;
   readonly position: readonly [number, number];
   readonly role: "user" | "assistant" | "system" | "product";
-  readonly kind: "message" | "assistant_text" | "steering" | "interaction";
+  readonly kind: "message" | "assistant_text" | "final_response" | "steering" | "interaction";
   readonly content: string;
   readonly omittedBytes: number;
   readonly productRunId: string | null;
@@ -259,7 +266,7 @@ export type ArtifactContentRead =
 
 export interface ResponsePreviewPart {
   readonly id: string;
-  readonly kind: "text" | "tool_call";
+  readonly kind: "text" | "tool_call" | "final_response";
   readonly name: string | null;
   readonly text: string;
   readonly offset: number;

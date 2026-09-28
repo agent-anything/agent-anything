@@ -452,6 +452,9 @@ importers:
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
+      '@streamparser/json':
+        specifier: 0.0.26
+        version: 0.0.26
     devDependencies:
       '@types/node':
         specifier: ^25.9.1
@@ -1643,6 +1646,9 @@ packages:
     resolution: {integrity: sha512-tkuFxhvKO/HlGd0VsINF6vHSYH8AF8W0TcNxKDK6JZmrehngFj78pToc8iemtnvwilDjs2G/qSzYFhe9U8q+fw==}
     cpu: [x64]
     os: [win32]
+
+  '@streamparser/json@0.0.26':
+    resolution: {integrity: sha512-46597LNFI+MFdUnzX2QJWwmdTRdq0XVD+vVNJTtGVzIrnCuhG9pFo1OAzbNBqci8UJgk/X5KJZ6LcV+y7PTuDQ==}
 
   '@tybys/wasm-util@0.10.2':
     resolution: {integrity: sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg==}
@@ -3450,6 +3456,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.61.0':
     optional: true
+
+  '@streamparser/json@0.0.26': {}
 
   '@tybys/wasm-util@0.10.2':
     dependencies:

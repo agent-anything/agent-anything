@@ -724,7 +724,7 @@ describe("Runner semantic integration", () => {
     }
   });
 
-  it.each(["advance", "propose_completion"] as const)("discards a stale %s Controller response", async (decisionKind) => {
+  it.each(["advance", "plan_request", "propose_completion"] as const)("discards a stale %s Controller response", async (decisionKind) => {
     const operation = operationRef("read-file");
     let ownerRevision = 1;
     const entered = deferred<void>();
@@ -754,11 +754,14 @@ describe("Runner semantic integration", () => {
       async (input) => {
         entered.resolve();
         await release.promise;
-        if (decisionKind === "propose_completion") return {
+        if (decisionKind === "propose_completion") return { candidates: [], completionSource: {kind: "controller" as const},
           kind: "propose_completion",
           output: {summary: "Stale stopping basis"},
           modelItems: modelTextItems("stale-model-item", "Stop now"),
         };
+        if (decisionKind === "plan_request") return updateState({
+          plan: [{ step: "Do not apply stale Plan", status: "in_progress" }],
+        }, "stale-model-item");
         return advance([toolCandidate(
           "codeAgent.readFile",
           { path: "README.md" },
@@ -1113,7 +1116,7 @@ describe("Runner semantic integration", () => {
           childTurn += 1;
           if (childTurn === 1) {
             suspendHandle(handles.get(input.runId)!);
-            return Object.freeze({
+            return Object.freeze({ candidates: [], completionSource: {kind: "controller" as const},
               kind: "propose_completion" as const,
               output: { summary: "The Child needs Parent direction." },
               modelItems: modelTextItems(
@@ -1141,7 +1144,7 @@ describe("Runner semantic integration", () => {
             input.toolExposure.controllerRequestId,
           )], "model_agent_1");
         }
-        if (rootTurn === 2 && tryParentStop) return {
+        if (rootTurn === 2 && tryParentStop) return { candidates: [], completionSource: {kind: "controller" as const},
           kind: "propose_completion",
           output: {summary: "Parent proposes stopping before Child settlement"},
           modelItems: modelTextItems("model_parent_stop", "Stop now"),
@@ -1274,7 +1277,7 @@ describe("Runner semantic integration", () => {
           childTurn += 1;
           if (childTurn <= 2) {
             suspendHandle(handles.get(input.runId)!);
-            return Object.freeze({
+            return Object.freeze({ candidates: [], completionSource: {kind: "controller" as const},
               kind: "propose_completion" as const,
               output: { summary: `Child suspension ${childTurn}.` },
               modelItems: modelTextItems(
@@ -2479,17 +2482,115 @@ describe("Runner semantic integration", () => {
     }));
   });
 
-  it("commits Plan state as an ordinary in-loop transition", async () => {
+  it.each([false, true])("settles same-turn Plan state before completion notification (final first: %s)", async finalFirst => {
+    const operations = createOperationFixture([]);
+    const decision = completionWithCalls([{kind: "state_transition", transition: "plan_update", input: {
+      plan: [{step: "Inspect state", status: "completed"}],
+    }}], "Done", "same-turn", finalFirst);
+    const controller = new ScriptedController([decision]);
+    const beforeCompletion = vi.fn((notification: import("../controller/index.js").ControllerCompletionInput<TestOutput>) => {
+      expect(notification.current.plan).toMatchObject({status: "completed", steps: [{status: "completed"}]});
+      expect(notification.settlements).toHaveLength(1);
+      expect(notification.settlements[0]?.settlement).toBe("succeeded");
+      return Promise.resolve({kind: "allow" as const});
+    });
+    Object.assign(controller, {beforeCompletion});
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(controller.calls).toHaveLength(1);
+    expect(beforeCompletion).toHaveBeenCalledTimes(1);
+    const settlements = result.items.filter(item => item.payload.kind === "model_call_settlement");
+    expect(settlements).toHaveLength(2);
+    expect(settlements.at(-1)?.payload).toMatchObject({result: {name: "final_result", settlement: "succeeded"}});
+    expect(result.items.some(item => item.payload.kind === "run_action" && item.payload.action.provenance.kind === "controller" &&
+      item.payload.action.provenance.modelCallRef.id === "same-turn:final")).toBe(false);
+    expect(result.items.some(item => item.payload.kind === "completion_acceptance" && item.payload.completionSource.kind === "model_call")).toBe(true);
+  });
+
+  it("returns failed co-calls before a new final proposal without making historical failures an ending gate", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([
-      advance([{
-        kind: "state_transition",
-        transition: "plan_update",
-        input: {
-          explanation: "Inspect before completing.",
-          plan: [{ step: "Inspect state", status: "in_progress" }],
-        },
-      }], "model_plan_1"),
+      completionWithCalls([{kind: "state_transition", transition: "plan_update", input: {plan: [{step: "Invalid", status: "unknown"}]}}], "Premature", "invalid-final"),
+      input => {
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        expect(input.interaction.settledCallCount).toBe(2);
+        return completionWithCalls([], "Acknowledged limitation", "later-final");
+      },
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.finalOutput).toEqual({summary: "Acknowledged limitation"});
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement").map(item => item.payload.result.settlement))
+      .toEqual(["invalid", "invalidated", "succeeded"]);
+  });
+
+  it("retains the accepted final call but not a final output when required finalization fails", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([completionWithCalls([], "Candidate", "finalizer-failure")]);
+    const beforeCompletion = vi.fn(async () => ({kind: "allow" as const}));
+    Object.assign(controller, {beforeCompletion});
+    const result = await createRunner(controller, operations, {
+      resourceFinalizers: [{async finalize() {throw new Error("Cleanup failed");}}],
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result).toMatchObject({status: "failed", finalOutput: null,
+      cause: {failure: {failure: {code: "runtime_resource_finalization_failed"}}}});
+    expect(controller.calls).toHaveLength(1);
+    expect(beforeCompletion).toHaveBeenCalledTimes(1);
+    expect(result.items.filter(item => item.payload.kind === "completion_acceptance")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement").map(item => item.payload.result))
+      .toMatchObject([{name: "final_result", settlement: "succeeded"}]);
+  });
+
+  it("cancels an in-flight completion notification without accepting or reentering it", async () => {
+    const operations = createOperationFixture([]);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const controller = new ScriptedController([completionWithCalls([], "Candidate", "cancel-final")]);
+    const beforeCompletion = vi.fn(async () => {entered.resolve(); await release.promise; return {kind: "allow" as const};});
+    Object.assign(controller, {beforeCompletion});
+    const handle = createRunner(controller, operations).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await entered.promise;
+    handle.cancel({origin: "user", reasonCode: "user_requested"});
+    release.resolve();
+    const result = await handle.wait();
+    expect(result).toMatchObject({status: "cancelled", finalOutput: null});
+    expect(result.items.filter(item => item.payload.kind === "completion_acceptance")).toHaveLength(0);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement").map(item => item.payload.result))
+      .toMatchObject([{name: "final_result", settlement: "cancelled"}]);
+    expect(beforeCompletion).toHaveBeenCalledTimes(1);
+    expect(controller.calls).toHaveLength(1);
+  });
+
+  it("settles declined output before the next ordinary turn and never replays its Plan update", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([
+      completionWithCalls([{kind: "state_transition", transition: "plan_update", input: {plan: [{step: "Open item", status: "in_progress"}]}}], "First", "feedback-final"),
+      input => {
+        expect(input.plan?.version).toBe(1);
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        return completionWithCalls([], "Second", "accepted-final");
+      },
+    ]);
+    let notifications = 0;
+    Object.assign(controller, {beforeCompletion: async () => ++notifications === 1
+      ? {kind: "continue_with_feedback", feedback: {source: {owner: "test", kind: "completion", id: "check", revision: "1"}, code: "one_more_turn", message: "Use the current results."}}
+      : {kind: "allow"}});
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(notifications).toBe(2);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(3);
+    expect(result.items.filter(item => item.payload.kind === "state_transition" && item.payload.transition === "plan").at(-1)?.payload)
+      .toMatchObject({plan: {status: "abandoned", steps: [{status: "in_progress"}]}});
+  });
+
+  it("processes Plan-only calls through shared admission without Tool execution or feedback", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([
+      updateState({
+        explanation: "Inspect before completing.",
+        plan: [{ step: "Inspect state", status: "in_progress" }],
+      }, "model_plan_1"),
       (input) => {
         expect(input.plan).toMatchObject({
           version: 1,
@@ -2507,6 +2608,13 @@ describe("Runner semantic integration", () => {
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
+    expect(result.items.filter(item => item.payload.kind === "controller_turn").map(item =>
+      item.payload.kind === "controller_turn" ? item.payload.decisionKind : null,
+    )).toEqual(["advance", "propose_completion"]);
+    expect(result.items.some(item => item.payload.kind === "controller_feedback")).toBe(false);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(1);
+    const coreSteps = recordedFlows.filter(fact => fact.kind === "step_entered" && fact.definition.id === "run-execution");
+    expect(coreSteps.some(fact => "stepId" in fact && fact.stepId === "dispatch")).toBe(true);
     const capturedInputs = recordedFlows.filter(fact => fact.kind === "material" && fact.name === "Controller input");
     expect(capturedInputs).toHaveLength(2);
     expect(capturedInputs[0]!.value).toMatchObject({input: {plan: null}});
@@ -2525,6 +2633,24 @@ describe("Runner semantic integration", () => {
       : null)).toEqual(["active", "abandoned"]);
   });
 
+  it("settles an invalid standalone Plan update without losing the call or fabricating completion", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([
+      updateState({ plan: [{ step: "Invalid status", status: "unknown" }] }, "invalid_plan"),
+      (input) => {
+        expect(input.plan).toBeNull();
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        expect(input.interaction.settledCallCount).toBe(1);
+        return complete("Handled rejected update", "after_invalid_plan");
+      },
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("completed");
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(1);
+    expect(result.items.some(item => item.payload.kind === "state_transition" && item.payload.transition === "plan")).toBe(false);
+    expect(result.items.some(item => item.payload.kind === "controller_feedback")).toBe(false);
+  });
+
   it("does not invent a no-progress terminal state for ordinary Plan churn", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];
@@ -2537,8 +2663,8 @@ describe("Runner semantic integration", () => {
       },
     });
     const controller = new ScriptedController([
-      advance([planCandidate()], "model_plan_1"),
-      advance([planCandidate()], "model_plan_2"),
+      updateState(planCandidate().input, "model_plan_1"),
+      updateState(planCandidate().input, "model_plan_2"),
       complete("Plan work is complete", "model_complete_3"),
     ]);
 
@@ -2586,14 +2712,10 @@ describe("Runner semantic integration", () => {
       }),
     ], [handler]);
     const controller = new ScriptedController([
-      advance([{
-        kind: "state_transition",
-        transition: "plan_update",
-        input: {
-          explanation: "Start with a declaration.",
-          plan: [{ step: "Inspect", status: "in_progress" }],
-        },
-      }], "model_plan_1"),
+      updateState({
+        explanation: "Start with a declaration.",
+        plan: [{ step: "Inspect", status: "in_progress" }],
+      }, "model_plan_1"),
       advance([operationCandidate(operation, {})], "model_operation"),
       complete("Completed after inspection", "model_complete"),
     ]);
@@ -2633,14 +2755,10 @@ describe("Runner semantic integration", () => {
       }),
     ], [], { actionExecution: actionExecution.dependencies });
     const controller = new ScriptedController([
-      advance([{
-        kind: "state_transition",
-        transition: "plan_update",
-        input: {
-          explanation: "Start with a declaration.",
-          plan: [{ step: "Inspect", status: "in_progress" }],
-        },
-      }], "model_plan_1"),
+      updateState({
+        explanation: "Start with a declaration.",
+        plan: [{ step: "Inspect", status: "in_progress" }],
+      }, "model_plan_1"),
       advance([operationCandidate(operation, { target: "workspace" })], "model_operation"),
     ]);
 
@@ -3233,7 +3351,7 @@ describe("Runner semantic integration", () => {
   it("normally ends an honest limitation reply without creating a suspension or claiming success", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];
-    const controller = new ScriptedController([{
+    const controller = new ScriptedController([{ candidates: [], completionSource: {kind: "controller" as const},
       kind: "propose_completion",
       output: {summary: "No useful continuation remains."},
       modelItems: modelTextItems("model_stop_1", "No useful continuation remains."),
@@ -3283,7 +3401,7 @@ describe("Runner semantic integration", () => {
 
   it("settles finalization failure after an accepted stop without another Controller turn", async () => {
     const operations = createOperationFixture([]);
-    const controller = new ScriptedController([{
+    const controller = new ScriptedController([{ candidates: [], completionSource: {kind: "controller" as const},
       kind: "propose_completion", output: {summary: "No useful work remains."},
       modelItems: modelTextItems("model_stop", "No useful work remains."),
     }]);
@@ -4132,7 +4250,7 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
 }
 
 function complete(summary: string, id = "model_complete_1"): ControllerDecision<TestOutput> {
-  return {
+  return { candidates: [], completionSource: {kind: "controller" as const},
     kind: "propose_completion",
     output: { summary },
     modelItems: modelTextItems(id, summary),
@@ -4186,6 +4304,25 @@ function advance(
       },
     }),
   };
+}
+
+function updateState(input: unknown, modelCallId: string): ControllerDecision<TestOutput> {
+  return advance([{ kind: "state_transition", transition: "plan_update", input }], modelCallId);
+}
+
+function completionWithCalls(candidates: readonly Readonly<Record<string, unknown>>[], summary: string, id: string, finalFirst = false): ControllerDecision<TestOutput> {
+  const turnId = `${id}:turn`, providerRequestId = `${id}:request`;
+  const normalized = candidates.map((candidate, index) => ({...candidate,
+    modelCallRef: testModelCallRef(`${id}:call:${index}`, turnId, providerRequestId, index + (finalFirst ? 1 : 0), `${turnId}:controller`)}));
+  const ordinal = finalFirst ? 0 : candidates.length;
+  const final = {name: "final_result", input: {response: summary}, ordinal, providerCallRef: null,
+    modelCallRef: testModelCallRef(`${id}:final`, turnId, providerRequestId, ordinal, `${turnId}:controller`)};
+  const calls = normalized.map(candidate => candidateModelToolCall(candidate, candidate.modelCallRef.contentBlockOrdinal));
+  const ordered = finalFirst ? [final, ...calls] : [...calls, final];
+  return {kind: "propose_completion", candidates: normalized as unknown as import("../controller/index.js").ProgressionCandidate[],
+    completionSource: {kind: "model_call", modelCallRef: final.modelCallRef}, output: {summary},
+    modelItems: createControllerModelItems({turnId, assistant: {role: "assistant", content: ordered.map(call => ({kind: "model_tool_call", call}))},
+      finish: {kind: "normal"}, usage: null, responseRef: {providerId: "scripted-controller", requestId: providerRequestId, responseId: `${id}:response`}})};
 }
 
 function operationCandidate(operation: OperationRevisionRef, request: unknown) {

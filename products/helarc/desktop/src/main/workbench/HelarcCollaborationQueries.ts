@@ -25,6 +25,10 @@ interface ResolvedWork {
   readonly projection: HelarcRunProjection;
   readonly live: boolean;
 }
+
+function outputModelItems(source: D.HelarcOutputSource | undefined): readonly string[] {
+  return source?.kind === "model_text" ? source.modelItemIds : source?.kind === "model_control" ? [source.modelItemId] : [];
+}
 export class HelarcCollaborationQueries {
   constructor(
     private readonly sources: WorkbenchQuerySources,
@@ -63,8 +67,7 @@ export class HelarcCollaborationQueries {
           productRunId: m.correlation.runId,
           runId: rootRunId,
           sourceId: m.id,
-          modelItemIds: (m.metadata.outputSource as D.HelarcOutputSource | undefined)?.kind === "model_text"
-            ? (m.metadata.outputSource as Extract<D.HelarcOutputSource,{kind:"model_text"}>).modelItemIds : [],
+          modelItemIds: outputModelItems(m.metadata.outputSource as D.HelarcOutputSource | undefined),
           detail:
             work && rootRunId
               ? {
@@ -105,7 +108,7 @@ export class HelarcCollaborationQueries {
             const source = message.metadata.outputSource as
               | D.HelarcOutputSource
               | undefined;
-            return source?.kind === "model_text" ? source.modelItemIds : [];
+            return outputModelItems(source);
           }),
         );
         for (const record of presentation.records) {
@@ -125,14 +128,14 @@ export class HelarcCollaborationQueries {
           if (record.runId !== root) continue;
           const c = record.content;
           if (
-            c.kind !== "assistant_text" &&
+            c.kind !== "assistant_text" && c.kind !== "final_response" &&
             !(c.kind === "steering" && c.origin === "user")
           )
             continue;
-          if (c.kind === "assistant_text" && suppressed.has(c.modelItemId))
+          if ((c.kind === "assistant_text" || c.kind === "final_response") && suppressed.has(c.modelItemId))
             continue;
           const text = textPage(
-            c.kind === "assistant_text" ? c.text : c.instruction,
+            c.kind !== "steering" ? c.text : c.instruction,
           );
           all.push({
             id: `record:${work.id}:${record.id}`,
@@ -146,7 +149,7 @@ export class HelarcCollaborationQueries {
             productRunId: work.id,
             runId: root,
             sourceId: record.id,
-            modelItemIds: c.kind === "assistant_text" ? [c.modelItemId] : [],
+            modelItemIds: c.kind !== "steering" ? [c.modelItemId] : [],
             detail: {
               threadId: query.threadId,
               productRunId: work.id,
@@ -154,7 +157,9 @@ export class HelarcCollaborationQueries {
               itemId: record.id,
             },
             artifactIds: [],
-            disposition: c.kind === "steering" ? c.disposition : null,
+            disposition: c.kind === "steering" ? c.disposition : c.kind === "final_response"
+              ? c.disposition === "completed" ? null : c.disposition === "proposed" || c.disposition === "accepted" ? "Awaiting completion" : "Not finalized"
+              : null,
           });
         }
       }
@@ -412,7 +417,7 @@ export class HelarcCollaborationQueries {
             r.runId === query.runId &&
             (!cursor || r.sequence < (cursor.before as number)) &&
             (query.collection === "assistant"
-              ? r.content.kind === "assistant_text"
+              ? r.content.kind === "assistant_text" || r.content.kind === "final_response"
               : isWorkbenchOperation(r) &&
                 r.content.settlement !== null),
         )
@@ -784,7 +789,7 @@ function recordPreview(
   record: HelarcRunPresentationRecord,
 ): D.HelarcRunPresentationRecord {
   const c = record.content;
-  if (c.kind === "assistant_text") {
+  if (c.kind === "assistant_text" || c.kind === "final_response") {
     const text = textPage(c.text, 0, 2048);
     return {
       ...record,

@@ -204,7 +204,7 @@ describe("Helarc Host Run composition", () => {
         const detail = await queries.query({...coreScope, kind: "get_flow_occurrence", occurrenceId: record.subject.id});
         expect(detail.flow?.occurrence?.status).toBe("closed");
         expect(detail.flow?.occurrence?.checks.every(check => check.availability === "recorded")).toBe(true);
-        expect(detail.flow?.occurrence?.references.every(reference => reference.availability === "present" || reference.availability === "observed_later")).toBe(true);
+        expect(detail.flow?.occurrence?.references.every(reference => reference.availability === "present" || reference.availability === "observed_later"), JSON.stringify({step:record.payload,refs:detail.flow?.occurrence?.references})).toBe(true);
         if (record.payload.kind === "flow_step" && ["initialize", "controller", "decision", "admission", "dispatch", "join"].includes(record.payload.observation.stepId)) {
           expect(detail.flow?.occurrence?.references.some(reference => reference.role === "input")).toBe(true);
         }
@@ -398,6 +398,8 @@ describe("Helarc Host Run composition", () => {
       "run.item.appended",
       "controller.tool_exposure.resolved",
       "controller.finished",
+      "context.transition.committed",
+      "run.item.appended",
       "run.item.appended",
       "run.item.appended",
       "run.item.appended",
@@ -995,7 +997,7 @@ describe("Helarc Host Run composition", () => {
     expect(observations[0]?.lowerRefs[0]?.id).not.toBe(observations[1]?.lowerRefs[0]?.id);
   });
 
-  it("keeps the recorded Plan when the model ignores one synchronization feedback and ends", async () => {
+  it("ends with an unfinished Plan without an extra model request or completion feedback", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-update-"));
     const provider = new ScriptedProvider([
       {
@@ -1009,10 +1011,6 @@ describe("Helarc Host Run composition", () => {
       {
         kind: "completion",
         summary: "Plan was recorded.",
-      },
-      {
-        kind: "completion",
-        summary: "Plan was recorded after reconciliation feedback.",
       },
     ]);
 
@@ -1031,35 +1029,33 @@ describe("Helarc Host Run composition", () => {
           { step: "Finish task", status: "pending" },
         ],
       };
-    expect(provider.lastControllerInputPlans).toEqual([null, recordedPlan, recordedPlan]);
+    expect(provider.lastControllerInputPlans).toEqual([null, recordedPlan]);
+    expect(provider.requests).toHaveLength(2);
     expect(provider.stopRequests).toHaveLength(0);
-    expect(JSON.stringify(provider.requests[2]!.messages)).toContain("plan_synchronization_requested");
-    expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(1);
+    expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(0);
     const updates = result.runResult.items.flatMap(({ payload }) => payload.kind === "state_transition" && payload.transition === "plan" ? [payload.plan] : []);
     expect(updates).toHaveLength(2);
     expect(updates.at(-1)).toMatchObject({ status: "abandoned", steps: recordedPlan.steps });
-    expect(result.product.output.agentSummary).toBe("Plan was recorded after reconciliation feedback.");
+    expect(result.product.output.agentSummary).toBe("Plan was recorded.");
   });
 
-  it.each(["completed", "pending"] as const)("accepts model Plan synchronization to %s without a separate assessment or repeated feedback", async (status) => {
+  it.each(["completed", "pending"] as const)("preserves ordinary model Plan updates to %s without completion-time synchronization", async (status) => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-sync-"));
     const provider = new ScriptedProvider([
       { kind: "plan_update", plan: [{ step: "Inspect workspace", status: "in_progress" }] },
-      { kind: "completion", summary: "Finished for now." },
       { kind: "plan_update", explanation: status === "completed" ? "Work is done." : "Inspection remains pending; no more work can be performed now.", plan: [{ step: "Inspect workspace", status }] },
       { kind: "completion", summary: "The Plan now records the actual state." },
     ]);
     const result = await executeReadOnlyTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings: createDefaultHelarcInstructionSettings() });
     expect(result.runResult.status).toBe("completed");
-    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests).toHaveLength(3);
     expect(provider.stopRequests).toHaveLength(0);
     expect(provider.requests.every((request) => request.interaction.kind === "native_tool_turn" && request.instructions.content.length === 0)).toBe(true);
-    expect(JSON.stringify(provider.requests[2]!.messages)).toContain("plan_synchronization_requested");
     const updates = result.runResult.items.flatMap(({ payload }) => payload.kind === "state_transition" && payload.transition === "plan" ? [payload.plan] : []);
     expect(updates).toHaveLength(status === "completed" ? 2 : 3);
     expect(updates.at(-1)?.status).toBe(status === "completed" ? "completed" : "abandoned");
     expect(updates.at(-1)?.steps).toEqual([{ step: "Inspect workspace", status }]);
-    expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(1);
+    expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(0);
     expect(result.runResult.items.some(({ payload }) => payload.kind === "suspension_transition")).toBe(false);
   });
 
@@ -1591,9 +1587,7 @@ function scriptedNativeProviderResult(
   const calls = scripted.kind === "tool_calls"
     ? scripted.calls as Record<string, unknown>[]
     : [scripted];
-  const content = scripted.kind === "completion"
-    ? [{ kind: "text" as const, text: String(scripted.summary) }]
-    : [...assistantText, ...calls.map((call, index) => Object.freeze({
+  const content = [...assistantText, ...calls.map((call, index) => Object.freeze({
         kind: "model_tool_call" as const,
         call: snapshotModelToolCall({
           modelCallRef: createModelCallRef({
@@ -1632,6 +1626,7 @@ function scriptedCallableName(
   scripted: Record<string, unknown>,
 ): string {
   if (typeof scripted.callableName === "string") return scripted.callableName;
+  if (scripted.kind === "completion") return "final_result";
   if (scripted.kind === "plan_update") return "update_plan";
   if (scripted.kind !== "tool_call" || typeof scripted.toolName !== "string") {
     return "unknown_scripted_callable";
@@ -1647,6 +1642,7 @@ function scriptedCallableName(
 function scriptedCallInput(scripted: Record<string, unknown>): {
   readonly [key: string]: ModelJsonValue;
 } {
+  if (scripted.kind === "completion") return {response: String(scripted.summary)};
   if (scripted.kind === "plan_update") {
     return {
       ...(typeof scripted.explanation === "string"

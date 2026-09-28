@@ -76,7 +76,7 @@ describe("ProviderBackedController", () => {
 
     const result = await controller.next(createControllerInput(), callContext());
 
-    expect(result).toEqual({
+    expect(result).toEqual({ candidates: [], completionSource: {kind: "controller" as const},
       kind: "propose_completion",
       output: { summary: "Done" },
       modelItems: modelItems("model_item_1", { summary: "Done" }),
@@ -232,6 +232,52 @@ describe("ProviderBackedController", () => {
     ]);
   });
 
+  it("validates Plan-only requests without a separate decision branch", () => {
+    const input = createControllerInput();
+    const call = modelCall("plan_item_1", "update_plan", 0);
+    const candidate = {
+      kind: "state_transition" as const,
+      transition: "plan_update" as const,
+      input: { plan: [{ step: "Inspect files", status: "in_progress" }] },
+      modelCallRef: call.modelCallRef,
+    };
+    const modelItems = modelCallItems([call]);
+    const result = validateControllerDecision({ kind: "advance", candidates: [candidate], modelItems }, input);
+    expect(result).toMatchObject({ kind: "advance", candidates: [candidate] });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(() => validateControllerDecision({ kind: "advance", candidates: [], modelItems } as unknown as ControllerDecision, input)).toThrow();
+  });
+
+  it("rejects completion that hides an unaccounted Tool call", () => {
+    const input = createControllerInput();
+    const call = modelCall("tool_item_1", "workspace.readFile", 0);
+    expect(() => validateControllerDecision({
+      kind: "propose_completion", candidates: [], completionSource: {kind: "controller"}, output: {summary: "Done"},
+      modelItems: modelCallItems([call]),
+    } as unknown as ControllerDecision, input)).toThrow();
+  });
+
+  it("requires exact, unique coverage across completion source and ordered co-calls", () => {
+    const input = createControllerInput();
+    const plan = modelCall("plan", "update_plan", 0);
+    const final = modelCall("final", "final_result", 1);
+    const decision: ControllerDecision = {
+      kind: "propose_completion", output: { summary: "Done" },
+      completionSource: { kind: "model_call", modelCallRef: final.modelCallRef },
+      candidates: [{ kind: "state_transition", transition: "plan_update", input: {}, modelCallRef: plan.modelCallRef }],
+      modelItems: modelCallItems([plan, final]),
+    };
+    expect(validateControllerDecision(decision, input)).toMatchObject({kind:"propose_completion",candidates:decision.candidates});
+    for (const invalid of [
+      { ...decision, candidates: [] },
+      { ...decision, completionSource: { kind: "controller" } },
+      { ...decision, completionSource: { kind: "model_call", modelCallRef: plan.modelCallRef } },
+      { ...decision, completionSource: { kind: "model_call", modelCallRef: {...final.modelCallRef, turnId: "foreign"} } },
+      { ...decision, candidates: [decision.candidates[0], decision.candidates[0]] },
+      { ...decision, modelItems: [...decision.modelItems, decision.modelItems[0]] },
+    ]) expect(() => validateControllerDecision(invalid as ControllerDecision, input)).toThrow();
+  });
+
   it("preserves trusted workflow provenance in generic Controller validation", () => {
     const input = createControllerInput();
     const call = modelCall("workflow_item_1", "workspace.createFile", 0);
@@ -303,7 +349,7 @@ describe("ProviderBackedController", () => {
       new FakeProvider({ results: [succeededResult({ action: "complete" })] }),
       {
         parseResponse() {
-          return {
+          return { candidates: [], completionSource: {kind: "controller" as const},
             kind: "propose_completion",
             output: { summary: "  No safe next action.  " },
             modelItems: modelItems("model_item_1", { action: "complete" }),
@@ -1260,7 +1306,7 @@ describe("ProviderBackedController native streaming", () => {
       },
       parseResponse: input.parseResponse ?? ((response) => {
         if (response.kind !== "native_tool_turn") throw new Error("Expected native turn");
-        return { kind: "propose_completion", output: { summary: "Done" }, modelItems: createControllerModelItems(response.turn) };
+        return { candidates: [], completionSource: {kind: "controller" as const}, kind: "propose_completion", output: { summary: "Done" }, modelItems: createControllerModelItems(response.turn) };
       }),
       retryExecutor: createSystemRetryExecutor(), retryClock: systemRetryClock,
     });
@@ -1278,7 +1324,7 @@ describe("ProviderBackedController native streaming", () => {
     const release = Promise.withResolvers<void>();
     const parse = vi.fn((response: ProviderResponse): ControllerDecision<TestOutput> => {
       if (response.kind !== "native_tool_turn") throw new Error("Expected native turn");
-      return { kind: "propose_completion", output: { summary: "Done" }, modelItems: createControllerModelItems(response.turn) };
+      return { candidates: [], completionSource: {kind: "controller" as const}, kind: "propose_completion", output: { summary: "Done" }, modelItems: createControllerModelItems(response.turn) };
     });
     const controller = setup({ events, parseResponse: parse, async send(request, _context, options) {
       expect(options?.mode).toBe("streaming");
@@ -1871,7 +1917,7 @@ function correctionError(
 }
 
 function finalDecision(output: unknown): ControllerDecision<TestOutput> {
-  return {
+  return { candidates: [], completionSource: {kind: "controller" as const},
     kind: "propose_completion",
     output: output as TestOutput,
     modelItems: modelItems("model_item_1", output),

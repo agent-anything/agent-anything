@@ -16,8 +16,6 @@ import {
   AgentHookController,
   type AgentHookExecutionStore,
 } from "@agent-anything/agent-hooks/execution";
-import { createAgentHookComposition } from "@agent-anything/agent-hooks/composition";
-import { createHelarcPlanSynchronizationHookComposition } from "../controller/HelarcPlanSynchronizationHook.js";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { HELARC_RESULT_EXECUTION_FLOW } from "./HelarcResultExecutionFlow.js";
@@ -174,13 +172,6 @@ export async function createHelarcProductComposition(
     (instructionSettings ?? createDefaultHelarcInstructionSettings()).stop,
     now,
   );
-  const planSynchronization = createHelarcPlanSynchronizationHookComposition();
-  const stopHooks = createAgentHookComposition({
-    id: "helarc.agent-hooks",
-    revision: `${planSynchronization.revision}:${taskFulfillment.composition.revision}`,
-    registrations: [...planSynchronization.registrations, ...taskFulfillment.composition.registrations],
-    bindings: [...planSynchronization.bindings, ...taskFulfillment.composition.bindings],
-  });
   const actions = createHelarcActionComposition({
     admittedAt,
     file: input.fileActions,
@@ -261,13 +252,17 @@ export async function createHelarcProductComposition(
     new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
       delivery: {mode:input.responseDelivery ?? "buffered", observer:{observe:event => previews.observe(event)}},
-      buildRequest: (controllerInput, context) =>
-        buildHelarcProviderRequest(
+      buildRequest: (controllerInput, context) => {
+        const request = buildHelarcProviderRequest(
           controllerInput,
           context,
           controllerProtocol,
           qualification,
-        ),
+        );
+        previews.bindRequest(controllerInput.runId, request.requestId,
+          controllerProtocol.createCallableCatalog(controllerInput.toolExposure, controllerInput.planLimits));
+        return request;
+      },
       parseResponse: (response, controllerInput, executionFlow) =>
         parseHelarcProviderResponse(
           response,
@@ -285,7 +280,7 @@ export async function createHelarcProductComposition(
   );
   const providerController = new AgentHookController<HelarcAgentOutput>({
     controller: tracedController,
-    composition: stopHooks,
+    composition: taskFulfillment.composition,
     rootRunId: input.runId,
     maxConsecutiveContinuations: 2,
     now,
@@ -318,7 +313,7 @@ export async function createHelarcProductComposition(
     interactions,
     delegation: descendant.delegation,
     agentHooks: providerController.store,
-    hookRegistrations: stopHooks.registrations,
+    hookRegistrations: taskFulfillment.composition.registrations,
     taskFulfillment: taskFulfillment.hook,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {

@@ -171,7 +171,7 @@ describe("Helarc native Tool controller", () => {
     expect(request.interaction.callables.map(({ name }) => name)).toEqual(
       expect.arrayContaining(["update_plan"]),
     );
-    expect(request.interaction.callables).toHaveLength(FILE_TOOLS.length + 1);
+    expect(request.interaction.callables).toHaveLength(FILE_TOOLS.length + 2);
     expect(request.interaction.callables.every(({ name }) => /^[A-Za-z0-9_-]+$/u.test(name)))
       .toBe(true);
     expect(request.interaction.callables.some(({ name }) => name === "Read")).toBe(false);
@@ -195,7 +195,7 @@ describe("Helarc native Tool controller", () => {
         revision: request.metadata.modelCallableDefinitionsDigest,
       },
       interactionHistory: null,
-      protocol: { id: "helarc.provider-native-tool-interaction.v1" },
+      protocol: { id: "helarc.provider-native-tool-interaction.v2" },
     });
     const readDefinition = request.interaction.callables.find(({ name }) =>
       name.startsWith("Read_")
@@ -320,6 +320,7 @@ describe("Helarc native Tool controller", () => {
       throw new Error("Expected native Tool interaction.");
     }
     expect(request.interaction.callables.map(({ name }) => name)).toEqual([
+      "final_result",
       "update_plan",
     ]);
   });
@@ -568,9 +569,10 @@ describe("Helarc native Tool controller", () => {
     ]);
   });
 
-  it("maps update_plan to a Runner-owned state transition", () => {
+  it.each([false, true])("returns results when a Plan call has no ending intent (assistant text: %s)", (withText) => {
     const input = createControllerInput();
-    const decision = parseHelarcProviderResponse(nativeResponse(input, [{
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [
+      ...(withText ? [{ kind: "text" as const, text: "Here is the current plan." }] : []), {
       kind: "call",
       name: "update_plan",
       input: {
@@ -598,11 +600,27 @@ describe("Helarc native Tool controller", () => {
     });
   });
 
-  it("maps final text, limitations, and refusal to normal completion candidates", () => {
+  it.each([true, false])("advances for the Tool request while preserving Plan order (Plan first: %s)", (planFirst) => {
+    const input = createControllerInput();
+    const catalog = createHelarcModelCallableCatalog({ toolExposure: input.toolExposure, planLimits: input.planLimits });
+    const update: NativeBlock = { kind: "call", name: "update_plan", input: {
+      plan: [{ step: "Inspect files", status: "in_progress" }],
+    } };
+    const read: NativeBlock = { kind: "call", name: toolCallable(catalog, "Read"), input: { file_path: "README.md" } };
+    const decision = parseHelarcProviderResponse(nativeResponse(input, planFirst ? [update, read] : [read, update]), input);
+    expect(decision.kind).toBe("advance");
+    if (decision.kind !== "advance") throw new Error("Expected Tool progression.");
+    expect(decision.candidates.map(candidate => candidate.kind)).toEqual(
+      planFirst ? ["state_transition", "tool_request"] : ["tool_request", "state_transition"],
+    );
+    expect(decision.candidates.map(candidate => candidate.modelCallRef.contentBlockOrdinal)).toEqual([0, 1]);
+  });
+
+  it("requires explicit final output but respects a Provider refusal", () => {
     const input = createControllerInput();
 
     expect(parseHelarcProviderResponse(nativeResponse(input, [
-      { kind: "text", text: "The task is complete." },
+      { kind: "call", name: "final_result", input: {response: "The task is complete."} },
     ]), input)).toMatchObject({
       kind: "propose_completion",
       output: { kind: "complete", summary: "The task is complete." },
@@ -611,8 +629,8 @@ describe("Helarc native Tool controller", () => {
       kind: "text",
       text: "Cannot continue safely.",
     }]), input)).toMatchObject({
-      kind: "propose_completion",
-      output: { summary: "Cannot continue safely." },
+      kind: "continue_with_feedback",
+      feedback: {code: "helarc_ending_signal_missing"},
     });
     expect(parseHelarcProviderResponse(nativeResponse(
       input,
@@ -622,6 +640,39 @@ describe("Helarc native Tool controller", () => {
       kind: "propose_completion",
       output: { summary: "Policy refusal." },
     });
+  });
+
+  it.each([false, true])("preserves same-turn Plan order with final output (final first: %s)", finalFirst => {
+    const input = createControllerInput();
+    const plan: NativeBlock = {kind: "call", name: "update_plan", input: {plan: [{step: "Done", status: "completed"}]}};
+    const final: NativeBlock = {kind: "call", name: "final_result", input: {response: ""}};
+    const result = parseHelarcProviderResponse(nativeResponse(input, finalFirst ? [final, plan] : [plan, final]), input);
+    expect(result).toMatchObject({kind: "propose_completion", candidates: [{kind: "state_transition", transition: "plan_update"}],
+      completionSource: {kind: "model_call"}, output: {summary: "", source: {kind: "model_control", control: "final_result", argumentPath: "/response"}}});
+    expect(result.modelItems.filter(item => item.kind === "assistant_text")).toHaveLength(0);
+  });
+
+  it.each([{response: 42}, {response: "ok", extra: true}, {}])("rejects malformed final output locally: %j", invalid => {
+    const input = createControllerInput();
+    const result = parseHelarcProviderResponse(nativeResponse(input, [
+      {kind: "call", name: "final_result", input: invalid},
+      {kind: "call", name: "update_plan", input: {plan: [{step: "Investigate", status: "pending"}]}},
+    ]), input);
+    expect(result).toMatchObject({kind: "advance", candidates: [
+      {kind: "model_call_rejection", code: "helarc_final_result_invalid"}, {kind: "state_transition"},
+    ]});
+  });
+
+  it("rejects every ambiguous final call and never chooses a response by position", () => {
+    const input = createControllerInput();
+    const result = parseHelarcProviderResponse(nativeResponse(input, [
+      {kind: "call", name: "final_result", input: {response: "First"}},
+      {kind: "call", name: "final_result", input: {response: "Last"}},
+    ]), input);
+    expect(result).toMatchObject({kind: "advance", candidates: [
+      {kind: "model_call_rejection", code: "helarc_final_result_ambiguous"},
+      {kind: "model_call_rejection", code: "helarc_final_result_ambiguous"},
+    ]});
   });
 
   it("rejects unknown calls without discarding valid sibling calls", () => {
@@ -710,7 +761,7 @@ describe("Helarc native Tool controller", () => {
   });
 
   it("drives ProviderBackedController through native turns without structured correction", async () => {
-    const provider = new FakeProvider((request) => nativeTextResponseFromRequest(request, "Done."));
+    const provider = new FakeProvider((request) => nativeFinalResponseFromRequest(request, "Done."));
     const controller = new ProviderBackedController<HelarcAgentOutput>({
       provider,
       buildRequest: buildHelarcProviderRequest,
@@ -1175,7 +1226,7 @@ function nativeResponse(
   });
 }
 
-function nativeTextResponseFromRequest(
+function nativeFinalResponseFromRequest(
   request: ProviderRequest,
   text: string,
 ): ProviderResponse {
@@ -1186,7 +1237,12 @@ function nativeTextResponseFromRequest(
       turnId,
       assistant: Object.freeze({
         role: "assistant",
-        content: Object.freeze([{ kind: "text", text }]),
+        content: Object.freeze([{ kind: "model_tool_call", call: {
+          modelCallRef: createModelCallRef({providerRequestId: request.requestId,
+            controllerRequestId: request.correlation.controllerRequestId!, branchId: request.correlation.branchId!,
+            turnId, contentBlockOrdinal: 0}), providerCallRef: {providerId: "fake-provider", id: "final-call"},
+          name: "final_result", input: {response: text}, ordinal: 0,
+        } }]),
       }),
       finish: Object.freeze({ kind: "normal" }),
       usage: null,

@@ -279,3 +279,12 @@ export {
   HELARC_OPERATIONAL_TARGET_INPUTS,
   runHelarcOperationalConformance,
 } from "./operational-evaluation/index.js";
+export {
+  HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
+  HELARC_EXPLICIT_FINAL_RESULT_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcExplicitFinalResultBaseline.js";
+export {
+  HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_ACCEPTED_BASELINE,
+  HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_BASELINE_ACCEPTANCE,
+  verifyHelarcExplicitFinalResultOperationalAcceptedBaseline,
+} from "./baseline/HelarcExplicitFinalResultOperationalBaseline.js";
