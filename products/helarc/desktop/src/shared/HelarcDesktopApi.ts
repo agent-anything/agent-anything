@@ -931,6 +931,7 @@ export interface HelarcHostRunStatusSnapshot {
 
 export interface HelarcDesktopApi {
   readConversation(input: import("./HelarcWorkbench.js").ConversationQuery): Promise<import("./HelarcWorkbench.js").ConversationPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readConversationTurn(input: import("./HelarcWorkbench.js").ConversationTurnQuery): Promise<import("./HelarcWorkbench.js").ConversationTurnPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readCurrentWork(input: import("./HelarcWorkbench.js").CurrentWorkQuery): Promise<import("./HelarcWorkbench.js").CurrentWorkPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readTaskDetails(input: import("./HelarcWorkbench.js").WorkbenchScope): Promise<import("./HelarcWorkbench.js").TaskDetailsPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readWorkHistory(input: import("./HelarcWorkbench.js").WorkHistoryQuery): Promise<import("./HelarcWorkbench.js").WorkHistoryPage | import("./HelarcWorkbench.js").WorkbenchRejected>;

@@ -22,7 +22,6 @@ import type {
 } from "../shared/HelarcWorkbench.js";
 import { SettingsPage } from "./SettingsPage.js";
 import { Conversation } from "./conversation/Conversation.js";
-import { ConversationActivity } from "./conversation/ConversationActivity.js";
 import { RequestElapsed } from "./conversation/RequestElapsed.js";
 import { ConversationPlan } from "./plan/PlanView.js";
 import { AttentionPanel } from "./interactions/AttentionPanel.js";
@@ -329,12 +328,6 @@ export function App() {
         onInspect={inspect}
         visible={!settings}
       />
-      {!newThread && currentScope && (
-        <ConversationActivity key={`activity:${currentScope.threadId}:${currentScope.productRunId}`}
-          scope={currentScope} activity={current?.activity ?? null} revision={current?.revision ?? 0}
-          visible={!settings} error={!!currentRead.error || currentRead.value?.status === "rejected"}
-          onRetry={currentRead.refresh} />
-      )}
       {!newThread && currentScope && (
         <ConversationPlan
           key={`${currentScope.threadId}:${currentScope.productRunId}`}

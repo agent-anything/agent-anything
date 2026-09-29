@@ -257,7 +257,7 @@ describe("OllamaProvider", () => {
         {
           role: "tool",
           tool_name: "Read",
-          content: "{\"text\":\"file contents\"}",
+          content: "{\"settlement\":\"succeeded\",\"content\":{\"text\":\"file contents\"}}",
         },
       ],
     });
@@ -502,8 +502,11 @@ describe("OllamaProvider", () => {
           role: "tool",
           tool_name: "Read",
           content: JSON.stringify({
-            code: "tool_failed",
-            message: "private Tool failure content",
+            settlement: "failed",
+            content: {
+              code: "tool_failed",
+              message: "private Tool failure content",
+            },
           }),
         },
       ],

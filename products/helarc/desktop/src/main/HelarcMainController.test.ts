@@ -169,7 +169,7 @@ describe("HelarcMainController", () => {
     const finalProjection = terminal.finalProjection!;
     const commands = Array.from({ length: 32 }, (_, index) => ({
       runId: scope.runId, executionId: `execution-${index}`, revision: 1,
-      phase: "settled", outcome: "succeeded", processId: null, capturedBytes: 0,
+      phase: "settled", outcome: "succeeded", processId: null, capturedBytes: 0, origin: null,
       omittedBytes: 0, outputPersistence: "complete", observedAt: terminal.host.completedAt,
       command: "x".repeat(20_000),
     }));

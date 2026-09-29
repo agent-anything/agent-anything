@@ -43,6 +43,7 @@ describe("Tool input validation", () => {
     ]);
     expect(result.message).not.toContain("secret-rejected-value");
     expect(result.message).not.toContain("do-not-project");
+    expect(result.message).toContain("The requested Tool operation was not executed.");
     expect(result.message.length).toBeLessThanOrEqual(4_096);
   });
 

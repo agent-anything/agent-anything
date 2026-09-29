@@ -121,17 +121,18 @@ export interface CurrentWorkQuery extends WorkScope {
 }
 export interface ConversationQuery {
   readonly threadId: string;
+  readonly scope?: WorkbenchScope;
   readonly position:
     | { readonly kind: "latest" }
-    | { readonly kind: "before"; readonly cursor: string };
+    | { readonly kind: "before"; readonly cursor: string }
+    | { readonly kind: "window"; readonly first: string; readonly last: string; readonly cursor?: string };
 }
-export interface ConversationEntry {
+interface ConversationEntryBase {
   readonly id: string;
   readonly title: string | null;
   readonly revision: number;
   readonly position: readonly [number, number];
   readonly role: "user" | "assistant" | "system" | "product";
-  readonly kind: "message" | "assistant_text" | "final_response" | "steering" | "interaction";
   readonly content: string;
   readonly omittedBytes: number;
   readonly productRunId: string | null;
@@ -142,6 +143,48 @@ export interface ConversationEntry {
   readonly artifactIds: readonly string[];
   readonly disposition: string | null;
 }
+export type ConversationEntry = ConversationMessageEntry | ConversationTurnEntry;
+export interface ConversationMessageEntry extends ConversationEntryBase {
+  readonly kind: "message" | "steering" | "interaction" | "notice";
+}
+export interface ConversationTurnEntry extends ConversationEntryBase {
+  readonly kind: "turn";
+  readonly scope: WorkbenchScope;
+  readonly turnId: string;
+  readonly blocks: readonly ConversationBlock[];
+  readonly nextCursor: string | null;
+  readonly blockCount: number;
+  readonly partial: boolean;
+}
+export type ConversationBlock = {
+  readonly id: string;
+  readonly modelItemId: string;
+  readonly ordinal: number;
+} & ({
+  readonly kind: "text" | "final_response";
+  readonly text: string;
+  readonly omittedBytes: number;
+  readonly detail: WorkbenchItemQuery | null;
+  readonly disposition: string | null;
+  readonly artifactIds: readonly string[];
+} | {
+  readonly kind: "activity";
+  readonly item: ConversationActivityItem;
+});
+export interface ConversationTurnQuery extends WorkbenchScope {
+  readonly turnId: string;
+  readonly cursor: string | null;
+}
+export interface ConversationTurnPage {
+  readonly status: "page";
+  readonly scope: WorkbenchScope;
+  readonly turnId: string;
+  readonly revision: number;
+  readonly blocks: readonly ConversationBlock[];
+  readonly nextCursor: string | null;
+  readonly blockCount: number;
+  readonly partial: boolean;
+}
 export interface ConversationPage {
   readonly status: "page";
   readonly threadId: string;
@@ -150,6 +193,7 @@ export interface ConversationPage {
   readonly latestPosition: readonly [number, number] | null;
   readonly previousCursor: string | null;
   readonly omittedRecords: number;
+  readonly nextWindowCursor: string | null;
 }
 export interface TaskSummary {
   readonly runId: string;
@@ -161,10 +205,10 @@ export interface TaskSummary {
   readonly hasPlan: boolean;
   readonly hasFinishedWork: boolean;
 }
-export interface WorkbenchActivityItem {
+export interface ConversationActivityItem {
   readonly id: string;
   readonly runId: string;
-  readonly kind: "command" | "operation" | "response" | "attention";
+  readonly kind: "command" | "operation";
   readonly title: string;
   readonly attribution: string | null;
   readonly state: "ongoing" | "waiting" | "settled" | "inactive";
@@ -173,12 +217,8 @@ export interface WorkbenchActivityItem {
   readonly endedAt: string | null;
   readonly detail: { readonly kind: "command"; readonly executionId: string }
     | { readonly kind: "operation"; readonly itemId: string } | null;
-}
-export interface WorkbenchActivity {
-  readonly current: readonly WorkbenchActivityItem[];
-  readonly recent: readonly WorkbenchActivityItem[];
-  readonly omittedCurrent: number;
-  readonly omittedRecent: number;
+  readonly child: { readonly scope: WorkbenchScope; readonly label: string; readonly status: string;
+    readonly relationship: "created" | "referenced" } | null;
 }
 export interface CurrentWorkPage {
   readonly status: "page";
@@ -187,7 +227,6 @@ export interface CurrentWorkPage {
   readonly revision: number;
   readonly rootRunId: string;
   readonly workStatus: string;
-  readonly activity: WorkbenchActivity;
   readonly tasks: readonly TaskSummary[];
   readonly plan: HelarcPresentationValue;
   readonly activeCalls: readonly HelarcRunPresentationRecord[];

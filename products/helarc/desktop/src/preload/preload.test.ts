@@ -11,6 +11,18 @@ interface ExposedHelarcApi {
 }
 
 describe("Helarc preload bridge", () => {
+  it("forwards exact conversation windows and Turn scope through read-only channels", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let api!: HelarcDesktopApi;
+    const invoke = vi.fn(async () => ({status:"page"}));
+    runInNewContext(source,{require:()=>({contextBridge:{exposeInMainWorld:(_key:string,value:HelarcDesktopApi)=>{api=value;}},
+      ipcRenderer:{invoke,on:vi.fn(),removeListener:vi.fn()}})});
+    const scope = {threadId:"thread",productRunId:"work",runId:"child"};
+    await api.readConversation({threadId:"thread",scope,position:{kind:"window",first:"one",last:"two",cursor:"cursor"}});
+    expect(invoke).toHaveBeenLastCalledWith("helarc:read-conversation",{threadId:"thread",scope,position:{kind:"window",first:"one",last:"two",cursor:"cursor"}});
+    await api.readConversationTurn({...scope,turnId:"turn",cursor:null});
+    expect(invoke).toHaveBeenLastCalledWith("helarc:read-conversation-turn",{...scope,turnId:"turn",cursor:null});
+  });
   it("forwards owned operation sections through the read-only detail route", async () => {
     const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
     let api!: HelarcDesktopApi;

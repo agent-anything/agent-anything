@@ -1,6 +1,6 @@
 export type {
   HelarcThreadStore,
-  HelarcThreadStoreDocumentV3,
+  HelarcThreadStoreDocument,
   FileHelarcThreadStoreOptions,
 } from "./FileHelarcThreadStore.js";
 export type { HelarcThreadSummary } from "./HelarcThreadSummary.js";

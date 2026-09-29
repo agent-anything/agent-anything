@@ -2,9 +2,11 @@
   display: flex;
   flex: 0 1 auto;
   min-height: 0;
-  max-height: 32%;
+  max-height: none;
   overflow: hidden;
-  border-top: 1px solid #e5e9e6;
+  border: 1px solid #e5e9e6;
+  border-radius: 4px;
+  margin: 8px 0;
   background: #f1f5f2;
   font-size: 12px;
 }
@@ -82,8 +84,15 @@ button.wb-activity-row:hover { color: #146346; background: #e7eee9; }
 @keyframes wb-activity-text-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .65; } }
 @media (prefers-reduced-motion: reduce) { .wb-activity-progress-pulse { animation: none; } }
 @media (max-width: 700px) {
-  .wb-conversation-activity { max-height: 28%; }
   .wb-activity-body { padding: 5px 8px 5px 12px; }
   .wb-activity-row { gap: 5px; }
   .wb-activity-state { font-size: 10px; }
 }
+.wb-activity-count { flex: 0 0 auto; color: #68756d; font-size: 10px; }
+.wb-response-text + .wb-response-text { margin-top: 10px; }
+.wb-delegated-conversation { border-left: 2px solid #bbcbbb; padding-left: 10px; margin-top: 8px; min-width: 0; }
+.wb-delegated-conversation h4 { font-size: 12px; margin: 4px 0 10px; overflow-wrap: anywhere; }
+.wb-delegated-conversation .wb-message { padding: 8px 0; margin: 0; }
+.wb-model-response-progress { padding: 8px 24px; color: #64726a; font-size: 12px; }
+.wb-model-response-progress span { animation: wb-activity-text-pulse 2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .wb-model-response-progress span { animation: none; } }

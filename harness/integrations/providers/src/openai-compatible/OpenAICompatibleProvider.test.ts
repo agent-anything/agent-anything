@@ -264,7 +264,7 @@ describe("OpenAICompatibleProvider", () => {
         {
           role: "tool",
           tool_call_id: "call-1",
-          content: "{\"text\":\"file contents\"}",
+          content: "{\"settlement\":\"succeeded\",\"content\":{\"text\":\"file contents\"}}",
         },
       ],
     });

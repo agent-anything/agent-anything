@@ -1277,6 +1277,67 @@ describe("Helarc Host Run composition", () => {
     await expect(readFile(targetPath, "utf8")).resolves.toBe("same same\n");
   });
 
+  it("returns the unchanged-file failure facts before accepting a corrected Edit", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-feedback-"));
+    const targetPath = join(workspaceRoot, "target.txt");
+    await writeFile(targetPath, "before\n");
+    const provider = new ScriptedProvider([
+      { kind: "tool_call", toolName: "Edit", input: {
+        file_path: "target.txt", old_string: "not present", new_string: "after",
+      } },
+      (request: ProviderRequest) => {
+        const results = request.messages.flatMap(message => message.role === "tool"
+          ? message.content.map(block => block.result) : []);
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({
+          settlement: "invalid", content: {
+            status: "invalid", output: null, effectCertainty: "none", completionExtent: "none",
+            failure: { code: "file_edit_no_match", message: expect.stringContaining("This attempt did not modify the file.") },
+          },
+        });
+        return { kind: "tool_call", toolName: "Edit", input: {
+          file_path: "target.txt", old_string: "before", new_string: "after",
+        } };
+      },
+      { kind: "completion", summary: "The corrected edit was applied." },
+    ]);
+    const result = await executeTestHostRun({
+      ...createTask(workspaceRoot), provider, permissionPreset: "full_access",
+    });
+    expect(result.product.status).toBe("completed");
+    expect(operationResults(result).map(operation => operation.status)).toEqual(["invalid", "succeeded"]);
+    const finalResults = provider.requests[2]!.messages.flatMap(message => message.role === "tool"
+      ? message.content.map(block => block.result) : []);
+    expect(finalResults).toMatchObject([
+      { settlement: "invalid", content: { effectCertainty: "none", completionExtent: "none" } },
+      { settlement: "succeeded", content: { effectCertainty: "confirmed", completionExtent: "complete" } },
+    ]);
+    await expect(readFile(targetPath, "utf8")).resolves.toBe("after\n");
+  });
+
+  it("reports a rejected Write as not executed without producing an Action or file", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-write-rejected-"));
+    const provider = new ScriptedProvider([
+      { kind: "tool_call", toolName: "Write", input: {
+        file_path: "target.txt", content: "not written", old_string: "unsupported", replace_all: false,
+      } },
+      { kind: "completion", summary: "The attempted write was rejected." },
+    ]);
+    const result = await executeTestHostRun({
+      ...createTask(workspaceRoot), provider, permissionPreset: "full_access",
+    });
+    const results = provider.requests[1]!.messages.flatMap(message => message.role === "tool"
+      ? message.content.map(block => block.result) : []);
+    expect(results).toMatchObject([{ settlement: "invalid", content: {
+      kind: "tool_rejected", code: "tool_input_invalid",
+      message: expect.stringContaining("The requested Tool operation was not executed."),
+      issues: expect.arrayContaining([expect.objectContaining({ path: "/old_string", reason: "unexpected" })]),
+    } }]);
+    expect(operationResults(result)).toEqual([]);
+    expect(result.product.actions).toEqual([]);
+    await expect(access(join(workspaceRoot, "target.txt"))).rejects.toThrow();
+  });
+
   it("invalidates an approved Edit when its prepared baseline becomes stale", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-stale-"));
     const targetPath = join(workspaceRoot, "stale.txt");

@@ -1,5 +1,5 @@
 import type { HostRunProjection } from "@agent-anything/host/projection";
-import { createHelarcRunPresentation, type HelarcRunPresentation } from "./presentation/HelarcRunPresentation.js";
+import { createHelarcRunPresentation, type HelarcRunPresentation, type HelarcModelItemOrigin } from "./presentation/HelarcRunPresentation.js";
 import { createHelarcResponsePreviews, type HelarcResponsePreviews } from "./presentation/HelarcResponsePreviews.js";
 import type {
   HelarcActivityItem,
@@ -14,7 +14,15 @@ export type HelarcModelContinuationProjection = ModelContinuationSafeEvent;
 
 export type HelarcProductPhase = { readonly kind: "none" };
 
+function commandOrigin(command: Omit<HelarcCommandProgress, "origin">, presentation: HelarcRunPresentation): HelarcModelItemOrigin | null {
+  if (!command.invocationId) return null;
+  const call = [...presentation.activeCalls, ...presentation.records].find(record => record.runId === command.runId &&
+    record.content.kind === "tool_call" && record.content.invocationIds.includes(command.invocationId!));
+  return call?.origin ?? null;
+}
+
 export interface HelarcCommandProgress {
+  readonly origin: HelarcModelItemOrigin | null;
   readonly runId:string;
   readonly executionId:string;
   readonly revision:number;
@@ -76,7 +84,7 @@ export interface HelarcModelContinuationProjectionUpdate
 export type HelarcProductRunProjectionUpdate =
   | HelarcProductProjectionUpdateBase<"responses_observed"> & { readonly responses: HelarcResponsePreviews }
   | HelarcProductProjectionUpdateBase<"presentation_observed"> & { readonly presentation: HelarcRunPresentation }
-  | HelarcProductProjectionUpdateBase<"command_observed"> & {readonly command:HelarcCommandProgress}
+  | HelarcProductProjectionUpdateBase<"command_observed"> & {readonly command:Omit<HelarcCommandProgress, "origin">}
   | HelarcProductActivityProjectionUpdate
   | HelarcModelContinuationProjectionUpdate
   | HelarcProductResultProjectionUpdate;
@@ -181,7 +189,9 @@ export function reduceHelarcProductRunProjection(
         return appliedProduct(Object.freeze({...current, sequence:update.sequence, responses:update.responses}));
       case "presentation_observed":
         if (update.presentation.revision <= current.presentation.revision) return rejectProduct(current, "stale_sequence");
-        return appliedProduct(Object.freeze({ ...current, sequence: update.sequence, presentation: update.presentation }));
+        return appliedProduct(Object.freeze({ ...current, sequence: update.sequence, presentation: update.presentation,
+          commands: Object.freeze(current.commands.map(command => command.origin ? command :
+            Object.freeze({...command, origin: commandOrigin(command, update.presentation)}))) }));
       case "command_observed": {
         const command=update.command;
         if(!hasIdentity(command.runId)||!hasIdentity(command.executionId)||!Number.isSafeInteger(command.revision)||command.revision<0||
@@ -190,8 +200,11 @@ export function reduceHelarcProductRunProjection(
           (command.omittedBytes!==null&&(!Number.isSafeInteger(command.omittedBytes)||command.omittedBytes<0))) return rejectProduct(current,"invalid_update");
         const previous=current.commands.find(item=>item.executionId===command.executionId);
         if(previous && (previous.runId!==command.runId||previous.revision>=command.revision))return rejectProduct(current,"stale_sequence");
-        const commands=current.commands.filter(item=>item.executionId!==command.executionId);
-        commands.push(Object.freeze({...command}));
+        if (previous && ((previous.invocationId != null && previous.invocationId !== command.invocationId) ||
+          (previous.attemptId != null && previous.attemptId !== command.attemptId))) return rejectProduct(current,"invalid_update");
+        const observed = Object.freeze({...command, origin: previous?.origin ?? commandOrigin(command, current.presentation)});
+        const commands = previous ? current.commands.map(item => item.executionId === command.executionId ? observed : item)
+          : [...current.commands, observed];
         if(commands.length>256) {
           const index=commands.findIndex(item=>item.phase==="settled");
           if(index>=0)commands.splice(index,1);

@@ -69,7 +69,7 @@ describe("Helarc IPC", () => {
       on:vi.fn((name:string,callback:(...args:unknown[]) => void) => callbacks.set(name,callback))};
     const detach = vi.fn();
     const subscribeResponsePreviews = vi.fn((scope:{threadId:string;productRunId:string}) => scope.threadId === "thread" ? detach : null);
-    const names = ["readConversation","readCurrentWork","readTaskDetails","readWorkHistory","readArtifactContent","readResponsePreview"] as const;
+    const names = ["readConversation","readConversationTurn","readCurrentWork","readTaskDetails","readWorkHistory","readArtifactContent","readResponsePreview"] as const;
     const workbench = Object.fromEntries(names.map(name => [name,vi.fn(async () => ({status:"page"}))]));
     const controller = controllerDouble(mainSnapshot(),{workbench,subscribeResponsePreviews});
     registerHelarcIpc({window:windowDouble({webContents:contents}),controller});

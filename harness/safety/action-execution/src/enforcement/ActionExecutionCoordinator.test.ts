@@ -85,6 +85,20 @@ describe("ActionExecutionCoordinator", () => {
     expect(assessments[1]).toMatchObject({occurredAt: NOW, permission: {status: "authorized", recordId: "permission-record-1", revision: "authority-1"}});
   });
 
+  it("preserves an adapter preparation diagnostic without dispatch or effects", async () => {
+    const fixture = createFixture({ invalidPreparation: true });
+    const result = await fixture.coordinator.execute(fixture.request);
+    expect(result).toMatchObject({
+      status: "settled",
+      settlement: { status: "invalid", attempts: [], effectCertainty: "none", completionExtent: "none" },
+      semanticResult: { status: "invalid", output: null, failure: {
+        owner: "test-adapter", code: "target_mismatch",
+        message: "The target does not match. Inspect its current contents before retrying.",
+      } },
+    });
+    expect(fixture.order).toEqual(["adapter.prepare", "records.post-effect"]);
+  });
+
   it("stops at Governance denial before Permission, revalidation, and dispatch", async () => {
     const fixture = createFixture({ policyStatus: "denied" });
 
@@ -274,6 +288,7 @@ describe("ActionExecutionCoordinator", () => {
 });
 
 interface FixtureOptions {
+  readonly invalidPreparation?: boolean;
   readonly policyStatus?: "allowed" | "denied";
   readonly permissionStatus?: "authorized" | "approval_required";
   readonly approvalResult?: Awaited<ReturnType<
@@ -371,6 +386,10 @@ function createFixture(options: FixtureOptions = {}) {
     descriptor: adapterDescriptor,
     async prepare(resolved, context) {
       order.push("adapter.prepare");
+      if (options.invalidPreparation) return {
+        status: "invalid" as const, owner: "test-adapter", code: "target_mismatch",
+        message: "The target does not match. Inspect its current contents before retrying.",
+      };
       return {
         status: "prepared" as const,
         prepared: await createPreparedAction(resolved, context, {

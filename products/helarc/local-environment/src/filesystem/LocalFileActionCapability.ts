@@ -296,7 +296,10 @@ async function prepareOperationInput(
     const current = await readBoundedUtf8(target.canonicalTarget, limits.maxWriteBytes);
     const replacementCount = countOccurrences(current.content, request.old_string);
     if (replacementCount === 0) {
-      throw new FileSystemError("file_edit_no_match", "Edit old_string does not occur in the target file.");
+      throw new FileSystemError(
+        "file_edit_no_match",
+        "Edit old_string does not occur in the target file. This attempt did not modify the file. Read its current content and supply an exact old_string match.",
+      );
     }
     if (replacementCount > 1 && request.replace_all !== true) {
       throw new FileSystemError(

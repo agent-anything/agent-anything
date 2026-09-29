@@ -36,5 +36,5 @@ export {
 export {
   createHelarcRunInput,
 } from "./HelarcRun.js";
-export type { HelarcOutputSource, HelarcPresentationValue, HelarcRunPresentationRecord, HelarcRunLabel, HelarcRunPresentation } from "./presentation/HelarcRunPresentation.js";
+export type { HelarcOutputSource, HelarcPresentationValue, HelarcModelItemOrigin, HelarcRunPresentationRecord, HelarcRunLabel, HelarcRunPresentation } from "./presentation/HelarcRunPresentation.js";
 export type { HelarcResponsePreview, HelarcResponsePreviewPart, HelarcResponsePreviews } from "./presentation/HelarcResponsePreviews.js";

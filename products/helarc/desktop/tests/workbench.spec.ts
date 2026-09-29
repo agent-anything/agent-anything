@@ -367,7 +367,6 @@ async function setup(
           revision: 2,
           rootRunId: root,
           workStatus: terminal ? "completed" : "running",
-          activity: { current: [], recent: [], omittedCurrent: 0, omittedRecent: 0 },
           tasks: [
             {
               runId: root,
@@ -571,23 +570,30 @@ async function setup(
 
 async function installActivity(page: Page, expanded = true) {
   await page.evaluate(async () => {
-    const w = window as any, api = w.helarc, original = api.readCurrentWork;
+    const w = window as any, api = w.helarc, original = api.readConversation;
     const snapshot = await api.getSnapshot(), root = snapshot.run.harnessRunId;
-    const common = { runId: root, attribution: null, state: "ongoing", startedAt: null, endedAt: null };
+    const common = { runId: root, attribution: null, state: "ongoing", startedAt: null, endedAt: null, child: null };
     const command = { ...common, id: "command:one", kind: "command", title: "dotnet build", status: "Running",
       startedAt: new Date(Date.now() - 18000).toISOString(), detail: { kind: "command", executionId: "exec-one" } };
     w.activityFixture = {
       current: [command,
         { ...common, id: "read:one", kind: "operation", title: "Read file: src/Program.cs", status: "Result pending",
-          detail: { kind: "operation", itemId: "read-one" } },
-        { ...common, id: "response:one", runId: "child-1", kind: "response", title: "Waiting for model response",
-          attribution: "Inspect project configuration", status: "", detail: null }],
+          detail: { kind: "operation", itemId: "read-one" } }],
       recent: [], omittedCurrent: 0, omittedRecent: 0,
     };
-    api.readCurrentWork = async (q: any) => {
+    api.readConversation = async (q: any) => {
       if (w.activityReadFailure) throw Error("offline");
-      const page = await original(q);
-      return { ...page, revision: (await api.getSnapshot()).activeThread.revision, activity: structuredClone(w.activityFixture) };
+      const page = await original(q), revision = (await api.getSnapshot()).activeThread.revision;
+      const scope = {threadId:"thread",productRunId:snapshot.run.productRunId,runId:root};
+      const blocks = [
+        {kind:"text",id:"commentary",modelItemId:"commentary",ordinal:0,text:"I will inspect and build the project.",omittedBytes:0,detail:null,disposition:null,artifactIds:[]},
+        ...[...w.activityFixture.current,...w.activityFixture.recent].map((item: any,index: number)=>({kind:"activity",id:item.id,modelItemId:item.id,ordinal:index+1,item})),
+      ];
+      const turn = {kind:"turn",id:"activity-turn",title:null,role:"assistant",content:"",omittedBytes:0,revision,
+        position:[239,1],productRunId:scope.productRunId,runId:root,sourceId:"turn",modelItemIds:blocks.map(b=>b.modelItemId),
+        detail:null,artifactIds:[],disposition:null,scope,turnId:"turn",blocks,nextCursor:null,blockCount:blocks.length,partial:false};
+      const entries = [...page.entries.filter((e: any)=>e.id==="user"), turn, ...page.entries.filter((e: any)=>e.id!=="user")];
+      return {...page, revision, entries, nextWindowCursor:null};
     };
     api.readCommandDetails = async (q: any) => ({ status: "page", live: true, command: {
       ...q, command: "dotnet build --no-restore", shell: "PowerShell", cwd: "D:/example", phase: "running",
@@ -610,62 +616,58 @@ async function installActivity(page: Page, expanded = true) {
     };
     w.emitWorkbench("revision");
   });
-  if (expanded) await page.getByRole("button", { name: "Expand activity", exact: true }).click();
+  if (expanded) {
+    await page.getByRole("button", { name: "Expand activity", exact: true }).click();
+    await page.getByRole("region", {name:"Response activity",exact:true}).getByRole("button", {name:/dotnet build/}).click();
+  }
 }
 
-test("activity starts collapsed, follows new facts and keeps disclosure stable until new work", async ({ page }, info) => {
+test("response-owned activity follows its text and refreshes while reading history", async ({page}, info) => {
   await setup(page);
-  await page.getByRole("button", { name: "Close work", exact: true }).click();
+  await page.getByRole("button",{name:"Close work",exact:true}).click();
   await installActivity(page, false);
-  const activity = page.getByRole("region", { name: "Current activity", exact: true });
-  const expand = activity.getByRole("button", { name: "Expand activity", exact: true });
-  const summary = activity.locator(".wb-activity-summary");
-  await expect(expand).toHaveAttribute("aria-expanded", "false");
-  await expect(activity.locator(".wb-activity-row")).toHaveCount(1);
-  await expect(activity.locator(".wb-activity-content")).toHaveCount(0);
-  await expect(activity.locator(".wb-activity-progress-pulse")).toHaveCount(1);
-  await expect(activity.locator(".wb-activity-progress-pulse")).toHaveCSS("animation-name", "wb-activity-text-pulse");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(activity.locator(".wb-activity-progress-pulse")).toHaveCSS("animation-name", "none");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  expect(await page.evaluate(() => (window as any).calls.filter((c: any) => ["output", "detail"].includes(c.method)))).toEqual([]);
+  const response = page.locator(".wb-response");
+  const activity = response.getByRole("region",{name:"Response activity",exact:true});
+  await expect(response).toContainText("I will inspect and build the project.");
+  await expect(activity).toContainText("2 operations");
+  await expect(page.locator(".wb-conversation > .wb-conversation-activity")).toHaveCount(0);
+  await activity.getByRole("button",{name:"Expand activity",exact:true}).click();
+  await activity.getByRole("button",{name:/dotnet build/}).click();
+  await expect(activity).toContainText("Determining projects to restore...");
+  await activity.getByRole("button",{name:/Read file:/}).click();
+  await expect(activity).toContainText('Console.WriteLine("Hello");');
+  await page.locator(".wb-conversation-scroll").evaluate(node => {
+    const spacer = document.createElement("div"); spacer.style.height="1800px"; node.firstElementChild!.appendChild(spacer);
+    node.scrollTop=0; node.dispatchEvent(new Event("scroll"));
+  });
   await page.evaluate(() => {
     const w = window as any;
-    w.activityFixture.current[2].title = "Receiving model response";
+    const read = w.helarc.readConversation;
+    w.helarc.readConversation = async (q: any) => {
+      w.calls.push({method:"conversation",query:q});
+      const result = await read(q);
+      if (q.position.kind !== "window") return result;
+      return q.position.cursor
+        ? {...result, entries:result.entries.slice(1), previousCursor:"within-window", nextWindowCursor:null}
+        : {...result, entries:result.entries.slice(0,1), previousCursor:"before-window", nextWindowCursor:"window-next"};
+    };
+    w.activityFixture.current[0].status="Exited with code 0";
+    w.activityFixture.current[0].state="settled";
     w.emitWorkbench("revision");
   });
-  await expect(summary).toContainText("Receiving model response");
-  await page.evaluate(() => (window as any).emitWorkbench("revision"));
-  await expect(summary).toContainText("Receiving model response");
-  expect(await expand.evaluate(button => {
-    const body = button.previousElementSibling!.getBoundingClientRect();
-    const control = button.getBoundingClientRect();
-    return Math.abs(body.right - control.left) < 1 && Math.abs(body.height - control.height) < 1;
-  })).toBe(true);
-  expect((await activity.boundingBox())!.height).toBeLessThanOrEqual(44);
-  await page.screenshot({ path: info.outputPath("activity-collapsed-wide.png") });
-  await page.setViewportSize({ width: 480, height: 720 });
-  await expect(expand).toBeVisible();
-  expect(await activity.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: info.outputPath("activity-collapsed-narrow.png") });
-  await expand.click();
-  const collapse = activity.getByRole("button", { name: "Collapse activity", exact: true });
-  await expect(summary).toHaveCount(0);
-  await expect(activity.locator(".wb-activity-row")).toHaveCount(3);
-  await expect(activity.locator(".wb-activity-progress-pulse")).toHaveCount(0);
-  await expect(activity).toContainText("Determining projects to restore...");
-  await page.evaluate(() => (window as any).emitWorkbench("revision"));
-  await expect(collapse).toHaveAttribute("aria-expanded", "true");
-  await collapse.click();
-  await expect(activity.locator(".wb-activity-row")).toHaveCount(1);
-  await expect(activity.locator(".wb-activity-progress-pulse")).toHaveCount(1);
-  await expect(activity.locator(".wb-output")).toHaveCount(0);
-  await expand.click();
-  await page.evaluate(() => (window as any).emitWorkbench("revision", (s: any) => {
-    s.run.productRunId = "next-work";
-  }));
-  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expect(activity).toContainText("Exited with code 0");
+  await expect(activity).toContainText('Console.WriteLine("Hello");');
+  expect(await page.locator(".wb-conversation-scroll").evaluate(n=>n.scrollTop)).toBeLessThan(100);
+  await page.screenshot({path:info.outputPath("response-work-wide.png")});
+  await page.setViewportSize({width:600,height:800});
+  await response.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:info.outputPath("response-work-narrow.png")});
+  await page.getByRole("button", {name:"Load earlier messages", exact:true}).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls
+    .filter((c:any) => c.method === "conversation" && c.query.position.kind === "before")
+    .at(-1)?.query.position.cursor)).toBe("before-window");
+  expect(await page.evaluate(()=>(window as any).calls.filter((c:any)=>["steer","submit","cancel"].includes(c.method)))).toEqual([]);
 });
 
 test("request duration is continuous while command duration starts displaying at five seconds", async ({ page }, info) => {
@@ -682,7 +684,7 @@ test("request duration is continuous while command duration starts displaying at
     });
   });
   const total = page.getByLabel("Request elapsed time", { exact: true });
-  const commandTime = page.getByRole("region", { name: "Current activity", exact: true })
+  const commandTime = page.getByRole("region", { name: "Response activity", exact: true })
     .locator(".wb-activity-item").first().locator(".wb-activity-state small");
   await expect(total).toHaveText("0s");
   await expect(commandTime).toHaveCount(0);
@@ -752,116 +754,6 @@ test("request duration starts during submission and binds to the accepted work",
   await expect(total).toHaveText("2s");
   await page.clock.runFor(1000);
   await expect(total).toHaveText("3s");
-});
-
-test("conversation activity shows concrete parallel work and live output independently of the right panel", async ({ page }, info) => {
-  await setup(page);
-  await page.getByRole("button", { name: "Close work", exact: true }).click();
-  await installActivity(page);
-  const activity = page.getByRole("region", { name: "Current activity", exact: true });
-  await expect(activity.locator(".wb-activity-body")).toHaveCSS("overflow-y", "auto");
-  await expect(activity.locator(".wb-activity-row").first()).toHaveCSS("display", "flex");
-  await expect(activity.locator(".lucide-loader-circle")).toHaveCount(0);
-  await expect(activity.locator(".wb-activity-progress-text").first()).toHaveCSS("font-weight", "500");
-  await expect(activity.locator(".wb-activity-progress-text").first()).toHaveCSS("animation-name", "none");
-  async function checkAlignment() {
-    const positions = await activity.locator(".wb-activity-row").evaluateAll(rows => rows.map(row => ({
-      title: row.querySelector(".wb-activity-description")!.getBoundingClientRect().left,
-      status: row.querySelector(".wb-activity-state")!.getBoundingClientRect().right,
-    })));
-    expect(positions.length).toBeGreaterThan(1);
-    expect(Math.max(...positions.map(p => p.title)) - Math.min(...positions.map(p => p.title))).toBeLessThan(1);
-    expect(Math.max(...positions.map(p => p.status)) - Math.min(...positions.map(p => p.status))).toBeLessThan(1);
-  }
-  await checkAlignment();
-  await expect(activity).toContainText("dotnet build");
-  await expect(activity).toContainText("Inspect project configuration");
-  await expect(activity).toContainText("Determining projects to restore...");
-  await expect(activity).toContainText("Build continues...");
-  await page.screenshot({ path: info.outputPath("conversation-activity-default.png") });
-  await activity.getByRole("button", { name: /Read file: src\/Program.cs/ }).click();
-  await expect(activity).toContainText('Console.WriteLine("Hello");');
-  await expect(page.getByRole("complementary", { name: "Current work" })).not.toBeVisible();
-  await activity.getByText("Command and working directory", { exact: true }).click();
-  await expect(activity).toContainText("dotnet build --no-restore");
-  await expect(activity).toContainText("D:/example");
-  await activity.getByRole("button", { name: "Expand output" }).click();
-  await expect(activity.locator(".wb-output")).toHaveClass(/is-expanded/);
-  const collapse = activity.getByRole("button", { name: "Collapse activity", exact: true });
-  const toggleBeforeScroll = await collapse.boundingBox();
-  await activity.locator(".wb-activity-body").evaluate(body => { body.scrollTop = body.scrollHeight; });
-  expect(await collapse.boundingBox()).toEqual(toggleBeforeScroll);
-  await page.screenshot({ path: info.outputPath("conversation-activity-wide.png") });
-  await page.setViewportSize({ width: 600, height: 800 });
-  await expect(activity).toBeVisible();
-  await checkAlignment();
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(activity.locator(".wb-activity-progress-text").first()).toHaveCSS("animation-name", "none");
-  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: info.outputPath("conversation-activity-narrow.png") });
-  expect(await page.evaluate(() => (window as any).calls.filter((c: any) => ["steer", "submit", "cancel"].includes(c.method)))).toEqual([]);
-});
-
-test("conversation activity keeps opened results readable through settlement and handles read errors locally", async ({ page }) => {
-  await setup(page);
-  await installActivity(page);
-  const activity = page.getByRole("region", { name: "Current activity", exact: true });
-  await activity.getByRole("button", { name: /Read file: src\/Program.cs/ }).click();
-  await expect(activity).toContainText('Console.WriteLine("Hello");');
-  await page.evaluate(() => {
-    const w = window as any, a = w.activityFixture;
-    a.recent = a.current.slice(0, 2).map((item: any) => ({ ...item, state: "settled",
-      status: item.kind === "command" ? "Exited with code 0" : "Returned", endedAt: new Date().toISOString() }));
-    a.current = [];
-    w.outputSettled = true;
-    w.emitWorkbench("revision");
-  });
-  await expect(activity).toContainText("Exited with code 0");
-  await expect(activity).toContainText("Returned");
-  await expect(activity.locator(".wb-activity-progress-text")).toHaveCount(0);
-  await page.evaluate(() => {
-    const w = window as any;
-    w.activityFixture.recent = [];
-    w.emitWorkbench("revision");
-  });
-  await expect(activity).toContainText("Retained detail");
-  await expect(activity).toContainText('Console.WriteLine("Hello");');
-  await page.evaluate(() => { (window as any).activityReadFailure = true; (window as any).emitWorkbench("revision"); });
-  await expect(activity).toContainText("Activity could not be updated.");
-  await page.evaluate(() => { (window as any).activityReadFailure = false; });
-  await activity.getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(activity).not.toContainText("Activity could not be updated.");
-  await activity.getByRole("button", { name: /Read file: src\/Program.cs/ }).click();
-  await expect(activity).toHaveCount(0);
-});
-
-test("conversation activity isolates concurrent command output and discards detail selection on new work", async ({ page }) => {
-  await setup(page);
-  await installActivity(page);
-  await page.evaluate(() => {
-    const w = window as any, a = w.activityFixture;
-    a.current.push({ ...a.current[0], id: "command:two", runId: "child-1", title: "echo child-output",
-      attribution: "Inspect dependencies", detail: { kind: "command", executionId: "exec-two" } });
-    const original = w.helarc.readCommandOutput;
-    w.helarc.readCommandOutput = async (q: any) => {
-      const result = await original(q);
-      return q.executionId === "exec-two" ? { ...result, stdout: { ...result.stdout, text: q.cursor ? "" : "CHILD ONLY\n" } } : result;
-    };
-    w.emitWorkbench("revision");
-  });
-  const activity = page.getByRole("region", { name: "Current activity", exact: true });
-  await activity.getByRole("button", { name: "1 more activities" }).click();
-  await activity.getByRole("button", { name: /echo child-output/ }).click();
-  const commands = activity.locator(".wb-activity-item").filter({ has: page.locator(".wb-output") });
-  await expect(commands).toHaveCount(2);
-  await expect(commands.nth(0)).not.toContainText("CHILD ONLY");
-  await expect(commands.nth(1)).toContainText("CHILD ONLY");
-  await page.evaluate(() => (window as any).emitWorkbench("revision", (s: any) => {
-    s.run.productRunId = "next-work";
-    (window as any).activityFixture = { current: [], recent: [], omittedCurrent: 0, omittedRecent: 0 };
-  }));
-  await expect(activity).toHaveCount(0);
 });
 
 test("operation details show delegated work and replies instead of protocol records", async ({ page }, info) => {
@@ -1316,6 +1208,18 @@ test("reading position and work detail survive refresh, Settings and viewport ch
     page.getByText("Earlier exchange", { exact: true }),
   ).toBeVisible();
   const top = await scroll.evaluate((e) => e.scrollTop);
+  await page.evaluate(() => {
+    const w = window as any;
+    const read = w.helarc.readConversation;
+    w.helarc.readConversation = async (q: any) => {
+      const result = await read(q);
+      if (q.position.kind === "window") {
+        const older = await read({...q, position: {kind: "before", cursor: "older"}});
+        return {...result, entries: [...older.entries, ...result.entries], latestPosition: [241, 0]};
+      }
+      return result;
+    };
+  });
   await page.evaluate(() => (window as any).emitWorkbench("revision"));
   await expect(
     page.getByRole("button", { name: /Latest messages.*new content/ }),
@@ -1506,12 +1410,12 @@ test("conversation Plan expands and updates independently of selected task detai
   await expect(plan).toBeVisible();
 });
 
-test("Plan and activity use aligned independent disclosure columns", async ({ page }, info) => {
+test("Plan and response activity keep independent disclosures", async ({ page }, info) => {
   await setup(page);
   await page.getByRole("button", { name: "Close work", exact: true }).click();
   await installActivity(page, false);
   const plan = page.getByRole("region", { name: "Plan", exact: true });
-  const activity = page.getByRole("region", { name: "Current activity", exact: true });
+  const activity = page.getByRole("region", { name: "Response activity", exact: true });
   const planToggle = plan.getByRole("button");
   const activityToggle = activity.locator(":scope > .wb-conversation-disclosure");
   for (const width of [1440, 480]) {
@@ -1526,7 +1430,6 @@ test("Plan and activity use aligned independent disclosure columns", async ({ pa
       await expect(activityToggle).toHaveAttribute("aria-expanded", String(expanded));
       const planBounds = (await planToggle.boundingBox())!;
       const activityBounds = (await activityToggle.boundingBox())!;
-      expect(Math.abs(planBounds.x - activityBounds.x)).toBeLessThan(1);
       expect(planBounds.width).toBe(activityBounds.width);
       expect(await planToggle.evaluate(button => {
         const body = button.previousElementSibling!.getBoundingClientRect();

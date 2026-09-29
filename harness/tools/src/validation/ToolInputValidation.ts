@@ -112,7 +112,7 @@ export function formatToolInputValidationFailure(
     details.push(`${failure.omittedIssueCount} additional issue(s) omitted.`);
   }
   return bounded(
-    `The Tool input is invalid. Correct the listed fields and submit a new Tool call. ${details.join(" ")}`,
+    `The Tool input is invalid. The requested Tool operation was not executed. Correct the listed fields and submit a new Tool call. ${details.join(" ")}`,
     MAX_CORRECTION_TEXT,
   );
 }

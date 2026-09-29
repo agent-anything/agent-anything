@@ -1171,6 +1171,15 @@ function hasProductDisplayState(projection: Partial<HelarcProductRunProjection>)
   return projection.presentation !== null && typeof projection.presentation === "object" &&
     Array.isArray(projection.presentation.records) &&
     Array.isArray(projection.presentation.activeCalls) &&
+    [...projection.presentation.records, ...projection.presentation.activeCalls].every(record =>
+      record !== null && typeof record === "object" && isDisplayOrigin(record.origin) &&
+      (record.content.kind !== "tool_call" || (Array.isArray(record.content.invocationIds) && record.content.invocationIds.every(hasText))) &&
+      (record.origin === null || record.origin.runId === record.runId)) &&
+    Array.isArray(projection.presentation.labels) &&
+    projection.presentation.labels.every(label => isDisplayOrigin(label.parentOrigin) &&
+      (label.parentOrigin === null || label.parentOrigin.runId === label.parentRunId)) &&
+    Array.isArray(projection.commands) && projection.commands.every(command => isDisplayOrigin(command.origin) &&
+      (command.origin === null || command.origin.runId === command.runId)) &&
     Number.isSafeInteger(projection.presentation.omittedActiveCalls) &&
     projection.presentation.omittedActiveCalls >= 0 &&
     projection.responses !== null && typeof projection.responses === "object" &&
@@ -1179,6 +1188,17 @@ function hasProductDisplayState(projection: Partial<HelarcProductRunProjection>)
     projection.responses.revision >= 0 &&
     Number.isSafeInteger(projection.responses.omittedAttempts) &&
     projection.responses.omittedAttempts >= 0;
+}
+
+function isDisplayOrigin(value: unknown): value is import("../run/presentation/HelarcRunPresentation.js").HelarcModelItemOrigin | null {
+  if (value === null) return true;
+  if (!value || typeof value !== "object") return false;
+  const origin = value as import("../run/presentation/HelarcRunPresentation.js").HelarcModelItemOrigin;
+  return hasText(origin.runId) && hasText(origin.turnId) && hasText(origin.modelItemId) &&
+    Number.isSafeInteger(origin.turnSequence) && origin.turnSequence > 0 &&
+    Number.isSafeInteger(origin.ordinal) && origin.ordinal >= 0 &&
+    (origin.callId === null || hasText(origin.callId)) && !!origin.source &&
+    hasText(origin.source.id) && Number.isSafeInteger(origin.source.sequence) && origin.source.sequence > 0;
 }
 
 function isCompatibleProductTerminal(

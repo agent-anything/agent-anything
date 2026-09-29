@@ -6919,6 +6919,7 @@ function projectObservationSettlement(observation: RunObservation): {
           kind: payload.kind,
           status: payload.result.status,
           output: payload.result.output,
+          ...projectActionEffectFacts(payload.result),
           failure: payload.result.failure === null
             ? null
             : {
@@ -7006,6 +7007,19 @@ function projectObservationSettlement(observation: RunObservation): {
         },
       );
   }
+}
+
+function projectActionEffectFacts(result: OperationResult): Readonly<Record<string, ModelJsonValue>> {
+  if (!result.lowerRefs.some(ref => ref.owner === "canonical-action" && ref.kind === "action_settlement")) {
+    return {};
+  }
+  const { effectCertainty, completionExtent } = result.metadata;
+  return {
+    ...(isActionEffectCertainty(effectCertainty) ? { effectCertainty } : {}),
+    ...(completionExtent === "none" || completionExtent === "partial" ||
+        completionExtent === "complete" || completionExtent === "unknown"
+      ? { completionExtent } : {}),
+  };
 }
 
 function modelSettlement(

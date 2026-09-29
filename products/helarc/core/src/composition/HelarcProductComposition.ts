@@ -4,7 +4,7 @@ import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
-import { appendHelarcRunPresentation, labelHelarcRunPresentation } from "../run/presentation/HelarcRunPresentation.js";
+import { appendHelarcRunPresentation, associateHelarcOperationPresentation, labelHelarcRunPresentation } from "../run/presentation/HelarcRunPresentation.js";
 import { HelarcResponsePreviewStore, type HelarcResponsePreview, type HelarcResponsePreviews } from "../run/presentation/HelarcResponsePreviews.js";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
 import {
@@ -134,7 +134,7 @@ export interface HelarcProductComposition {
   subscribeResponsePreviews(listener: (value: HelarcResponsePreviews, attempt: HelarcResponsePreview) => void): () => void;
   recordTranscript(record: RunTranscriptRecord): void;
   recordRunLineage(runId: string, lineage: RunLineage): void;
-  recordCommandProgress(command:import("../run/HelarcRunProjection.js").HelarcCommandProgress):void;
+  recordCommandProgress(command:Omit<import("../run/HelarcRunProjection.js").HelarcCommandProgress, "origin">):void;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
   recordRuntimeEvent(event: RuntimeEvent): {
     readonly event: RuntimeEvent;
@@ -332,7 +332,7 @@ export async function createHelarcProductComposition(
       const presentation = labelHelarcRunPresentation(productProjection.presentation, runId, lineage, input.task.input.prompt);
       if (presentation !== productProjection.presentation) publishProductUpdate({ kind: "presentation_observed", presentation });
     },
-    recordCommandProgress(command:import("../run/HelarcRunProjection.js").HelarcCommandProgress):void {
+    recordCommandProgress(command:Omit<import("../run/HelarcRunProjection.js").HelarcCommandProgress, "origin">):void {
       if(productProjection.result!==null||productProjection.commands.some(item=>item.executionId===command.executionId&&item.revision>=command.revision))return;
       publishProductUpdate({kind:"command_observed",command});
     },
@@ -352,6 +352,10 @@ export async function createHelarcProductComposition(
       }
       if (activityRootRunId !== null && eventRootRunId !== activityRootRunId) {
         throw new TypeError("Helarc activity cannot combine different Run Tree roots.");
+      }
+      if (event.name === "operation.started" && !productProjection.result) {
+        const presentation = associateHelarcOperationPresentation(productProjection.presentation, event);
+        if (presentation !== productProjection.presentation) publishProductUpdate({kind: "presentation_observed", presentation});
       }
       const controllerTrace = projectHelarcControllerTraceForEvent(
         event,

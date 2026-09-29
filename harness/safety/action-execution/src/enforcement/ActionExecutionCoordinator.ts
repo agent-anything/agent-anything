@@ -267,6 +267,7 @@ export class ActionExecutionCoordinator {
         "invalid",
         "action-execution",
         "action_adapter_unavailable",
+        "No matching Action adapter is available; the requested operation was not executed.",
       );
     }
 
@@ -289,6 +290,7 @@ export class ActionExecutionCoordinator {
         preparationStatus(preparedResult.status),
         preparedResult.owner,
         preparedResult.code,
+        preparedResult.message,
       );
     }
     const prepared = preparedResult.prepared;
@@ -743,6 +745,7 @@ export class ActionExecutionCoordinator {
     status: CanonicalActionSettlementStatus,
     owner: string,
     code: string,
+    message: string,
   ): Promise<ActionExecutionResult<TOutput>> {
     const settlement = emptySettlement(
       request,
@@ -758,7 +761,7 @@ export class ActionExecutionCoordinator {
     return Object.freeze({
       status: "settled" as const,
       settlement,
-      semanticResult: semanticFailure(settlement, owner, code),
+      semanticResult: semanticFailure(settlement, owner, code, message),
     }) as ActionExecutionResult<TOutput>;
   }
 
@@ -1019,13 +1022,14 @@ function semanticFailure(
   settlement: CanonicalActionSettlement,
   owner: string,
   code: string,
+  message: string,
 ): ActionSemanticResult {
   return Object.freeze({
     operationInvocationId: settlement.operationInvocation.id,
     settlement,
     status: settlement.status === "timed_out" ? "timed_out" : settlement.status === "cancelled" ? "cancelled" : settlement.status === "denied" ? "denied" : settlement.status === "invalid" || settlement.status === "invalidated" ? "invalid" : settlement.status === "unknown_effect" ? "unknown_effect" : "failed",
     output: null,
-    failure: Object.freeze({ owner, code, message: code }),
+    failure: Object.freeze({ owner, code, message }),
   });
 }
 

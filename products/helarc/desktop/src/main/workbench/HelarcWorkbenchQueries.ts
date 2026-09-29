@@ -15,6 +15,7 @@ import type {
 } from "../../shared/HelarcWorkbench.js";
 import type { CommandOutputRegistry } from "./CommandOutputRegistry.js";
 import { HelarcCollaborationQueries } from "./HelarcCollaborationQueries.js";
+import { HelarcConversationQueries } from "./HelarcConversationQueries.js";
 import { fitsPage, textPage, validOffset } from "./WorkbenchReadLimits.js";
 import { isWorkbenchOperation, workbenchOperationDetail } from "./WorkbenchOperationPresentation.js";
 import { workbenchInteractionText } from "./WorkbenchInteractionPresentation.js";
@@ -29,10 +30,13 @@ export interface WorkbenchQuerySources {
 }
 export class HelarcWorkbenchQueries {
   readonly collaboration: HelarcCollaborationQueries;
+  readonly conversation: HelarcConversationQueries;
   constructor(private readonly sources: WorkbenchQuerySources) {
     this.collaboration = new HelarcCollaborationQueries(sources, scope => this.resolve(scope));
+    this.conversation = new HelarcConversationQueries(sources);
   }
-  readConversation = (query: Parameters<HelarcCollaborationQueries["readConversation"]>[0]) => this.collaboration.readConversation(query);
+  readConversation = (query: Parameters<HelarcConversationQueries["readConversation"]>[0]) => this.conversation.readConversation(query);
+  readConversationTurn = (query: Parameters<HelarcConversationQueries["readConversationTurn"]>[0]) => this.conversation.readConversationTurn(query);
   readCurrentWork = (query: Parameters<HelarcCollaborationQueries["readCurrentWork"]>[0]) => this.collaboration.readCurrentWork(query);
   readTaskDetails = (query: Parameters<HelarcCollaborationQueries["readTaskDetails"]>[0]) => this.collaboration.readTaskDetails(query);
   readWorkHistory = (query: Parameters<HelarcCollaborationQueries["readWorkHistory"]>[0]) => this.collaboration.readWorkHistory(query);

@@ -1,6 +1,7 @@
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type { ToolBindingRef } from "@agent-anything/tools/identity";
+import type { RuntimeEvent } from "@agent-anything/observability";
 
 export type HelarcOutputSource =
   | { readonly kind: "model_control"; readonly turnId: string; readonly modelItemId: string;
@@ -22,12 +23,23 @@ export type HelarcPresentationValue =
   | readonly HelarcPresentationValue[]
   | { readonly [key: string]: HelarcPresentationValue };
 
+export interface HelarcModelItemOrigin {
+  readonly runId: string;
+  readonly turnId: string;
+  readonly turnSequence: number;
+  readonly modelItemId: string;
+  readonly ordinal: number;
+  readonly callId: string | null;
+  readonly source: { readonly id: string; readonly sequence: number };
+}
+
 export interface HelarcRunPresentationRecord {
   readonly id: string;
   readonly runId: string;
   readonly sequence: number;
   readonly revision: number;
   readonly observedAt: string;
+  readonly origin: HelarcModelItemOrigin | null;
   readonly source: {
     readonly owner: "runtime";
     readonly kind: "run_item";
@@ -58,6 +70,7 @@ export interface HelarcRunPresentationRecord {
         readonly input: HelarcPresentationValue;
         readonly runActionId: string | null;
         readonly invocationId: string | null;
+        readonly invocationIds: readonly string[];
         readonly settlement: string | null;
         readonly result: HelarcPresentationValue;
       }
@@ -75,6 +88,7 @@ export interface HelarcRunLabel {
   readonly runId: string;
   readonly parentRunId: string | null;
   readonly parentRunActionId: string | null;
+  readonly parentOrigin: HelarcModelItemOrigin | null;
   readonly label: string;
   readonly objective: string | null;
 }
@@ -215,12 +229,13 @@ export function labelHelarcRunPresentation(
   const parentRunId = lineage.kind === "descendant" ? lineage.parent.id : null;
   const parentRunActionId =
     lineage.kind === "descendant" ? lineage.parentRunAction.id : null;
-  const call = [...current.activeCalls, ...current.records].find(
+  const callRecord = [...current.activeCalls, ...current.records].find(
     (record) =>
       record.runId === parentRunId &&
       record.content.kind === "tool_call" &&
       record.content.runActionId === parentRunActionId,
-  )?.content;
+  );
+  const call = callRecord?.content;
   const input =
     call?.kind === "tool_call" &&
     typeof call.input === "object" &&
@@ -240,14 +255,15 @@ export function labelHelarcRunPresentation(
       : typeof input.description === "string"
         ? input.description
         : "Delegated work";
+  const previous = current.labels.find((item) => item.runId === runId);
   const entry = {
     runId,
     parentRunId,
     parentRunActionId,
+    parentOrigin: callRecord?.origin ?? previous?.parentOrigin ?? null,
     label: label.slice(0, 160),
     objective: objective?.slice(0, 512) ?? null,
   };
-  const previous = current.labels.find((item) => item.runId === runId);
   if (previous && JSON.stringify(previous) === JSON.stringify(entry))
     return current;
   return {
@@ -276,13 +292,14 @@ export function appendHelarcRunPresentation(
     id: item.ref.id,
     sequence: record.sequence,
   };
-  const add = (id: string, content: HelarcRunPresentationRecord["content"]) => {
+  const add = (id: string, content: HelarcRunPresentationRecord["content"], origin: HelarcModelItemOrigin | null = null) => {
     const entry: HelarcRunPresentationRecord = {
       id,
       runId: record.runId,
       sequence: nextSequence++,
       revision: item.committedInRevision,
       observedAt: item.createdAt,
+      origin,
       source,
       content,
     };
@@ -291,7 +308,17 @@ export function appendHelarcRunPresentation(
       input:projectHelarcPresentationValue(content.input, 1024)}});
   };
   if (payload.kind === "controller_turn") {
+    const turns = new Map<string, number>();
     for (const model of payload.modelItems) {
+      if (model.kind !== "assistant_text" && model.kind !== "model_tool_call") continue;
+      const turnId = model.kind === "assistant_text" ? model.turnId : model.call.modelCallRef.turnId;
+      if (!turns.has(turnId)) turns.set(turnId, nextSequence);
+      const origin: HelarcModelItemOrigin = {
+        runId: record.runId, turnId, turnSequence: turns.get(turnId)!, modelItemId: model.id,
+        ordinal: model.kind === "assistant_text" ? model.contentBlockOrdinal : model.call.modelCallRef.contentBlockOrdinal,
+        callId: model.kind === "model_tool_call" ? model.call.modelCallRef.id : null,
+        source: { id: source.id, sequence: source.sequence },
+      };
       if (model.kind === "assistant_text")
         add(model.id, {
           kind: "assistant_text",
@@ -299,12 +326,12 @@ export function appendHelarcRunPresentation(
           modelItemId: model.id,
           ordinal: model.contentBlockOrdinal,
           ...boundedPresentationText(model.text),
-        });
+        }, origin);
       if (model.kind === "model_tool_call") {
         const binding = resolvedCallable(model.metadata?.helarcCallableBinding);
         if (binding.callableKind === "control" && binding.resolvedName === "final_result" && typeof model.call.input.response === "string") {
           add(model.id, {kind: "final_response", turnId: model.call.modelCallRef.turnId, modelItemId: model.id,
-            callId: model.call.modelCallRef.id, ...boundedPresentationText(model.call.input.response), disposition: "proposed"});
+            callId: model.call.modelCallRef.id, ...boundedPresentationText(model.call.input.response), disposition: "proposed"}, origin);
           continue;
         }
         add(model.id, {
@@ -316,9 +343,10 @@ export function appendHelarcRunPresentation(
           input: projectHelarcPresentationValue(model.call.input),
           runActionId: null,
           invocationId: null,
+          invocationIds: [],
           settlement: null,
           result: null,
-        });
+        }, origin);
       }
     }
   } else if (
@@ -354,6 +382,9 @@ export function appendHelarcRunPresentation(
                   payload.action.subject.kind === "operation"
                     ? payload.action.subject.invocationId
                     : null,
+                invocationIds: payload.action.subject.kind === "operation" && payload.action.subject.invocationId
+                  ? [...new Set([...entry.content.invocationIds, payload.action.subject.invocationId])]
+                  : entry.content.invocationIds,
               }
             : {
                 settlement: payload.result.settlement,
@@ -432,6 +463,39 @@ export function appendHelarcRunPresentation(
       detail: projectHelarcPresentationValue(payload),
     });
   }
+  const labels = current.labels.map(label => {
+    if (label.parentOrigin || !label.parentRunId || !label.parentRunActionId) return label;
+    const call = [...activeCalls, ...records].find(entry => entry.runId === label.parentRunId && entry.content.kind === "tool_call" &&
+      entry.content.runActionId === label.parentRunActionId);
+    return call?.origin ? { ...label, parentOrigin: call.origin } : label;
+  });
+  return retainPresentation({
+    ...current, revision: current.revision + 1, nextSequence, records, activeCalls,
+    omittedActiveCalls, plans, labels,
+    sourceSequences: {...current.sourceSequences, [record.runId]: record.sequence},
+  });
+}
+
+export function associateHelarcOperationPresentation(current: HelarcRunPresentation,
+  event: RuntimeEvent<"operation.started">): HelarcRunPresentation {
+  const {invocationId, parentInvocationId, parentRunActionId} = event.payload;
+  let changed = false;
+  const associate = (entry: HelarcRunPresentationRecord): HelarcRunPresentationRecord => {
+    const c = entry.content;
+    if (entry.runId !== event.runId || c.kind !== "tool_call" || c.invocationIds.includes(invocationId)) return entry;
+    const matched = parentInvocationId === null ? c.runActionId === parentRunActionId : c.invocationIds.includes(parentInvocationId);
+    if (!matched) return entry;
+    changed = true;
+    return {...entry, content: {...c, invocationId: c.invocationId ?? (parentInvocationId === null ? invocationId : null),
+      invocationIds: [...c.invocationIds, invocationId]}};
+  };
+  const records = current.records.map(associate), activeCalls = current.activeCalls.map(associate);
+  return changed ? retainPresentation({...current, revision: current.revision + 1, records, activeCalls}) : current;
+}
+
+function retainPresentation(current: HelarcRunPresentation): HelarcRunPresentation {
+  const records = [...current.records], activeCalls = [...current.activeCalls];
+  let omittedActiveCalls = current.omittedActiveCalls;
   let retainedBytes = records.reduce(
     (total, entry) => total + encoder.encode(JSON.stringify(entry)).length,
     0,
@@ -453,17 +517,10 @@ export function appendHelarcRunPresentation(
   }
   return {
     ...current,
-    revision: current.revision + 1,
-    nextSequence,
     records,
     activeCalls,
     omittedActiveCalls,
-    plans,
     retainedBytes,
     omittedRecords,
-    sourceSequences: {
-      ...current.sourceSequences,
-      [record.runId]: record.sequence,
-    },
   };
 }

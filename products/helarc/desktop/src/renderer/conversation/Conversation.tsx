@@ -1,51 +1,78 @@
 import * as React from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, MoreHorizontal } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import type { HelarcMainSnapshot } from "../../shared/HelarcDesktopApi.js";
 import type {
   ConversationEntry,
   ConversationPage,
   WorkbenchScope,
 } from "../../shared/HelarcWorkbench.js";
-import { CopyButton, MarkdownContent } from "./MarkdownContent.js";
 import { useResponsePreview } from "./useResponsePreview.js";
-import { ResultLinks } from "../work/ResultContent.js";
+import {
+  ConversationEntries,
+  ModelResponseProgress,
+} from "./ConversationEntries.js";
+import { ConversationReadingBudget } from "./ConversationReadingBudget.js";
 
-export function Conversation({
-  snapshot,
-  scope,
-  onInspect,
-  visible,
-}: {
+type Props = {
   snapshot: HelarcMainSnapshot;
   scope: WorkbenchScope | null;
   onInspect: (scope: WorkbenchScope) => void;
   visible: boolean;
-}) {
+};
+export function Conversation(props: Props) {
+  return (
+    <ConversationReadingBudget key={props.snapshot.activeThread?.id ?? "empty"}>
+      <ConversationReader {...props} />
+    </ConversationReadingBudget>
+  );
+}
+export function boundConversation(
+  entries: readonly ConversationEntry[],
+  maximum = 300,
+  maxChars = 1024 * 1024,
+) {
+  const bounded: ConversationEntry[] = [];
+  let chars = 0;
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.id)) continue;
+    const size = JSON.stringify(entry).length;
+    if (bounded.length >= maximum || chars + size > maxChars) break;
+    bounded.push(entry);
+    chars += size;
+    seen.add(entry.id);
+  }
+  return bounded;
+}
+function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
   const threadId = snapshot.activeThread?.id ?? "";
   const viewport = useRef<HTMLDivElement>(null),
     content = useRef<HTMLDivElement>(null);
   const following = useRef(true),
-    generation = useRef(0),
     reading = useRef(false);
   const anchor = useRef<{ id: string; offset: number } | null>(null);
-  const [page, setPage] = useState<ConversationPage | null>(null),
-    [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState<ConversationPage | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [newContent, setNewContent] = useState(false),
     [busy, setBusy] = useState(false);
+  const [syncedCommitKey, setSyncedCommitKey] = useState("");
   const live =
     !!snapshot.run &&
     !snapshot.run.display.terminal &&
     snapshot.run.productRunId === scope?.productRunId;
   const previews = useResponsePreview(
     scope,
-    live,
+    live && visible,
     snapshot.activeThread?.revision ?? 0,
   );
   const commitKey = previews.attempts
     .filter((a) => a.state === "committed")
     .map((a) => `${a.invocationId}:${a.revision}`)
     .join("|");
+  const state = useRef({ page, commitKey });
+  state.current = { page, commitKey };
+  const reader = useRef<(older?: boolean) => void>(() => {});
   function saveAnchor() {
     const node = viewport.current;
     if (!node || following.current) {
@@ -83,14 +110,6 @@ export function Conversation({
         selected.offset;
   }
   useLayoutEffect(restore, [page, previews.attempts, visible]);
-  useEffect(() => {
-    if (
-      !following.current &&
-      previews.attempts.some((attempt) => attempt.state === "receiving")
-    ) {
-      setNewContent(true);
-    }
-  }, [previews.attempts]);
   useLayoutEffect(() => {
     if (!content.current) return;
     const observer = new ResizeObserver(restore);
@@ -98,74 +117,128 @@ export function Conversation({
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    generation.current++;
-    following.current = true;
-    setPage(null);
-    setNewContent(false);
-  }, [threadId]);
-  async function load(older = false) {
-    if (!threadId || (older && !page?.previousCursor)) return;
-    const gen = ++generation.current;
-    reading.current = true;
-    setBusy(true);
-    saveAnchor();
-    try {
-      const result = await window.helarc.readConversation({
-        threadId,
-        position: older
-          ? { kind: "before", cursor: page!.previousCursor! }
-          : { kind: "latest" },
-      });
-      if (gen !== generation.current) return;
-      if (result.status !== "page") {
-        setError(
-          result.code === "stale_cursor"
-            ? "Earlier content changed. Return to latest messages."
-            : "Conversation unavailable.",
-        );
+    let disposed = false,
+      again = false,
+      inFlight = false;
+    async function load(older = false) {
+      if (!threadId) return;
+      if (inFlight) {
+        again = true;
         return;
       }
-      if (older) {
-        following.current = false;
-        const entries = [...result.entries, ...(page?.entries ?? [])];
-        const bounded: ConversationEntry[] = [];
-        let chars = 0;
-        for (const entry of entries) {
-          if (
-            bounded.length >= 300 ||
-            chars + entry.content.length > 1024 * 1024
-          )
-            break;
-          bounded.push(entry);
-          chars += entry.content.length;
+      const previous = state.current.page,
+        committed = state.current.commitKey;
+      if (older && !previous?.previousCursor) return;
+      inFlight = true;
+      reading.current = true;
+      setBusy(true);
+      saveAnchor();
+      try {
+        const window = !older && !following.current && previous?.entries.length;
+        let result: ConversationPage;
+        if (window) {
+          const first = previous.entries[0]!.id,
+            last = previous.entries.at(-1)!.id;
+          const entries: ConversationEntry[] = [];
+          let cursor: string | undefined;
+          let firstPage: ConversationPage | null = null;
+          let lastPage: ConversationPage | null = null;
+          do {
+            const next = await globalThis.window.helarc.readConversation({
+              threadId,
+              position: {
+                kind: "window",
+                first,
+                last,
+                ...(cursor ? { cursor } : {}),
+              },
+            });
+            if (disposed) return;
+            if (next.status !== "page") throw Error(next.code);
+            entries.push(...next.entries);
+            firstPage ??= next;
+            lastPage = next;
+            cursor = next.nextWindowCursor ?? undefined;
+          } while (cursor && entries.length < 300);
+          result = {
+            ...lastPage!,
+            previousCursor: firstPage!.previousCursor,
+            entries: boundConversation(entries),
+          };
+        } else {
+          const next = await globalThis.window.helarc.readConversation({
+            threadId,
+            position: older
+              ? { kind: "before", cursor: previous!.previousCursor! }
+              : { kind: "latest" },
+          });
+          if (disposed) return;
+          if (next.status !== "page") throw Error(next.code);
+          result = older
+            ? {
+                ...next,
+                entries: boundConversation([
+                  ...next.entries,
+                  ...(previous?.entries ?? []),
+                ]),
+              }
+            : next;
         }
-        setPage({ ...result, entries: bounded });
-        setNewContent(true);
-      } else if (following.current || !page || page.threadId !== threadId) {
+        if (older) following.current = false;
         setPage(result);
-        setNewContent(false);
-      } else setNewContent(true);
-      setError(null);
-    } catch {
-      if (gen === generation.current)
-        setError("Conversation could not be read.");
-    } finally {
-      if (gen === generation.current) {
-        reading.current = false;
-        setBusy(false);
+        setSyncedCommitKey(committed);
+        setError(null);
+        const last = result.entries.at(-1)?.position,
+          latest = result.latestPosition;
+        setNewContent(
+          !!last &&
+            !!latest &&
+            (last[0] < latest[0] ||
+              (last[0] === latest[0] && last[1] < latest[1])),
+        );
+      } catch (e) {
+        if (!disposed)
+          setError(
+            e instanceof Error && e.message === "stale_cursor"
+              ? "Earlier content changed. Return to latest messages."
+              : "Conversation could not be read.",
+          );
+      } finally {
+        inFlight = false;
+        if (!disposed) {
+          reading.current = false;
+          setBusy(false);
+          if (again) {
+            again = false;
+            void load();
+          }
+        }
       }
     }
-  }
-  useEffect(() => {
+    reader.current = (older) => {
+      void load(older);
+    };
     void load();
+    return () => {
+      disposed = true;
+    };
+  }, [threadId]);
+  useEffect(() => {
+    if (visible) reader.current();
   }, [
-    threadId,
     snapshot.activeThread?.revision,
     snapshot.run?.product.presentationRevision,
+    snapshot.run?.host.runRevision,
     commitKey,
+    visible,
   ]);
-  const entries = page?.threadId === threadId ? page.entries : [];
-  const committed = new Set(entries.flatMap((e) => e.modelItemIds));
+  useEffect(() => {
+    if (
+      !following.current &&
+      previews.attempts.some((a) => a.state === "receiving")
+    )
+      setNewContent(true);
+  }, [previews.attempts]);
   return (
     <div className="wb-conversation-body">
       <div
@@ -184,7 +257,7 @@ export function Conversation({
             <button
               className="wb-link"
               disabled={busy}
-              onClick={() => void load(true)}
+              onClick={() => reader.current(true)}
             >
               Load earlier messages
             </button>
@@ -200,88 +273,17 @@ export function Conversation({
               <span>No conversation yet</span>
             </div>
           )}
-          {entries.map((entry) => (
-            <article
-              key={entry.id}
-              data-entry={entry.id}
-              className={`wb-message wb-message-${entry.role}`}
-            >
-              <header>
-                <strong>
-                  {entry.title ?? (entry.role === "user"
-                    ? "You"
-                    : entry.role === "assistant"
-                      ? "Helarc"
-                      : "Status")}
-                </strong>
-                {entry.disposition && (
-                  <small>{entry.disposition.replaceAll("_", " ")}</small>
-                )}
-                <CopyButton text={entry.content} />
-                {entry.productRunId && entry.runId && (
-                  <details className="wb-message-menu">
-                    <summary aria-label="Message options">
-                      <MoreHorizontal size={16} />
-                    </summary>
-                    <button
-                      className="wb-link"
-                      onClick={() =>
-                        onInspect({
-                          threadId,
-                          productRunId: entry.productRunId!,
-                          runId: entry.runId!,
-                        })
-                      }
-                    >
-                      Work details
-                    </button>
-                  </details>
-                )}
-              </header>
-              <MessageText entry={entry} />
-              <ResultLinks
-                snapshot={snapshot}
-                artifactIds={entry.artifactIds}
-              />
-            </article>
-          ))}
-          {previews.attempts.map((attempt) =>
-            attempt.parts
-              .filter(
-                (p) =>
-                  (p.kind === "text" || p.kind === "final_response") &&
-                  p.text &&
-                  !(p.modelItemId && committed.has(p.modelItemId)),
-              )
-              .map((part) => (
-                <article
-                  className="wb-message wb-preview"
-                  data-entry={part.id}
-                  key={`${attempt.invocationId}:${part.id}`}
-                >
-                  <header>
-                    <strong>Helarc</strong>
-                    <span className="wb-muted">
-                      {attempt.state === "receiving"
-                        ? "Responding"
-                        : part.kind === "final_response" && ["received", "validated", "committed"].includes(attempt.state)
-                          ? "Awaiting completion"
-                        : attempt.state === "committed"
-                          ? "Recorded response"
-                          : attempt.state === "received" ||
-                              attempt.state === "validated"
-                            ? "Processing response"
-                            : `${attempt.state} response`}
-                    </span>
-                  </header>
-                  <MarkdownContent text={part.text} />
-                  {part.omittedBytes > 0 && (
-                    <p className="wb-muted">Preview shortened.</p>
-                  )}
-                  {attempt.code && <p className="wb-warning">{attempt.code}</p>}
-                </article>
-              )),
-          )}
+          <ConversationEntries
+            entries={page?.entries ?? []}
+            snapshot={snapshot}
+            visible={visible}
+            live={live}
+            revision={page?.revision ?? 0}
+            onInspect={onInspect}
+            attempts={previews.attempts}
+            syncedCommitKey={syncedCommitKey}
+          />
+          <ModelResponseProgress attempts={previews.attempts} live={live} />
           {previews.omitted > 0 && (
             <p className="wb-muted">Earlier response previews omitted.</p>
           )}
@@ -295,7 +297,7 @@ export function Conversation({
               className="wb-link"
               onClick={() => {
                 following.current = true;
-                void load();
+                reader.current();
               }}
             >
               {error} Reload
@@ -307,64 +309,12 @@ export function Conversation({
         className={`wb-latest ${newContent ? "has-new" : ""}`}
         onClick={() => {
           following.current = true;
-          void load();
+          reader.current();
         }}
       >
         <ArrowDown size={14} />
         Latest messages{newContent ? " (new content)" : ""}
       </button>
     </div>
-  );
-}
-function MessageText({ entry }: { entry: ConversationEntry }) {
-  const [full, setFull] = useState<{
-      text: string;
-      next: number | null;
-      omitted: number;
-    } | null>(null),
-    [error, setError] = useState(false),
-    [busy, setBusy] = useState(false);
-  async function read() {
-    if (!entry.detail) return;
-    setBusy(true);
-    try {
-      const page = await window.helarc.readWorkbenchItem({
-        ...entry.detail,
-        offset: full?.next ?? 0,
-      });
-      if (page.status === "page") {
-        setFull({
-          text: page.text,
-          next: page.nextOffset,
-          omitted: page.omittedBytes,
-        });
-        setError(false);
-      } else setError(true);
-    } catch {
-      setError(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      {entry.kind === "interaction"
-        ? <div className="wb-interaction-text">{full?.text ?? entry.content}</div>
-        : <MarkdownContent text={full?.text ?? entry.content} />}
-      {entry.omittedBytes > 0 && !full && entry.detail && (
-        <button className="wb-link" disabled={busy} onClick={() => void read()}>
-          Read retained text
-        </button>
-      )}
-      {full?.next != null && (
-        <button className="wb-link" disabled={busy} onClick={() => void read()}>
-          Next text page
-        </button>
-      )}
-      {!!full?.omitted && (
-        <p className="wb-muted">Some text was not retained.</p>
-      )}
-      {error && <p className="wb-warning">Retained text unavailable.</p>}
-    </>
   );
 }

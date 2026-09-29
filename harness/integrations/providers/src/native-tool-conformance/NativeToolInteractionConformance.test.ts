@@ -8,12 +8,14 @@ import { OllamaProvider } from "../ollama/OllamaProvider.js";
 import { OpenAICompatibleProvider } from "../openai-compatible/OpenAICompatibleProvider.js";
 import {
   createNativeProviderRequest,
+  createSettledToolResultMessage,
+  defaultMessages,
 } from "./NativeToolInteractionTestSupport.js";
 
 interface AdapterCase {
   readonly name: string;
   readonly expectedCorrelation: "adapter_assigned" | "provider_supplied";
-  create(response: unknown, supported?: boolean): Provider;
+  create(response: unknown, supported?: boolean, onRequest?: (body: unknown) => void): Provider;
   response(input: {
     readonly text: string | null;
     readonly calls: readonly {
@@ -28,7 +30,7 @@ interface AdapterCase {
 const ADAPTERS: readonly AdapterCase[] = [{
   name: "Ollama",
   expectedCorrelation: "adapter_assigned",
-  create(response, supported = true) {
+  create(response, supported = true, onRequest) {
     return new OllamaProvider({
       baseUrl: "http://localhost:11434",
       model: "model-a",
@@ -40,7 +42,10 @@ const ADAPTERS: readonly AdapterCase[] = [{
         source: "host_configured",
         revision: "test-transport-limit-1",
       },
-    }, async () => okResponse(response));
+    }, async (_url, init) => {
+      onRequest?.(JSON.parse(init.body));
+      return okResponse(response);
+    });
   },
   response(input) {
     return {
@@ -61,7 +66,7 @@ const ADAPTERS: readonly AdapterCase[] = [{
 }, {
   name: "OpenAI-compatible",
   expectedCorrelation: "provider_supplied",
-  create(response, supported = true) {
+  create(response, supported = true, onRequest) {
     return new OpenAICompatibleProvider({
       baseUrl: "https://provider.local/v1",
       apiKey: "",
@@ -74,7 +79,10 @@ const ADAPTERS: readonly AdapterCase[] = [{
         source: "host_configured",
         revision: "test-transport-limit-1",
       },
-    }, async () => okResponse(response));
+    }, async (_url, init) => {
+      onRequest?.(JSON.parse(init.body));
+      return okResponse(response);
+    });
   },
   response(input) {
     return {
@@ -100,6 +108,42 @@ const ADAPTERS: readonly AdapterCase[] = [{
 
 for (const adapter of ADAPTERS) {
   describe(`${adapter.name} native Tool interaction conformance`, () => {
+    it.each(["succeeded", "failed", "invalid", "denied", "invalidated", "cancelled"] as const)(
+      "preserves %s settlement independently of Tool content in the encoded request",
+      async (settlement) => {
+        const bodies: unknown[] = [];
+        const provider = adapter.create(adapter.response({
+          text: null, calls: [{ id: "call-1", name: "Read", input: { file_path: "file.txt" } }],
+          finish: "normal",
+        }), true, body => { bodies.push(body); });
+        const turn = successfulTurn(await provider.send(createNativeProviderRequest(provider), context()));
+        const block = turn.assistant.content.find(block => block.kind === "model_tool_call");
+        if (block?.kind !== "model_tool_call") throw new TypeError("Expected Tool call.");
+        const resultMessage = createSettledToolResultMessage(block.call);
+        const content = settlement === "succeeded" ? "plain file content" : {
+          code: "input_rejected", message: "The operation was not executed.",
+        };
+        const request = createNativeProviderRequest(provider, {
+          requestId: "native-request-2", instructions: { content: [] },
+          messages: [...defaultMessages(), turn.assistant, {
+            ...resultMessage,
+            content: resultMessage.content.map(item => ({
+              ...item, result: { ...item.result, settlement, content },
+            })),
+          }],
+        });
+        expect((await provider.send(request, context())).kind).toBe("succeeded");
+        const body = bodies[1] as { messages: { role: string; content: string; tool_name?: string; tool_call_id?: string }[] };
+        const result = body.messages.at(-1)!;
+        expect(result.role).toBe("tool");
+        expect(JSON.parse(result.content)).toEqual({ settlement, content });
+        expect(result).toMatchObject(adapter.name === "Ollama"
+          ? { tool_name: "Read" } : { tool_call_id: "call-1" });
+        expect(body.messages.some(message => message.role === "system")).toBe(false);
+        expect(result.content).not.toContain("sourceRefs");
+      },
+    );
+
     it("declares the complete configured mechanical capability", () => {
       const provider = adapter.create(adapter.response({ text: "done", calls: [], finish: "normal" }));
       expect(provider.descriptor.capabilities.nativeToolInteraction).toEqual({

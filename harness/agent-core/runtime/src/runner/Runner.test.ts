@@ -614,6 +614,12 @@ describe("Runner semantic integration", () => {
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
     expect(handler.execute, JSON.stringify(result, null, 2)).toHaveBeenCalledTimes(1);
+    const settlement = result.items.find(item => item.payload.kind === "model_call_settlement");
+    expect(settlement?.payload).toMatchObject({ result: { settlement: "succeeded" } });
+    if (settlement?.payload.kind === "model_call_settlement") {
+      expect(settlement.payload.result.content).not.toHaveProperty("effectCertainty");
+      expect(settlement.payload.result.content).not.toHaveProperty("completionExtent");
+    }
     const observation = observations(result).find(
       ({ payload }) => payload.kind === "operation",
     );
@@ -2794,6 +2800,12 @@ describe("Runner semantic integration", () => {
       payload.cause.failure.failure.code === "executor_connection_lost"
     );
     expect(settlementIndex).toBeGreaterThanOrEqual(0);
+    expect(result.items[settlementIndex]?.payload).toMatchObject({
+      kind: "model_call_settlement",
+      result: { settlement: "failed", content: {
+        status: "unknown_effect", effectCertainty: "unknown", completionExtent: "unknown",
+      } },
+    });
     expect(terminalIndex).toBeGreaterThan(settlementIndex);
   });
 

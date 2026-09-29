@@ -22,6 +22,7 @@ export const HELARC_IPC_CHANNELS = {
   selectProject: "helarc:select-project",
   chooseProjectFolder: "helarc:choose-project-folder",
   readConversation: "helarc:read-conversation",
+  readConversationTurn: "helarc:read-conversation-turn",
   readCurrentWork: "helarc:read-current-work",
   readTaskDetails: "helarc:read-task-details",
   readWorkHistory: "helarc:read-work-history",
@@ -68,7 +69,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   const trustedSender = (event: IpcMainInvokeEvent) => event.sender === input.window.webContents &&
     event.senderFrame === input.window.webContents.mainFrame && event.senderFrame?.url === input.window.webContents.getURL();
   for (const method of ["listThreadRuns", "readCommandDetails", "readWorkbenchItem", "readCommandOutput",
-    "readConversation", "readCurrentWork", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
+    "readConversation", "readConversationTurn", "readCurrentWork", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
     ipcMain.handle(HELARC_IPC_CHANNELS[method], (event, query) => {
       if (!trustedSender(event)) return { status: "rejected", code: "invalid_query" };
       return input.controller.workbench[method](query);

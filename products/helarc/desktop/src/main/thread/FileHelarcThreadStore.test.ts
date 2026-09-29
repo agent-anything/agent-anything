@@ -40,7 +40,7 @@ describe("FileHelarcThreadStore", () => {
       latestRun: { runId: "run-1", status: "inactive" },
     }]);
     expect(JSON.parse(await readFile(filePath, "utf8"))).toMatchObject({
-      formatVersion: 4,
+      formatVersion: 5,
       aggregates: [{ commitLedger: [{ commitId: "commit-start-1" }] }],
     });
   });
@@ -205,7 +205,7 @@ describe("FileHelarcThreadStore", () => {
       .toBeInstanceOf(HelarcThreadStoreCorruptionError);
 
     const store = new FileHelarcThreadStore(filePath);
-    await writeFile(filePath, JSON.stringify({ formatVersion: 4, aggregates: [] }), "utf8");
+    await writeFile(filePath, JSON.stringify({ formatVersion: 5, aggregates: [] }), "utf8");
     await store.commitRunStart(startCommit("1"));
     const valid = JSON.parse(await readFile(filePath, "utf8"));
     const malformed = structuredClone(valid);
@@ -215,7 +215,7 @@ describe("FileHelarcThreadStore", () => {
       .toBeInstanceOf(HelarcThreadStoreCorruptionError);
 
     await writeFile(filePath, JSON.stringify({
-      formatVersion: 4,
+      formatVersion: 5,
       aggregates: [valid.aggregates[0], valid.aggregates[0]],
     }), "utf8");
     await expect(store.listThreadSummaries()).rejects

@@ -17,6 +17,7 @@ import {
   type ModelInstructions,
   type ModelMessage,
   type ModelToolCall,
+  type ModelToolResult,
   type ModelTurnFinish,
   type Provider,
   type ProviderCallResult,
@@ -483,7 +484,7 @@ function encodeOllamaChatMessages(
         encoded.push({
           role: "tool",
           tool_name: result.name,
-          content: renderToolResultContent(result.content),
+          content: renderToolResultContent(result),
         });
       }
       continue;
@@ -787,8 +788,8 @@ function renderInstructions(instructions: ModelInstructions): string {
   return instructions.content.map((block) => block.text).join("\n\n");
 }
 
-function renderToolResultContent(value: ModelJsonValue): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
+function renderToolResultContent(result: ModelToolResult): string {
+  return JSON.stringify({ settlement: result.settlement, content: result.content });
 }
 
 async function readOllamaHttpErrorDiagnostic(

@@ -34,7 +34,12 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   })),
   selectProject: (input) => ipcRenderer.invoke(channels.selectProject, productCommand("project.select", input?.commandId, { projectId: input?.projectId })),
   chooseProjectFolder: (input) => ipcRenderer.invoke(channels.chooseProjectFolder, productCommand("project.chooseFolder", input?.commandId, {})),
-  readConversation: (input) => ipcRenderer.invoke("helarc:read-conversation", {threadId:input?.threadId,position:input?.position?.kind === "before" ? {kind:"before",cursor:input.position.cursor} : {kind:input?.position?.kind}}),
+  readConversation: (input) => ipcRenderer.invoke("helarc:read-conversation", {threadId:input?.threadId,
+    ...(input?.scope ? {scope:taskScope(input.scope)} : {}),
+    position:input?.position?.kind === "before" ? {kind:"before",cursor:input.position.cursor}
+      : input?.position?.kind === "window" ? {kind:"window",first:input.position.first,last:input.position.last,cursor:input.position.cursor}
+        : {kind:input?.position?.kind}}),
+  readConversationTurn: (input) => ipcRenderer.invoke("helarc:read-conversation-turn", {...taskScope(input),turnId:input?.turnId,cursor:input?.cursor}),
   readCurrentWork: (input) => ipcRenderer.invoke("helarc:read-current-work", {...workScope(input),collection:input?.collection,cursor:input?.cursor}),
   readTaskDetails: (input) => ipcRenderer.invoke("helarc:read-task-details", taskScope(input)),
   readWorkHistory: (input) => ipcRenderer.invoke("helarc:read-work-history", {...taskScope(input),collection:input?.collection,cursor:input?.cursor}),

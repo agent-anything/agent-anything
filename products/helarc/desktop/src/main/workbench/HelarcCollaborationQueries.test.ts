@@ -134,6 +134,8 @@ function textRecord(
     sequence,
     revision: sequence,
     observedAt: "2026-09-22T00:00:00Z",
+    origin: {runId, turnId: `turn-${sequence}`, turnSequence: sequence, modelItemId: `model-${sequence}`, ordinal: 0, callId: null,
+      source: {id: `item-${sequence}`, sequence}},
     source: {
       owner: "runtime" as const,
       kind: "run_item" as const,
@@ -165,7 +167,7 @@ describe("collaboration reads", () => {
     if (current.status !== "page") return;
     expect(current.activeCalls.map(r => r.id)).toEqual(["ordinary"]);
     expect(current.attention).toHaveLength(1);
-    expect(current.activity.current.map(i => i.id)).toEqual(["call:root:ordinary"]);
+    expect("activity" in current).toBe(false);
     expect(await api.readWorkbenchItem({ ...scope, runId: "child", itemId: "question" })).toMatchObject({ code: "not_found" });
     const before = await api.readConversation({ threadId: "thread", position: { kind: "latest" } });
     if (before.status === "page") expect(before.entries.filter(e => e.kind === "interaction")).toEqual([]);
@@ -176,7 +178,7 @@ describe("collaboration reads", () => {
     Object.assign(p.product.presentation, { activeCalls: [ordinary] });
     Object.assign(p.host, { pendingInteractions: [] });
     retain();
-    const conversation = await api.readConversation({ threadId: "thread", position: { kind: "latest" } });
+    const conversation = await api.readConversation({ threadId: "thread", scope: {...scope, runId: "child"}, position: { kind: "latest" } });
     expect(conversation.status).toBe("page");
     if (conversation.status !== "page") return;
     const exchange = conversation.entries.find(e => e.kind === "interaction");
@@ -185,10 +187,10 @@ describe("collaboration reads", () => {
     expect(await api.readWorkbenchItem({ ...scope, runId: "child", itemId: "question" })).toMatchObject({ status: "page", title: "Question", text: exchange?.content });
     expect(await api.readWorkbenchItem({ ...scope, itemId: "question" })).toMatchObject({ code: "not_found" });
     expect(await api.readWorkHistory({ ...scope, runId: "child", collection: "operations", cursor: null })).toMatchObject({ records: [] });
-    expect(await api.readCurrentWork(scope)).toMatchObject({ retainedFinishedCount: 0, activity: { recent: [] } });
+    expect(await api.readCurrentWork(scope)).toMatchObject({ retainedFinishedCount: 0 });
 
     Object.assign(question.content, { settlement: "failed", result: { kind: "interaction", status: "expired", value: { code: "interaction_expired" } } });
-    const expired = await api.readConversation({ threadId: "thread", position: { kind: "latest" } });
+    const expired = await api.readConversation({ threadId: "thread", scope: {...scope, runId: "child"}, position: { kind: "latest" } });
     if (expired.status === "page") {
       const item = expired.entries.find(e => e.kind === "interaction");
       expect(item).toMatchObject({ disposition: "Expired" });
@@ -214,7 +216,6 @@ describe("collaboration reads", () => {
     expect(active.status).toBe("page");
     if (active.status !== "page") return;
     expect(active.activeCalls.map(r => r.id)).toEqual(["ordinary", "unknown"]);
-    expect(active.activity.current.filter(i => i.kind === "operation").map(i => i.id)).toEqual(["call:root:ordinary", "call:root:unknown"]);
     expect(active.plan).toEqual(plan);
     expect(active.retainedFinishedCount).toBe(0);
     expect(await api.readWorkbenchItem({ ...scope, itemId: "control" })).toMatchObject({ code: "not_found" });
@@ -225,7 +226,7 @@ describe("collaboration reads", () => {
     Object.assign(control.content, { settlement: "succeeded", result: { kind: "plan_update" } });
     Object.assign(p.product.presentation, { activeCalls: [tool, unknown] });
     const controlOnly = await api.readCurrentWork(scope);
-    expect(controlOnly).toMatchObject({ retainedFinishedCount: 0, activity: { recent: [] }, tasks: [
+    expect(controlOnly).toMatchObject({ retainedFinishedCount: 0, tasks: [
       { runId: "root", hasPlan: true, hasFinishedWork: false }, expect.anything(),
     ] });
 
@@ -237,114 +238,7 @@ describe("collaboration reads", () => {
     if (history.status === "page") expect(history.records.map(r => r.id)).toEqual(["ordinary", "unknown"]);
     const settled = await api.readCurrentWork(scope);
     expect(settled).toMatchObject({ retainedFinishedCount: 2, plan });
-    if (settled.status === "page") expect(settled.activity.recent.map(i => i.id)).toEqual(["call:root:ordinary", "call:root:unknown"]);
     expect(p.product.presentation.records.find(r => r.id === "control")?.content).toMatchObject({ callableKind: "control", settlement: "succeeded" });
-  });
-  it("projects concrete concurrent activity without equating outstanding calls to executing commands", async () => {
-    const { p, api } = fixture();
-    Object.assign(p.product.presentation, { activeCalls: [
-      callRecord("shell", "root", "PowerShell", { command: "dotnet build" }, "invocation"),
-      callRecord("read", "child", "Read", { file_path: "src/Program.cs" }),
-    ] });
-    Object.assign(p.product, { commands: [commandRecord()] });
-    const page = await api.readCurrentWork(scope);
-    expect(page.status).toBe("page");
-    if (page.status !== "page") return;
-    expect(page.activity.current).toMatchObject([
-      { kind: "command", title: "dotnet build", status: "Running" },
-      { kind: "operation", title: "Read file: src/Program.cs", status: "Result pending", attribution: "Subtask" },
-    ]);
-    expect(page.activity.current.filter(i => i.title.includes("dotnet build"))).toHaveLength(1);
-    expect(page.activity.current.every(i => !("input" in i) && !("result" in i))).toBe(true);
-    Object.assign(p.product, { commands: [] });
-    const before = await api.readCurrentWork(scope);
-    expect(before).toMatchObject({ activity: { current: [
-      { kind: "operation", title: "PowerShell command: dotnet build", status: "Result pending" }, expect.anything(),
-    ] } });
-  });
-  it("does not join sibling invocations or use task-level attention to misclassify an active command", async () => {
-    const { p, api } = fixture();
-    Object.assign(p.product.presentation, { activeCalls: [
-      callRecord("shell", "child", "PowerShell", { command: "other command" }, "invocation"),
-    ] });
-    Object.assign(p.product, { commands: [commandRecord()] });
-    Object.assign(p.host, { pendingInteractions: [{ runId: "root", request: { id: "approval" }, phase: "pending" }] });
-    const page = await api.readCurrentWork(scope);
-    expect(page).toMatchObject({ activity: { current: [
-      { kind: "command", status: "Running" }, { kind: "operation", status: "Result pending" },
-      { kind: "attention", state: "waiting" },
-    ] } });
-  });
-  it.each(["running", "waiting", "suspended", "cancelling"])("keeps %s task lifecycle in task summaries, not activity", async status => {
-    const { p, api } = fixture();
-    Object.assign(p.host, { status });
-    for (const node of p.host.runTree.nodes) Object.assign(node, { status });
-    const page = await api.readCurrentWork(scope);
-    expect(page).toMatchObject({ activity: { current: [], recent: [], omittedCurrent: 0 }, tasks: [
-      { runId: "root", status }, { runId: "child", status },
-    ] });
-  });
-  it("keeps delegation hierarchy out of activity while preserving concrete child work", async () => {
-    const { p, api } = fixture();
-    Object.assign(p.host.runTree.nodes[1]!, { parentRunActionId: "delegate-action" });
-    const call = callRecord("delegate", "root", "Agent", { description: "Inspect dependencies", prompt: "PRIVATE PROMPT" });
-    Object.assign(call.content, { runActionId: "delegate-action" });
-    Object.assign(p.product.presentation, { activeCalls: [call], labels: [
-      ...p.product.presentation.labels, { runId: "child", parentRunId: "root", parentRunActionId: "delegate-action", label: "Inspect dependencies", objective: "PRIVATE PROMPT" },
-    ] });
-    const page = await api.readCurrentWork(scope);
-    expect(page).toMatchObject({ activity: { current: [] }, tasks: [
-      { runId: "root" }, { runId: "child", parentRunId: "root", label: "Inspect dependencies" },
-    ] });
-    if (page.status === "page") expect(JSON.stringify(page.activity)).not.toContain("PRIVATE PROMPT");
-    Object.assign(p.host, { status: "waiting" });
-    Object.assign(p.host.runTree.nodes[0]!, { status: "waiting" });
-    Object.assign(p.product.presentation, { activeCalls: [call, callRecord("read", "child", "Read", { file_path: "package.json" })] });
-    expect(await api.readCurrentWork(scope)).toMatchObject({ activity: { current: [
-      { kind: "operation", title: "Read file: package.json", attribution: "Inspect dependencies" },
-    ] } });
-  });
-  it("uses response facts and never resurrects ended or inactive work as live", async () => {
-    const { p, api, retain } = fixture();
-    Object.assign(p.product.responses, { attempts: [{ runId: "child", invocationId: "response", state: "receiving", parts: [] }] });
-    expect(await api.readCurrentWork(scope)).toMatchObject({ activity: { current: [
-      { kind: "response", title: "Waiting for model response" },
-    ] } });
-    Object.assign(p.host.runTree.nodes[1]!, { status: "completed" });
-    expect(await api.readCurrentWork(scope)).toMatchObject({ activity: { current: [] } });
-    Object.assign(p.product, { commands: [commandRecord()] });
-    retain();
-    expect(await api.readCurrentWork(scope)).toMatchObject({ activity: { current: [
-      { kind: "command", state: "inactive", status: "Last observed: Running" },
-    ] } });
-  });
-  it("retains a bounded recent result set and keeps command settlement separate from Tool return", async () => {
-    const { p, api } = fixture();
-    const call = callRecord("shell", "root", "PowerShell", { command: "dotnet build" }, "invocation");
-    Object.assign(call.content, { settlement: "succeeded" });
-    Object.assign(p.product.presentation, { records: [call], activeCalls: [] });
-    Object.assign(p.product, { commands: [commandRecord()] });
-    expect(await api.readCurrentWork(scope)).toMatchObject({ activity: { current: [
-      { kind: "command", status: "Running" },
-    ], recent: [] } });
-    Object.assign(p.product, { commands: Array.from({ length: 6 }, (_, n) => ({ ...commandRecord(),
-      executionId: `exec-${n}`, phase: "settled", exitCode: n, completedAt: `2026-09-22T00:00:0${n}Z`,
-    })) });
-    const page = await api.readCurrentWork(scope);
-    if (page.status !== "page") throw Error("Expected page");
-    expect(page.activity.recent).toHaveLength(3);
-    expect(page.activity.recent[0]).toMatchObject({ status: "Exited with code 5", state: "settled" });
-    expect(page.activity.omittedRecent).toBe(3);
-  });
-  it("bounds activity independently of current-work collection paging", async () => {
-    const { p, api } = fixture();
-    Object.assign(p.product.presentation, { activeCalls: Array.from({ length: 60 }, (_, n) =>
-      callRecord(`read-${n}`, "root", "Read", { file_path: `file-${n}.txt` })) });
-    const page = await api.readCurrentWork(scope);
-    if (page.status !== "page") throw Error("Expected page");
-    expect(page.activity.current).toHaveLength(24);
-    expect(page.activity.omittedCurrent).toBe(36);
-    expect(page.activeCalls).toHaveLength(60);
   });
   it("uses the recorded main objective as its bounded title in both work and detail reads", async () => {
     const { p, api } = fixture();
@@ -499,73 +393,6 @@ describe("collaboration reads", () => {
     ]) } });
     expect(JSON.stringify(result)).not.toContain("do-not-display");
   });
-  it("reads the latest root content directly, keeps older anchors on append and suppresses final source globally", async () => {
-    const { p, thread, api } = fixture();
-    const records = Array.from({ length: 240 }, (_, i) => textRecord(i + 1));
-    Object.assign(p.product.presentation, {
-      records: [...records, textRecord(241, "child", "child-private-context")],
-      nextSequence: 242,
-    });
-    const latest = await api.readConversation({
-      threadId: "thread",
-      position: { kind: "latest" },
-    });
-    expect(latest.status).toBe("page");
-    if (latest.status !== "page") return;
-    expect(latest.entries).toHaveLength(100);
-    expect(latest.entries.at(-1)?.content).toBe("message-240");
-    expect(JSON.stringify(latest)).not.toContain("child-private-context");
-    records.push(textRecord(242));
-    Object.assign(p.product.presentation, { records });
-    const older = await api.readConversation({
-      threadId: "thread",
-      position: { kind: "before", cursor: latest.previousCursor! },
-    });
-    expect(older.status).toBe("page");
-    if (older.status !== "page") return;
-    expect(older.entries.at(-1)?.content).toBe("message-140");
-    thread.messages.push({
-      ...thread.messages[0]!,
-      id: "final",
-      sequence: 2,
-      role: "assistant",
-      content: "final reply",
-      source: { kind: "agent_run", owner: "helarc", refId: "work" },
-      metadata: {
-        outputSource: {
-          kind: "model_text",
-          turnId: "turn-240",
-          modelItemIds: ["model-240", "model-1"],
-        },
-      },
-    });
-    const final = await api.readConversation({
-      threadId: "thread",
-      position: { kind: "latest" },
-    });
-    expect(final.status).toBe("page");
-    if (final.status !== "page") return;
-    expect(final.entries.at(-1)?.content).toBe("final reply");
-    expect(final.entries.some((e) => e.sourceId === "text-root-240")).toBe(
-      false,
-    );
-    const originalTail = await api.readConversation({
-      threadId: "thread",
-      position: { kind: "before", cursor: older.previousCursor! },
-    });
-    expect(originalTail.status).toBe("page");
-    if (originalTail.status === "page")
-      expect(
-        originalTail.entries.some((e) => e.sourceId === "text-root-1"),
-      ).toBe(false);
-    Object.assign(p.product.presentation, { omittedRecords: 1 });
-    expect(
-      await api.readConversation({
-        threadId: "thread",
-        position: { kind: "before", cursor: latest.previousCursor! },
-      }),
-    ).toMatchObject({ code: "stale_cursor" });
-  });
   it("keeps attention and active work separate from history with bound rather than current configuration", async () => {
     const { p, api } = fixture();
     Object.assign(p.host, {
@@ -680,11 +507,15 @@ describe("collaboration reads", () => {
     });
     expect(next.status).toBe("page");
     if (next.status !== "page") return;
-    expect(
-      [...first.activeCalls, ...next.activeCalls].map((c) => c.id),
-    ).toEqual(calls.map((c) => c.id));
+    const ids = [...first.activeCalls, ...next.activeCalls].map(c => c.id);
+    let cursor = next.nextCursors.calls;
+    while (cursor) {
+      const rest = await api.readCurrentWork({...scope, collection: "calls", cursor});
+      if (rest.status !== "page") throw Error(rest.code);
+      ids.push(...rest.activeCalls.map(c => c.id)); cursor = rest.nextCursors.calls;
+    }
+    expect(ids).toEqual(calls.map(c => c.id));
     expect(next.tasks).toEqual([]);
-    expect(next.nextCursors.calls).toBeNull();
     expect(
       await api.readCurrentWork({
         ...scope,
@@ -917,14 +748,141 @@ describe("collaboration reads", () => {
 });
 
 function callRecord(id: string, runId: string, name: string, input: Record<string, string>, invocationId: string | null = null) {
-  return { ...textRecord(1, runId), id, content: { kind: "tool_call" as const,
+  return { ...textRecord(1, runId), id,
+    origin: {runId, turnId: "turn", turnSequence: 1, modelItemId: id, ordinal: 0, callId: id, source: {id: "item-1", sequence: 1}},
+    content: { kind: "tool_call" as const,
     callableKind: "tool" as const, toolBindingKind: "operation" as const, interactionProtocol: null,
     callId: id, turnId: "turn", name: `${name}_hash`, resolvedName: name, input,
     runActionId: null as string | null, invocationId, settlement: null as string | null, result: null } };
 }
 function commandRecord() {
   return { runId: "root", executionId: "execution", revision: 1, phase: "running", processId: 123,
+    origin: callRecord("shell", "root", "PowerShell", {}).origin,
     outcome: null, capturedBytes: 0, omittedBytes: 0, outputPersistence: "live", observedAt: "2026-09-22T00:00:00Z",
     command: "dotnet build", shell: "powershell", cwd: "D:/example", startedAt: "2026-09-22T00:00:00Z",
     completedAt: null, exitCode: null, invocationId: "invocation" };
 }
+
+describe("conversation-local activity reads", () => {
+  const latest = {threadId: "thread", position: {kind: "latest" as const}};
+  const blocks = async (api: HelarcWorkbenchQueries, runId = "root", turnId = "turn") => {
+    const page = await api.readConversationTurn({...scope, runId, turnId, cursor: null});
+    if (page.status !== "page") throw Error(page.code);
+    return page;
+  };
+  it("preserves model block order and replaces a Shell call with only its exact execution", async () => {
+    const {p, api, retain} = fixture();
+    const text = textRecord(1, "root", "I will inspect and build.");
+    Object.assign(text.origin, {turnId: "turn"});
+    Object.assign(text.content, {turnId: "turn"});
+    const call = callRecord("shell", "root", "PowerShell", {command: "dotnet build"}, "invocation");
+    Object.assign(call.origin, {ordinal: 1});
+    const after = textRecord(3, "root", "Meanwhile, inspect the settings.");
+    Object.assign(after.origin, {turnId: "turn", turnSequence: 1, ordinal: 2});
+    Object.assign(after.content, {turnId: "turn", ordinal: 2});
+    const childCall = callRecord("read-child", "child", "Read", {file_path: "child.txt"});
+    Object.assign(p.product.presentation, {records: [text, call, after], activeCalls: [call, childCall]});
+    const requested = await blocks(api);
+    expect(requested.blocks.map(b => b.kind)).toEqual(["text", "activity", "text"]);
+    expect(requested.blocks[1]).toMatchObject({item: {kind: "operation", status: "Result pending"}});
+    Object.assign(p.product, {commands: [commandRecord()]});
+    Object.assign(call.content, {settlement: "succeeded"});
+    const running = await blocks(api);
+    expect(running.blocks[1]?.id).toBe(requested.blocks[1]?.id);
+    expect(running.blocks[1]).toMatchObject({modelItemId: requested.blocks[1]!.modelItemId, item: {kind: "command", status: "Running"}});
+    expect(JSON.stringify(running)).not.toContain("child.txt");
+    expect((await blocks(api, "child")).blocks).toMatchObject([{item: {title: "Read file: child.txt"}}]);
+    retain();
+    expect((await blocks(api)).blocks[1]).toMatchObject({item: {state: "inactive", status: "Last observed: Running"}});
+  });
+  it("keeps background work under the original response after source eviction and later replies", async () => {
+    const {p, api} = fixture();
+    Object.assign(p.product, {commands: [commandRecord()]});
+    Object.assign(p.product.presentation, {records: [textRecord(20)], omittedRecords: 10});
+    const page = await api.readConversation(latest);
+    if (page.status !== "page") throw Error(page.code);
+    const turn = page.entries.find(e => e.kind === "turn" && e.turnId === "turn")!;
+    expect(turn).toMatchObject({kind: "turn", position: [1, 1], partial: true});
+    Object.assign(p.product.commands[0]!, {revision: 2, phase: "settled", exitCode: 0});
+    Object.assign(p.product, {sequence: 20});
+    const window = await api.readConversation({...latest, position: {kind: "window", first: turn.id, last: turn.id}});
+    expect(window).toMatchObject({revision: 22, entries: [{blocks: [{item: {status: "Exited with code 0"}}]}]});
+    expect((await blocks(api)).blocks).toHaveLength(1);
+  });
+  it("retains multiple executions, never joins by text, and reports missing origins", async () => {
+    const {p, api} = fixture();
+    Object.assign(p.product, {commands: [commandRecord(), {...commandRecord(),executionId:"second"}, {...commandRecord(),executionId:"unknown",origin:null}]});
+    expect((await blocks(api)).blocks.map(b => b.kind === "activity" && b.item.detail)).toEqual([
+      {kind:"command",executionId:"execution"},{kind:"command",executionId:"second"},
+    ]);
+    const page = await api.readConversation(latest);
+    if (page.status !== "page") throw Error(page.code);
+    expect(page.entries.find(e => e.kind === "notice")?.content).toContain("1 retained work items");
+  });
+  it("distinguishes creating a Child from later references and does not expose delegation instructions", async () => {
+    const {p, api} = fixture();
+    const create = callRecord("agent", "root", "Agent", {description:"Inspect settings",prompt:"PRIVATE instructions"});
+    const reference = callRecord("reference", "root", "Agent", {agent_id:"opaque",prompt:"PRIVATE continuation"});
+    Object.assign(reference.origin, {turnId:"later",turnSequence:2});
+    Object.assign(reference.content, {turnId:"later",result:{kind:"descendant_progress",childRunId:"child"}});
+    Object.assign(p.product.presentation, {records:[create,reference,textRecord(3,"child","Child findings")],
+      labels:[...p.product.presentation.labels,{runId:"child",parentRunId:"root",parentRunActionId:"create",parentOrigin:create.origin,label:"Inspect settings",objective:"PRIVATE instructions"}]});
+    expect((await blocks(api)).blocks[0]).toMatchObject({item:{child:{relationship:"created",scope:{runId:"child"}}}});
+    expect((await blocks(api,"root","later")).blocks[0]).toMatchObject({item:{child:{relationship:"referenced",scope:{runId:"child"}}}});
+    const root = await api.readConversation(latest);
+    expect(JSON.stringify(root)).not.toContain("Child findings");
+    expect(JSON.stringify(root)).not.toContain("PRIVATE");
+    const child = await api.readConversation({...latest,scope:{...scope,runId:"child"}});
+    expect(JSON.stringify(child)).toContain("Child findings");
+    expect(JSON.stringify(child)).not.toContain('"Task"');
+    expect(await api.readConversation({...latest,scope:{...scope,threadId:"other"}})).toMatchObject({code:"invalid_query"});
+    expect(await api.readConversation({...latest,scope:{...scope,runId:"elsewhere"}})).toMatchObject({code:"not_found"});
+  });
+  it("reconciles only the final source, retaining commentary and calls from the same Turn", async () => {
+    const {p, thread, api} = fixture();
+    const text = textRecord(1,"root","Commentary"); Object.assign(text.origin,{turnId:"turn"});
+    const call = callRecord("read","root","Read",{file_path:"file.txt"}); Object.assign(call.origin,{ordinal:1});
+    const final = {...textRecord(3),origin:{...call.origin,modelItemId:"final",ordinal:2},
+      content:{kind:"final_response",modelItemId:"final",turnId:"turn",callId:"final-call",text:"Candidate",omittedBytes:0,disposition:"accepted"}};
+    Object.assign(p.product.presentation,{records:[text,call,final]});
+    expect((await blocks(api)).blocks[2]).toMatchObject({text:"Candidate",disposition:"Awaiting completion"});
+    thread.messages.push({...thread.messages[0]!,id:"final-message",sequence:2,role:"assistant",content:"Official reply",
+      source:{kind:"agent_run",owner:"helarc",refId:"work"},metadata:{outputSource:{kind:"model_control",turnId:"turn",modelItemId:"final",control:"final_result",
+        modelCallRef:{contentBlockOrdinal:2},argumentPath:"/response"}}});
+    const page = await api.readConversation(latest);
+    if (page.status !== "page") throw Error(page.code);
+    expect(page.entries.filter(e => e.kind === "message")).toHaveLength(1);
+    expect((await blocks(api)).blocks).toMatchObject([{text:"Commentary"},{kind:"activity"},{text:"Official reply",disposition:null}]);
+    Object.assign(p.product.presentation,{records:[text,call],omittedRecords:1});
+    expect((await blocks(api)).blocks[2]).toMatchObject({text:"Official reply"});
+  });
+  it("keeps before cursors across status changes, pages large Turns and refreshes loaded windows", async () => {
+    const {p, api} = fixture();
+    const records = Array.from({length:230},(_,i)=>textRecord(i+1));
+    Object.assign(p.product.presentation,{records});
+    const page = await api.readConversation(latest);
+    if (page.status !== "page") throw Error(page.code);
+    expect(page.entries).toHaveLength(100);
+    expect(page.entries.at(-1)?.sourceId).toBe("turn-230");
+    Object.assign(p.product,{sequence:55});
+    const older = await api.readConversation({...latest,position:{kind:"before",cursor:page.previousCursor!}});
+    expect(older).toMatchObject({status:"page"});
+    const first = page.entries[0]!, last = page.entries.at(-1)!;
+    expect(await api.readConversation({...latest,position:{kind:"window",first:first.id,last:last.id}})).toMatchObject({revision:57});
+    records.splice(0,1); Object.assign(p.product.presentation,{omittedRecords:1});
+    expect(await api.readConversation({...latest,position:{kind:"before",cursor:page.previousCursor!}})).toMatchObject({code:"stale_cursor"});
+    const calls = Array.from({length:240},(_,i)=>{const c=callRecord(`call-${i}`,"root","Read",{file_path:`file-${i}`}); Object.assign(c.origin,{ordinal:i}); return c;});
+    Object.assign(p.product.presentation,{records:[...calls,textRecord(999)],activeCalls:[]});
+    const firstTurn = await blocks(api);
+    expect(firstTurn.blocks).toHaveLength(100);
+    const second = await api.readConversationTurn({...scope,turnId:"turn",cursor:firstTurn.nextCursor});
+    if(second.status!=="page") throw Error(second.code);
+    expect(second.blocks[0]?.modelItemId).toBe("call-100");
+    const third = await api.readConversationTurn({...scope,turnId:"turn",cursor:second.nextCursor});
+    expect(third).toMatchObject({blockCount:240,nextCursor:null});
+    const tail = await api.readConversation(latest);
+    expect(JSON.stringify(tail)).toContain("message-999");
+    for (const result of [firstTurn,second,third,tail]) expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(256*1024);
+    expect(await api.readConversationTurn({...scope,runId:"child",turnId:"turn",cursor:firstTurn.nextCursor})).toMatchObject({code:"not_found"});
+  });
+});
