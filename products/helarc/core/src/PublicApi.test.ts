@@ -52,6 +52,7 @@ describe("Helarc public API", () => {
       "createHelarcRunInput",
       "createHelarcRunProjection",
       "deriveHelarcRunDisplayProjection",
+      "helarcSubtaskName",
       "reduceHelarcProductRunProjection",
       "reduceHelarcRunProjection",
     ]);

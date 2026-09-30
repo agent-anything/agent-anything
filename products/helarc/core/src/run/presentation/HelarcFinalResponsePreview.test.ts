@@ -34,6 +34,17 @@ describe("final response argument preview", () => {
     expect(new HelarcFinalResponsePreview().write('{"response":"first","response":"second"}').text).toBe("");
   });
 
+  it.each([false, true])("previews only the response beside a final Plan snapshot (Plan first: %s)", planFirst => {
+    const plan = [{step: "Inspect", status: "completed"}, {step: "Remaining work", status: "pending"}];
+    const response = "Inspection finished; remaining work is unavailable.";
+    const source = JSON.stringify(planFirst ? {plan, response} : {response, plan});
+    for (let split = 0; split <= source.length; split++) {
+      const preview = new HelarcFinalResponsePreview();
+      preview.write(source.slice(0, split));
+      expect(preview.write(source.slice(split))).toEqual({text: response, omittedBytes: 0});
+    }
+  });
+
   it("bounds raw argument parsing independently from authoritative interpretation", () => {
     const preview = new HelarcFinalResponsePreview();
     expect(preview.write('{"response":"early').text).toBe("early");

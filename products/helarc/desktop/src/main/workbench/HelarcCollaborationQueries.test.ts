@@ -61,6 +61,7 @@ function fixture() {
             runId: "root",
             parentRunId: null,
             parentRunActionId: null,
+            siblingOrdinal: null,
             label: "Root",
             objective: "Task",
           },
@@ -247,7 +248,7 @@ describe("collaboration reads", () => {
     Object.assign(label, { objective });
     expect(await api.readCurrentWork(scope)).toMatchObject({ tasks: [
       { runId: "root", parentRunId: null, label: objective.trim().slice(0, 160), objective },
-      { runId: "child", parentRunId: "root", label: "Delegated work" },
+      { runId: "child", parentRunId: "root", label: "Subtask: Delegated work" },
     ] });
     expect(await api.readTaskDetails(scope)).toMatchObject({ task: {
       runId: "root", label: objective.trim().slice(0, 160), objective,
@@ -280,7 +281,7 @@ describe("collaboration reads", () => {
     Object.assign(p.product, { qualification: { diagnostic: "qualification-detail" } });
     const child = await api.readTaskDetails({ ...scope, runId: "child" });
     const root = await api.readTaskDetails(scope);
-    expect(child).toMatchObject({ task: { label: "Inspect dependencies", objective: null }, problem: null });
+    expect(child).toMatchObject({ task: { label: "Subtask: Inspect dependencies", objective: null }, problem: null });
     for (const page of [child, root]) {
       expect(page).not.toHaveProperty("diagnostics");
       expect(page).not.toHaveProperty("retries");
@@ -753,7 +754,7 @@ function callRecord(id: string, runId: string, name: string, input: Record<strin
     content: { kind: "tool_call" as const,
     callableKind: "tool" as const, toolBindingKind: "operation" as const, interactionProtocol: null,
     callId: id, turnId: "turn", name: `${name}_hash`, resolvedName: name, input,
-    runActionId: null as string | null, invocationId, settlement: null as string | null, result: null } };
+    runActionId: null as string | null, invocationId, invocationIds: invocationId ? [invocationId] : [], settlement: null as string | null, result: null } };
 }
 function commandRecord() {
   return { runId: "root", executionId: "execution", revision: 1, phase: "running", processId: 123,
@@ -803,10 +804,10 @@ describe("conversation-local activity reads", () => {
     if (page.status !== "page") throw Error(page.code);
     const turn = page.entries.find(e => e.kind === "turn" && e.turnId === "turn")!;
     expect(turn).toMatchObject({kind: "turn", position: [1, 1], partial: true});
-    Object.assign(p.product.commands[0]!, {revision: 2, phase: "settled", exitCode: 0});
+    Object.assign(p.product.commands[0]!, {revision: 2, phase: "settled", outcome: "succeeded", exitCode: 0});
     Object.assign(p.product, {sequence: 20});
     const window = await api.readConversation({...latest, position: {kind: "window", first: turn.id, last: turn.id}});
-    expect(window).toMatchObject({revision: 22, entries: [{blocks: [{item: {status: "Exited with code 0"}}]}]});
+    expect(window).toMatchObject({revision: 22, entries: [{blocks: [{item: {status: "Completed (root exit code 0)"}}]}]});
     expect((await blocks(api)).blocks).toHaveLength(1);
   });
   it("retains multiple executions, never joins by text, and reports missing origins", async () => {
@@ -819,6 +820,18 @@ describe("conversation-local activity reads", () => {
     if (page.status !== "page") throw Error(page.code);
     expect(page.entries.find(e => e.kind === "notice")?.content).toContain("1 retained work items");
   });
+  it.each([
+    ["timed_out", "Timed out"], ["cancelled", "Cancelled"],
+    ["unknown", "Outcome uncertain"], ["failed", "Failed"],
+    [null, "Outcome unavailable"],
+  ])("preserves %s despite root exit zero in live and retained reads", async (outcome, label) => {
+    const {p, api, retain} = fixture();
+    Object.assign(p.product, {commands: [{...commandRecord(), phase: "settled", outcome, exitCode: 0}]});
+    const expected = {item: {state: "settled", status: `${label} (root exit code 0)`}};
+    expect((await blocks(api)).blocks[0]).toMatchObject(expected);
+    retain();
+    expect((await blocks(api)).blocks[0]).toMatchObject(expected);
+  });
   it("distinguishes creating a Child from later references and does not expose delegation instructions", async () => {
     const {p, api} = fixture();
     const create = callRecord("agent", "root", "Agent", {description:"Inspect settings",prompt:"PRIVATE instructions"});
@@ -826,9 +839,25 @@ describe("conversation-local activity reads", () => {
     Object.assign(reference.origin, {turnId:"later",turnSequence:2});
     Object.assign(reference.content, {turnId:"later",result:{kind:"descendant_progress",childRunId:"child"}});
     Object.assign(p.product.presentation, {records:[create,reference,textRecord(3,"child","Child findings")],
-      labels:[...p.product.presentation.labels,{runId:"child",parentRunId:"root",parentRunActionId:"create",parentOrigin:create.origin,label:"Inspect settings",objective:"PRIVATE instructions"}]});
+      labels:[...p.product.presentation.labels,{runId:"child",parentRunId:"root",parentRunActionId:"create",parentOrigin:create.origin,siblingOrdinal:1,label:"Inspect settings",objective:"PRIVATE instructions"}]});
     expect((await blocks(api)).blocks[0]).toMatchObject({item:{child:{relationship:"created",scope:{runId:"child"}}}});
+    expect(await api.readTaskDetails({...scope, runId: "child"})).toMatchObject({task: {label: "Subtask 1: Inspect settings"}});
     expect((await blocks(api,"root","later")).blocks[0]).toMatchObject({item:{child:{relationship:"referenced",scope:{runId:"child"}}}});
+    const reading = callRecord("child-read", "child", "Read", {file_path: "settings.json"});
+    Object.assign(p.product.presentation, {activeCalls: [reading]});
+    Object.assign(p.product, {sequence: 2});
+    const active = await blocks(api);
+    expect(active.blocks[0]).toMatchObject({item: {child: {displayName: "Subtask 1", activity: {
+      activeCount: 1, items: [{title: "Read file: settings.json", attribution: "Subtask 1"}],
+    }}}});
+    expect((await blocks(api, "root", "later")).blocks[0]).toMatchObject({item: {child: {activity: null}}});
+    Object.assign(p.product.presentation, {activeCalls: []});
+    Object.assign(p.product.responses, {attempts: [{runId: "child", invocationId: "waiting", state: "receiving", parts: [], observedAt: "2026-09-30T00:00:00Z"}]});
+    Object.assign(p.product, {sequence: 3});
+    const updated = await blocks(api);
+    expect(updated.revision).toBeGreaterThan(active.revision);
+    expect(updated.blocks[0]?.id).toBe(active.blocks[0]?.id);
+    expect(updated.blocks[0]).toMatchObject({item: {child: {activity: {items: [{kind: "model", title: "Waiting for model response"}]}}}});
     const root = await api.readConversation(latest);
     expect(JSON.stringify(root)).not.toContain("Child findings");
     expect(JSON.stringify(root)).not.toContain("PRIVATE");

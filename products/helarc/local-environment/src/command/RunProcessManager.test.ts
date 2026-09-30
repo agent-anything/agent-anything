@@ -119,6 +119,36 @@ describe("RunProcessManager", () => {
     expect((await t.observe()).snapshot.outcome).toBe("succeeded"); expect(t.handle.close).toHaveBeenCalledTimes(1);
   });
 
+  it("reads immutable Run-owned snapshots without consuming output or refreshing availability", async () => {
+    const t = await setup(); await t.manager.start(t.input);
+    const before = t.manager.getRunSnapshots(t.input.runId);
+    const availability = t.manager.getRunAvailability(t.input.runId);
+    expect(before).toHaveLength(1);
+    expect(Object.isFrozen(before)).toBe(true);
+    expect(t.manager.getRunSnapshots("other-run")).toEqual([]);
+    expect(t.manager.getRunAvailability(t.input.runId)).toEqual(availability);
+    t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("retained")});
+    t.finish(); await t.cleanup();
+    expect(before[0]!.phase).toBe("running");
+    expect(t.manager.getRunSnapshots(t.input.runId)[0]).toMatchObject({phase: "settled", outcome: "succeeded"});
+    expect((await t.observe()).stdout.text).toBe("retained");
+  });
+
+  it("preserves root exit zero when its remaining scope reaches the execution deadline", async () => {
+    const t = await setup();
+    vi.mocked(t.handle.terminate).mockImplementation(async () => {
+      t.emit({kind: "scope_empty"});
+      t.emit({kind: "output_closed", incomplete: false});
+      return "forced";
+    });
+    await t.manager.start({...t.input, timeoutMs: 100});
+    t.emit({kind: "root_exit", code: 0, signal: null});
+    await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+    expect((await t.observe()).snapshot).toMatchObject({rootExit: {code: 0}, outcome: "timed_out",
+      containment: {disposition: "empty"}, termination: {reason: "execution_timeout"}});
+    await t.cleanup();
+  });
+
   it("never renews the execution deadline when observations repeat", async () => {
     const t=await setup(); await t.manager.start({...t.input,timeoutMs:150});
     const deadline=(await t.observe()).snapshot.deadlineAt;

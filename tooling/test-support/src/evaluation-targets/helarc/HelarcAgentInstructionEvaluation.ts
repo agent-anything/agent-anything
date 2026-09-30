@@ -290,7 +290,13 @@ function createInstructionConformanceCases(
             { step: "Summarize the result.", status: "completed" },
           ],
         },
-        { kind: "model_call", name: "final_result", input: {response: inspect.expectedClaim.agentSummary} },
+        { kind: "model_call", name: "final_result", input: {
+          response: inspect.expectedClaim.agentSummary,
+          plan: [
+            { step: "Inspect the declared source.", status: "completed" },
+            { step: "Summarize the result.", status: "completed" },
+          ],
+        } },
       ], ["Read"]),
       options: Object.freeze({}),
     }),

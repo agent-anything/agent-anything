@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { access, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,4 +96,40 @@ describe("Shell final-working-directory control channel", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+describe.skipIf(process.platform !== "win32")("PowerShell command sequencing", () => {
+  it.each([
+    { behavior: "continues after a non-terminating error", errorAction: "", exitCode: 0, stdout: "42" },
+    { behavior: "honors an explicit terminating error", errorAction: " -ErrorAction Stop", exitCode: 1, stdout: "" },
+  ])("$behavior without changing native semantics", async ({ errorAction, exitCode, stdout }) => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-shell-sequencing-"));
+    const controlPath = join(directory, "cwd.txt");
+    try {
+      const shell = join(process.env.SystemRoot!, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+      const command = `Set-Location -LiteralPath './missing-directory'${errorAction}; & '${process.execPath.replaceAll("'", "''")}' -e 'console.log(42)'`;
+
+      for (const source of [command, commandWithFinalWorkingDirectory("PowerShell", command, controlPath)]) {
+        const result = spawnSync(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", source], {
+          cwd: directory,
+          encoding: "utf8",
+          timeout: 5000,
+          windowsHide: true,
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.signal).toBeNull();
+        expect(result.status).toBe(exitCode);
+        expect(result.stdout.trim()).toBe(stdout);
+        expect(result.stderr).toContain("PathNotFound");
+      }
+
+      if (exitCode === 0) {
+        await expect(consumeFinalWorkingDirectory(controlPath)).resolves.toBe(
+          await realpath(directory),
+        );
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

@@ -3,6 +3,7 @@ import type { PlanLimits } from "@agent-anything/agent-runtime/plan";
 import {
   snapshotModelCallableDefinitions,
   type ModelCallableDefinition,
+  type ModelJsonSchema,
 } from "@agent-anything/model-interaction";
 
 export type HelarcControllerControlName = "update_plan" | "final_result";
@@ -26,7 +27,7 @@ const ENTRIES = Object.freeze([
       "A Plan is optional and may be created or revised at any turn; do not create one for a simple direct task.",
       "Every call replaces the complete visible Plan, so retain still-relevant steps, mark established work completed, keep future work pending, and use at most one in_progress step.",
       "Once a Plan exists, update it promptly after a step's outcome is established, when work moves to another step, or when the scope or approach changes.",
-      "When submitting final_result, reconcile the existing Plan with actual progress if it is stale; update_plan and final_result may be submitted in the same turn. The Plan update is processed before the ending proposal.",
+      "When ending, submit the complete final Plan snapshot inside final_result instead of calling update_plan separately in that turn. The snapshot is applied before the ending proposal is considered.",
       "Keep still-relevant unfinished work visible and use explanation to describe unresolved or changed work. Never mark unfinished steps completed merely because the Run is ending.",
       "Do not create a Plan solely to close the Run or repeat an unchanged update.",
       "The Plan records intended progression but grants no Tool, Permission, or execution authority and does not prove that a step succeeded.",
@@ -39,7 +40,9 @@ const ENTRIES = Object.freeze([
       "The response may be an answer, partial result, limitation, or refusal; ending does not assert that the user's objective was achieved.",
       "Use this control when no further model turn is needed. Ordinary assistant text is commentary, not an ending signal.",
       "Call final_result at most once per turn, with the complete response string; an empty response is valid.",
-      "Other calls, including update_plan, may accompany it. They are processed first; failed or unresolved work may return feedback instead of accepting the ending proposal.",
+      "If a Plan already exists, include its complete final snapshot in plan, even when unchanged. Report actual step progress; pending or in_progress steps do not prevent ending. Never mark unfinished work completed merely to end the Run.",
+      "Without an existing Plan, plan is optional; do not create one solely to end. Do not call update_plan in the same turn as final_result; put the final snapshot in this call instead.",
+      "Other Tool calls may accompany it. Their requests and the embedded Plan update are processed before ending; failed or unresolved work may return feedback instead of accepting the ending proposal.",
       "Do not claim results of accompanying calls that have not yet been observed. If their results are needed to form your response, wait for them before submitting final_result.",
     ].join(" "),
   }),
@@ -50,6 +53,7 @@ export const HELARC_CONTROLLER_CONTROL_GUIDANCE = createGuidance();
 export function createHelarcControllerControlDefinitions(
   guidance: HelarcControllerControlGuidance,
   limits: PlanLimits,
+  hasPlan: boolean,
 ): readonly ModelCallableDefinition[] {
   assertPlanLimits(limits);
   const byName = new Map(guidance.entries.map((entry) => [entry.name, entry]));
@@ -62,8 +66,11 @@ export function createHelarcControllerControlDefinitions(
       description: byName.get("final_result")!.modelDescription,
       inputSchema: {
         type: "object",
-        properties: {response: {type: "string", description: "Complete user-facing final response, including any limitations. May be empty."}},
-        required: ["response"],
+        properties: {
+          response: {type: "string", description: "Complete user-facing final response, including any limitations. May be empty."},
+          plan: createPlanSchema(limits),
+        },
+        required: hasPlan ? ["response", "plan"] : ["response"],
         additionalProperties: false,
       },
     },
@@ -78,36 +85,37 @@ export function createHelarcControllerControlDefinitions(
             maxLength: limits.maxExplanationLength,
             description: "Optional concise reason for creating or replacing the Plan, especially when its structure or direction changed.",
           },
-          plan: {
-            type: "array",
-            minItems: 1,
-            maxItems: limits.maxSteps,
-            description: "Complete replacement Plan in intended work order. Include all still-relevant steps and use at most one in_progress status.",
-            items: {
-              type: "object",
-              properties: {
-                step: {
-                  type: "string",
-                  minLength: 1,
-                  maxLength: limits.maxStepLength,
-                  description: "Concrete bounded outcome or unit of work whose progress can be understood independently.",
-                },
-                status: {
-                  type: "string",
-                  enum: ["pending", "in_progress", "completed"],
-                  description: "Current step state: pending has not started, in_progress is the one active step, and completed is established as done.",
-                },
-              },
-              required: ["step", "status"],
-              additionalProperties: false,
-            },
-          },
+          plan: createPlanSchema(limits),
         },
         required: ["plan"],
         additionalProperties: false,
       },
     },
   ]);
+}
+
+function createPlanSchema(limits: PlanLimits): ModelJsonSchema {
+  return {
+    type: "array",
+    minItems: 1,
+    maxItems: limits.maxSteps,
+    description: "Complete replacement Plan in intended work order. Include all still-relevant steps and use at most one in_progress status. Unfinished steps may remain when ending.",
+    items: {
+      type: "object",
+      properties: {
+        step: {
+          type: "string", minLength: 1, maxLength: limits.maxStepLength,
+          description: "Concrete bounded outcome or unit of work whose progress can be understood independently.",
+        },
+        status: {
+          type: "string", enum: ["pending", "in_progress", "completed"],
+          description: "Current step state: pending has not started, in_progress is the one active step, and completed is established as done.",
+        },
+      },
+      required: ["step", "status"],
+      additionalProperties: false,
+    },
+  };
 }
 
 function createGuidance(): HelarcControllerControlGuidance {

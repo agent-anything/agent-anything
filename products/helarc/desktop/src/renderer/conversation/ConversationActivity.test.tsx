@@ -1,6 +1,6 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ConversationActivityItem } from "../../shared/HelarcWorkbench.js";
 import { ConversationActivity } from "./ConversationActivity.js";
 import { ModelResponseProgress } from "./ConversationEntries.js";
@@ -9,6 +9,7 @@ const command: ConversationActivityItem = {
   id: "command", runId: "root", kind: "command", title: "dotnet build",
   attribution: null, state: "ongoing", status: "Running", startedAt: null,
   endedAt: null, detail: { kind: "command", executionId: "execution" }, child: null,
+  observedAt: "2026-09-30T00:00:00.000Z",
 };
 const scope = {threadId:"thread", productRunId:"work", runId:"root"};
 
@@ -21,6 +22,27 @@ describe("Response activity disclosure", () => {
     expect(html).toContain("2 operations");
     expect(html).not.toContain("Another command");
     expect(html).not.toContain("wb-activity-content");
+  });
+  it("shows attributed nested activity while the delegated conversation remains closed", () => {
+    const renderChild = vi.fn(() => null);
+    const delegated: ConversationActivityItem = {...command, id: "delegation", kind: "operation", title: "Subtask 1: Inspect files", state: "settled",
+      detail: null, child: {scope: {...scope, runId: "child"}, displayName: "Subtask 1", label: "Inspect files",
+        relationship: "created", status: "running", activity: {activeCount: 2, omittedCount: 0, retentionLimited: false,
+          items: [{...command, id: "nested-command", runId: "nested", attribution: "Subtask 1.1"},
+            {...command, id: "model", runId: "child", kind: "model", title: "Waiting for model response", status: "",
+              attribution: "Subtask 1", observedAt: "2026-09-30T00:00:01.000Z"}]}}};
+    const html = renderToStaticMarkup(<ConversationActivity scope={scope} items={[delegated]} revision={2} visible renderChild={renderChild}/>);
+    expect(html).toContain("Subtask 1");
+    expect(html).toContain("Waiting for model response");
+    expect(html).toContain("+1 active");
+    expect(html).not.toContain("Inspect files");
+    expect(html).not.toContain("dotnet build");
+    expect(renderChild).not.toHaveBeenCalled();
+    const finished = {...delegated, child: {...delegated.child!, status: "completed", activity: {items: [], activeCount: 0, omittedCount: 0, retentionLimited: false}}};
+    const retained = renderToStaticMarkup(<ConversationActivity scope={scope} items={[finished]} revision={3} visible renderChild={renderChild}/>);
+    expect(retained).toContain("Subtask 1: Inspect files");
+    expect(retained).not.toContain("wb-activity-progress-pulse");
+    expect(retained).not.toContain("Waiting for model response");
   });
   it.each(["ongoing", "waiting", "settled", "inactive"] as const)("limits animation to live activity when state is %s", state => {
     for (const visible of [true, false]) {

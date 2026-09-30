@@ -113,6 +113,7 @@ export interface HelarcLocalCommandActionCapability {
   readonly internalHandlers: readonly ProcessObservationHandler[];
   readonly taskStopBinding: OperationBindingRevisionRef;
   readonly taskAvailability: Pick<RunProcessManager, "getRunAvailability">;
+  readonly taskState: Pick<RunProcessManager, "getRunSnapshots">;
   readonly shellSession: (runId:string) => ReturnType<ShellExecutionSession["snapshot"]>;
 }
 
@@ -203,6 +204,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
       initialHandlerId:input.initialObservationHandlerId, outputHandlerId:input.taskOutputHandlerId}),
     taskStopBinding: input.taskStopBinding,
     taskAvailability: processTasks,
+    taskState: processTasks,
     shellSession:(runId:string)=>sessionFor(runId).snapshot(),
   });
 }

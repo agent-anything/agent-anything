@@ -29,6 +29,7 @@ import {
   type HelarcModelCallableCatalog,
 } from "./HelarcModelCallableCatalog.js";
 import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
+import { createHelarcCommandStateSection, type HelarcCommandStateSnapshot } from "./HelarcCommandState.js";
 import { createHelarcUnknownCallableRejection } from "./HelarcModelCallFeedback.js";
 import type {
   HelarcModelQualificationResolution,
@@ -36,7 +37,7 @@ import type {
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
-  "helarc.provider-native-tool-interaction.v2";
+  "helarc.provider-native-tool-interaction.v3";
 export const HELARC_MODEL_CONTEXT_HEADROOM_TOKENS = 1_024;
 export type HelarcAgentOutput = { kind: "complete"; summary: string; source: import("../run/presentation/HelarcRunPresentation.js").HelarcOutputSource };
 
@@ -54,12 +55,13 @@ export function buildHelarcProviderRequest(
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
   qualification: HelarcModelQualificationResolution,
+  commandState: readonly HelarcCommandStateSnapshot[] = [],
 ): ProviderRequest {
   const flow = new ExecutionFlowPath(HELARC_REQUEST_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId);
   try {
     const step = flow.advance("compose", {agentId:input.agent.id, instructionBlocks:input.agent.instructions.blocks.length, unsettledCalls:input.interaction.unsettledCalls.length},
       [{owner: "runtime", kind: "request", id: input.toolExposure.controllerRequestId, revision: null}]);
-    const request = buildRequest(input, context, protocol, qualification);
+    const request = buildRequest(input, context, protocol, qualification, commandState);
     step.check("instruction_binding", "passed", {bindingId:input.instructionBinding.ref.id});
     step.check("settled_interaction", "passed");
     const compositionRef = flow.material("Model input composition", "composed", request.composition, "provider");
@@ -76,6 +78,7 @@ function buildRequest(
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
   qualification: HelarcModelQualificationResolution,
+  commandState: readonly HelarcCommandStateSnapshot[],
 ): ProviderRequest {
   assertInstructionModelIdentity(input, context);
   if (context.correction !== null) {
@@ -87,6 +90,7 @@ function buildRequest(
   const callableCatalog = protocol.createCallableCatalog(
     input.toolExposure,
     input.planLimits,
+    input.plan !== null,
   );
   const toolGuidanceBinding = protocol.bindRun(input.runId);
   const interaction = createNativeToolTurnInteraction(callableCatalog.definitions);
@@ -94,12 +98,13 @@ function buildRequest(
     controllerInput: input,
     protocolInstructions: protocol.protocolInstructions,
   });
+  const commandSection = createHelarcCommandStateSection(input.runId, commandState);
   const composition = composeModelInput({
     id: `${input.runId}:model-input:${input.iteration}:${context.attemptNumber}`,
     providerId: context.target.providerId,
     model: context.target.model,
     interaction,
-    sections: promptAssembly.sections,
+    sections: commandSection === null ? promptAssembly.sections : [...promptAssembly.sections, commandSection],
     lineage: Object.freeze({
       instructionBinding: source("agent-runtime", "agent_instruction_binding", input.instructionBinding.ref.id, input.instructionBinding.ref.revision),
       agent: source("agent-core", "agent_revision", input.agent.id, input.agent.revision),
@@ -234,7 +239,7 @@ function interpretResponse(
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
   }
-  const catalog = protocol.createCallableCatalog(input.toolExposure, input.planLimits);
+  const catalog = protocol.createCallableCatalog(input.toolExposure, input.planLimits, input.plan !== null);
   assertTurnCorrelation(response, input);
   const modelItems = createControllerModelItems(
     response.turn,
@@ -272,7 +277,7 @@ function interpretResponse(
   if (calls.length === 0) {
     return Object.freeze({
       kind: "continue_with_feedback",
-      feedback: {source: {owner: "helarc", kind: "controller_protocol", id: HELARC_NATIVE_TOOL_PROTOCOL_REVISION, revision: "2"},
+      feedback: {source: {owner: "helarc", kind: "controller_protocol", id: HELARC_NATIVE_TOOL_PROTOCOL_REVISION, revision: "3"},
         code: "helarc_ending_signal_missing",
         message: "This turn contained no function call. To end this Run, call final_result with your complete response. To continue working, call the functions supplied in this request. Ordinary text does not end the Run."},
       modelItems,
@@ -283,14 +288,29 @@ function interpretResponse(
     const binding = findHelarcModelCallableBinding(catalog, call.name);
     return binding?.kind === "control" && binding.control === "final_result";
   });
-  const final = finals.length === 1 && validFinalInput(finals[0]!.input) ? finals[0]! : null;
-  const candidates = calls.filter(call => call !== final).map(call =>
-    finals.includes(call)
-      ? Object.freeze({kind: "model_call_rejection" as const, name: call.name,
-          code: finals.length > 1 ? "helarc_final_result_ambiguous" : "helarc_final_result_invalid",
-          message: "Submit exactly one final_result call with an object containing only response, a string (which may be empty). Other calls have their own results and must not be repeated merely to correct this call.",
-          modelCallRef: call.modelCallRef})
-      : bindModelCall(call, catalog, input));
+  const hasSeparatePlan = calls.some(call => {
+    const binding = findHelarcModelCallableBinding(catalog, call.name);
+    return binding?.kind === "control" && binding.control === "update_plan";
+  });
+  const final = finals.length === 1 && validFinalInput(finals[0]!.input, input.plan !== null) && !hasSeparatePlan
+    ? finals[0]! : null;
+  const candidates = calls.flatMap<ProgressionCandidate>(call => {
+    if (call === final) {
+      return "plan" in final.input ? [{
+        kind: "state_transition", transition: "plan_update",
+        input: {plan: final.input.plan}, modelCallRef: final.modelCallRef,
+      }] : [];
+    }
+    if (finals.includes(call)) {
+      return [Object.freeze({
+        kind: "model_call_rejection", name: call.name,
+        code: finals.length > 1 ? "helarc_final_result_ambiguous" : "helarc_final_result_invalid",
+        message: finalInputFeedback(input.plan !== null, hasSeparatePlan),
+        modelCallRef: call.modelCallRef,
+      })];
+    }
+    return [bindModelCall(call, catalog, input)];
+  });
   if (final !== null) {
     const item = modelItems.find(item => item.kind === "model_tool_call" && item.call.modelCallRef.id === final.modelCallRef.id)!;
     return Object.freeze({
@@ -313,9 +333,28 @@ function interpretResponse(
   });
 }
 
-function validFinalInput(value: unknown): value is {response: string} {
+interface FinalResultInput {
+  readonly response: string;
+  readonly plan?: readonly unknown[];
+}
+
+function validFinalInput(value: unknown, hasPlan: boolean): value is FinalResultInput {
   return value !== null && typeof value === "object" && !Array.isArray(value) &&
-    Object.keys(value).length === 1 && typeof (value as Record<string, unknown>).response === "string";
+    Object.keys(value).every(key => key === "response" || key === "plan") &&
+    typeof (value as Record<string, unknown>).response === "string" &&
+    (!hasPlan || "plan" in value) &&
+    (!("plan" in value) || Array.isArray(value.plan));
+}
+
+function finalInputFeedback(hasPlan: boolean, hasSeparatePlan: boolean): string {
+  return [
+    "This final_result call was not accepted. Submit exactly one final_result with response, a string (which may be empty), and no fields other than response and plan.",
+    hasPlan ? "A Plan exists: plan is required and must contain its complete final step/status array, even when unchanged."
+      : "Without an existing Plan, plan is optional; do not create a Plan just to end.",
+    "Use the request's final_result Schema. A supplied Plan must satisfy its limits and may retain unfinished steps; ending does not require all steps completed.",
+    ...(hasSeparatePlan ? ["Do not submit update_plan alongside final_result; include the final snapshot in final_result instead."] : []),
+    "Other calls retain their own results; do not repeat successful calls merely to correct this call.",
+  ].join(" ");
 }
 
 function bindModelCall(

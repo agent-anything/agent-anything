@@ -50,6 +50,7 @@ export function createHelarcModelCallableCatalog(input: {
   readonly toolGuidance: ResolvedHelarcToolGuidance;
   readonly controlGuidance: HelarcControllerControlGuidance;
   readonly planLimits: PlanLimits;
+  readonly hasPlan: boolean;
 }): HelarcModelCallableCatalog {
   if (
     input.toolExposure.selectionRevision !==
@@ -86,7 +87,7 @@ export function createHelarcModelCallableCatalog(input: {
   }
 
   const controlDefinitions = new Map(
-    createHelarcControllerControlDefinitions(input.controlGuidance, input.planLimits)
+    createHelarcControllerControlDefinitions(input.controlGuidance, input.planLimits, input.hasPlan)
       .map((definition) => [definition.name, definition]),
   );
   const definitions = snapshotModelCallableDefinitions(bindings.map((binding) => {

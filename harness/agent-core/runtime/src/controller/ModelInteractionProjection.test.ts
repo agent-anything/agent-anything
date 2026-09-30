@@ -66,6 +66,37 @@ describe("ModelInteractionProjection", () => {
     expect(projection.messages).toHaveLength(1);
   });
 
+  it("retains accompanying text and calls together when reconstructing subsequent model history", () => {
+    const call = modelCall("read", 1);
+    const first = modelTurn([call]);
+    const mixed: ModelTurn = { ...first, assistant: { role: "assistant", content: [
+      { kind: "text", text: "I will inspect the file." },
+      { kind: "model_tool_call", call },
+      { kind: "text", text: "The result will inform the next action." },
+    ] } };
+    const later = modelTurn([], "turn-2", "request-2");
+    const projection = projectModelInteraction({
+      runId: "run-1",
+      runRevision: 3,
+      items: [
+        runItem(1, controllerTurn(mixed)),
+        runItem(2, settlement(call, "succeeded")),
+        runItem(3, controllerTurn({ ...later, assistant: { role: "assistant", content: [
+          { kind: "text", text: "The file has been inspected." },
+        ] } })),
+      ],
+    });
+
+    expect(projection.messages.map(message => message.role)).toEqual(["assistant", "tool", "assistant"]);
+    expect(projection.messages[0]).toEqual(mixed.assistant);
+    expect(projection.messages[1]).toMatchObject({ content: [{ result: {
+      modelCallRef: call.modelCallRef, name: "read", settlement: "succeeded",
+    } }] });
+    expect(projection.messages[2]).toMatchObject({ content: [{ kind: "text", text: "The file has been inspected." }] });
+    expect(projection.unsettledCalls).toEqual([]);
+    expect(projection.settledCallCount).toBe(1);
+  });
+
   it("rejects a next Controller turn while a prior call is unsettled", () => {
     const firstCall = modelCall("read", 0, "turn-1", "request-1");
     const secondTurn = modelTurn([], "turn-2", "request-2");

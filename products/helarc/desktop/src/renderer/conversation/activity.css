@@ -53,6 +53,9 @@ button.wb-activity-row:hover { color: #146346; background: #e7eee9; }
   white-space: nowrap;
 }
 .wb-activity-description small { color: #6a756e; overflow-wrap: anywhere; }
+.wb-activity-attribution { flex: 0 1 auto; max-width: 30%; font-size: 11px; line-height: 18px; overflow-wrap: anywhere; color: #53665a; }
+.wb-delegated-activity { margin-left: 22px; padding-left: 10px; border-left: 2px solid #d4dfd6; }
+.wb-delegated-activity:empty { display: none; }
 .wb-activity-kind, .wb-activity-row > svg { flex: 0 0 auto; margin-top: 2px; }
 .wb-activity-state { display: flex; align-items: center; gap: 5px; color: #70786f; max-width: 42%; }
 .wb-activity-state small { white-space: nowrap; font-variant-numeric: tabular-nums; }

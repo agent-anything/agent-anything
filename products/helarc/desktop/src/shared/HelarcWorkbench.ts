@@ -205,19 +205,29 @@ export interface TaskSummary {
   readonly hasPlan: boolean;
   readonly hasFinishedWork: boolean;
 }
-export interface ConversationActivityItem {
+export interface ConversationActivityRow {
   readonly id: string;
   readonly runId: string;
-  readonly kind: "command" | "operation";
+  readonly kind: "command" | "operation" | "model";
   readonly title: string;
   readonly attribution: string | null;
   readonly state: "ongoing" | "waiting" | "settled" | "inactive";
   readonly status: string;
   readonly startedAt: string | null;
   readonly endedAt: string | null;
+  readonly observedAt: string;
+}
+export interface ConversationDelegatedActivity {
+  readonly items: readonly ConversationActivityRow[];
+  readonly activeCount: number;
+  readonly omittedCount: number;
+  readonly retentionLimited: boolean;
+}
+export interface ConversationActivityItem extends ConversationActivityRow {
   readonly detail: { readonly kind: "command"; readonly executionId: string }
     | { readonly kind: "operation"; readonly itemId: string } | null;
   readonly child: { readonly scope: WorkbenchScope; readonly label: string; readonly status: string;
+    readonly displayName: string; readonly activity: ConversationDelegatedActivity | null;
     readonly relationship: "created" | "referenced" } | null;
 }
 export interface CurrentWorkPage {

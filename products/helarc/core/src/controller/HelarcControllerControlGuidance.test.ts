@@ -9,6 +9,7 @@ describe("Helarc Controller Control Guidance", () => {
     const definitions = createHelarcControllerControlDefinitions(
       HELARC_CONTROLLER_CONTROL_GUIDANCE,
       { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 },
+      false,
     );
 
     expect(definitions.map(({ name }) => name)).toEqual(["final_result", "update_plan"]);
@@ -37,10 +38,12 @@ describe("Helarc Controller Control Guidance", () => {
     const first = createHelarcControllerControlDefinitions(
       HELARC_CONTROLLER_CONTROL_GUIDANCE,
       { maxSteps: 8, maxStepLength: 500, maxExplanationLength: 2_000 },
+      false,
     );
     const second = createHelarcControllerControlDefinitions(
       HELARC_CONTROLLER_CONTROL_GUIDANCE,
       { maxSteps: 16, maxStepLength: 500, maxExplanationLength: 2_000 },
+      false,
     );
 
     expect(first).not.toEqual(second);
@@ -49,17 +52,28 @@ describe("Helarc Controller Control Guidance", () => {
     expect(Object.isFrozen(HELARC_CONTROLLER_CONTROL_GUIDANCE.entries)).toBe(true);
   });
 
-  it("guides timely and truthful Plan updates without requiring closure bookkeeping", () => {
+  it("requires a final snapshot only when a Plan exists", () => {
+    const limits = { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 };
+    const absent = createHelarcControllerControlDefinitions(HELARC_CONTROLLER_CONTROL_GUIDANCE, limits, false);
+    const present = createHelarcControllerControlDefinitions(HELARC_CONTROLLER_CONTROL_GUIDANCE, limits, true);
+    expect(absent[0]?.inputSchema.required).toEqual(["response"]);
+    expect(present[0]?.inputSchema.required).toEqual(["response", "plan"]);
+    expect(present[0]?.inputSchema.properties?.plan).toEqual(present[1]?.inputSchema.properties?.plan);
+    expect(absent[1]).toEqual(present[1]);
+  });
+
+  it("guides timely updates and an explicit final snapshot without requiring successful steps", () => {
     const definitions = createHelarcControllerControlDefinitions(
       HELARC_CONTROLLER_CONTROL_GUIDANCE,
       { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 },
+      true,
     );
 
     const definition = definitions.find(item => item.name === "update_plan");
     expect(definition?.description).toContain("after a step's outcome is established");
     expect(definition?.description).toContain("when work moves to another step");
     expect(definition?.description).toContain("when the scope or approach changes");
-    expect(definition?.description).toContain("update_plan and final_result may be submitted in the same turn");
+    expect(definition?.description).toContain("complete final Plan snapshot inside final_result");
     expect(definition?.description).toContain("Keep still-relevant unfinished work visible");
     expect(definition?.description).toContain("Never mark unfinished steps completed merely because the Run is ending");
     expect(definition?.description).toContain("Do not create a Plan solely to close the Run or repeat an unchanged update");

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { helarcSubtaskName } from "@agent-anything/helarc/run";
 import type {
   HelarcRunProjection,
   HelarcRunPresentationRecord,
@@ -496,7 +497,7 @@ function taskSummary(
     parentRunId: node.parentRunId,
     label: node.parentRunId === null
       ? label?.objective?.trim().slice(0, 160) || "Main task"
-      : label?.label ?? "Delegated work",
+      : `${helarcSubtaskName(p.product.presentation.labels, runId)}: ${label?.label ?? "Delegated work"}`,
     objective: node.parentRunId === null ? label?.objective ?? null : null,
     status: !live && node.terminal === null ? "inactive" : node.status,
     terminalCode: node.terminal?.code ?? null,

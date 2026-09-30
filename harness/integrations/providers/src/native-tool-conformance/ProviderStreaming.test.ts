@@ -112,6 +112,43 @@ describe.each(["ollama", "openai"] as const)("%s streaming", (format) => {
     expect(progress.filter((entry) => entry.kind === "settled")).toHaveLength(1);
   });
 
+  it.each([text, ""])("preserves calls when subsequent content is %j without fabricating prose", async (content) => {
+    const callFrame = format === "ollama"
+      ? ndjson({ done: false, message: { tool_calls: [{ function: call }] } })
+      : sse({ tool_calls: [{ index: 0, id: "call-1", type: "function", function: {
+        name: call.name, arguments: JSON.stringify(call.arguments),
+      } }] });
+    const contentFrames = [content.slice(0, 9), content.slice(9)].map(fragment => format === "ollama"
+      ? ndjson({ done: false, message: { content: fragment, thinking: "private analysis" } })
+      : sse({ content: fragment }));
+    const terminal = format === "ollama" ? ndjson({ done: true, done_reason: "stop" })
+      : sse({}, "tool_calls") + "data: [DONE]\n\n";
+    const progress: ProviderDeliveryProgress[] = [];
+    const provider = create(async () => response(body([callFrame, ...contentFrames, terminal].join(""), 1)));
+    const result = await provider.send(createNativeProviderRequest(provider, { instructions: { content: [] } }), context(), {
+      mode: "streaming", invocationId: "call-first", observer: { observe: event => { progress.push(event); } },
+    });
+
+    expect(result.kind).toBe("succeeded");
+    if (result.kind !== "succeeded" || result.response.kind !== "native_tool_turn") throw new Error("Expected native turn.");
+    const blocks = result.response.turn.assistant.content;
+    expect(blocks.map(block => block.kind)).toEqual(content ? ["text", "model_tool_call"] : ["model_tool_call"]);
+    expect(blocks.flatMap(block => block.kind === "text" ? [block.text] : [])).toEqual(content ? [content] : []);
+    expect(blocks.at(-1)).toMatchObject({ call: {
+      name: call.name, input: call.arguments, ordinal: content ? 1 : 0,
+      modelCallRef: { contentBlockOrdinal: content ? 1 : 0 },
+    } });
+    expect(progress[1]).toMatchObject({ kind: "tool_call_delta", partId: "call:0" });
+    const deltas = progress.filter(event => event.kind === "text_delta");
+    expect(deltas.map(event => event.text).join("")).toBe(content);
+    if (!content) expect(deltas).toEqual([]);
+    expect(progress.at(-1)).toMatchObject({ kind: "settled", disposition: "completed", parts: [
+      ...(content ? [{ partId: "text:0", contentBlockOrdinal: 0 }] : []),
+      { partId: "call:0", contentBlockOrdinal: content ? 1 : 0 },
+    ] });
+    expect(JSON.stringify({ result, progress })).not.toContain("private analysis");
+  });
+
   it.each(["throw", "reject", "pending"])("isolates a %s observer without delaying the response", async (behavior) => {
     const provider = create(async () => response(body(frames(format).join(""))));
     const result = await provider.send(createNativeProviderRequest(provider), context(), {

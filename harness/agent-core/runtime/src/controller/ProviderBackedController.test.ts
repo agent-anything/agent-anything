@@ -278,6 +278,21 @@ describe("ProviderBackedController", () => {
     ]) expect(() => validateControllerDecision(invalid as ControllerDecision, input)).toThrow();
   });
 
+  it("allows one state update to share ending provenance but not executable work or duplicate updates", () => {
+    const input = createControllerInput();
+    const final = modelCall("final-with-state", "product_end", 0);
+    const update = {kind: "state_transition" as const, transition: "plan_update" as const,
+      input: {plan: [{step: "Unfinished", status: "pending"}]}, modelCallRef: final.modelCallRef};
+    const decision: ControllerDecision = {kind: "propose_completion", output: {summary: "Partial"},
+      completionSource: {kind: "model_call", modelCallRef: final.modelCallRef},
+      candidates: [update], modelItems: modelCallItems([final])};
+    expect(validateControllerDecision(decision, input)).toMatchObject(decision);
+    expect(() => validateControllerDecision({...decision, candidates: [update, update]}, input)).toThrow();
+    expect(() => validateControllerDecision({...decision, candidates: [{kind: "tool_request", modelCallRef: final.modelCallRef,
+      tool: {name: "workspace.writeFile", revision: "1", input: {}, origin: "model", controllerRequestId: "request-1"}}]}, input)).toThrow();
+    expect(() => validateControllerDecision({...decision, candidates: [{...update, transition: "handoff"}]} as unknown as ControllerDecision, input)).toThrow();
+  });
+
   it("preserves trusted workflow provenance in generic Controller validation", () => {
     const input = createControllerInput();
     const call = modelCall("workflow_item_1", "workspace.createFile", 0);

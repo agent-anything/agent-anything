@@ -16,6 +16,7 @@ import { ResultLinks } from "../work/ResultContent.js";
 import { ConversationActivity } from "./ConversationActivity.js";
 import { useResponsePreview } from "./useResponsePreview.js";
 import { useConversationCapacity } from "./ConversationReadingBudget.js";
+import { modelResponseProgress } from "../../shared/ModelResponsePresentation.js";
 
 export interface ConversationContentProps {
   entries: readonly ConversationEntry[];
@@ -163,18 +164,8 @@ export function ModelResponseProgress({
   live: boolean;
 }) {
   const attempt = attempts.at(-1);
-  if (
-    !live ||
-    !attempt ||
-    !["receiving", "received", "validated"].includes(attempt.state)
-  )
-    return null;
-  const label =
-    attempt.state === "receiving"
-      ? attempt.parts.some((p) => p.receivedLength > 0)
-        ? "Receiving model response"
-        : "Waiting for model response"
-      : "Processing model response";
+  const label = live ? modelResponseProgress(attempt) : null;
+  if (!label) return null;
   return (
     <div className="wb-model-response-progress" role="status">
       <span>{label}</span>
@@ -281,7 +272,7 @@ function ConversationTurn({
               <ChildConversation
                 {...props}
                 child={child.scope}
-                label={child.label}
+                label={`${child.displayName}: ${child.label}`}
                 live={
                   props.live &&
                   !["completed", "failed", "cancelled", "inactive"].includes(

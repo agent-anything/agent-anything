@@ -21,6 +21,7 @@ describe("coalesced response publication", () => {
       controllerRequestId: "controller",
       invocationId: "attempt",
       revision: 1,
+      observedAt: "2026-09-30T00:00:00.000Z",
       deliverySequence: 1,
       mode: "streaming",
       state: "receiving",

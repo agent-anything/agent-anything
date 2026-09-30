@@ -2,6 +2,7 @@ import { HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE, HELARC_CALL_ADMISSI
 import { HELARC_NORMAL_COMPLETION_ACCEPTED_BASELINE, HELARC_NORMAL_COMPLETION_BASELINE_ACCEPTANCE } from "./baseline/HelarcNormalCompletionBaseline.js";
 import { HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE, HELARC_RUN_OWNED_COMMAND_BASELINE_ACCEPTANCE } from "./baseline/HelarcRunOwnedCommandBaseline.js";
 import { HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE, HELARC_EXPLICIT_FINAL_RESULT_BASELINE_ACCEPTANCE } from "./baseline/HelarcExplicitFinalResultBaseline.js";
+import { HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE, HELARC_FINAL_PLAN_SUBMISSION_BASELINE_ACCEPTANCE } from "./baseline/HelarcFinalPlanSubmissionBaseline.js";
 import { describe, expect, it } from "vitest";
 import { HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE, HELARC_CHILD_REPORT_TRANSFER_BASELINE_ACCEPTANCE } from "./baseline/HelarcChildReportTransferBaseline.js";
 import { HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE, HELARC_NORMAL_STOP_SETTLEMENT_BASELINE_ACCEPTANCE } from "./baseline/HelarcNormalStopSettlementBaseline.js";
@@ -100,7 +101,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the explicit final-result successor", async () => {
+  it("preserves accepted history and proves the final Plan submission successor", async () => {
     const baselines = [
       HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
       HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -129,21 +130,22 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       HELARC_CALL_ADMISSION_SCHEDULING_ACCEPTED_BASELINE,
       HELARC_NORMAL_COMPLETION_ACCEPTED_BASELINE,
       HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE,
+      HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
     ];
     const historyBefore = baselines.map((baseline) => JSON.stringify(baseline));
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE,
+      HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
+      HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE,
       candidate,
     );
 
     expect(predecessorComparison).toMatchObject({
       status: "incomparable",
-      differences: ["target_snapshot_ref", "target_manifest", "corpus_revision"],
+      differences: ["target_snapshot_ref", "target_manifest"],
     });
     expect(acceptedComparison.status, JSON.stringify(acceptedComparison, null, 2))
       .toBe("equivalent");
@@ -157,16 +159,19 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
     expect(baselines.map((baseline) => JSON.stringify(baseline))).toEqual(historyBefore);
     expect(candidate.report.ref)
-      .toEqual(HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.ref)
-      .toEqual(HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
+    expect(HELARC_FINAL_PLAN_SUBMISSION_BASELINE_ACCEPTANCE.predecessorReportRef)
+      .toEqual(HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.reportRef);
+    expect(Object.isFrozen(HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE)).toBe(true);
     expect(HELARC_EXPLICIT_FINAL_RESULT_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE.reportRef);
     expect(Object.isFrozen(HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE)).toBe(true);

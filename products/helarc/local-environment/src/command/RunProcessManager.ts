@@ -146,6 +146,10 @@ export class RunProcessManager {
   }
 
   get(runId: string, executionId: string): ProcessSnapshot { return this.find(runId, executionId).snapshot; }
+  getRunSnapshots(runId: string): readonly ProcessSnapshot[] {
+    return Object.freeze([...this.executions.values()]
+      .filter(entry => entry.input.runId === runId).map(entry => entry.snapshot));
+  }
   getDisplayDescriptor(runId: string, executionId: string) {
     const entry = this.find(runId, executionId);
     return { shell: entry.input.displayCommand?.shell ?? null, command: entry.input.displayCommand?.command ?? null };

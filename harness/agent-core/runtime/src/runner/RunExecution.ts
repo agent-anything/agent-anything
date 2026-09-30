@@ -532,6 +532,7 @@ export class RunExecution<TOutput> {
   private pendingCompletionCall: {
     readonly call: ModelToolCall;
     readonly turn: ControllerTurnRef;
+    stateResult: ModelToolResult | null;
   } | null = null;
   private readonly retryScopes = new Map<string, RunRetryWaitScope>();
   private readonly toolExposure: RunToolExposureCoordinator;
@@ -1189,7 +1190,7 @@ export class RunExecution<TOutput> {
         if (decision.decision.kind === "propose_completion" && decision.decision.completionSource.kind === "model_call") {
           const call = this.findModelToolCall(decision.decision.completionSource.modelCallRef);
           if (call === null) throw new TypeError("Completion call was not recorded.");
-          this.pendingCompletionCall = { call, turn: decision.turn };
+          this.pendingCompletionCall = { call, turn: decision.turn, stateResult: null };
         }
         const decisionRef = {owner:"runtime",kind:"contribution",id:`${decision.turn.id}:decision`,revision:String(decision.basisRevision)};
         this.flow.current?.output(decisionRef);
@@ -1485,9 +1486,14 @@ export class RunExecution<TOutput> {
       return null;
     }
     const keys = new Set(decision.candidates.map(candidate => modelCallRefKey(candidate.modelCallRef)));
+    const includesCompletionUpdate = decision.completionSource.kind === "model_call" &&
+      keys.delete(modelCallRefKey(decision.completionSource.modelCallRef));
+    const stateResult = this.pendingCompletionCall?.stateResult ?? null;
     const settlements = current.items.flatMap(item => item.payload.kind === "model_call_settlement" && keys.has(modelCallRefKey(item.payload.result.modelCallRef)) ? [item.payload.result] : []);
-    const failed = settlements.length !== keys.size || settlements.some(result => result.settlement !== "succeeded");
-    step.check("call_settlements", failed ? "not_satisfied" : "passed", {expected: keys.size, settled: settlements.length});
+    const failed = settlements.length !== keys.size || settlements.some(result => result.settlement !== "succeeded") ||
+      (includesCompletionUpdate && stateResult?.settlement !== "succeeded");
+    step.check("call_settlements", failed ? "not_satisfied" : "passed", {expected: keys.size, settled: settlements.length,
+      completionStateUpdate: includesCompletionUpdate ? stateResult?.settlement ?? "missing" : null});
     if (failed) {
       this.declineCompletion(turn, "completion_calls_not_successful", "One or more requests accompanying this final response did not succeed. Read their returned results before choosing a new action or final response; do not repeat successful calls unnecessarily.");
       return null;
@@ -1584,12 +1590,19 @@ export class RunExecution<TOutput> {
     const pending = this.pendingCompletionCall;
     if (pending === null) return;
     if (!this.hasModelCallSettlement(pending.call)) {
-      this.commitLocalModelCallResult(pending.call, settlement, {status: settlement, code}, [source ? {
+      this.commitLocalModelCallResult(pending.call, settlement, {
+        status: settlement, code,
+        ...(pending.stateResult === null ? {} : {stateUpdate: {
+          settlement: pending.stateResult.settlement, content: pending.stateResult.content,
+        }}),
+      }, [...(pending.stateResult?.sourceRefs ?? []), source ? {
         owner: source.owner, kind: source.kind, id: source.id, revision: source.revision,
       } : {
         owner: "agent-runtime", kind: "controller_turn", id: pending.turn.id, revision: String(pending.turn.sequence),
       }]);
     }
+    const actionRef = pending.stateResult?.sourceRefs.find(ref => ref.kind === "run_action");
+    if (actionRef !== undefined) this.closeModelCallFlow(actionRef.id, pending.call.modelCallRef.id, settlement);
     this.pendingCompletionCall = null;
   }
 
@@ -1640,6 +1653,12 @@ export class RunExecution<TOutput> {
     }
     if (this.hasModelCallSettlement(call)) {
       throw new TypeError("A Model Tool Call cannot settle more than once.");
+    }
+    const completing = this.pendingCompletionCall !== null &&
+      modelCallRefKey(this.pendingCompletionCall.call.modelCallRef) === modelCallRefKey(call.modelCallRef)
+      ? this.pendingCompletionCall : null;
+    if (completing !== null && completing.stateResult !== null) {
+      throw new TypeError("A completion call cannot apply more than one state transition.");
     }
     const observation = this.findRunActionObservation(action.ref);
     if (observation === null && fallback === null) {
@@ -1700,15 +1719,24 @@ export class RunExecution<TOutput> {
         sourceRefs,
       });
     }
+    // A state-maintaining ending call receives one result after its ending disposition.
+    if (completing !== null) {
+      completing.stateResult = result;
+      return;
+    }
     this.writer.commit({
       kind: "model_call_settlement",
       result,
     }, current => ({ status: this.statusAfterPendingChange(current, current.pending, action.ref.id) }));
-    const flow = this.actionFlows.get(action.ref.id);
-    flow?.advance("settlement", {settlement: result.settlement, callId: call.modelCallRef.id}, [{owner:"runtime",kind:"call",id:call.modelCallRef.id,revision:null}]).check("single_settlement", "passed");
-    flow?.current?.output({owner:"runtime",kind:"call",id:call.modelCallRef.id,revision:null});
-    flow?.close(result.settlement === "cancelled" ? "cancelled" : result.settlement === "failed" ? "failed" : "returned");
-    this.actionFlows.delete(action.ref.id);
+    this.closeModelCallFlow(action.ref.id, call.modelCallRef.id, result.settlement);
+  }
+
+  private closeModelCallFlow(actionId: string, callId: string, settlement: ModelCallSettlementKind): void {
+    const flow = this.actionFlows.get(actionId);
+    flow?.advance("settlement", {settlement, callId}, [{owner:"runtime",kind:"call",id:callId,revision:null}]).check("single_settlement", "passed");
+    flow?.current?.output({owner:"runtime",kind:"call",id:callId,revision:null});
+    flow?.close(settlement === "cancelled" ? "cancelled" : settlement === "failed" ? "failed" : "returned");
+    this.actionFlows.delete(actionId);
   }
 
   private settleUnprocessedModelCalls(
@@ -1747,6 +1775,11 @@ export class RunExecution<TOutput> {
   ): void {
     const call = this.findModelToolCall(candidate.modelCallRef);
     if (call === null || this.hasModelCallSettlement(call)) return;
+    if (this.pendingCompletionCall !== null &&
+      modelCallRefKey(this.pendingCompletionCall.call.modelCallRef) === modelCallRefKey(call.modelCallRef)) {
+      this.settleCompletionCall(settlement, code);
+      return;
+    }
     this.commitLocalModelCallResult(call, settlement, {
       status: settlement,
       code,
@@ -1914,16 +1947,9 @@ export class RunExecution<TOutput> {
         state.deadlineAt,
       );
       const validityStep = flow.advance("validity");
-      let currentExposure;
-      try {
-        currentExposure = await this.toolExposure.resolve(turn.id);
-      } catch (error) {
-        if (!(error instanceof ToolExposureBasisChangedError)) throw error;
-        currentExposure = null;
-      }
-      const stale = currentExposure === null ||
-        this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== state.revision ||
-        currentExposure.exposure.basis.revision !== resolvedExposure.exposure.basis.revision ||
+      // Exposure is request provenance. Live availability is checked on each
+      // selected binding before materialization, not on unrelated catalog paths.
+      const stale = this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== state.revision ||
         this.interactionSettlements.length > 0 ||
         this.steeringQueue.length > 0 ||
         this.config.cancellation.context.request !== null;
@@ -1948,7 +1974,7 @@ export class RunExecution<TOutput> {
           turnId: turn.id,
           iteration,
           status: "interrupted",
-          code: "tool_exposure_basis_stale",
+          code: "controller_decision_basis_stale",
           decisionKind: null,
         });
         return null;

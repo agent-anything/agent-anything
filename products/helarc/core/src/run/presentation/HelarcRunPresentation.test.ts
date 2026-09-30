@@ -6,6 +6,7 @@ import {
   createHelarcRunPresentation,
   labelHelarcRunPresentation,
   projectHelarcPresentationValue,
+  helarcSubtaskName,
 } from "./HelarcRunPresentation.js";
 
 const at = "2026-09-18T00:00:00.000Z";
@@ -36,6 +37,35 @@ const call = {
 };
 
 describe("Run presentation", () => {
+  it("retains sibling numbers through reordered labels, completion, and persisted reload", () => {
+    let state = labelHelarcRunPresentation(createHelarcRunPresentation(), "root", {kind: "root", root: {id: "root"}, depth: 0}, "Task");
+    const add = (id: string, parent = "root") => {
+      state = labelHelarcRunPresentation(state, id, {
+        kind: "descendant", root: {id: "root"}, parent: {id: parent}, depth: parent === "root" ? 1 : 2,
+        parentRunAction: {id: `create-${id}`, run: {id: parent}, sequence: 1}, relation: {id: `relation-${id}`},
+      }, "Task");
+    };
+    add("a"); add("b"); add("nested", "a");
+    expect(["a", "b", "nested"].map(id => helarcSubtaskName(state.labels, id))).toEqual(["Subtask 1", "Subtask 2", "Subtask 1.1"]);
+    state = {...state, labels: [...state.labels].reverse(), records: [], activeCalls: []};
+    add("a");
+    state = JSON.parse(JSON.stringify(state));
+    add("c"); add("next-nested", "a");
+    expect(["a", "b", "c", "nested", "next-nested"].map(id => helarcSubtaskName(state.labels, id)))
+      .toEqual(["Subtask 1", "Subtask 2", "Subtask 3", "Subtask 1.1", "Subtask 1.2"]);
+    expect(helarcSubtaskName(state.labels, "root")).toBe("Main task");
+  });
+  it("does not invent a path when ancestors are not yet available", () => {
+    const child = labelHelarcRunPresentation(createHelarcRunPresentation(), "child", {
+      kind: "descendant", root: {id: "root"}, parent: {id: "root"}, depth: 1,
+      parentRunAction: {id: "create", run: {id: "root"}, sequence: 1}, relation: {id: "relation"},
+    }, "Task");
+    expect(helarcSubtaskName(child.labels, "child")).toBe("Subtask");
+    const labeled = labelHelarcRunPresentation(child, "root", {kind: "root", root: {id: "root"}, depth: 0}, "Task");
+    expect(helarcSubtaskName(labeled.labels, "child")).toBe("Subtask 1");
+    expect(labeled.labels.find(label => label.runId === "child")).toBe(child.labels[0]);
+    expect(helarcSubtaskName([{...child.labels[0]!, parentRunId: "child"}], "child")).toBe("Subtask");
+  });
   it.each(["completed", "failed", "cancelled"])("retains final candidates separately from commentary until %s terminalization", terminal => {
     let state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {
       kind: "controller_turn", modelItems: [

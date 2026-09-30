@@ -48,6 +48,17 @@ function interpreted(
 }
 describe("response display previews", () => {
   afterEach(() => vi.useRealTimers());
+  it("timestamps actual observations without a reader changing their recency", () => {
+    let at = "2026-09-30T00:00:00.000Z";
+    const store = new HelarcResponsePreviewStore(() => {}, () => at);
+    store.observe(delivery(1, {kind: "started", mode: "streaming"}, "child"));
+    expect(store.snapshot().attempts[0]?.observedAt).toBe(at);
+    at = "2026-09-30T00:00:01.000Z";
+    expect(store.snapshot().attempts[0]?.observedAt).not.toBe(at);
+    store.observe(delivery(2, {kind: "text_delta", partId: "text:0", offset: 0, text: "Reading"}, "child"));
+    expect(store.snapshot().attempts[0]?.observedAt).toBe(at);
+    store.close();
+  });
   it("streams only request-bound final controls and reconciles full arguments without calling them final", () => {
     const store = new HelarcResponsePreviewStore(() => {});
     store.bindRequest("root", "root:request", { bindings: [

@@ -1,6 +1,6 @@
 import {
   HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
-  HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE,
+  HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
@@ -17,11 +17,11 @@ const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
 const agentHooks = await runAgentHookDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
-  HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE,
+  HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
+  HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE,
   systemCandidate,
 );
 
@@ -29,12 +29,12 @@ process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
   kind: "context_continuity_and_helarc_evaluation_candidate",
   predecessor: {
-    reportRef: HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_RUN_OWNED_COMMAND_ACCEPTED_BASELINE.acceptanceRef,
-  },
-  acceptedSuccessor: {
     reportRef: HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.reportRef,
     acceptanceRef: HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.acceptanceRef,
+  },
+  acceptedSuccessor: {
+    reportRef: HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),

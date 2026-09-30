@@ -1096,9 +1096,18 @@ export function validateControllerDecision<TOutput>(
       const remainingCalls = new Map(modelCalls);
       if (candidate.completionSource.kind === "model_call") {
         const modelCallRef = snapshotModelCallRef(candidate.completionSource.modelCallRef);
-        if (!remainingCalls.delete(modelCallRefKey(modelCallRef))) {
+        const key = modelCallRefKey(modelCallRef);
+        if (!remainingCalls.has(key)) {
           throw decisionContractError("controller_completion_source_invalid");
         }
+        const sourceCandidates = Array.isArray(candidate.candidates)
+          ? candidate.candidates.filter(item => isRecord(item) && isRecord(item.modelCallRef) &&
+              modelCallRefKey(snapshotModelCallRef(item.modelCallRef as unknown as ModelCallRef)) === key)
+          : [];
+        if (sourceCandidates.some(item => item.kind !== "state_transition" || item.transition !== "plan_update")) {
+          throw decisionContractError("controller_completion_source_candidate_invalid");
+        }
+        if (sourceCandidates.length === 0) remainingCalls.delete(key);
         completionSource = Object.freeze({ kind: "model_call", modelCallRef });
       } else if (candidate.completionSource.kind === "controller") {
         completionSource = Object.freeze({ kind: "controller" });

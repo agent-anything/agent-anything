@@ -6,9 +6,12 @@ import {
   ChevronUp,
   Terminal,
   Wrench,
+  MessageSquare,
 } from "lucide-react";
 import type {
   ConversationActivityItem,
+  ConversationActivityRow,
+  ConversationDelegatedActivity,
   WorkbenchScope,
 } from "../../shared/HelarcWorkbench.js";
 import { CommandOutput } from "../work/CommandOutput.js";
@@ -48,7 +51,12 @@ export function ConversationActivity({
           i.child.status,
         )),
   );
-  const summary = current[0] ?? items.at(-1);
+  const facts = items.flatMap(item => item.child?.relationship === "created"
+    ? item.child.activity?.items ?? [] : item.state === "ongoing" ? [item] : [])
+    .sort((a, b) => b.observedAt.localeCompare(a.observedAt) || a.id.localeCompare(b.id));
+  const activeCount = items.reduce((total, item) => total + (item.child?.relationship === "created"
+    ? item.child.activity?.activeCount ?? 0 : item.state === "ongoing" ? 1 : 0), 0);
+  const summary = facts[0] ?? current[0] ?? items.at(-1);
   if (!summary) return null;
   if (!count)
     return (
@@ -65,10 +73,10 @@ export function ConversationActivity({
         {!open && (
           <div className="wb-activity-row wb-activity-summary">
             <ActivityContents item={summary} visible={visible} pulse />
-            {items.length > 1 && (
+            {(items.length > 1 || activeCount > 1) && (
               <small className="wb-activity-count">
-                {current.length ? `${current.length} active / ` : ""}
-                {items.length} operations
+                {activeCount > 1 && items.some(item => item.child?.activity?.activeCount)
+                  ? `+${activeCount - 1} active` : `${items.length} operations`}
               </small>
             )}
           </div>
@@ -103,6 +111,9 @@ export function ConversationActivity({
                       )}
                     </span>
                   </button>
+                  {item.child?.activity && (
+                    <DelegatedActivityRows activity={item.child.activity} visible={visible} />
+                  )}
                   {expandedItem && (
                     <div className="wb-activity-content">
                       {item.detail?.kind === "command" ? (
@@ -169,11 +180,11 @@ function ActivityContents({
   visible,
   pulse = false,
 }: {
-  item: ConversationActivityItem;
+  item: ConversationActivityRow & { readonly child?: ConversationActivityItem["child"] };
   visible: boolean;
   pulse?: boolean;
 }) {
-  const Icon = item.kind === "command" ? Terminal : Wrench;
+  const Icon = item.kind === "command" ? Terminal : item.kind === "model" ? MessageSquare : Wrench;
   const active =
     visible &&
     (item.state === "ongoing" ||
@@ -184,6 +195,7 @@ function ActivityContents({
   return (
     <>
       <Icon size={14} className="wb-activity-kind" />
+      {item.attribution && <strong className="wb-activity-attribution">{item.attribution}</strong>}
       <span className="wb-activity-description">
         <span
           className={
@@ -210,6 +222,17 @@ function ActivityContents({
       </span>
     </>
   );
+}
+
+function DelegatedActivityRows({activity, visible}: {activity: ConversationDelegatedActivity; visible: boolean}) {
+  const count = useConversationCapacity("rows", activity.items.length);
+  return <div className="wb-delegated-activity">
+    {activity.items.slice(0, count).map(item => <div className="wb-activity-row" key={item.id}>
+      <ActivityContents item={item} visible={visible} />
+    </div>)}
+    {activity.activeCount > count && <p className="wb-muted">{activity.activeCount - count} more active items are not shown.</p>}
+    {activity.retentionLimited && <p className="wb-muted">Some activity records are no longer retained.</p>}
+  </div>;
 }
 
 function ActivityCommand({

@@ -730,17 +730,20 @@ describe("Runner semantic integration", () => {
     }
   });
 
-  it.each(["advance", "plan_request", "propose_completion"] as const)("discards a stale %s Controller response", async (decisionKind) => {
+  it.each((["advance", "plan_request", "propose_completion"] as const).flatMap(kind =>
+    [false, true].map(revoked => [kind, revoked] as const)
+  ))("retains a %s response across availability changes (revoked=%s)", async (decisionKind, revoked) => {
     const operation = operationRef("read-file");
     let ownerRevision = 1;
     const entered = deferred<void>();
     const release = deferred<void>();
+    const handler = internalHandler("handler.read-file", "code-workspace", { content: "hello" });
     const operations = createOperationFixture([
       operationSpec(operation, "internal", {
         requestOrigins: ["tool_request"],
         handlerId: "handler.read-file",
       }),
-    ], [], {
+    ], [handler], {
       availability: [Object.freeze({
         binding: { operation, revision: "binding-1" },
         assess: () => Object.freeze({
@@ -750,8 +753,8 @@ describe("Runner semantic integration", () => {
             id: "workspace",
             revision: String(ownerRevision),
           })]),
-          disposition: "available" as const,
-          reason: null,
+          disposition: revoked && ownerRevision > 1 ? "unavailable" as const : "available" as const,
+          reason: revoked && ownerRevision > 1 ? "binding_inactive" as const : null,
         }),
       })],
     });
@@ -762,17 +765,17 @@ describe("Runner semantic integration", () => {
         await release.promise;
         if (decisionKind === "propose_completion") return { candidates: [], completionSource: {kind: "controller" as const},
           kind: "propose_completion",
-          output: {summary: "Stale stopping basis"},
-          modelItems: modelTextItems("stale-model-item", "Stop now"),
+          output: {summary: "Valid ending proposal"},
+          modelItems: modelTextItems("retained-model-item", "Stop now"),
         };
         if (decisionKind === "plan_request") return updateState({
-          plan: [{ step: "Do not apply stale Plan", status: "in_progress" }],
-        }, "stale-model-item");
+          plan: [{ step: "Retain Plan update", status: "in_progress" }],
+        }, "retained-model-item");
         return advance([toolCandidate(
           "codeAgent.readFile",
           { path: "README.md" },
           input.toolExposure.controllerRequestId,
-        )], "stale-model-item");
+        )], "retained-model-item");
       },
       complete("Fresh response accepted", "fresh-model-item"),
     ]);
@@ -788,15 +791,20 @@ describe("Runner semantic integration", () => {
     const result = await pending;
 
     expect(result.status).toBe("completed");
-    expect(controller.calls).toHaveLength(2);
+    expect(controller.calls).toHaveLength(decisionKind === "propose_completion" ? 1 : 2);
     expect(result.items).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({
         kind: "controller_turn",
-        status: "interrupted",
-        modelItems: [],
+        status: "decided",
       }),
     }));
-    expect(JSON.stringify(result.items)).not.toContain("stale-model-item");
+    expect(JSON.stringify(result.items)).toContain("retained-model-item");
+    expect(handler.execute).toHaveBeenCalledTimes(decisionKind === "advance" && !revoked ? 1 : 0);
+    if (decisionKind === "advance") {
+      expect(result.items.flatMap(({ payload }) =>
+        payload.kind === "model_call_settlement" ? [payload.result] : []
+      )).toMatchObject([{ settlement: revoked ? "invalid" : "succeeded" }]);
+    }
   });
 
   it.each([false, true])("revalidates only selected availability after owner revision changes (revoked=%s)", async (revoked) => {
@@ -2511,6 +2519,107 @@ describe("Runner semantic integration", () => {
     expect(result.items.some(item => item.payload.kind === "run_action" && item.payload.action.provenance.kind === "controller" &&
       item.payload.action.provenance.modelCallRef.id === "same-turn:final")).toBe(false);
     expect(result.items.some(item => item.payload.kind === "completion_acceptance" && item.payload.completionSource.kind === "model_call")).toBe(true);
+  });
+
+  it.each(["completed", "pending", "in_progress"])("applies an embedded %s Plan and settles the ending call exactly once", async status => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([completionWithPlan([{step: "Inspect", status}], "Final", "embedded")]);
+    Object.assign(controller, {beforeCompletion: async (input: import("../controller/index.js").ControllerCompletionInput<TestOutput>) => {
+      expect(input.current.plan?.steps).toEqual([{step: "Inspect", status}]);
+      expect(input.current.interaction.unsettledCalls).toHaveLength(1);
+      expect(input.settlements).toEqual([]);
+      return {kind: "allow"};
+    }});
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(controller.calls).toHaveLength(1);
+    const settlements = result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result] : []);
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]).toMatchObject({name: "final_result", settlement: "succeeded",
+      content: {code: "completion_candidate_accepted", stateUpdate: {settlement: "succeeded", content: {kind: "plan_update"}}}});
+    expect(settlements[0]?.sourceRefs.map(ref => ref.kind)).toEqual(["run_action", "run_observation", "run_completion_acceptance"]);
+    const plans = result.items.flatMap(item => item.payload.kind === "state_transition" && item.payload.transition === "plan" ? [item.payload.plan] : []);
+    expect(plans.at(-1)).toMatchObject({status: status === "completed" ? "completed" : "abandoned", steps: [{step: "Inspect", status}]});
+  });
+
+  it.each([
+    {plan: []},
+    {plan: [{step: "", status: "completed"}]},
+    {plan: [{step: "Inspect", status: "unknown"}]},
+    {plan: [{step: "A", status: "in_progress"}, {step: "B", status: "in_progress"}]},
+  ])("returns invalid embedded Plan facts before accepting a corrected final: $plan", async ({plan}) => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([
+      completionWithPlan(plan, "Invalid", "invalid-embedded"),
+      input => {
+        expect(input.plan).toBeNull();
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        expect(input.interaction.messages.filter(message => message.role === "tool")).toMatchObject([
+          {content: [{result: {settlement: "invalidated", content: {stateUpdate: {settlement: "invalid"}}}}]},
+        ]);
+        return completionWithPlan([{step: "Inspect", status: "pending"}], "Cannot finish", "corrected-embedded");
+      },
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.finalOutput).toEqual({summary: "Cannot finish"});
+    expect(result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result.settlement] : []))
+      .toEqual(["invalidated", "succeeded"]);
+  });
+
+  it("retains the embedded Plan when completion feedback requests another turn, without replay", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([
+      completionWithPlan([{step: "Inspect", status: "pending"}], "First", "embedded-feedback"),
+      input => {
+        expect(input.plan).toMatchObject({version: 1, steps: [{step: "Inspect", status: "pending"}]});
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        return completionWithPlan([{step: "Inspect", status: "pending"}], "Unchanged", "embedded-unchanged");
+      },
+    ]);
+    let calls = 0;
+    Object.assign(controller, {beforeCompletion: async () => ++calls === 1
+      ? {kind: "continue_with_feedback", feedback: {source: {owner: "test", kind: "ending", id: "feedback", revision: "1"}, code: "continue", message: "Consider current results."}}
+      : {kind: "allow"}});
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    const results = result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result] : []);
+    expect(results.map(item => item.settlement)).toEqual(["invalidated", "succeeded"]);
+    expect(results[1]?.content).toMatchObject({stateUpdate: {content: {result: {status: "no_change"}}}});
+    expect(result.items.filter(item => item.payload.kind === "state_transition" && item.payload.transition === "plan")).toHaveLength(2);
+  });
+
+  it("cancels the ending call after applying its Plan without a premature success result", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([completionWithPlan([{step: "Inspect", status: "completed"}], "Final", "cancel-embedded")]);
+    const entered = deferred<void>(), release = deferred<void>();
+    Object.assign(controller, {beforeCompletion: async () => {entered.resolve(); await release.promise; return {kind: "allow"};}});
+    const handle = createRunner(controller, operations).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await entered.promise;
+    handle.cancel({origin: "user", reasonCode: "user_requested"});
+    release.resolve();
+    const result = await handle.wait();
+    expect(result.status).toBe("cancelled");
+    const settlements = result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result] : []);
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]).toMatchObject({settlement: "cancelled", content: {stateUpdate: {settlement: "succeeded"}}});
+    expect(result.items.some(item => item.payload.kind === "completion_acceptance")).toBe(false);
+  });
+
+  it.each([false, true])("does not accept an embedded final when an accompanying call fails (final first: %s)", async finalFirst => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([
+      completionWithPlan([{step: "Inspect", status: "completed"}], "Premature", "embedded-co-failure", [
+        {kind: "model_call_rejection", name: "unavailable", code: "unknown", message: "Unavailable call."},
+      ], finalFirst),
+      completionWithCalls([], "Limitations acknowledged", "embedded-co-corrected"),
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.finalOutput).toEqual({summary: "Limitations acknowledged"});
+    const settlements = result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result] : []);
+    expect(settlements.map(item => item.settlement)).toEqual(["invalid", "invalidated", "succeeded"]);
+    expect(settlements[1]?.content).toMatchObject({stateUpdate: {settlement: "succeeded"}});
   });
 
   it("returns failed co-calls before a new final proposal without making historical failures an ending gate", async () => {
@@ -4337,6 +4446,20 @@ function completionWithCalls(candidates: readonly Readonly<Record<string, unknow
       finish: {kind: "normal"}, usage: null, responseRef: {providerId: "scripted-controller", requestId: providerRequestId, responseId: `${id}:response`}})};
 }
 
+function completionWithPlan(
+  plan: readonly {step: string; status: string}[], summary: string, id: string,
+  coCalls: readonly Readonly<Record<string, unknown>>[] = [], finalFirst = false,
+): ControllerDecision<TestOutput> {
+  const decision = completionWithCalls(coCalls, summary, id, finalFirst);
+  if (decision.kind !== "propose_completion" || decision.completionSource.kind !== "model_call") throw new Error("Expected model completion.");
+  const ref = decision.completionSource.modelCallRef;
+  return {...decision, candidates: [...decision.candidates, {
+    kind: "state_transition" as const, transition: "plan_update" as const, input: {plan}, modelCallRef: ref,
+  }].sort((left, right) => left.modelCallRef.contentBlockOrdinal - right.modelCallRef.contentBlockOrdinal),
+  modelItems: decision.modelItems.map(item => item.kind === "model_tool_call" && item.call.modelCallRef.id === ref.id
+    ? {...item, call: {...item.call, input: {response: summary, plan: plan.map(step => ({...step}))}}} : item)};
+}
+
 function operationCandidate(operation: OperationRevisionRef, request: unknown) {
   return {
     kind: "operation_request" as const,
@@ -4429,6 +4552,9 @@ function candidateModelToolCall(
       { subject: candidate.subject as ModelJsonValue },
       ordinal,
     );
+  }
+  if (candidate.kind === "model_call_rejection") {
+    return scriptedModelToolCall(candidate.modelCallRef, String(candidate.name), {}, ordinal);
   }
   throw new TypeError("Unsupported scripted Controller candidate.");
 }

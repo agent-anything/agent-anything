@@ -55,6 +55,9 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
     readonly revision: string;
   };
   readonly taskStopBinding: OperationBindingRevisionRef;
+  readonly taskState: {
+    getRunSnapshots(runId: string): readonly import("../controller/HelarcCommandState.js").HelarcCommandStateSnapshot[];
+  };
   readonly taskAvailability: {
     getRunAvailability(runId: string): {
       readonly revision: number;

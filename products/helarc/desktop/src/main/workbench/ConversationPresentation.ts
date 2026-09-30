@@ -2,8 +2,8 @@ import type {
   HelarcModelItemOrigin,
   HelarcRunProjection,
   HelarcRunPresentationRecord,
-  HelarcCommandProgress,
 } from "@agent-anything/helarc/run";
+import { helarcSubtaskName } from "@agent-anything/helarc/run";
 import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
 import type * as D from "../../shared/HelarcWorkbench.js";
 import {
@@ -12,6 +12,8 @@ import {
 } from "./WorkbenchOperationPresentation.js";
 import { workbenchInteractionText } from "./WorkbenchInteractionPresentation.js";
 import { textPage } from "./WorkbenchReadLimits.js";
+import { commandActivity } from "./ConversationCommandPresentation.js";
+import { conversationDelegatedActivity } from "./ConversationDelegatedActivity.js";
 
 const ended = (status: string) =>
   ["completed", "failed", "cancelled"].includes(status);
@@ -189,7 +191,9 @@ export function presentConversationWork(
                 ?.label ??
               "Delegated task",
           ),
-          status: !live && !ended(node.status) ? "inactive" : node.status,
+          status: !active && !ended(node.status) ? "inactive" : node.status,
+          displayName: helarcSubtaskName(p.product.presentation.labels, node.runId),
+          activity: created ? conversationDelegatedActivity(p, node.runId, live) : null,
           relationship: created ? "created" : "referenced",
         }
       : null;
@@ -197,9 +201,9 @@ export function presentConversationWork(
       id: `call:${runId}:${o.modelItemId}`,
       runId,
       kind: "operation",
-      title: call
+      title: child ? `${child.displayName}: ${child.label}` : call
         ? workbenchOperationTitle(call)
-        : (child?.label ?? "Operation details no longer retained"),
+        : "Operation details no longer retained",
       attribution: null,
       state: call?.settlement ? "settled" : active ? "ongoing" : "inactive",
       status: call?.settlement
@@ -209,6 +213,7 @@ export function presentConversationWork(
           : "No recorded result",
       startedAt: null,
       endedAt: null,
+      observedAt: r?.observedAt ?? node?.startedAt ?? "",
       detail: r ? { kind: "operation", itemId: r.id } : null,
       child,
     };
@@ -321,40 +326,5 @@ export function presentConversationWork(
     turns: [...turns.values()].filter((t) => t.blocks.length),
     notices,
     placedMessages,
-  };
-}
-
-function commandActivity(
-  c: HelarcCommandProgress,
-  active: boolean,
-): D.ConversationActivityItem {
-  const phases: Record<string, string> = {
-    starting: "Starting",
-    running: "Running",
-    draining: "Finishing output capture",
-    stopping: "Stopping",
-    terminating: "Stopping",
-    unresolved: "Process state unresolved",
-  };
-  const phase = phases[c.phase] ?? "Execution pending";
-  const settled = c.phase === "settled";
-  return {
-    id: c.executionId,
-    runId: c.runId,
-    kind: "command",
-    title: short(c.command ?? "Shell command"),
-    attribution: null,
-    state: settled ? "settled" : active ? "ongoing" : "inactive",
-    status: settled
-      ? c.exitCode != null
-        ? `Exited with code ${c.exitCode}`
-        : `Ended: ${c.outcome ?? "status unavailable"}`
-      : active
-        ? phase
-        : `Last observed: ${phase}`,
-    startedAt: c.startedAt ?? null,
-    endedAt: c.completedAt ?? null,
-    detail: { kind: "command", executionId: c.executionId },
-    child: null,
   };
 }

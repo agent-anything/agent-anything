@@ -38,6 +38,7 @@ import { isWorkbenchOperation } from "../workbench/WorkbenchOperationPresentatio
 import { CommandOutputRegistry } from "../workbench/CommandOutputRegistry.js";
 import {
   prepareHelarcHostRun,
+  type HelarcHostActiveRun,
   type PrepareHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";
 
@@ -606,7 +607,7 @@ describe("Helarc Host Run composition", () => {
         plan: [{ step: "Inspect and report", status: "completed" }],
         assistantTexts: hasReport ? ["SDK inspection findings.", "Build and run commands."] : [],
       },
-      { kind: "completion", summary: finalText },
+      { kind: "completion", summary: finalText, plan: [{ step: "Inspect and report", status: "completed" }] },
       { kind: "completion", summary: "Parent received the Child result." },
     ]);
     const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
@@ -953,6 +954,7 @@ describe("Helarc Host Run composition", () => {
       ...createTask(workspaceRoot),
       provider,
       permissionPreset: "full_access",
+      instructionSettings: createDefaultHelarcInstructionSettings(),
     });
 
     expect(result.product.status, JSON.stringify(result, null, 2)).toBe("completed");
@@ -974,6 +976,57 @@ describe("Helarc Host Run composition", () => {
       }),
     ]);
     expect(provider.lastControllerInputContexts).toEqual([0, 3, 4]);
+    expect(provider.requests).toHaveLength(3);
+    const stateSection = (request: ProviderRequest) => request.composition.sections.find(
+      section => section.id === "helarc:model-input:command-state",
+    );
+    expect(stateSection(provider.requests[0]!)).toBeUndefined();
+    const runningState = stateSection(provider.requests[1]!)!;
+    const stoppedState = stateSection(provider.requests[2]!)!;
+    expect(runningState).toMatchObject({ role: "user", necessity: "mandatory" });
+    expect(JSON.stringify(runningState)).toContain('\\"phase\\":\\"running\\"');
+    expect(JSON.stringify(stoppedState)).toContain('\\"outcome\\":\\"cancelled\\"');
+    expect(stoppedState.source.revision).not.toBe(runningState.source.revision);
+    const priorResults = provider.requests[1]!.messages.filter(message => message.role === "tool");
+    const subsequentResults = provider.requests[2]!.messages.filter(message => message.role === "tool");
+    expect(subsequentResults.slice(0, priorResults.length)).toEqual(priorResults);
+    expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
+  });
+
+  it("delivers asynchronous timeout facts without TaskOutput or discarding a concurrent model response", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-late-command-state-"));
+    let active: HelarcHostActiveRun;
+    const provider = new ScriptedProvider([
+      { kind: "tool_call", toolName: nativeShellTool(), input: {
+        command: process.platform === "win32" ? "Start-Sleep -Seconds 30" : "sleep 30",
+        run_in_background: true, timeout_ms: 2_000,
+      } },
+      { kind: "plan_update", plan: [{ step: "Observe current command state", status: "in_progress" }] },
+      { kind: "completion", summary: "The command timed out.", plan: [{ step: "Observe current command state", status: "completed" }] },
+    ], async () => {
+      if (provider.requests.length === 2) {
+        await expect.poll(() => active.getProductProjection().commands[0]?.phase, { timeout: 5_000 }).toBe("settled");
+      }
+    });
+    const prepared = await prepareTestHostRun({
+      ...createTask(workspaceRoot), provider, permissionPreset: "full_access",
+      instructionSettings: createDefaultHelarcInstructionSettings(),
+    });
+    const execution = prepared.start();
+    active = execution.activeRun;
+    const result = await execution.result;
+
+    expect(result.runResult.status, JSON.stringify(result.product.output.safeErrors)).toBe("completed");
+    expect(provider.requests).toHaveLength(3);
+    const currentState = (request: ProviderRequest) => request.composition.sections.find(
+      section => section.id === "helarc:model-input:command-state",
+    )?.content;
+    expect(currentState(provider.requests[1]!)).toMatchObject({kind: "text", text: expect.stringContaining('"phase":"running"')});
+    expect(currentState(provider.requests[2]!)).toMatchObject({kind: "text", text: expect.stringContaining('"outcome":"timed_out"')});
+    const oldResults = provider.requests[1]!.messages.filter(message => message.role === "tool");
+    expect(provider.requests[2]!.messages.filter(message => message.role === "tool").slice(0, oldResults.length)).toEqual(oldResults);
+    expect(operationResults(result).some(operation => operation.binding.operation.operation.name === "task-output")).toBe(false);
+    expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
   });
 
   it("retrieves a retained command through TaskOutput without launching it again", async () => {
@@ -997,7 +1050,62 @@ describe("Helarc Host Run composition", () => {
     expect(observations[0]?.lowerRefs[0]?.id).not.toBe(observations[1]?.lowerRefs[0]?.id);
   });
 
-  it("ends with an unfinished Plan without an extra model request or completion feedback", async () => {
+  it("submits the final Plan and reply together without another model request or enabled instructions", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-final-plan-"));
+    const provider = new ScriptedProvider([
+      { kind: "plan_update", plan: [{ step: "Inspect workspace", status: "in_progress" }] },
+      { kind: "completion", summary: "Inspection is complete.", plan: [{ step: "Inspect workspace", status: "completed" }] },
+    ]);
+    const result = await executeReadOnlyTestHostRun({
+      ...createTask(workspaceRoot), provider, instructionSettings: createDefaultHelarcInstructionSettings(),
+    });
+
+    expect(result.runResult.status).toBe("completed");
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.stopRequests).toHaveLength(0);
+    expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
+    const required = provider.requests.map(request => request.interaction.kind === "native_tool_turn"
+      ? request.interaction.callables.find(call => call.name === "final_result")?.inputSchema.required : null);
+    expect(required).toEqual([["response"], ["response", "plan"]]);
+    const plans = result.runResult.items.flatMap(({ payload }) => payload.kind === "state_transition" && payload.transition === "plan" ? [payload.plan] : []);
+    expect(plans).toHaveLength(2);
+    expect(plans.at(-1)).toMatchObject({status: "completed", steps: [{step: "Inspect workspace", status: "completed"}]});
+    const endingCalls = result.runResult.items.flatMap(({ payload }) => payload.kind === "model_call_settlement" && payload.result.name === "final_result" ? [payload.result] : []);
+    expect(endingCalls).toHaveLength(1);
+    expect(endingCalls[0]).toMatchObject({settlement: "succeeded", content: {stateUpdate: {settlement: "succeeded"}}});
+    expect(result.product.output.agentSummary).toBe("Inspection is complete.");
+  });
+
+  it("corrects an omitted final Plan without replaying a successful accompanying call", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-final-plan-correction-"));
+    await writeFile(join(workspaceRoot, "finding.txt"), "Retained finding.", "utf8");
+    const provider = new ScriptedProvider([
+      { kind: "plan_update", plan: [{step: "Inspect workspace", status: "in_progress"}] },
+      { kind: "tool_calls", calls: [
+        {kind: "tool_call", toolName: "Read", input: {file_path: "finding.txt"}},
+        {kind: "completion", summary: "Premature response."},
+      ] },
+      { kind: "completion", summary: "Inspection is complete.", plan: [{step: "Inspect workspace", status: "completed"}] },
+    ]);
+    const result = await executeReadOnlyTestHostRun({
+      ...createTask(workspaceRoot), provider, instructionSettings: createDefaultHelarcInstructionSettings(),
+    });
+
+    expect(result.runResult.status).toBe("completed");
+    expect(provider.requests).toHaveLength(3);
+    expect(provider.stopRequests).toHaveLength(0);
+    expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
+    const returned = provider.requests[2]!.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result) : []);
+    expect(returned.at(-1)).toMatchObject({name: "final_result", settlement: "invalid", content: {
+      code: "helarc_final_result_invalid", message: expect.stringContaining("plan is required"),
+    }});
+    expect(returned.at(-2)).toMatchObject({settlement: "succeeded"});
+    expect(operationResults(result)).toHaveLength(1);
+    expect(result.product.output.agentSummary).toBe("Inspection is complete.");
+    expect(result.runResult.items.filter(({payload}) => payload.kind === "completion_acceptance")).toHaveLength(1);
+  });
+
+  it("ends with an explicitly unchanged unfinished Plan without an extra model request or completion feedback", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-update-"));
     const provider = new ScriptedProvider([
       {
@@ -1011,6 +1119,10 @@ describe("Helarc Host Run composition", () => {
       {
         kind: "completion",
         summary: "Plan was recorded.",
+        plan: [
+          { step: "Inspect workspace", status: "in_progress" },
+          { step: "Finish task", status: "pending" },
+        ],
       },
     ]);
 
@@ -1044,7 +1156,7 @@ describe("Helarc Host Run composition", () => {
     const provider = new ScriptedProvider([
       { kind: "plan_update", plan: [{ step: "Inspect workspace", status: "in_progress" }] },
       { kind: "plan_update", explanation: status === "completed" ? "Work is done." : "Inspection remains pending; no more work can be performed now.", plan: [{ step: "Inspect workspace", status }] },
-      { kind: "completion", summary: "The Plan now records the actual state." },
+      { kind: "completion", summary: "The Plan now records the actual state.", plan: [{ step: "Inspect workspace", status }] },
     ]);
     const result = await executeReadOnlyTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings: createDefaultHelarcInstructionSettings() });
     expect(result.runResult.status).toBe("completed");
@@ -1491,7 +1603,7 @@ class ScriptedProvider implements Provider {
 
   constructor(
     private readonly outputs: unknown[],
-    private readonly beforeResponse: (request: ProviderRequest) => void = () => {},
+    private readonly beforeResponse: (request: ProviderRequest) => void | Promise<void> = () => {},
   ) {}
 
   async send(
@@ -1505,7 +1617,7 @@ class ScriptedProvider implements Provider {
     this.requests.push(request);
     this.lastControllerInputContexts.push(readObservationCount(request));
     this.lastControllerInputPlans.push(readCurrentPlan(request));
-    this.beforeResponse(request);
+    await this.beforeResponse(request);
     const scriptedOutput = this.outputs.shift();
     if (scriptedOutput === undefined) {
       return {
@@ -1703,7 +1815,10 @@ function scriptedCallableName(
 function scriptedCallInput(scripted: Record<string, unknown>): {
   readonly [key: string]: ModelJsonValue;
 } {
-  if (scripted.kind === "completion") return {response: String(scripted.summary)};
+  if (scripted.kind === "completion") return {
+    response: String(scripted.summary),
+    ...(scripted.plan === undefined ? {} : {plan: scripted.plan as ModelJsonValue}),
+  };
   if (scripted.kind === "plan_update") {
     return {
       ...(typeof scripted.explanation === "string"

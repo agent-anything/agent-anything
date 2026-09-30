@@ -258,9 +258,10 @@ export async function createHelarcProductComposition(
           context,
           controllerProtocol,
           qualification,
+          input.commandActions.taskState.getRunSnapshots(controllerInput.runId),
         );
         previews.bindRequest(controllerInput.runId, request.requestId,
-          controllerProtocol.createCallableCatalog(controllerInput.toolExposure, controllerInput.planLimits));
+          controllerProtocol.createCallableCatalog(controllerInput.toolExposure, controllerInput.planLimits, controllerInput.plan !== null));
         return request;
       },
       parseResponse: (response, controllerInput, executionFlow) =>

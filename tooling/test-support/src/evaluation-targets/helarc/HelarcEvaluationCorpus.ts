@@ -31,6 +31,7 @@ import {
   type EvaluationCampaign,
 } from "@agent-anything/evaluation/campaign";
 import { createHelarcAgent } from "@agent-anything/helarc/agent";
+import { HELARC_NATIVE_TOOL_PROTOCOL_REVISION } from "@agent-anything/helarc/controller";
 import { HELARC_TASK_FULFILLMENT_HOOK_REVISION } from "@agent-anything/helarc/task-fulfillment";
 import { HELARC_SHELL_COMMAND_OUTCOME_REVISION } from "@agent-anything/helarc-local-environment/command";
 import {
@@ -355,7 +356,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v25-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v26-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -366,14 +367,14 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-explicit-final-result-v1",
+    "product.revision": "helarc-product-final-plan-submission-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
     "agent.instructions.digest": `sha256:${agent.instructions.contentDigest.value}`,
     "prompt.revision": "helarc-prompt-v7",
-    "controller-protocol.revision": "helarc.provider-native-tool-interaction.v2",
-    "controller-control-set.revision": "helarc.controller-controls.v2",
+    "controller-protocol.revision": HELARC_NATIVE_TOOL_PROTOCOL_REVISION,
+    "controller-control-set.revision": "helarc.controller-controls.v3",
     "model-interaction.protocol.revision": "provider-native-tool-interaction.v1",
     "run-interaction-records.revision": "model-turn-and-settlement.v1",
     "run-lifecycle.revision": "agent-runtime.run-lifecycle.v4",
@@ -389,7 +390,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-explicit-final-result-v1",
+    "source.revision": "helarc-final-plan-submission-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "helarc-baseline-tools-v4",

@@ -554,6 +554,7 @@ function createLocalContributions() {
       shellActionAdapterId: "test.shell.adapter",
       taskStopActionAdapterId: "test.task-stop.adapter",
       taskStopBinding: HELARC_TASK_STOP_BINDING,
+      taskState: { getRunSnapshots: () => [] },
       taskAvailability: {
         getRunAvailability() {
           return { revision: 0, activeTaskCount: 0, retainedTaskCount: 0 };

@@ -572,7 +572,8 @@ async function installActivity(page: Page, expanded = true) {
   await page.evaluate(async () => {
     const w = window as any, api = w.helarc, original = api.readConversation;
     const snapshot = await api.getSnapshot(), root = snapshot.run.harnessRunId;
-    const common = { runId: root, attribution: null, state: "ongoing", startedAt: null, endedAt: null, child: null };
+    const common = { runId: root, attribution: null, state: "ongoing", startedAt: null, endedAt: null, child: null,
+      observedAt: "2026-09-30T00:00:00.000Z" };
     const command = { ...common, id: "command:one", kind: "command", title: "dotnet build", status: "Running",
       startedAt: new Date(Date.now() - 18000).toISOString(), detail: { kind: "command", executionId: "exec-one" } };
     w.activityFixture = {
@@ -621,6 +622,63 @@ async function installActivity(page: Page, expanded = true) {
     await page.getByRole("region", {name:"Response activity",exact:true}).getByRole("button", {name:/dotnet build/}).click();
   }
 }
+
+test("delegated activity stays visible and attributed with closed Child conversations", async ({page}, info) => {
+  await setup(page);
+  await page.getByRole("button", {name: "Close work", exact: true}).click();
+  await installActivity(page, false);
+  await page.evaluate(async () => {
+    const w = window as any;
+    const snapshot = await w.helarc.getSnapshot();
+    const base = w.activityFixture.current[0];
+    w.activityFixture.current = [{...base, id: "delegate", kind: "operation", title: "Subtask 1: Inspect dependencies",
+      state: "settled", status: "Returned", detail: null, child: {
+        scope: {threadId: "thread", productRunId: snapshot.run.productRunId, runId: "child-1"},
+        displayName: "Subtask 1", label: "Inspect dependencies", status: "running", relationship: "created",
+        activity: {activeCount: 2, omittedCount: 0, retentionLimited: false, items: [
+          {...base, id: "nested", runId: "nested-1", attribution: "Subtask 1.1", observedAt: "2026-09-30T00:00:02.000Z"},
+          {...base, id: "child-model", runId: "child-1", kind: "model", title: "Waiting for model response", status: "",
+            attribution: "Subtask 1", startedAt: null, observedAt: "2026-09-30T00:00:01.000Z"},
+        ]},
+      }}];
+    const read = w.helarc.readConversation;
+    w.helarc.readConversation = async (query: any) => {
+      if (query.scope?.runId === "child-1") {
+        w.calls.push({method: "child-conversation", query});
+        return {status: "page", threadId: "thread", revision: 1, entries: [], latestPosition: null, previousCursor: null, omittedRecords: 0, nextWindowCursor: null};
+      }
+      return read(query);
+    };
+    w.emitWorkbench("revision");
+  });
+  const activity = page.getByRole("region", {name: "Response activity", exact: true});
+  await expect(activity).toContainText("Subtask 1.1");
+  await expect(activity).toContainText("dotnet build");
+  await expect(activity).toContainText("+1 active");
+  await expect(page.locator(".wb-delegated-conversation")).toHaveCount(0);
+  await page.screenshot({path: info.outputPath("delegated-activity-collapsed.png")});
+  await activity.getByRole("button", {name: "Expand activity", exact: true}).click();
+  await expect(activity.locator(".wb-delegated-activity .wb-activity-row")).toHaveCount(2);
+  await expect(activity).toContainText("Waiting for model response");
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.method === "child-conversation"))).toEqual([]);
+  await page.screenshot({path: info.outputPath("delegated-activity-expanded.png")});
+  await activity.getByRole("button", {name: "Collapse activity", exact: true}).click();
+  await page.evaluate(() => {
+    const w = window as any, activity = w.activityFixture.current[0].child.activity;
+    activity.items = [activity.items[1]];
+    activity.activeCount = 1;
+    w.emitWorkbench("revision");
+  });
+  await expect(activity).not.toContainText("dotnet build");
+  await expect(activity).toContainText("Waiting for model response");
+  await page.setViewportSize({width: 390, height: 844});
+  await page.screenshot({path: info.outputPath("delegated-activity-narrow.png")});
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await activity.getByRole("button", {name: "Expand activity", exact: true}).click();
+  await activity.getByRole("button", {name: /Subtask 1: Inspect dependencies/}).click();
+  await expect(page.getByRole("region", {name: "Subtask 1: Inspect dependencies", exact: true})).toBeVisible();
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.method === "child-conversation").length)).toBeGreaterThan(0);
+});
 
 test("response-owned activity follows its text and refreshes while reading history", async ({page}, info) => {
   await setup(page);

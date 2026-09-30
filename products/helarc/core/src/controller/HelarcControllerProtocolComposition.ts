@@ -35,6 +35,7 @@ export interface HelarcControllerProtocolComposition {
   createCallableCatalog(
     toolExposure: ToolExposureProof,
     planLimits: PlanLimits,
+    hasPlan: boolean,
   ): HelarcModelCallableCatalog;
 }
 
@@ -86,12 +87,13 @@ export function createHelarcControllerProtocolComposition(input: {
     bindRun(runId: string) {
       return createHelarcToolGuidanceBinding({ runId, guidance: input.toolGuidance });
     },
-    createCallableCatalog(toolExposure: ToolExposureProof, planLimits: PlanLimits) {
+    createCallableCatalog(toolExposure: ToolExposureProof, planLimits: PlanLimits, hasPlan: boolean) {
       return createHelarcModelCallableCatalog({
         toolExposure,
         toolGuidance: input.toolGuidance,
         controlGuidance: input.controlGuidance,
         planLimits,
+        hasPlan,
       });
     },
   });

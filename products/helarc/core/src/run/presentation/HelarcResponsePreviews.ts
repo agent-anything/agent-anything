@@ -21,6 +21,7 @@ export interface HelarcResponsePreview {
   readonly controllerRequestId: string;
   readonly invocationId: string;
   readonly revision: number;
+  readonly observedAt: string;
   readonly deliverySequence: number;
   readonly mode: "buffered" | "streaming";
   readonly state:
@@ -58,6 +59,7 @@ export class HelarcResponsePreviewStore {
   >();
   constructor(
     private readonly checkpoint: (value: HelarcResponsePreviews) => void,
+    private readonly now: () => string = () => new Date().toISOString(),
   ) {}
   snapshot(): HelarcResponsePreviews {
     return this.state;
@@ -131,6 +133,7 @@ export class HelarcResponsePreviewStore {
           controllerRequestId: progress.controllerRequestId,
           invocationId: progress.invocationId,
           revision: 0,
+          observedAt: this.now(),
           deliverySequence: progress.sequence,
           mode: progress.mode,
           state: "receiving",
@@ -268,6 +271,7 @@ export class HelarcResponsePreviewStore {
     const attempt = Object.freeze({
       ...value,
       revision,
+      observedAt: this.now(),
       parts: Object.freeze(value.parts.map((p) => Object.freeze(p))),
     });
     const attempts = [...this.state.attempts];

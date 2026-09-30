@@ -183,7 +183,7 @@ test("actual commands and nested delegation retain their response owners", async
       .click();
     await second.locator(".wb-activity-item > button").first().click();
     const child = second.getByRole("region", {
-      name: "Inspect delegated work",
+      name: "Subtask 1: Inspect delegated work",
       exact: true,
     });
     await expect(child).toContainText("Delegated inspection finished.");
@@ -192,7 +192,7 @@ test("actual commands and nested delegation retain their response owners", async
       .click();
     await child.locator(".wb-activity-item > button").first().click();
     await expect(
-      child.getByRole("region", { name: "Nested inspection", exact: true }),
+      child.getByRole("region", { name: "Subtask 1.1: Nested inspection", exact: true }),
     ).toContainText("Nested inspection finished.");
     await expect(page.locator("#task-input")).toHaveAttribute(
       "placeholder",

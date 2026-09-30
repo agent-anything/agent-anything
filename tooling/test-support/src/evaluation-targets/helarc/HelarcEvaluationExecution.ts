@@ -404,7 +404,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.explicit-final-result-baseline-result`,
+      id: `${definition.ref.id}.final-plan-submission-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -415,7 +415,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.explicit-final-result.report.baseline",
+      id: "helarc.final-plan-submission.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -461,7 +461,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.run-owned-command.report.baseline",
+      id: "helarc.explicit-final-result.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -477,13 +477,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.explicit-final-result.baseline-acceptance",
+      id: "helarc.final-plan-submission.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "explicit-final-result-v1",
+      revision: "final-plan-submission-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -492,14 +492,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Explicit final control separates ending intent from co-calls; all calls settle before optional Stop feedback and normal finalization. Existing task outcomes and safety gates are preserved.",
+      "Final control submits an existing Plan with the reply. Its state update precedes ending notification and receives one native-call settlement. Existing task outcomes and safety gates are preserved; unfinished steps do not prevent normal ending.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.run-owned-command.baseline-acceptance",
+      id: "helarc.explicit-final-result.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -524,10 +524,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v25-")) {
-    throw new TypeError(`Unknown explicit-final-result Target revision '${revision}'.`);
+  if (!revision.startsWith("v26-")) {
+    throw new TypeError(`Unknown final-plan-submission Target revision '${revision}'.`);
   }
-  return revision.replace(/^v25-/, "v24-");
+  return revision.replace(/^v26-/, "v25-");
 }
 
 function gradeExpectedOutcome(

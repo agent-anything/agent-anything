@@ -89,6 +89,7 @@ export interface HelarcRunLabel {
   readonly parentRunId: string | null;
   readonly parentRunActionId: string | null;
   readonly parentOrigin: HelarcModelItemOrigin | null;
+  readonly siblingOrdinal: number | null;
   readonly label: string;
   readonly objective: string | null;
 }
@@ -261,6 +262,9 @@ export function labelHelarcRunPresentation(
     parentRunId,
     parentRunActionId,
     parentOrigin: callRecord?.origin ?? previous?.parentOrigin ?? null,
+    siblingOrdinal: previous?.siblingOrdinal ?? (parentRunId === null ? null :
+      current.labels.filter(item => item.parentRunId === parentRunId)
+        .reduce((maximum, item) => Math.max(maximum, item.siblingOrdinal ?? 0), 0) + 1),
     label: label.slice(0, 160),
     objective: objective?.slice(0, 512) ?? null,
   };
@@ -271,6 +275,21 @@ export function labelHelarcRunPresentation(
     revision: current.revision + 1,
     labels: [...current.labels.filter((item) => item.runId !== runId), entry],
   };
+}
+
+export function helarcSubtaskName(labels: readonly HelarcRunLabel[], runId: string): string {
+  const byId = new Map(labels.map(label => [label.runId, label]));
+  const visited = new Set<string>();
+  const path: number[] = [];
+  let current = byId.get(runId);
+  while (current && !visited.has(current.runId)) {
+    visited.add(current.runId);
+    if (current.parentRunId === null) return path.length ? `Subtask ${path.reverse().join(".")}` : "Main task";
+    if (!Number.isSafeInteger(current.siblingOrdinal) || current.siblingOrdinal! < 1) break;
+    path.push(current.siblingOrdinal!);
+    current = byId.get(current.parentRunId);
+  }
+  return "Subtask";
 }
 
 export function appendHelarcRunPresentation(

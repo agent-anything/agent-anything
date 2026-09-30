@@ -210,6 +210,7 @@ export type ControllerDecision<TOutput = unknown> =
     };
 
 export type CompletionSource =
+  // The source call may also supply one Plan transition; it still settles once.
   | { readonly kind: "model_call"; readonly modelCallRef: ModelCallRef }
   | { readonly kind: "controller" };
 
