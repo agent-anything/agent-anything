@@ -623,6 +623,18 @@ function safeProductErrorMessage(code: string): string {
   ) {
     return "The model returned a response that could not be understood.";
   }
+  if (code === "runtime_deadline_exceeded") {
+    return "The execution time limit was reached.";
+  }
+  if (code === "provider_timeout") {
+    return "The model request timed out.";
+  }
+  if (code === "provider_retry_exhausted") {
+    return "The model request failed after its allowed retry attempts.";
+  }
+  if (code === "provider_operation_deadline_exceeded" || code === "model_operation_deadline_exceeded") {
+    return "The model operation could not continue within its time limit.";
+  }
   if (code.startsWith("model_") || code.startsWith("provider_")) {
     return "The model request could not be completed.";
   }

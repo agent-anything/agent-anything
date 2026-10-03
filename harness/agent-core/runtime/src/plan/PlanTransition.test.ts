@@ -5,6 +5,7 @@ import {
   applyPlanUpdate,
   assertValidPlanLimits,
   projectPlan,
+  validatePlanUpdate,
 } from "./PlanTransition.js";
 
 describe("Plan transitions", () => {
@@ -58,6 +59,7 @@ describe("Plan transitions", () => {
       { step: "Two", status: "in_progress" },
     ] }, "At most one Plan step may be in progress."],
   ])("rejects invalid model input without creating Plan state", (candidate, message) => {
+    expect(validatePlanUpdate(candidate, createLimits())).toMatchObject({status: "rejected", message});
     const result = applyPlanUpdate({
       currentPlan: null,
       newPlanId: "plan-1",

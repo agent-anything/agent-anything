@@ -41,7 +41,7 @@ const ENTRIES = Object.freeze([
       "Use this control when no further model turn is needed. Ordinary assistant text is commentary, not an ending signal.",
       "Call final_result at most once per turn, with the complete response string; an empty response is valid.",
       "If a Plan already exists, include its complete final snapshot in plan, even when unchanged. Report actual step progress; pending or in_progress steps do not prevent ending. Never mark unfinished work completed merely to end the Run.",
-      "Without an existing Plan, plan is optional; do not create one solely to end. Do not call update_plan in the same turn as final_result; put the final snapshot in this call instead.",
+      "Without an existing Plan, omit plan or use an empty array to make no Plan update; do not create one solely to end. An existing Plan requires its complete nonempty snapshot. Do not call update_plan in the same turn as final_result; put the final snapshot in this call instead.",
       "Other Tool calls may accompany it. Their requests and the embedded Plan update are processed before ending; failed or unresolved work may return feedback instead of accepting the ending proposal.",
       "Do not claim results of accompanying calls that have not yet been observed. If their results are needed to form your response, wait for them before submitting final_result.",
     ].join(" "),
@@ -68,7 +68,7 @@ export function createHelarcControllerControlDefinitions(
         type: "object",
         properties: {
           response: {type: "string", description: "Complete user-facing final response, including any limitations. May be empty."},
-          plan: createPlanSchema(limits),
+          plan: createPlanSchema(limits, !hasPlan),
         },
         required: hasPlan ? ["response", "plan"] : ["response"],
         additionalProperties: false,
@@ -94,12 +94,13 @@ export function createHelarcControllerControlDefinitions(
   ]);
 }
 
-function createPlanSchema(limits: PlanLimits): ModelJsonSchema {
+function createPlanSchema(limits: PlanLimits, allowAbsentPlan = false): ModelJsonSchema {
   return {
     type: "array",
-    minItems: 1,
+    minItems: allowAbsentPlan ? 0 : 1,
     maxItems: limits.maxSteps,
-    description: "Complete replacement Plan in intended work order. Include all still-relevant steps and use at most one in_progress status. Unfinished steps may remain when ending.",
+    description: "Complete replacement Plan in intended work order. Include all still-relevant steps and use at most one in_progress status. Unfinished steps may remain when ending." +
+      (allowAbsentPlan ? " No Plan exists: omission or an empty array means no Plan update." : " At least one step is required."),
     items: {
       type: "object",
       properties: {

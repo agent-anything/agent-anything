@@ -112,6 +112,15 @@ const planStepStatuses: readonly PlanStepStatus[] = [
   "completed",
 ];
 
+export function validatePlanUpdate(
+  candidate: unknown,
+  limits: PlanLimits,
+): RejectedObservation | null {
+  assertValidPlanLimits(limits);
+  const result = normalizePlanUpdate(candidate, limits);
+  return result.valid ? null : result.observation;
+}
+
 export function applyPlanUpdate(input: ApplyPlanUpdateInput): ApplyPlanUpdateResult {
   assertValidPlanLimits(input.limits);
   assertNonEmpty(input.now, "now");

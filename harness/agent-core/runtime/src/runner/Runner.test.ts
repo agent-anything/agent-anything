@@ -92,7 +92,7 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "../controller/index.js";
-import { createControllerModelItems } from "../controller/index.js";
+import { ControllerError, createControllerModelItems } from "../controller/index.js";
 import type {
   ModelCallRef,
   ModelJsonValue,
@@ -167,6 +167,46 @@ class ScriptedController implements Controller<TestOutput> {
 }
 
 describe("Runner semantic integration", () => {
+  it.each(["provider_request", "structured_output"] as const)("attributes an elapsed Run deadline during %s and retains its original cause", async owner => {
+    const operations = createOperationFixture([]);
+    let now = NOW;
+    const code = owner === "provider_request" ? "provider_operation_deadline_exceeded" : "model_operation_deadline_exceeded";
+    const controller = new ScriptedController([(_input, context) => {
+      now = context.retry.deadlineAt;
+      throw new ControllerError(owner === "provider_request"
+        ? {kind: "provider", failure: {category: "deadline", code, message: "Operation deadline", metadata: {lastFailure: {code: "transport_interrupted"}}}}
+        : {kind: "model", failure: {code, message: "Operation deadline", retryable: false, metadata: {}}},
+      "settled_failure", {owner, operationId: "operation-deadline", deadlineAt: now, exhaustedAt: now});
+    }]);
+    const result = await createRunner(controller, operations, {now: () => now})
+      .run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("failed");
+    expect(result.cause).toMatchObject({kind: "failure", source: {owner: "runtime", kind: "run_deadline"},
+      failure: {kind: "runtime", failure: {code: "runtime_deadline_exceeded", metadata: {
+        scope: "run_tree", interruptedOperation: {owner, operationId: "operation-deadline"},
+        interruptedFailure: {failure: {code}},
+      }}}, underlying: [{source: {owner, kind: "retry_operation", id: "operation-deadline"}}]});
+    expect(controller.calls).toHaveLength(1);
+  });
+
+  it.each(["timeout", "retry_budget", "foreign_deadline", "early_deadline"] as const)("does not relabel %s as an elapsed Run deadline", async mode => {
+    const operations = createOperationFixture([]);
+    const code = mode === "timeout" ? "provider_timeout" : mode === "retry_budget" ? "provider_retry_exhausted" : "provider_operation_deadline_exceeded";
+    let now = NOW;
+    const controller = new ScriptedController([(_input, context) => {
+      if (mode !== "early_deadline") now = context.retry.deadlineAt;
+      throw new ControllerError({kind: "provider", failure: {
+        category: mode, code, message: mode, metadata: {},
+      }}, "settled_failure", mode === "foreign_deadline" || mode === "early_deadline"
+        ? {owner: "provider_request", operationId: "operation", deadlineAt: mode === "early_deadline" ? context.retry.deadlineAt : NOW, exhaustedAt: now}
+        : null);
+    }]);
+    const result = await createRunner(controller, operations, {now: () => now})
+      .run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.cause).toMatchObject({kind: "failure", failure: {kind: "provider", failure: {code}}});
+    expect(controller.calls).toHaveLength(1);
+  });
+
   it("completes one Run through the single Controller loop", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([complete("Done")]);
@@ -2555,7 +2595,7 @@ describe("Runner semantic integration", () => {
         expect(input.plan).toBeNull();
         expect(input.interaction.unsettledCalls).toEqual([]);
         expect(input.interaction.messages.filter(message => message.role === "tool")).toMatchObject([
-          {content: [{result: {settlement: "invalidated", content: {stateUpdate: {settlement: "invalid"}}}}]},
+          {content: [{result: {settlement: "invalidated", content: {code: "completion_state_update_failed", stateUpdate: {settlement: "invalid"}}}}]},
         ]);
         return completionWithPlan([{step: "Inspect", status: "pending"}], "Cannot finish", "corrected-embedded");
       },
@@ -3340,12 +3380,20 @@ describe("Runner semantic integration", () => {
     ]);
   });
 
-  it("executes a result-dependent Composite sequence without another Controller turn", async () => {
+  it.each([false, true])("returns Composite settlement details to the next turn (child rejected: %s)", async rejected => {
     const composite = operationRef("inspect-workspace");
     const child = operationRef("read-metadata");
     const childHandler = internalHandler("handler.read-metadata", "code-workspace", {
       files: 3,
     });
+    if (rejected) childHandler.execute.mockImplementation(async context => createOperationResult({
+      ref: {invocation: context.binding.invocation, id: "rejected-result"}, binding: context.binding.binding,
+      semanticOwner: "code-workspace", status: "invalid", output: null,
+      failure: {owner: "permission", code: "interaction_expired", message: "Approval expired before dispatch.", retryable: false, metadata: {private: "not-for-model"}},
+      startedAt: NOW, finishedAt: NOW,
+      lowerRefs: [{owner: "canonical-action", kind: "action_settlement", id: "not-dispatched", revision: "1"}],
+      metadata: {effectCertainty: "none", completionExtent: "none"},
+    }));
     const definition = snapshotCompositeDefinition({
       ref: { id: "composite.inspect-workspace", revision: "1" },
       inputSchemaRevision: "input-1",
@@ -3416,7 +3464,19 @@ describe("Runner semantic integration", () => {
     });
     const controller = new ScriptedController([
       advance([operationCandidate(composite, { path: "." })], "model_operation"),
-      complete("Composite complete", "model_complete_2"),
+      input => {
+        const results = input.interaction.messages.filter(message => message.role === "tool");
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({content: [{result: {content: {
+          status: rejected ? "failed" : "succeeded",
+          composite: {childCount: 2, omittedChildCount: 0, children: expect.arrayContaining([
+            expect.objectContaining(rejected ? {nodeId: "read-metadata", status: "invalid", effectCertainty: "none", completionExtent: "none",
+              failure: expect.objectContaining({owner: "permission", code: "interaction_expired"})} : {nodeId: "read-metadata", status: "succeeded"}),
+          ])},
+        }}}]});
+        expect(JSON.stringify(results)).not.toContain("not-for-model");
+        return complete("Composite complete", "model_complete_2");
+      },
     ]);
 
     const result = await createRunner(controller, operations).run(
@@ -3426,12 +3486,12 @@ describe("Runner semantic integration", () => {
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
-    expect(childHandler.execute).toHaveBeenCalledTimes(2);
+    expect(childHandler.execute).toHaveBeenCalledTimes(rejected ? 1 : 2);
     expect(controller.calls).toHaveLength(2);
     expect(result.items.filter(({ payload }) => payload.kind === "run_action"))
-      .toHaveLength(3);
+      .toHaveLength(rejected ? 2 : 3);
     expect(observations(result).filter(({ payload }) => payload.kind === "operation"))
-      .toHaveLength(3);
+      .toHaveLength(rejected ? 2 : 3);
   });
 
   it("cancels an active Controller boundary and does not commit its late decision", async () => {

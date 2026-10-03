@@ -31,6 +31,7 @@ import {
 import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
 import { createHelarcCommandStateSection, type HelarcCommandStateSnapshot } from "./HelarcCommandState.js";
 import { createHelarcUnknownCallableRejection } from "./HelarcModelCallFeedback.js";
+import { finalResultInputError } from "./HelarcFinalResultInput.js";
 import type {
   HelarcModelQualificationResolution,
 } from "../model-qualification/index.js";
@@ -292,11 +293,16 @@ function interpretResponse(
     const binding = findHelarcModelCallableBinding(catalog, call.name);
     return binding?.kind === "control" && binding.control === "update_plan";
   });
-  const final = finals.length === 1 && validFinalInput(finals[0]!.input, input.plan !== null) && !hasSeparatePlan
+  const finalError = finals.length > 1
+    ? "Submit exactly one final_result call per turn."
+    : hasSeparatePlan
+      ? "Do not submit update_plan alongside final_result; include the complete final snapshot in final_result.plan instead."
+      : finals.length === 1 ? finalResultInputError(finals[0]!.input, input.plan !== null, input.planLimits) : null;
+  const final = finals.length === 1 && finalError === null
     ? finals[0]! : null;
   const candidates = calls.flatMap<ProgressionCandidate>(call => {
     if (call === final) {
-      return "plan" in final.input ? [{
+      return Array.isArray(final.input.plan) && final.input.plan.length > 0 ? [{
         kind: "state_transition", transition: "plan_update",
         input: {plan: final.input.plan}, modelCallRef: final.modelCallRef,
       }] : [];
@@ -305,7 +311,7 @@ function interpretResponse(
       return [Object.freeze({
         kind: "model_call_rejection", name: call.name,
         code: finals.length > 1 ? "helarc_final_result_ambiguous" : "helarc_final_result_invalid",
-        message: finalInputFeedback(input.plan !== null, hasSeparatePlan),
+        message: `${finalError} Other calls retain their own results; do not repeat successful calls merely to correct this call.`,
         modelCallRef: call.modelCallRef,
       })];
     }
@@ -331,30 +337,6 @@ function interpretResponse(
     ],
     modelItems,
   });
-}
-
-interface FinalResultInput {
-  readonly response: string;
-  readonly plan?: readonly unknown[];
-}
-
-function validFinalInput(value: unknown, hasPlan: boolean): value is FinalResultInput {
-  return value !== null && typeof value === "object" && !Array.isArray(value) &&
-    Object.keys(value).every(key => key === "response" || key === "plan") &&
-    typeof (value as Record<string, unknown>).response === "string" &&
-    (!hasPlan || "plan" in value) &&
-    (!("plan" in value) || Array.isArray(value.plan));
-}
-
-function finalInputFeedback(hasPlan: boolean, hasSeparatePlan: boolean): string {
-  return [
-    "This final_result call was not accepted. Submit exactly one final_result with response, a string (which may be empty), and no fields other than response and plan.",
-    hasPlan ? "A Plan exists: plan is required and must contain its complete final step/status array, even when unchanged."
-      : "Without an existing Plan, plan is optional; do not create a Plan just to end.",
-    "Use the request's final_result Schema. A supplied Plan must satisfy its limits and may retain unfinished steps; ending does not require all steps completed.",
-    ...(hasSeparatePlan ? ["Do not submit update_plan alongside final_result; include the final snapshot in final_result instead."] : []),
-    "Other calls retain their own results; do not repeat successful calls merely to correct this call.",
-  ].join(" ");
 }
 
 function bindModelCall(

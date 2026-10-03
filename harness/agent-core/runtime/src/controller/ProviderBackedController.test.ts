@@ -666,8 +666,12 @@ describe("ProviderBackedController", () => {
     const error = await run;
 
     expect((error as ControllerError).failure.failure).toMatchObject({
-      code: "provider_retry_exhausted",
-      metadata: { retryExhaustionReason: "deadline_exceeded", retryTotalAttempts: 1 },
+      code: "provider_operation_deadline_exceeded",
+      metadata: { retryExhaustionReason: "deadline_exceeded", retryTotalAttempts: 1,
+        lastFailure: {code: "provider_operation_deadline"} },
+    });
+    expect((error as ControllerError).deadline).toMatchObject({
+      owner: "provider_request", deadlineAt: "2026-07-14T00:00:00.025Z", operationId: expect.any(String),
     });
     expect(events.filter((event) => event.owner === "provider_request")
       .map((event) => event.type)).toEqual([
@@ -1164,12 +1168,13 @@ describe("ProviderBackedController", () => {
 
     expect(provider.requests()).toHaveLength(1);
     expect((error as ControllerError).failure.failure).toMatchObject({
-      code: "model_structured_output_retry_exhausted",
+      code: "model_operation_deadline_exceeded",
       metadata: {
         retryExhaustionReason: "deadline_exceeded",
         retryTotalAttempts: 1,
       },
     });
+    expect((error as ControllerError).deadline).toMatchObject({owner: "structured_output", deadlineAt: "2026-07-14T00:00:00.025Z"});
   });
 
   it.each([

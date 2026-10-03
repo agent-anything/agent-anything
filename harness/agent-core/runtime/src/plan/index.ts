@@ -20,4 +20,5 @@ export {
   applyPlanUpdate,
   assertValidPlanLimits,
   projectPlan,
+  validatePlanUpdate,
 } from "./PlanTransition.js";

@@ -1076,6 +1076,26 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.output.agentSummary).toBe("Inspection is complete.");
   });
 
+  it.each([false, true])("ends a no-Plan Run in one request with no optional instructions (empty final Plan: %s)", async emptyPlan => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-plan-ending-"));
+    const provider = new ScriptedProvider([
+      {kind: "completion", summary: "Finished without a Plan.", ...(emptyPlan ? {plan: []} : {})},
+    ]);
+    const result = await executeReadOnlyTestHostRun({
+      ...createTask(workspaceRoot), provider, instructionSettings: createDefaultHelarcInstructionSettings(),
+    });
+    expect(result.runResult.status, JSON.stringify(result.product.output.safeErrors)).toBe("completed");
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.stopRequests).toHaveLength(0);
+    expect(provider.requests[0]?.instructions.content).toHaveLength(0);
+    expect(result.runResult.items.filter(({payload}) => payload.kind === "state_transition" && payload.transition === "plan")).toEqual([]);
+    expect(result.runResult.items.filter(({payload}) => payload.kind === "controller_feedback")).toEqual([]);
+    const settlements = result.runResult.items.flatMap(({payload}) => payload.kind === "model_call_settlement" ? [payload.result] : []);
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]).toMatchObject({name: "final_result", settlement: "succeeded"});
+    expect(result.product.output.agentSummary).toBe("Finished without a Plan.");
+  });
+
   it("corrects an omitted final Plan without replaying a successful accompanying call", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-final-plan-correction-"));
     await writeFile(join(workspaceRoot, "finding.txt"), "Retained finding.", "utf8");

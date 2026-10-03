@@ -4,6 +4,7 @@ export type {
   BuildProviderRequest,
   ControllerFailure,
   ControllerFailureCode,
+  ControllerOperationDeadline,
   ParseProviderResponse,
   ProviderBackedControllerInput,
 } from "./ProviderBackedController.js";

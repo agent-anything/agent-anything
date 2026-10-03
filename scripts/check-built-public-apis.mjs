@@ -524,6 +524,8 @@ const expectedLowerValueExports = {
     "HELARC_EXPLICIT_FINAL_RESULT_OPERATIONAL_BASELINE_ACCEPTANCE",
     "HELARC_FILE_TOOLS_ACCEPTED_BASELINE",
     "HELARC_FILE_TOOLS_BASELINE_ACCEPTANCE",
+    "HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE",
+    "HELARC_FINAL_PLAN_SUBMISSION_BASELINE_ACCEPTANCE",
     "HELARC_INCIDENT_ADMISSION_REVISION",
     "HELARC_NORMAL_STOP_OPERATIONAL_ACCEPTED_BASELINE",
     "HELARC_NORMAL_STOP_OPERATIONAL_BASELINE_ACCEPTANCE",
@@ -710,7 +712,7 @@ const expectedOperationCompositionValueExports = {
     "snapshotCompositeDefinition",
   ],
   "@agent-anything/operation-composition/execution": ["CompositeExecution"],
-  "@agent-anything/operation-composition/result": [],
+  "@agent-anything/operation-composition/result": ["createCompositeResultSummary", "readCompositeResultSummary"],
 };
 
 const expectedValueExports = {
@@ -763,6 +765,7 @@ const expectedValueExports = {
     "applyPlanUpdate",
     "assertValidPlanLimits",
     "projectPlan",
+    "validatePlanUpdate",
   ],
   "@agent-anything/agent-hooks": [
     "AgentHookController",
@@ -1062,6 +1065,7 @@ const expectedValueExports = {
     "createHelarcRunInput",
     "createHelarcRunProjection",
     "deriveHelarcRunDisplayProjection",
+    "helarcSubtaskName",
     "reduceHelarcProductRunProjection",
     "reduceHelarcRunProjection",
   ],

@@ -73,6 +73,7 @@ describe("Agent Core Runtime public API", () => {
       "applyPlanUpdate",
       "assertValidPlanLimits",
       "projectPlan",
+      "validatePlanUpdate",
     ]);
     expect(Object.keys(transcriptApi).sort()).toEqual([
       "RunTranscriptRecorder",

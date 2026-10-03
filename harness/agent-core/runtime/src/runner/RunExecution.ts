@@ -60,7 +60,7 @@ import {
   type OperationResult,
 } from "@agent-anything/operation-catalog/result";
 import { CompositeExecution } from "@agent-anything/operation-composition/execution";
-import type { CompositeResult } from "@agent-anything/operation-composition/result";
+import { createCompositeResultSummary, readCompositeResultSummary, type CompositeResult } from "@agent-anything/operation-composition/result";
 import {
   ActionExecutionCoordinator,
   type ActionApprovalResolutionPort,
@@ -1495,7 +1495,11 @@ export class RunExecution<TOutput> {
     step.check("call_settlements", failed ? "not_satisfied" : "passed", {expected: keys.size, settled: settlements.length,
       completionStateUpdate: includesCompletionUpdate ? stateResult?.settlement ?? "missing" : null});
     if (failed) {
-      this.declineCompletion(turn, "completion_calls_not_successful", "One or more requests accompanying this final response did not succeed. Read their returned results before choosing a new action or final response; do not repeat successful calls unnecessarily.");
+      if (includesCompletionUpdate && stateResult?.settlement !== "succeeded") {
+        this.declineCompletion(turn, "completion_state_update_failed", "The state update submitted with this ending proposal was not accepted. Read stateUpdate in this call's returned result for its rejection reason and correct that input before proposing completion again. Other successful calls remain settled; do not repeat them unnecessarily.");
+      } else {
+        this.declineCompletion(turn, "completion_calls_not_successful", "One or more requests accompanying this final response did not succeed. Read their returned results before choosing a new action or final response; do not repeat successful calls unnecessarily.");
+      }
       return null;
     }
     const outstanding = this.hasUnsettledDescendantObligations();
@@ -5834,6 +5838,23 @@ export class RunExecution<TOutput> {
       };
     }
     if (error instanceof ControllerError) {
+      const deadline = error.deadline;
+      if (deadline !== null && deadline.deadlineAt === this.writer.getSnapshot().deadlineAt &&
+        Date.parse(deadline.exhaustedAt) >= Date.parse(deadline.deadlineAt)) {
+        const scope = deadline.deadlineAt === this.runTree.getSnapshot().deadlineAt ? "run_tree" : "run";
+        return {
+          status: "failed",
+          failure: runtimeFailure("runtime_deadline_exceeded", "Run deadline elapsed.", {
+            deadlineAt: deadline.deadlineAt, scope,
+            interruptedOperation: deadline,
+            interruptedFailure: error.failure,
+          }),
+          source: {owner: "runtime", kind: "run_deadline", id: this.runId, revision: null, run: {id: this.runId}},
+          underlying: [{relation: "caused_by", source: {
+            owner: deadline.owner, kind: "retry_operation", id: deadline.operationId, revision: null, run: {id: this.runId},
+          }}],
+        };
+      }
       return {
         status: "failed",
         failure: createRunFailureCause(error.failure.kind, error.failure.failure),
@@ -6491,6 +6512,7 @@ function operationResultFromComposite(
     metadata: Object.freeze({
       compositeId: result.compositeId,
       childCount: result.children.length,
+      compositeSettlement: createCompositeResultSummary(result),
     }),
   } as OperationResult);
 }
@@ -6938,7 +6960,8 @@ function projectObservationSettlement(observation: RunObservation): {
         payload.status === "applied" ? "succeeded" : "invalid",
         { kind: payload.kind, status: payload.status, code: payload.code },
       );
-    case "operation":
+    case "operation": {
+      const composite = readCompositeResultSummary(payload.result.metadata.compositeSettlement);
       return modelSettlement(
         operationModelSettlement(payload.result.status),
         {
@@ -6946,6 +6969,7 @@ function projectObservationSettlement(observation: RunObservation): {
           status: payload.result.status,
           output: payload.result.output,
           ...projectActionEffectFacts(payload.result),
+          ...(composite === null ? {} : {composite}),
           failure: payload.result.failure === null
             ? null
             : {
@@ -6955,6 +6979,7 @@ function projectObservationSettlement(observation: RunObservation): {
               },
         },
       );
+    }
     case "operation_rejected":
     case "model_call_rejected":
       return modelSettlement("invalid", {

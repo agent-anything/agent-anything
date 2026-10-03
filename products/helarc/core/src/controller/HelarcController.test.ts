@@ -686,7 +686,7 @@ describe("Helarc native Tool controller", () => {
     if (request.interaction.kind !== "native_tool_turn") throw new Error("Expected native request.");
     expect(request.interaction.callables.find(item => item.name === "final_result")?.inputSchema.required).toEqual(["response", "plan"]);
     const missing = parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: {response: "Done"}}]), input);
-    expect(missing).toMatchObject({kind: "advance", candidates: [{kind: "model_call_rejection", message: expect.stringContaining("A Plan exists: plan is required")}]});
+    expect(missing).toMatchObject({kind: "advance", candidates: [{kind: "model_call_rejection", message: expect.stringContaining("final_result.plan is required")}]});
     const final = parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: {response: "", plan: input.plan.steps}}]), input);
     expect(final).toMatchObject({kind: "propose_completion", candidates: [{kind: "state_transition", transition: "plan_update", input: {plan: input.plan.steps}}], output: {summary: ""}});
     expect(validateControllerDecision(final, input)).toEqual(final);
@@ -704,6 +704,48 @@ describe("Helarc native Tool controller", () => {
     expect(validateControllerDecision(decision, input)).toEqual(decision);
     if (decision.kind !== "propose_completion") throw new Error("Expected completion proposal.");
     expect(decision.candidates.map(item => item.kind)).toEqual(finalFirst ? ["state_transition", "tool_request"] : ["tool_request", "state_transition"]);
+  });
+
+  it.each([{response: "Done"}, {response: "Done", plan: []}])("ends without inventing a Plan transition: %j", finalInput => {
+    const input = createControllerInput();
+    const request = buildHelarcProviderRequest(input, requestBuildContext());
+    if (request.interaction.kind !== "native_tool_turn") throw new Error("Expected native request.");
+    const schema = request.interaction.callables.find(item => item.name === "final_result")!.inputSchema;
+    expect(schema.properties?.plan).toMatchObject({minItems: 0});
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: finalInput}]), input);
+    expect(decision).toMatchObject({kind: "propose_completion", candidates: [], output: {summary: "Done"}});
+    expect(validateControllerDecision(decision, input)).toEqual(decision);
+  });
+
+  it("rejects an empty final snapshot when a Plan exists without clearing it", () => {
+    const input = {...createControllerInput(), plan: {id: "plan", version: 1, status: "active" as const,
+      steps: [{step: "Inspect", status: "pending" as const}]}};
+    const request = buildHelarcProviderRequest(input, requestBuildContext());
+    if (request.interaction.kind !== "native_tool_turn") throw new Error("Expected native request.");
+    expect(request.interaction.callables.find(item => item.name === "final_result")?.inputSchema.properties?.plan).toMatchObject({minItems: 1});
+    expect(parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: {response: "Done", plan: []}}]), input))
+      .toMatchObject({kind: "advance", candidates: [{kind: "model_call_rejection", message: expect.stringContaining("cannot be empty because a Plan exists")}]});
+    expect(input.plan.steps).toEqual([{step: "Inspect", status: "pending"}]);
+  });
+
+  it.each([
+    {plan: [{step: " ", status: "completed"}], reason: "text must not be empty"},
+    {plan: [{step: "Inspect", status: "unknown"}], reason: "status is not supported"},
+    {plan: [{step: "A", status: "in_progress"}, {step: "B", status: "in_progress"}], reason: "At most one"},
+    {plan: [{step: "A", status: "completed", extra: true}], reason: "plan[0] accepts only"},
+  ])("rejects malformed final Plan before a transition is created: $reason", ({plan, reason}) => {
+    const input = createControllerInput();
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: {response: "Done", plan}}]), input);
+    expect(decision).toMatchObject({kind: "advance", candidates: [{kind: "model_call_rejection",
+      code: "helarc_final_result_invalid", message: expect.stringContaining(reason)}]});
+  });
+
+  it("enforces the request's Plan limits before emitting final state transitions", () => {
+    const input = {...createControllerInput(), planLimits: {maxSteps: 1, maxStepLength: 5, maxExplanationLength: 20}};
+    for (const plan of [[{step: "A", status: "completed"}, {step: "B", status: "pending"}], [{step: "Too long", status: "completed"}]]) {
+      expect(parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: {response: "Done", plan}}]), input))
+        .toMatchObject({kind: "advance", candidates: [{kind: "model_call_rejection", code: "helarc_final_result_invalid", message: expect.stringContaining("final_result.plan:")}]});
+    }
   });
 
   it.each([{response: 42}, {response: "ok", extra: true}, {response: "ok", plan: null}, {response: "ok", plan: "complete"}, {}])("rejects malformed final output locally: %j", invalid => {

@@ -80,6 +80,8 @@ export type ControllerFailureCode =
   | "provider_request_failed"
   | "provider_timeout"
   | "provider_retry_exhausted"
+  | "provider_operation_deadline_exceeded"
+  | "model_operation_deadline_exceeded"
   | "provider_cancellation_unconfirmed";
 
 export type ControllerFailure =
@@ -92,10 +94,18 @@ export type ControllerFailure =
       readonly failure: ProviderFailure & { readonly code: ControllerFailureCode };
     };
 
+export type ControllerOperationDeadline = Readonly<{
+  operationId: string;
+  owner: "provider_request" | "structured_output";
+  deadlineAt: string;
+  exhaustedAt: string;
+}>;
+
 export class ControllerError extends Error {
   constructor(
     readonly failure: ControllerFailure,
     readonly operationSettlement: "unsettled" | "settled_failure" = "unsettled",
+    readonly deadline: ControllerOperationDeadline | null = null,
   ) {
     super(failure.failure.message);
     this.name = "ControllerError";
@@ -481,9 +491,9 @@ export class ProviderBackedController<TOutput = unknown>
           result.exhaustion.lastFailure,
         );
       case "deadline_exhausted":
-        throw structuredOutputRetryExhaustedError(
-          "deadline_exceeded",
-          result.exhaustion.operationId,
+        throw operationDeadlineError(
+          operation,
+          result.exhaustion.exhaustedAt,
           result.exhaustion.totalAttempts,
           result.exhaustion.totalRetryDelayMs,
           result.exhaustion.lastFailure,
@@ -929,9 +939,9 @@ export class ProviderBackedController<TOutput = unknown>
         );
 
       case "deadline_exhausted":
-        throw providerRetryExhaustedError(
-          "deadline_exceeded",
-          result.exhaustion.operationId,
+        throw operationDeadlineError(
+          operation,
+          result.exhaustion.exhaustedAt,
           result.exhaustion.totalAttempts,
           result.exhaustion.totalRetryDelayMs,
           result.exhaustion.lastFailure,
@@ -1594,6 +1604,7 @@ function createControllerError(
   metadata: Readonly<Record<string, unknown>>,
   operationSettlement: "unsettled" | "settled_failure" = "unsettled",
   providerCategory?: string,
+  deadline: ControllerOperationDeadline | null = null,
 ): ControllerError {
   const frozenMetadata = Object.freeze({ ...metadata });
   return new ControllerError(
@@ -1617,6 +1628,7 @@ function createControllerError(
           }),
         }),
     operationSettlement,
+    deadline,
   );
 }
 
@@ -2052,7 +2064,7 @@ function structuredOutputFailureError(
 }
 
 function structuredOutputRetryExhaustedError(
-  reason: "retry_budget_exhausted" | "deadline_exceeded",
+  reason: "retry_budget_exhausted",
   operationId: string,
   totalAttempts: number,
   totalRetryDelayMs: number,
@@ -2111,7 +2123,7 @@ function providerRetryFailureError(
 }
 
 function providerRetryExhaustedError(
-  reason: "retry_budget_exhausted" | "deadline_exceeded",
+  reason: "retry_budget_exhausted",
   operationId: string,
   totalAttempts: number,
   totalRetryDelayMs: number,
@@ -2135,6 +2147,40 @@ function providerRetryExhaustedError(
       providerStatusCode: lastFailure?.statusCode ?? null,
     },
     "settled_failure",
+  );
+}
+
+function operationDeadlineError(
+  operation: RetryOperation,
+  exhaustedAt: string,
+  totalAttempts: number,
+  totalRetryDelayMs: number,
+  lastFailure: RetryFailure | null,
+  providerId?: string,
+): ControllerError {
+  if (operation.deadlineAt === undefined ||
+    (operation.owner !== "provider_request" && operation.owner !== "structured_output")) {
+    throw new TypeError("Controller deadline exhaustion requires its logical operation deadline.");
+  }
+  const provider = operation.owner === "provider_request";
+  return createControllerError(
+    provider ? "provider" : "model",
+    provider ? "provider_operation_deadline_exceeded" : "model_operation_deadline_exceeded",
+    "The Controller operation cannot continue within its assigned deadline.",
+    false,
+    {
+      retryOperationId: operation.operationId,
+      retryExhaustionReason: "deadline_exceeded",
+      retryTotalAttempts: totalAttempts,
+      retryTotalDelayMs: totalRetryDelayMs,
+      deadlineAt: operation.deadlineAt,
+      exhaustedAt,
+      ...(provider ? {providerId: providerId ?? null} : {}),
+      lastFailure,
+    },
+    "settled_failure",
+    provider ? "deadline" : undefined,
+    Object.freeze({operationId: operation.operationId, owner: operation.owner, deadlineAt: operation.deadlineAt, exhaustedAt}),
   );
 }
 
