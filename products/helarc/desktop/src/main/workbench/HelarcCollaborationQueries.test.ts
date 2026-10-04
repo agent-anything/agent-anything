@@ -154,6 +154,45 @@ function textRecord(
   };
 }
 describe("collaboration reads", () => {
+  it("shows attributed Child inputs in delivery order, with bounded reads and no root duplication", async () => {
+    const {p, api, retain} = fixture();
+    const prompt = "Received task content ".repeat(2000);
+    const inputRecord = {...textRecord(1, "child"), id: "received-task", origin: null,
+      source: {owner: "runtime", kind: "run_input", id: "child:input", sequence: 0},
+      content: {kind: "received_input", inputKind: "task", text: prompt, omittedBytes: 0, senderRunId: "root", disposition: null}};
+    const steering = (sequence: number, origin: string, disposition: string) => ({...textRecord(sequence, "child"), origin: null,
+      content: {kind: "steering", commandId: `steer-${sequence}`, instruction: `${origin} update`, origin, disposition, omittedBytes: 0}});
+    Object.assign(p.product.presentation, {records: [inputRecord, textRecord(2, "child", "First reply"),
+      steering(3, "model", "applied"), steering(4, "host", "applied"), steering(5, "user", "superseded"), textRecord(6, "child", "Next reply"),
+      {...inputRecord, id: "delivery", sequence: 7, content: {...inputRecord.content, inputKind: "agent_result", text: "Delivered finding", senderRunId: "nested", disposition: "partial"}},
+    ], labels: [...p.product.presentation.labels,
+      {runId: "child", parentRunId: "root", siblingOrdinal: 1, label: "Child", objective: "short label"},
+      {runId: "nested", parentRunId: "child", siblingOrdinal: 1, label: "Nested"},
+    ]});
+    const query = {threadId: "thread", scope: {...scope, runId: "child"}, position: {kind: "latest" as const}};
+    const page = await api.readConversation(query);
+    if (page.status !== "page") throw Error(page.code);
+    expect(page.entries.map(e => [e.kind, e.title])).toEqual([
+      ["received_input", "Received task from Main task"], ["turn", null],
+      ["received_input", "Agent message"], ["received_input", "Host message"], ["turn", null],
+      ["received_input", "Result from Subtask 1.1"],
+      ["notice", "Unattributed work"],
+    ]);
+    expect(page.entries[0]).toMatchObject({role: "product", omittedBytes: expect.any(Number)});
+    expect(page.entries[0]!.content.length).toBeLessThan(prompt.length);
+    let text = "", offset: number | null = 0;
+    while (offset !== null) {
+      const detail = await api.readWorkbenchItem({...page.entries[0]!.detail!, offset});
+      if (detail.status !== "page") throw Error(detail.status);
+      text += detail.text; offset = detail.nextOffset;
+      expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThanOrEqual(64 * 1024);
+    }
+    expect(text).toBe(prompt);
+    expect(await api.readWorkbenchItem({...scope, itemId: "received-task"})).toMatchObject({code: "not_found"});
+    expect(JSON.stringify(await api.readConversation({threadId: "thread", position: {kind: "latest"}}))).not.toContain("Received task content");
+    retain();
+    expect((await api.readConversation(query))).toEqual(page);
+  });
   it("routes interaction Tools to forms and attributed conversation facts rather than execution", async () => {
     const { p, api, retain } = fixture();
     const protocol = { owner: "helarc", kind: "clarification", revision: "1" };
@@ -850,12 +889,22 @@ describe("conversation-local activity reads", () => {
     Object.assign(p.product.presentation, {records:[create,reference,textRecord(3,"child","Child findings")],
       labels:[...p.product.presentation.labels,{runId:"child",parentRunId:"root",parentRunActionId:"create",parentOrigin:create.origin,siblingOrdinal:1,label:"Inspect settings",objective:"PRIVATE instructions"}]});
     expect((await blocks(api)).blocks[0]).toMatchObject({item:{child:{relationship:"created",scope:{runId:"child"}}}});
+    Object.assign(p.host.runTree.nodes.find(n => n.runId === "child")!, {dispatch: {
+      requestedForm: "concurrent_sibling", controllerRequestId: "request", controllerTurnId: "turn",
+      candidateIndex: 4, siblingIndex: 1, siblingCount: 2,
+    }});
+    const initialChild = (await blocks(api)).blocks[0];
+    expect(initialChild).toMatchObject({item: {child: {concurrentGroup: {
+      id: JSON.stringify(["root", "request", "turn", 3]), index: 1, count: 2,
+    }, textRevision: expect.any(String)}}});
     expect(await api.readTaskDetails({...scope, runId: "child"})).toMatchObject({task: {label: "Subtask 1: Inspect settings"}});
     expect((await blocks(api,"root","later")).blocks[0]).toMatchObject({item:{child:{relationship:"referenced",scope:{runId:"child"}}}});
     const reading = callRecord("child-read", "child", "Read", {file_path: "settings.json"});
     Object.assign(p.product.presentation, {activeCalls: [reading]});
     Object.assign(p.product, {sequence: 2});
     const active = await blocks(api);
+    expect(active.blocks[0]?.kind === "activity" && active.blocks[0].item.child?.textRevision)
+      .toBe(initialChild?.kind === "activity" && initialChild.item.child?.textRevision);
     expect(active.blocks[0]).toMatchObject({item: {child: {displayName: "Subtask 1", activity: {
       activeCount: 1, items: [{title: "Read file: settings.json", attribution: "Subtask 1"}],
     }}}});
@@ -867,8 +916,17 @@ describe("conversation-local activity reads", () => {
     expect(updated.revision).toBeGreaterThan(active.revision);
     expect(updated.blocks[0]?.id).toBe(active.blocks[0]?.id);
     expect(updated.blocks[0]).toMatchObject({item: {child: {activity: {items: [{kind: "model", title: "Waiting for model response"}]}}}});
+    expect(updated.blocks[0]?.kind === "activity" && updated.blocks[0].item.child?.textRevision)
+      .toBe(initialChild?.kind === "activity" && initialChild.item.child?.textRevision);
+    Object.assign(p.product.responses.attempts[0]!, {parts: [{id: "part", kind: "text", text: "New child text", receivedLength: 14}]});
+    const streamed = (await blocks(api)).blocks[0];
+    expect(streamed?.kind === "activity" && streamed.item.child?.textRevision)
+      .not.toBe(initialChild?.kind === "activity" && initialChild.item.child?.textRevision);
     const root = await api.readConversation(latest);
-    expect(JSON.stringify(root)).not.toContain("Child findings");
+    expect(root.status === "page" && root.entries.filter(e => e.kind === "turn").flatMap(e => e.blocks)
+      .some(b => b.kind !== "activity" && b.text.includes("Child findings"))).toBe(false);
+    expect(root.status === "page" && root.entries.filter(e => e.kind === "turn").flatMap(e => e.blocks)
+      .some(b => b.kind === "activity" && b.item.child?.textPreview?.text === "New child text")).toBe(true);
     expect(JSON.stringify(root)).not.toContain("PRIVATE");
     const child = await api.readConversation({...latest,scope:{...scope,runId:"child"}});
     expect(JSON.stringify(child)).toContain("Child findings");

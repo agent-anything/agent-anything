@@ -19,6 +19,7 @@ import { HelarcConversationQueries } from "./HelarcConversationQueries.js";
 import { fitsPage, textPage, validOffset } from "./WorkbenchReadLimits.js";
 import { isWorkbenchOperation, workbenchOperationDetail } from "./WorkbenchOperationPresentation.js";
 import { workbenchInteractionText } from "./WorkbenchInteractionPresentation.js";
+import { conversationInputText } from "./ConversationInputPresentation.js";
 
 export interface WorkbenchQuerySources {
   loadThread(threadId: string): Promise<HelarcThreadRecord | null>;
@@ -120,6 +121,15 @@ export class HelarcWorkbenchQueries {
         (item) => item.id === query.itemId && item.runId === query.runId,
       );
       if (!record) return rejected("not_found");
+      const incoming = conversationInputText(record, resolved.projection);
+      if (incoming) {
+        if (query.section !== undefined) return rejected("invalid_query");
+        const offset = query.offset ?? 0;
+        if (!validOffset(incoming.text, offset)) return rejected("invalid_query");
+        const page = textPage(incoming.text, offset, 16 * 1024, 64 * 1024 - Buffer.byteLength(JSON.stringify(query.itemId)) - 256);
+        return {status: "page", itemId: query.itemId, title: incoming.title, text: page.text,
+          nextOffset: page.end < incoming.text.length ? page.end : null, omittedBytes: incoming.omittedBytes};
+      }
       const interaction = workbenchInteractionText(record, resolved.projection);
       if (interaction) {
         if (query.section !== undefined) return rejected("invalid_query");

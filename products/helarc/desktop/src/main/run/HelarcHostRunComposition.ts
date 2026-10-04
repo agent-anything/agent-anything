@@ -374,7 +374,14 @@ export async function prepareHelarcHostRun(
         try { input.inspection?.transcriptObserver?.observe(record); } catch { /* Independent observer. */ }
       },
     },
-    executionObserver: input.inspection?.executionObserver,
+    executionObserver: {
+      observe(observation) {
+        if (observation.kind === "run_input" && observation.occurredAt !== null) {
+          try { product.recordRunInput(observation.runId, observation.input, observation.occurredAt); } catch { /* Display is non-authoritative. */ }
+        }
+        try { input.inspection?.executionObserver?.observe(observation); } catch { /* Independent observer. */ }
+      },
+    },
     executionFlow: input.inspection?.executionFlow,
     controller: product.controller,
     inputNotifications: {read: (runId, afterSequence) => commandActions.processes.readInputNotifications(runId, afterSequence)},

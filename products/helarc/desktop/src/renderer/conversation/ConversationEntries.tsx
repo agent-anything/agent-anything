@@ -17,6 +17,9 @@ import { ConversationActivity } from "./ConversationActivity.js";
 import { useResponsePreview } from "./useResponsePreview.js";
 import { useConversationCapacity } from "./ConversationReadingBudget.js";
 import { modelResponseProgress } from "../../shared/ModelResponsePresentation.js";
+import { conversationBlockGroups } from "./ConversationBlockGroups.js";
+import { DelegatedConversations, type ChildReadingPosition } from "./DelegatedConversations.js";
+import { ConversationExcerpt, ConversationFollowing, ConversationReading } from "./ConversationReading.js";
 
 export interface ConversationContentProps {
   entries: readonly ConversationEntry[];
@@ -25,6 +28,7 @@ export interface ConversationContentProps {
   live: boolean;
   revision: number;
   onInspect: (scope: WorkbenchScope) => void;
+  speaker?: string;
 }
 export function ConversationEntries(
   props: ConversationContentProps & {
@@ -50,7 +54,7 @@ export function ConversationEntries(
               ? (mapping.get(entry.turnId) ?? entry.id)
               : entry.id
           }
-          className={`wb-message wb-message-${entry.role}${entry.kind === "turn" ? " wb-response" : ""}`}
+          className={`wb-message wb-message-${entry.role}${entry.kind === "turn" ? " wb-response" : ""}${entry.kind === "received_input" ? " wb-received-input" : ""}`}
         >
           {(entry.kind !== "turn" ||
             entry.blocks.some((b) => b.kind !== "activity")) && (
@@ -60,7 +64,7 @@ export function ConversationEntries(
                   (entry.role === "user"
                     ? "You"
                     : entry.role === "assistant"
-                      ? "Helarc"
+                      ? (props.speaker ?? "Helarc")
                       : "Status")}
               </strong>
               {entry.disposition && (
@@ -97,6 +101,9 @@ export function ConversationEntries(
                 omittedBytes={entry.omittedBytes}
                 detail={entry.detail}
                 plain={entry.kind === "interaction"}
+                compact={!!props.speaker}
+                identity={entry.id}
+                excerptLabel={entry.kind === "received_input" ? "input" : "response"}
               />
               <ResultLinks
                 snapshot={props.snapshot}
@@ -127,7 +134,7 @@ export function ConversationEntries(
             key={attempt.invocationId}
           >
             <header>
-              <strong>Helarc</strong>
+              <strong>{props.speaker ?? "Helarc"}</strong>
               <small>
                 {attempt.state === "receiving"
                   ? "Responding"
@@ -142,7 +149,8 @@ export function ConversationEntries(
             </header>
             {parts.map((part) => (
               <React.Fragment key={part.id}>
-                <MarkdownContent text={part.text} />
+                {props.speaker ? <ConversationExcerpt identity={part.id}><MarkdownContent text={part.text} /></ConversationExcerpt>
+                  : <MarkdownContent text={part.text} />}
                 {!!part.omittedBytes && (
                   <p className="wb-muted">Preview shortened.</p>
                 )}
@@ -238,30 +246,18 @@ function ConversationTurn({
     else setFull(null);
   }, [entry.revision, pages, capacity]);
   const blocks = capacity && pages && full ? full.blocks : entry.blocks;
-  const groups: (
-    | ConversationBlock
-    | {
-        kind: "activities";
-        id: string;
-        blocks: Extract<ConversationBlock, { kind: "activity" }>[];
-      }
-  )[] = [];
-  for (const block of blocks) {
-    const previous = groups.at(-1);
-    if (block.kind === "activity") {
-      if (previous?.kind === "activities") previous.blocks.push(block);
-      else
-        groups.push({
-          kind: "activities",
-          id: block.modelItemId,
-          blocks: [block],
-        });
-    } else groups.push(block);
-  }
+  const groups = conversationBlockGroups(blocks);
   return (
     <>
       {groups.map((group) =>
-        group.kind === "activities" ? (
+        group.kind === "delegations" ? (
+          <DelegatedConversations key={group.id} items={group.blocks.map(b => b.item)} visible={props.visible}
+            renderChild={(child, reading) => <ChildConversation {...props} key={child.scope.runId}
+              child={child.scope} label={`${child.displayName}: ${child.label}`} speaker={child.displayName}
+              reading={reading}
+              live={props.live && !["completed", "failed", "cancelled", "inactive"].includes(child.status)} />}
+          />
+        ) : group.kind === "activities" ? (
           <ConversationActivity
             key={group.id}
             scope={entry.scope}
@@ -273,6 +269,7 @@ function ConversationTurn({
                 {...props}
                 child={child.scope}
                 label={`${child.displayName}: ${child.label}`}
+                speaker={child.displayName}
                 live={
                   props.live &&
                   !["completed", "failed", "cancelled", "inactive"].includes(
@@ -283,7 +280,7 @@ function ConversationTurn({
             )}
           />
         ) : (
-          group.kind !== "activity" && (
+          (
             <div className="wb-response-text" key={group.id}>
               {group.disposition && (
                 <small className="wb-muted">{group.disposition}</small>
@@ -292,6 +289,8 @@ function ConversationTurn({
                 text={group.text}
                 omittedBytes={group.omittedBytes}
                 detail={group.detail}
+                compact={!!props.speaker}
+                identity={group.id}
               />
               <ResultLinks
                 snapshot={props.snapshot}
@@ -338,6 +337,7 @@ function ChildConversation(
   props: Omit<ConversationContentProps, "entries"> & {
     child: WorkbenchScope;
     label: string;
+    reading?: ChildReadingPosition;
   },
 ) {
   const capacity = useConversationCapacity("children", 1);
@@ -353,8 +353,11 @@ function ChildConversationContent(
   props: Omit<ConversationContentProps, "entries"> & {
     child: WorkbenchScope;
     label: string;
+    reading?: ChildReadingPosition;
   },
 ) {
+  const preserve = React.useContext(ConversationReading);
+  const follow = React.useContext(ConversationFollowing);
   const previews = useResponsePreview(
     props.child,
     props.live && props.visible,
@@ -364,10 +367,10 @@ function ChildConversationContent(
     .filter((a) => a.state === "committed")
     .map((a) => `${a.invocationId}:${a.revision}`)
     .join("|");
-  const [page, setPage] = useState<ConversationPage | null>(null),
+  const [page, setPage] = useState<ConversationPage | null>(props.reading?.page ?? null),
     [error, setError] = useState(false);
   const [synced, setSynced] = useState("");
-  const historical = useRef(false);
+  const historical = useRef(props.reading?.historical ?? false);
   const [hasNew, setHasNew] = useState(false);
   const latest = useRef({ commitKey, page });
   latest.current = { commitKey, page };
@@ -391,7 +394,7 @@ function ChildConversationContent(
           position:
             older && previous?.previousCursor
               ? { kind: "before", cursor: previous.previousCursor }
-              : historical.current && previous?.entries.length
+              : (historical.current || !follow.following.current) && previous?.entries.length
                 ? {
                     kind: "window",
                     first: previous.entries[0]!.id,
@@ -436,7 +439,12 @@ function ChildConversationContent(
             (last[0] < latest[0] ||
               (last[0] === latest[0] && last[1] < latest[1])),
         );
-        setPage({ ...result, entries: bounded });
+        const nextPage = { ...result, entries: bounded };
+        if (props.reading) {
+          props.reading.page = nextPage;
+          props.reading.historical = historical.current;
+        }
+        setPage(nextPage);
         setSynced(committed);
         setError(false);
       } catch {
@@ -458,18 +466,25 @@ function ChildConversationContent(
     };
   }, [JSON.stringify(props.child)]);
   useEffect(() => reader.current(), [props.revision, commitKey]);
+  useEffect(() => {
+    if (follow.latest) {
+      historical.current = false;
+      reader.current();
+    }
+  }, [follow.latest]);
   return (
     <section className="wb-delegated-conversation" aria-label={props.label}>
-      <h4>{props.label}</h4>
+      {!props.reading && <h4>{props.label}</h4>}
       {page?.previousCursor && (
-        <button className="wb-link" onClick={() => reader.current(true)}>
+        <button className="wb-link" onClick={event => { preserve(event.currentTarget); reader.current(true); }}>
           Earlier delegated messages
         </button>
       )}
       {hasNew && (
         <button
           className="wb-link"
-          onClick={() => {
+          onClick={event => {
+            preserve(event.currentTarget);
             historical.current = false;
             reader.current();
           }}
@@ -510,11 +525,17 @@ export function ConversationText({
   omittedBytes,
   detail,
   plain,
+  compact = false,
+  identity = "response",
+  excerptLabel = "response",
 }: {
   text: string;
   omittedBytes: number;
   detail: ConversationEntry["detail"];
   plain?: boolean;
+  compact?: boolean;
+  identity?: string;
+  excerptLabel?: string;
 }) {
   const [full, setFull] = useState<{
     text: string;
@@ -558,6 +579,8 @@ export function ConversationText({
     <>
       {plain ? (
         <div className="wb-interaction-text">{full?.text ?? text}</div>
+      ) : compact ? (
+        <ConversationExcerpt identity={identity} label={excerptLabel}><MarkdownContent text={full?.text ?? text} /></ConversationExcerpt>
       ) : (
         <MarkdownContent text={full?.text ?? text} />
       )}

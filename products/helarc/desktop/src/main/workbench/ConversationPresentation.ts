@@ -14,6 +14,8 @@ import { workbenchInteractionText } from "./WorkbenchInteractionPresentation.js"
 import { textPage } from "./WorkbenchReadLimits.js";
 import { commandActivity } from "./ConversationCommandPresentation.js";
 import { conversationDelegatedActivity } from "./ConversationDelegatedActivity.js";
+import { conversationChildResponse } from "./ConversationChildResponse.js";
+import { conversationInputText } from "./ConversationInputPresentation.js";
 
 const ended = (status: string) =>
   ["completed", "failed", "cancelled"].includes(status);
@@ -182,6 +184,7 @@ export function presentConversationWork(
       (n) =>
         n.parentRunId === runId && n.runId === (created?.runId ?? referencedId),
     );
+    const textPreview = node ? conversationChildResponse(p, node.runId) : null;
     const child: D.ConversationActivityItem["child"] = node
       ? {
           scope: { ...scope, runId: node.runId },
@@ -194,6 +197,16 @@ export function presentConversationWork(
           status: !active && !ended(node.status) ? "inactive" : node.status,
           displayName: helarcSubtaskName(p.product.presentation.labels, node.runId),
           activity: created ? conversationDelegatedActivity(p, node.runId, live) : null,
+          concurrentGroup: created && node.dispatch?.requestedForm === "concurrent_sibling"
+            ? {
+                id: JSON.stringify([runId, node.dispatch.controllerRequestId,
+                  node.dispatch.controllerTurnId, node.dispatch.candidateIndex - node.dispatch.siblingIndex]),
+                index: node.dispatch.siblingIndex,
+                count: node.dispatch.siblingCount,
+              }
+            : null,
+          textRevision: textPreview?.revision ?? null,
+          textPreview,
           relationship: created ? "created" : "referenced",
         }
       : null;
@@ -268,21 +281,22 @@ export function presentConversationWork(
     }
   for (const r of sourceRecords) {
     const interaction = workbenchInteractionText(r, p);
+    const incoming = conversationInputText(r, p);
     const c = r.content;
-    if (!interaction && !(c.kind === "steering" && c.origin === "user"))
+    if (!incoming && !interaction && !(c.kind === "steering" && c.origin === "user" && runId === p.host.runId))
       continue;
     const text = textPage(
-      interaction?.text ?? (c.kind === "steering" ? c.instruction : ""),
+      incoming?.text ?? interaction?.text ?? (c.kind === "steering" ? c.instruction : ""),
     );
     notices.push({
       id: `record:${productRunId}:${runId}:${r.id}`,
-      kind: interaction ? "interaction" : "steering",
-      role: interaction ? "product" : "user",
-      title: interaction?.title ?? null,
+      kind: incoming ? "received_input" : interaction ? "interaction" : "steering",
+      role: incoming || interaction ? "product" : "user",
+      title: incoming?.title ?? interaction?.title ?? null,
       revision: r.revision,
       position: [anchor, r.sequence],
       content: text.text,
-      omittedBytes: text.omittedBytes,
+      omittedBytes: text.omittedBytes + (incoming?.omittedBytes ?? (c.kind === "steering" ? c.omittedBytes : 0)),
       productRunId,
       runId,
       sourceId: r.id,
@@ -290,7 +304,7 @@ export function presentConversationWork(
       detail: detail(r.id),
       artifactIds: [],
       disposition:
-        interaction?.status ?? (c.kind === "steering" ? c.disposition : null),
+        incoming ? incoming.disposition : interaction?.status ?? (c.kind === "steering" ? c.disposition : null),
     });
   }
   const missing =

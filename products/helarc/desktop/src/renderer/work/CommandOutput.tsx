@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
+import { createPortal } from "react-dom";
+import { RefreshCw, RotateCcw, Maximize2, X } from "lucide-react";
 import type {
   CommandOutputPage,
   WorkbenchScope,
@@ -45,11 +46,21 @@ export function CommandOutput({
   const flight = useRef(false);
   const generation = useRef(0);
   const output = useRef<HTMLDivElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const dialogBody = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (follow && output.current)
+    const element = dialog.current;
+    if (!expanded || !element) return;
+    element.showModal();
+    return () => element.close();
+  }, [expanded]);
+  useEffect(() => {
+    if (follow && compact && dialogBody.current)
+      dialogBody.current.scrollTop = dialogBody.current.scrollHeight;
+    else if (follow && !compact && output.current)
       for (const pre of output.current.querySelectorAll("pre"))
         pre.scrollTop = pre.scrollHeight;
-  }, [stdout, stderr, follow, expanded]);
+  }, [stdout, stderr, follow, expanded, compact]);
   useEffect(() => {
     const version = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -113,24 +124,16 @@ export function CommandOutput({
     active,
     refresh,
   ]);
-  return (
-    <div className={`wb-output${compact ? " wb-output-compact" : ""}${expanded ? " is-expanded" : ""}`} ref={output}>
-      <div className="wb-output-toolbar">
-        {compact && <button className="wb-icon" type="button"
-          title={expanded ? "Collapse output" : "Expand output"}
-          aria-label={expanded ? "Collapse output" : "Expand output"}
-          onClick={() => setExpanded(value => !value)}>
-          {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-        </button>}
-        {(!compact || expanded) && <label>
+  const toolbar = <div className="wb-output-toolbar">
+        <label>
           <input
             type="checkbox"
             checked={follow}
             onChange={(event) => setFollow(event.target.checked)}
           />
           Follow output
-        </label>}
-        {(!compact || page?.status === "rejected" || page?.status === "unavailable") && <button
+        </label>
+        <button
           className="wb-icon"
           type="button"
           title="Refresh output"
@@ -139,8 +142,8 @@ export function CommandOutput({
           onClick={() => setRefresh((value) => value + 1)}
         >
           <RefreshCw size={14} />
-        </button>}
-        {(!compact || expanded) && <button
+        </button>
+        <button
           className="wb-icon"
           type="button"
           title="Read from beginning"
@@ -155,11 +158,12 @@ export function CommandOutput({
           }}
         >
           <RotateCcw size={14} />
-        </button>}
-        {!compact && <span>
+        </button>
+        <span>
           {page?.status === "page" ? page.source : busy ? "Reading" : ""}
-        </span>}
-      </div>
+        </span>
+      </div>;
+  const notices = <>
       {page?.status === "unavailable" ? (
         <p className="wb-warning">Output unavailable: {page.reason}</p>
       ) : page?.status === "rejected" ? (
@@ -170,7 +174,8 @@ export function CommandOutput({
           Earlier mounted output omitted; read from beginning to inspect it.
         </p>
       )}
-      {(["stdout", "stderr"] as const).filter(stream => !compact || stream === "stdout" || stderr ||
+  </>;
+  const streams = (preview: boolean) => (["stdout", "stderr"] as const).filter(stream => !preview || stream === "stdout" || stderr ||
         (page?.status === "page" && (page.stderr.omittedBytes > 0 || page.stderr.replacementCount > 0))).map((stream) => (
         <section className="wb-output-stream" key={stream}>
           <header>
@@ -178,17 +183,17 @@ export function CommandOutput({
             <CopyButton text={stream === "stdout" ? stdout : stderr} />
           </header>
           <pre onScroll={event => {
-            if (follow && event.currentTarget.scrollHeight - event.currentTarget.clientHeight - event.currentTarget.scrollTop > 8)
+            if (!compact && follow && event.currentTarget.scrollHeight - event.currentTarget.clientHeight - event.currentTarget.scrollTop > 8)
               setFollow(false);
           }}>
-            {(compact && !expanded ? outputPreview(stream === "stdout" ? stdout : stderr) : (stream === "stdout" ? stdout : stderr)) ||
+            {(preview ? outputPreview(stream === "stdout" ? stdout : stderr) : (stream === "stdout" ? stdout : stderr)) ||
               (page?.status === "page"
                 ? page.settled && !page.hasMore
                   ? "(empty)"
                   : "(no output yet)"
                 : "")}
           </pre>
-          {page?.status === "page" && (!compact || page[stream].omittedBytes > 0 ||
+          {page?.status === "page" && (!preview || page[stream].omittedBytes > 0 ||
             page[stream].replacementCount > 0 || page[stream].integrity !== "exact") && (
             <small className="wb-muted">
               {page[stream].encoding ?? "Encoding unknown"} /{" "}
@@ -202,8 +207,8 @@ export function CommandOutput({
             </small>
           )}
         </section>
-      ))}
-      {page?.status === "page" && page.hasMore && (
+      ));
+  const more = page?.status === "page" && page.hasMore && (
         <button
           className="wb-link"
           disabled={busy}
@@ -212,7 +217,29 @@ export function CommandOutput({
         >
           Read next output page
         </button>
-      )}
+      );
+  return (
+    <div className={`wb-output${compact ? " wb-output-compact" : ""}`} ref={output}>
+      {compact ? <div className="wb-output-toolbar">
+        <button className="wb-icon" type="button" title="Open full output" aria-label="Open full output"
+          onClick={() => setExpanded(true)}><Maximize2 size={14} /></button>
+        {(page?.status === "rejected" || page?.status === "unavailable") && <button className="wb-link"
+          disabled={busy} onClick={() => setRefresh(value => value + 1)}>Retry output</button>}
+      </div> : toolbar}
+      {notices}
+      {streams(compact)}
+      {!compact && more}
+      {compact && expanded && createPortal(<dialog ref={dialog} className="wb-output-dialog" aria-label="Command output"
+        onCancel={event => {event.preventDefault(); setExpanded(false);}}>
+        <header><strong>Command output</strong><button type="button" className="wb-icon" title="Close output" aria-label="Close output"
+          onClick={() => setExpanded(false)}><X size={18} /></button></header>
+        <div className="wb-output-dialog-body" ref={dialogBody} onScroll={event => {
+          if (follow && event.currentTarget.scrollHeight - event.currentTarget.clientHeight - event.currentTarget.scrollTop > 8)
+            setFollow(false);
+        }}>
+          {toolbar}{notices}{streams(false)}{more}
+        </div>
+      </dialog>, document.body)}
     </div>
   );
 }

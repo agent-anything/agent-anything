@@ -13,6 +13,7 @@ import {
   ModelResponseProgress,
 } from "./ConversationEntries.js";
 import { ConversationReadingBudget } from "./ConversationReadingBudget.js";
+import { ConversationFollowing, ConversationReading } from "./ConversationReading.js";
 
 type Props = {
   snapshot: HelarcMainSnapshot;
@@ -51,12 +52,14 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
     content = useRef<HTMLDivElement>(null);
   const following = useRef(true),
     reading = useRef(false);
-  const anchor = useRef<{ id: string; offset: number } | null>(null);
+  const anchor = useRef<{ id: string; offset: number; element: HTMLElement } | null>(null);
+  const lastProgramScroll = useRef(-1);
   const [page, setPage] = useState<ConversationPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [newContent, setNewContent] = useState(false),
     [busy, setBusy] = useState(false);
   const [syncedCommitKey, setSyncedCommitKey] = useState("");
+  const [latestRequest, setLatestRequest] = useState(0);
   const live =
     !!snapshot.run &&
     !snapshot.run.display.terminal &&
@@ -76,6 +79,7 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
   function returnToLatest() {
     following.current = true;
     anchor.current = null;
+    setLatestRequest(value => value + 1);
     reader.current();
   }
   function saveAnchor() {
@@ -85,13 +89,15 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
       return;
     }
     const top = node.getBoundingClientRect().top;
-    const element = [
-      ...node.querySelectorAll<HTMLElement>("[data-entry]"),
-    ].find((e) => e.getBoundingClientRect().bottom > top);
+    const candidates = [...node.querySelectorAll<HTMLElement>("[data-entry], [data-reading-anchor]")]
+      .filter(e => e.getBoundingClientRect().height > 0 && e.getBoundingClientRect().bottom > top);
+    // Prefer the deepest entry spanning the viewport top, not its root ancestor.
+    const element = candidates.filter(e => e.getBoundingClientRect().top <= top).at(-1) ?? candidates[0];
     anchor.current = element
       ? {
-          id: element.dataset.entry!,
+          id: element.dataset.readingAnchor ?? element.dataset.entry!,
           offset: element.getBoundingClientRect().top - top,
+          element,
         }
       : null;
   }
@@ -100,19 +106,22 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
     if (!node) return;
     if (following.current) {
       node.scrollTop = node.scrollHeight;
+      lastProgramScroll.current = node.scrollTop;
       return;
     }
     const selected = anchor.current;
     const element =
       selected &&
-      [...node.querySelectorAll<HTMLElement>("[data-entry]")].find(
-        (e) => e.dataset.entry === selected.id,
-      );
+      (selected.element.isConnected ? selected.element :
+        [...node.querySelectorAll<HTMLElement>("[data-entry], [data-reading-anchor]")].find(
+          (e) => (e.dataset.readingAnchor ?? e.dataset.entry) === selected.id,
+        ));
     if (element && selected)
       node.scrollTop +=
         element.getBoundingClientRect().top -
         node.getBoundingClientRect().top -
         selected.offset;
+    lastProgramScroll.current = node.scrollTop;
   }
   useLayoutEffect(restore, [page, previews.attempts, visible]);
   useLayoutEffect(() => {
@@ -252,6 +261,7 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
         onScroll={() => {
           if (!viewport.current || reading.current) return;
           const v = viewport.current;
+          if (v.scrollTop === lastProgramScroll.current) return;
           const atTail = v.scrollHeight - v.scrollTop - v.clientHeight < 64;
           if (atTail && (!following.current || newContent)) {
             returnToLatest();
@@ -282,6 +292,14 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
               <span>No conversation yet</span>
             </div>
           )}
+          <ConversationFollowing.Provider value={{following, latest: latestRequest}}>
+          <ConversationReading.Provider value={element => {
+            following.current = false;
+            if (element && viewport.current) {
+              anchor.current = {element, id: element.dataset.readingAnchor ?? element.dataset.entry ?? "",
+                offset: Math.max(0, element.getBoundingClientRect().top - viewport.current.getBoundingClientRect().top)};
+            } else saveAnchor();
+          }}>
           <ConversationEntries
             entries={page?.entries ?? []}
             snapshot={snapshot}
@@ -292,6 +310,8 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
             attempts={previews.attempts}
             syncedCommitKey={syncedCommitKey}
           />
+          </ConversationReading.Provider>
+          </ConversationFollowing.Provider>
           <ModelResponseProgress attempts={previews.attempts} live={live} />
           {previews.omitted > 0 && (
             <p className="wb-muted">Earlier response previews omitted.</p>

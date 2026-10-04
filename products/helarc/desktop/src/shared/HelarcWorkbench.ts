@@ -31,11 +31,14 @@ export interface HelarcRunPresentationRecord {
   readonly observedAt: string;
   readonly source: {
     readonly owner: "runtime";
-    readonly kind: "run_item";
+    readonly kind: "run_item" | "run_input";
     readonly id: string;
     readonly sequence: number;
   };
   readonly content:
+    | { readonly kind: "received_input"; readonly inputKind: "task" | "message" | "agent_result";
+        readonly text: string; readonly omittedBytes: number; readonly senderRunId: string | null;
+        readonly disposition: string | null }
     | {
         readonly kind: "assistant_text";
         readonly turnId: string;
@@ -145,7 +148,7 @@ interface ConversationEntryBase {
 }
 export type ConversationEntry = ConversationMessageEntry | ConversationTurnEntry;
 export interface ConversationMessageEntry extends ConversationEntryBase {
-  readonly kind: "message" | "steering" | "interaction" | "notice";
+  readonly kind: "message" | "steering" | "interaction" | "notice" | "received_input";
 }
 export interface ConversationTurnEntry extends ConversationEntryBase {
   readonly kind: "turn";
@@ -223,11 +226,20 @@ export interface ConversationDelegatedActivity {
   readonly omittedCount: number;
   readonly retentionLimited: boolean;
 }
+export interface ConversationChildTextPreview {
+  readonly text: string;
+  readonly revision: string;
+  readonly disposition: string | null;
+  readonly retentionLimited: boolean;
+}
 export interface ConversationActivityItem extends ConversationActivityRow {
   readonly detail: { readonly kind: "command"; readonly executionId: string }
     | { readonly kind: "operation"; readonly itemId: string } | null;
   readonly child: { readonly scope: WorkbenchScope; readonly label: string; readonly status: string;
     readonly displayName: string; readonly activity: ConversationDelegatedActivity | null;
+    readonly concurrentGroup: { readonly id: string; readonly index: number; readonly count: number } | null;
+    readonly textRevision: string | null;
+    readonly textPreview: ConversationChildTextPreview | null;
     readonly relationship: "created" | "referenced" } | null;
 }
 export interface CurrentWorkPage {

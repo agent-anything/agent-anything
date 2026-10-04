@@ -2,6 +2,7 @@ import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcri
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type { ToolBindingRef } from "@agent-anything/tools/identity";
 import type { RuntimeEvent } from "@agent-anything/observability";
+import type { RunInput } from "@agent-anything/agent-core/input";
 
 export type HelarcOutputSource =
   | { readonly kind: "model_control"; readonly turnId: string; readonly modelItemId: string;
@@ -42,11 +43,14 @@ export interface HelarcRunPresentationRecord {
   readonly origin: HelarcModelItemOrigin | null;
   readonly source: {
     readonly owner: "runtime";
-    readonly kind: "run_item";
+    readonly kind: "run_item" | "run_input";
     readonly id: string;
     readonly sequence: number;
   };
   readonly content:
+    | { readonly kind: "received_input"; readonly inputKind: "task" | "message" | "agent_result";
+        readonly text: string; readonly omittedBytes: number; readonly senderRunId: string | null;
+        readonly disposition: string | null }
     | {
         readonly kind: "assistant_text";
         readonly turnId: string;
@@ -292,6 +296,44 @@ export function helarcSubtaskName(labels: readonly HelarcRunLabel[], runId: stri
   return "Subtask";
 }
 
+/** Actual Run input, not the shortened label or a reconstructed Provider request. */
+export function receiveHelarcRunInputPresentation(
+  current: HelarcRunPresentation, runId: string, input: RunInput, receivedAt: string,
+): HelarcRunPresentation {
+  const label = current.labels.find(label => label.runId === runId);
+  if (!label?.parentRunId) return current;
+  const id = `${runId}:received-task`;
+  if (current.records.some(record => record.id === id && record.runId === runId)) return current;
+  const task = input.task.input as { prompt?: unknown } | null;
+  if (typeof task?.prompt !== "string") return current;
+  let sequence = current.nextSequence;
+  const records: HelarcRunPresentationRecord[] = [];
+  const add = (id: string, text: string, inputKind: "task" | "message", source: HelarcRunPresentationRecord["source"]) => {
+    records.push({id, runId, sequence: sequence++, revision: 0, observedAt: receivedAt, origin: null, source,
+      content: {kind: "received_input", inputKind, ...boundedPresentationText(text), senderRunId: label.parentRunId, disposition: null}});
+  };
+  const source = {owner: "runtime" as const, kind: "run_input" as const, id: `${runId}:input`, sequence: 0};
+  add(id, task.prompt, "task", source);
+  for (const item of input.items) {
+    // The delegation objective is already represented by the task text.
+    if (item.role === "user" && !(item.metadata.source === "delegation_objective" && item.content === task.prompt)) {
+      add(`${runId}:received-input:${item.id}`, item.content, "message", source);
+    }
+  }
+  // A continuation preserves its original task and adds the accepted Parent message.
+  // Resolve the creation action, not a latest-call/name/time heuristic.
+  const creation = current.records.find(record => record.runId === label.parentRunId &&
+    record.content.kind === "tool_call" && record.content.runActionId === label.parentRunActionId);
+  if (creation?.content.kind === "tool_call" && creation.content.toolBindingKind === "descendant_message") {
+    const value = creation.content.input;
+    if (value && typeof value === "object" && !Array.isArray(value) && "prompt" in value && typeof value.prompt === "string") {
+      add(`${runId}:received-continuation`, value.prompt, "message", creation.source);
+    }
+  }
+  return retainPresentation({...current, revision: current.revision + 1, nextSequence: sequence,
+    records: [...current.records, ...records]});
+}
+
 export function appendHelarcRunPresentation(
   current: HelarcRunPresentation,
   record: RunTranscriptRecord,
@@ -359,7 +401,8 @@ export function appendHelarcRunPresentation(
           turnId: model.call.modelCallRef.turnId,
           name: model.call.name,
           ...resolvedCallable(model.metadata?.helarcCallableBinding),
-          input: projectHelarcPresentationValue(model.call.input),
+          input: projectHelarcPresentationValue(model.call.input,
+            binding.toolBindingKind === "descendant_message" ? 256 * 1024 : undefined),
           runActionId: null,
           invocationId: null,
           invocationIds: [],
@@ -430,6 +473,12 @@ export function appendHelarcRunPresentation(
     const text = boundedPresentationText(command.instruction);
     add(item.ref.id, {kind:"steering", commandId:command.commandId, instruction:text.text,
       omittedBytes:text.omittedBytes, origin:command.attribution.origin, disposition:payload.steering.status});
+  } else if (payload.kind === "observation" && payload.observation.payload.kind === "descendant_result_transfer") {
+    const result = payload.observation.payload;
+    const output = result.output as {summary?: unknown} | null;
+    add(item.ref.id, {kind: "received_input", inputKind: "agent_result",
+      ...boundedPresentationText(typeof output?.summary === "string" ? output.summary : ""),
+      senderRunId: result.childRunId, disposition: result.status});
   } else if (payload.kind === "pending_transition" || payload.kind === "retry_transition") {
     add(item.ref.id, {
       kind: "interaction",

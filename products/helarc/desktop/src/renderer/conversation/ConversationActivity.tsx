@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useId, useState } from "react";
+import { useContext, useId, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -19,6 +19,7 @@ import { OperationDetail } from "../work/OperationDetail.js";
 import { useRead } from "../workbench/useRead.js";
 import { ElapsedTime } from "../workbench/ElapsedTime.js";
 import { useConversationCapacity } from "./ConversationReadingBudget.js";
+import { ConversationExcerpt, ConversationReading } from "./ConversationReading.js";
 
 /** A group belongs to one contiguous set of calls in one model response. */
 export function ConversationActivity({
@@ -36,6 +37,7 @@ export function ConversationActivity({
     child: NonNullable<ConversationActivityItem["child"]>,
   ) => React.ReactNode;
 }) {
+  const preserve = useContext(ConversationReading);
   const [open, setOpen] = useState(false);
   const contentId = useId();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -92,14 +94,15 @@ export function ConversationActivity({
                 >
                   <button
                     className="wb-activity-row"
-                    onClick={() =>
+                    onClick={event => {
+                      preserve(event.currentTarget);
                       setExpanded((previous) => {
                         const next = new Set(previous);
                         if (next.has(item.id)) next.delete(item.id);
                         else next.add(item.id);
                         return next;
-                      })
-                    }
+                      });
+                    }}
                     aria-expanded={expandedItem}
                   >
                     <ActivityContents item={item} visible={visible} />
@@ -135,7 +138,7 @@ export function ConversationActivity({
                           {renderChild(item.child)}
                         </>
                       ) : item.detail?.kind === "operation" ? (
-                        <OperationDetail
+                        <ConversationExcerpt identity={item.id} label="details"><OperationDetail
                           scope={scope}
                           record={{
                             id: item.detail.itemId,
@@ -143,7 +146,7 @@ export function ConversationActivity({
                           }}
                           revision={revision}
                           visible={visible}
-                        />
+                        /></ConversationExcerpt>
                       ) : (
                         <p className="wb-muted">Details no longer retained.</p>
                       )}
@@ -167,7 +170,7 @@ export function ConversationActivity({
         aria-controls={contentId}
         title={open ? "Collapse activity" : "Expand activity"}
         aria-label={open ? "Collapse activity" : "Expand activity"}
-        onClick={() => setOpen((v) => !v)}
+        onClick={event => { preserve(event.currentTarget.parentElement!); setOpen((v) => !v); }}
       >
         {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
       </button>

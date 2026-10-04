@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConversationActivityItem } from "../../shared/HelarcWorkbench.js";
 import { ConversationActivity } from "./ConversationActivity.js";
 import { ModelResponseProgress } from "./ConversationEntries.js";
+import { DelegatedConversations } from "./DelegatedConversations.js";
 
 const command: ConversationActivityItem = {
   id: "command", runId: "root", kind: "command", title: "dotnet build",
@@ -14,6 +15,21 @@ const command: ConversationActivityItem = {
 const scope = {threadId:"thread", productRunId:"work", runId:"root"};
 
 describe("Response activity disclosure", () => {
+  it("shows public text and command activity together without mounting Child histories", () => {
+    const renderChild = vi.fn(() => null);
+    const html = renderToStaticMarkup(<DelegatedConversations visible renderChild={renderChild} items={[{
+      ...command, child: {scope: {...scope, runId: "child"}, displayName: "Subtask 1", label: "Inspect",
+        status: "running", relationship: "created", concurrentGroup: null, textRevision: "1",
+        textPreview: {text: "The latest public text", revision: "1", disposition: null, retentionLimited: false},
+        activity: {items: [{...command, runId: "child"}], activeCount: 3, omittedCount: 0, retentionLimited: false}},
+    }]} />);
+    expect(html).toContain("The latest public text");
+    expect(html).toContain("dotnet build");
+    expect(html).toContain("+2");
+    expect(html).toContain('aria-label="Expand Subtask 1"');
+    expect(html).not.toContain('role="tab"');
+    expect(renderChild).not.toHaveBeenCalled();
+  });
   it("starts with one collapsed row and exposes multiplicity without reading details", () => {
     const html = renderToStaticMarkup(<ConversationActivity scope={scope}
       items={[command, {...command,id:"other",title:"Another command"}]} revision={1} visible renderChild={() => null}/>);
@@ -26,7 +42,7 @@ describe("Response activity disclosure", () => {
   it("shows attributed nested activity while the delegated conversation remains closed", () => {
     const renderChild = vi.fn(() => null);
     const delegated: ConversationActivityItem = {...command, id: "delegation", kind: "operation", title: "Subtask 1: Inspect files", state: "settled",
-      detail: null, child: {scope: {...scope, runId: "child"}, displayName: "Subtask 1", label: "Inspect files",
+      detail: null, child: {scope: {...scope, runId: "child"}, displayName: "Subtask 1", label: "Inspect files", concurrentGroup: null, textRevision: null, textPreview: null,
         relationship: "created", status: "running", activity: {activeCount: 2, omittedCount: 0, retentionLimited: false,
           items: [{...command, id: "nested-command", runId: "nested", attribution: "Subtask 1.1"},
             {...command, id: "model", runId: "child", kind: "model", title: "Waiting for model response", status: "",

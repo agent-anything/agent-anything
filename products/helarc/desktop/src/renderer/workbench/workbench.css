@@ -143,6 +143,7 @@
   flex-direction: column;
 }
 .wb-conversation-scroll {
+  --wb-reading-inset: 16px;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -510,6 +511,7 @@
     height: 100%;
   }
   .wb-conversation-scroll {
+    --wb-reading-inset: 12px;
     padding: 12px 18px 24px;
   }
   .wb-header {

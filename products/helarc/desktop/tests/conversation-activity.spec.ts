@@ -175,25 +175,35 @@ test("actual commands and nested delegation retain their response owners", async
       });
     await command.getByRole("button").first().click();
     await expect(command.locator(".wb-output")).toContainText("begin");
+    await expect(command.locator(".wb-output-stream pre")).toHaveCSS("overflow-y", "visible");
+    await command.getByRole("button", {name: "Open full output", exact: true}).click();
+    const outputDialog = page.getByRole("dialog", {name: "Command output", exact: true});
+    await expect(outputDialog).toBeVisible();
+    await expect(outputDialog).toContainText("begin");
+    await expect(outputDialog.locator(".wb-output-stream pre").first()).toHaveCSS("overflow-y", "visible");
+    await page.keyboard.press("Escape");
+    await expect(outputDialog).toHaveCount(0);
     const second = conversation
       .locator(".wb-response")
       .filter({ hasText: "I am delegating the inspection" });
-    await second
-      .getByRole("button", { name: "Expand activity", exact: true })
-      .click();
-    await second.locator(".wb-activity-item > button").first().click();
     const child = second.getByRole("region", {
       name: "Subtask 1: Inspect delegated work",
       exact: true,
     });
+    await second.getByRole("button", {name: "Expand Subtask 1", exact: true}).click();
+    await expect(child.locator(".wb-received-input").first()).toContainText("Received task from Main task");
+    await expect(child.locator(".wb-received-input").first()).toContainText("child-fixture: delegate a small check and report the result.");
     await expect(child).toContainText("Delegated inspection finished.");
-    await child
-      .getByRole("button", { name: "Expand activity", exact: true })
-      .click();
-    await child.locator(".wb-activity-item > button").first().click();
+    await child.getByRole("button", {name: "Expand Subtask 1.1", exact: true}).click();
     await expect(
       child.getByRole("region", { name: "Subtask 1.1: Nested inspection", exact: true }),
     ).toContainText("Nested inspection finished.");
+    await expect(child.getByRole("region", { name: "Subtask 1.1: Nested inspection", exact: true })
+      .locator(".wb-received-input")).toContainText("Received task from Subtask 1");
+    await expect(child.locator(".wb-child-viewport")).toHaveCount(0);
+    expect(await child.evaluate(root => [...root.querySelectorAll<HTMLElement>("*")].filter(e =>
+      /^(auto|scroll)$/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1
+    ).map(e => e.className))).toEqual([]);
     await expect(page.locator("#task-input")).toHaveAttribute(
       "placeholder",
       "Add guidance...",
@@ -206,7 +216,7 @@ test("actual commands and nested delegation retain their response owners", async
       held!.body.messages.map((m: any) => m.content ?? "").join("\n"),
     )?.[1];
     expect(taskId).toBeTruthy();
-    await expect(command).toContainText("Exited with code 0", {
+    await expect(command).toContainText("Completed (root exit code 0)", {
       timeout: 15000,
     });
     await expect(command.locator(".wb-output")).toContainText("end");
@@ -221,7 +231,7 @@ test("actual commands and nested delegation retain their response owners", async
         { timeout: 20000 },
       )
       .toBe("completed");
-    await expect(command).toContainText("Exited with code 0");
+    await expect(command).toContainText("Completed (root exit code 0)");
     await expect(command.locator(".wb-output")).toContainText("end");
     await page.getByRole("button", { name: /Latest messages/ }).click();
     await expect(
@@ -254,13 +264,14 @@ test("actual commands and nested delegation retain their response owners", async
         exact: true,
       }),
     ).toHaveCount(1);
-    await expect(
-      conversation.getByText("Delegated inspection finished.", { exact: true }),
-    ).toHaveCount(0);
+    await expect(conversation.locator(".wb-delegated-conversation")).toHaveCount(0);
+    await expect(conversation.locator(".wb-child-text-preview")).toContainText("Delegated inspection finished.");
+    await second.getByRole("button", {name: "Expand Subtask 1", exact: true}).click();
+    await expect(child.locator(".wb-received-input").first()).toContainText("child-fixture: delegate a small check and report the result.");
     await response
       .getByRole("button", { name: "Expand activity", exact: true })
       .click();
-    await expect(response).toContainText("Exited with code 0");
+    await expect(response).toContainText("Completed (root exit code 0)");
     expect(requests).toHaveLength(totalRequests);
   } finally {
     if (info.status !== info.expectedStatus) {

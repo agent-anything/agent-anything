@@ -7,6 +7,7 @@ import {
   labelHelarcRunPresentation,
   projectHelarcPresentationValue,
   helarcSubtaskName,
+  receiveHelarcRunInputPresentation,
 } from "./HelarcRunPresentation.js";
 
 const at = "2026-09-18T00:00:00.000Z";
@@ -37,6 +38,60 @@ const call = {
 };
 
 describe("Run presentation", () => {
+  it("records actual delegated input once without label truncation or system material", () => {
+    const text = "Task detail ".repeat(3000);
+    let state = labelHelarcRunPresentation(createHelarcRunPresentation(), "child", {
+      kind: "descendant", root: {id: "root"}, parent: {id: "root"}, depth: 1,
+      parentRunAction: {id: "create", run: {id: "root"}, sequence: 1}, relation: {id: "relation"},
+    }, "Not the child's task");
+    const input = {task: {id: "task", kind: "helarc.delegated-code-task", input: {prompt: text}, createdAt: at, metadata: {}},
+      items: [
+        {id: "objective", kind: "message" as const, role: "user" as const, content: text, createdAt: at, metadata: {source: "delegation_objective"}},
+        {id: "extra", kind: "message" as const, role: "user" as const, content: "Additional material", createdAt: at, metadata: {}},
+        {id: "system", kind: "message" as const, role: "system" as const, content: "PRIVATE instructions", createdAt: at, metadata: {}},
+      ], metadata: {private: "not displayed"}};
+    state = receiveHelarcRunInputPresentation(state, "child", input, at);
+    expect(state.records.map(r => r.content)).toEqual([
+      {kind: "received_input", inputKind: "task", text, omittedBytes: 0, senderRunId: "root", disposition: null},
+      {kind: "received_input", inputKind: "message", text: "Additional material", omittedBytes: 0, senderRunId: "root", disposition: null},
+    ]);
+    expect(state.records[0]?.source).toMatchObject({kind: "run_input", id: "child:input"});
+    expect(receiveHelarcRunInputPresentation(state, "child", input, at)).toBe(state);
+    expect(receiveHelarcRunInputPresentation(state, "root", input, at)).toBe(state);
+    state = appendHelarcRunPresentation(state, record(1, {kind: "controller_turn", modelItems: [
+      {kind: "assistant_text", id: "reply", turnId: "turn", contentBlockOrdinal: 0, text: "Reply"},
+    ]}, "child"));
+    expect(state.records.at(-1)?.origin?.turnSequence).toBeGreaterThan(state.records[1]!.sequence);
+    expect(JSON.stringify(state.records)).not.toContain("PRIVATE");
+  });
+  it("keeps a continuation's accepted message separate from its original task", () => {
+    const prompt = "Continue with this input. ".repeat(2000);
+    let state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {kind: "controller_turn", modelItems: [{
+      ...call, metadata: {helarcCallableBinding: {kind: "tool", toolName: "SendMessage", binding: {kind: "descendant_message"}}},
+      call: {...call.call, input: {agent_id: "previous", prompt}},
+    }]}));
+    state = appendHelarcRunPresentation(state, record(2, {kind: "run_action", action: {ref: {id: "continue"},
+      provenance: {kind: "controller", modelCallRef: {id: "call"}}, subject: {kind: "tool"}}}));
+    state = labelHelarcRunPresentation(state, "continued", {kind: "descendant", root: {id: "root"}, parent: {id: "root"}, depth: 1,
+      parentRunAction: {id: "continue", run: {id: "root"}, sequence: 1}, relation: {id: "relation"}}, "Root objective");
+    state = receiveHelarcRunInputPresentation(state, "continued", {task: {id: "task", kind: "helarc.delegated-code-task",
+      input: {prompt: "Original task"}, createdAt: at, metadata: {}}, items: [], metadata: {}}, at);
+    expect(state.records.filter(r => r.runId === "continued").map(r => r.content)).toMatchObject([
+      {inputKind: "task", text: "Original task"}, {inputKind: "message", text: prompt},
+    ]);
+  });
+  it("records asynchronous delivered results but does not duplicate ordinary Tool results", () => {
+    let state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {kind: "observation", observation: {
+      payload: {kind: "descendant_run", output: {summary: "Ordinary Tool return"}},
+    }}, "child"));
+    expect(state.records).toEqual([]);
+    state = appendHelarcRunPresentation(state, record(2, {kind: "observation", observation: {
+      payload: {kind: "descendant_result_transfer", childRunId: "nested", status: "partial", output: {summary: "Actual delivered text", secret: "PRIVATE"}},
+    }}, "child"));
+    expect(state.records[0]?.content).toEqual({kind: "received_input", inputKind: "agent_result", text: "Actual delivered text",
+      omittedBytes: 0, senderRunId: "nested", disposition: "partial"});
+    expect(JSON.stringify(state.records)).not.toContain("PRIVATE");
+  });
   it("retains sibling numbers through reordered labels, completion, and persisted reload", () => {
     let state = labelHelarcRunPresentation(createHelarcRunPresentation(), "root", {kind: "root", root: {id: "root"}, depth: 0}, "Task");
     const add = (id: string, parent = "root") => {
