@@ -24,6 +24,8 @@ export {
   StructuredOutputError,
 } from "./StructuredOutput.js";
 export type { ModelFailure } from "./ModelFailure.js";
+export type { ModelOutputRecovery } from "./ModelOutputRecovery.js";
+export { createModelOutputRecoverySection } from "./ModelOutputRecovery.js";
 export {
   ModelInteractionProjectionError,
   projectModelInteraction,

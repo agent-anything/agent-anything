@@ -104,7 +104,7 @@ export class HelarcCollaborationQueries {
         query,
         "commands",
         p.product.commands
-          .filter((c) => c.phase !== "settled")
+          .filter((c) => c.outcome === null && c.phase !== "settled")
           .map((c) => ({
             ...c,
             command: c.command?.slice(0, 2048),
@@ -183,7 +183,7 @@ export class HelarcCollaborationQueries {
       if (!resolved) return readRejected("not_found");
       const presentation = resolved.projection.product.presentation;
       if (query.collection === "commands") {
-        const all = resolved.projection.product.commands.filter(c => c.runId === query.runId && c.phase === "settled");
+        const all = resolved.projection.product.commands.filter(c => c.runId === query.runId && (c.outcome !== null || c.phase === "settled"));
         const identity = [query.threadId,query.productRunId,query.runId,"commands"];
         const cursor = query.cursor ? decodePosition(query.cursor) : null;
         const anchor = cursor ? all.findIndex(c => c.executionId === cursor.before) : all.length;
@@ -502,7 +502,7 @@ function taskSummary(
     status: !live && node.terminal === null ? "inactive" : node.status,
     terminalCode: node.terminal?.code ?? null,
     hasPlan: p.product.presentation.plans[runId] != null,
-    hasFinishedWork: p.product.commands.some(c => c.runId === runId && c.phase === "settled") ||
+    hasFinishedWork: p.product.commands.some(c => c.runId === runId && (c.outcome !== null || c.phase === "settled")) ||
       p.product.presentation.records.some(r => r.runId === runId && isWorkbenchOperation(r) && r.content.settlement !== null),
   };
 }

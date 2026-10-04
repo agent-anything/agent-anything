@@ -17,7 +17,8 @@ export type RunExecutionObservation = {
       readonly disposition: "admitted" | "rejected" | "queued" | "dispatched"; readonly rule: string; readonly groupId: string | null; readonly reason: string | null }
   | { readonly kind: "context_projection"; readonly projection: ContextProjection | null; readonly manifest: ProjectionManifest }
   | { readonly kind: "context_committed"; readonly context: ActiveContext }
-  | { readonly kind: "context_source"; readonly source: import("@agent-anything/context/contribution").ContextContribution["source"]; readonly value: unknown }
+  | { readonly kind: "context_source"; readonly source: import("@agent-anything/context/contribution").ContextContribution["source"]; readonly value: unknown;
+      readonly inputs?: readonly {readonly owner: string; readonly kind: string; readonly id: string; readonly revision: string}[] }
   | { readonly kind: "descendant_result"; readonly parentRunActionId: string; readonly raw: RunResult; readonly projected: DelegationResult }
   | { readonly kind: "composite"; readonly parentRunActionId: string; readonly definition: CompositeDefinitionRevision; readonly snapshot: CompositeExecutionSnapshot }
   | { readonly kind: "tool_exposure"; readonly turnId: string; readonly exposure: CurrentTurnToolExposure; readonly proof: ToolExposureProof; readonly selected: readonly ToolRevisionRef[] }

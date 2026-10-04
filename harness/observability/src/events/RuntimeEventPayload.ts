@@ -8,6 +8,7 @@ export type RuntimeRunItemKind =
   | "retry_transition"
   | "cancellation_transition"
   | "controller_feedback"
+  | "input_notification"
   | "completion_acceptance"
   | "suspension_transition"
   | "settlement_cause"

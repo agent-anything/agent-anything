@@ -170,6 +170,37 @@ describe.each(["ollama", "openai"] as const)("%s streaming", (format) => {
     expect(progress.at(-1)).toMatchObject({ kind: "settled", disposition: "interrupted", parts: [] });
   });
 
+  it.each(["buffered", "streaming"] as const)("preserves output-limit classification for unfinished calls in %s delivery", async (mode) => {
+    const rawCall = { function: { name: "Read", arguments: '{"file_path":' } };
+    const transportCalls = format === "ollama" ? [rawCall] : [{ ...rawCall, type: "function", id: "unfinished-call" }];
+    const value = format === "ollama"
+      ? { done: true, done_reason: "length", message: { content: "", tool_calls: transportCalls }, prompt_eval_count: 10, eval_count: 2048 }
+      : { id: "response-1", choices: [{ finish_reason: "length", message: { content: "", tool_calls: transportCalls } }],
+        usage: { prompt_tokens: 10, completion_tokens: 2048, total_tokens: 2058 } };
+    const stream = format === "ollama" ? ndjson(value)
+      : sse({ tool_calls: [{ ...transportCalls[0], index: 0 }] }, "length") + "data: [DONE]\n\n";
+    const provider = create(async () => mode === "buffered"
+      ? { ok: true, status: 200, json: async () => value }
+      : response(body(stream)));
+    const result = await provider.send(createNativeProviderRequest(provider), context(), { mode, invocationId: "truncated" });
+    expect(result).toMatchObject({ kind: "succeeded", response: {
+      kind: "native_tool_turn", turn: { finish: { kind: "output_limit" }, assistant: { content: [] } },
+      metadata: { outputTruncation: { discardedToolCallCount: 1 } },
+    } });
+    if (mode === "buffered" || format === "ollama") {
+      expect(result).toMatchObject({ response: { turn: { usage: { outputTokens: 2048 } } } });
+    }
+  });
+
+  it("still rejects unfinished call arguments when the provider declares normal completion", async () => {
+    const payload = format === "ollama"
+      ? ndjson({ done: true, done_reason: "stop", message: { content: "", tool_calls: [{ function: { name: "Read", arguments: '{"file_path":' } }] } })
+      : sse({ tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "Read", arguments: '{"file_path":' } }] }, "tool_calls") + "data: [DONE]\n\n";
+    const provider = create(async () => response(body(payload)));
+    expect(await provider.send(createNativeProviderRequest(provider), context(), { mode: "streaming", invocationId: "malformed" }))
+      .toMatchObject({ kind: "failed", failure: { code: "provider_response_malformed" } });
+  });
+
   it.each(["invalid_utf8", "bad_json", "missing_body", "oversized_frame", "oversized_text"])("rejects %s without fallback", async (kind) => {
     const payload = kind === "invalid_utf8" ? new Uint8Array([0xc3, 0x28])
       : kind === "bad_json" ? format === "ollama" ? "{bad}\n" : "data: {bad}\n\n"

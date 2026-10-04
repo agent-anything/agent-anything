@@ -7,7 +7,7 @@ export function commandActivity(c: HelarcCommandProgress, active: boolean): Conv
     stopping: "Stopping", terminating: "Stopping", unresolved: "Process state unresolved",
   };
   const phase = phases[c.phase] ?? "Execution pending";
-  const settled = c.phase === "settled";
+  const settled = c.outcome !== null || c.phase === "settled";
   const outcomes: Record<string, string> = {
     succeeded: "Completed", failed: "Failed", cancelled: "Cancelled",
     timed_out: "Timed out", unknown: "Outcome uncertain",
@@ -19,7 +19,7 @@ export function commandActivity(c: HelarcCommandProgress, active: boolean): Conv
     attribution: null,
     state: settled ? "settled" : active ? "ongoing" : "inactive",
     status: settled
-      ? `${outcome}${c.exitCode == null ? "" : ` (root exit code ${c.exitCode})`}`
+      ? `${outcome}${c.exitCode == null ? "" : ` (root exit code ${c.exitCode})`}${c.phase === "settled" ? "" : "; resources still managed"}`
       : active ? phase : `Last observed: ${phase}`,
     startedAt: c.startedAt ?? null, endedAt: c.completedAt ?? null,
     observedAt: c.observedAt,

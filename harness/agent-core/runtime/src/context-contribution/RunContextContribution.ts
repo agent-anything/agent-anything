@@ -251,7 +251,7 @@ export function measureDelegationInitialContextBytes(input: {
 export function createCurrentRunContextAdmissionProfile(): ContextAdmissionProfile {
   return admissionProfile({
     owner: "agent-runtime",
-    sourceKinds: ["run_state", "run_plan"],
+    sourceKinds: ["run_state", "run_plan", "input_notifications"],
     audiences: ["model"],
     retention: ["current"],
     instructionRoles: ["data"],

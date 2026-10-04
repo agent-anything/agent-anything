@@ -377,6 +377,7 @@ export async function prepareHelarcHostRun(
     executionObserver: input.inspection?.executionObserver,
     executionFlow: input.inspection?.executionFlow,
     controller: product.controller,
+    inputNotifications: {read: (runId, afterSequence) => commandActions.processes.readInputNotifications(runId, afterSequence)},
     contextProjection,
     operations: {
       catalog: product.actions.operationCatalog,

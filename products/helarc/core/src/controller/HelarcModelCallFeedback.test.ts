@@ -46,6 +46,7 @@ describe("Helarc model-call feedback", () => {
     });
     expect(feedback.message).toContain('Unknown function name "Agent"');
     expect(feedback.message).toContain("This call was not executed.");
+    expect(feedback.message).toContain("No requested state update was applied by this call.");
     expect(feedback.message).toContain(JSON.stringify(current.definitions.map(({ name }) => name)));
     expect(feedback.message).toContain("function definitions supplied with your current request");
     expect(feedback.message).toContain("including any suffix");
@@ -54,6 +55,39 @@ describe("Helarc model-call feedback", () => {
     expect(feedback.message).not.toContain("active catalog");
     expect(feedback.message).not.toContain(rejectedCall.input.prompt);
     expect(Object.isFrozen(feedback)).toBe(true);
+  });
+
+  it.each([
+    { submitted: "Update_plan", available: "update_plan" },
+    { submitted: "READ_123456ABCDEF", available: "Read_123456abcdef" },
+  ])("suggests the unique case-only spelling without resolving $submitted", ({ submitted, available }) => {
+    const rejectedCall = call(submitted);
+    const feedback = createHelarcUnknownCallableRejection(rejectedCall, catalog([available, "final_result"]));
+
+    expect(feedback).toMatchObject({
+      kind: "model_call_rejection",
+      name: submitted,
+      code: "model_callable_unknown",
+      modelCallRef: rejectedCall.modelCallRef,
+    });
+    expect(feedback.message).toContain(`Only the letter case differs from an available function: ${JSON.stringify(available)}.`);
+    expect(feedback.message).toContain("Names are case-sensitive; submit a new call using that exact name.");
+    expect(feedback.message).toContain("No requested state update was applied by this call.");
+    expect(feedback.message).not.toContain(rejectedCall.input.prompt);
+  });
+
+  it.each([
+    { submitted: "DOTHING", names: ["DoThing", "doThing"] },
+    { submitted: "Agent", names: ["Agent_6e06f4afa928"] },
+    { submitted: "Read_obsolete", names: ["Read_123456abcdef"] },
+    { submitted: "updat_plan", names: ["update_plan"] },
+    { submitted: "\u212A", names: ["k"] },
+  ])("does not guess a correction for $submitted", ({ submitted, names }) => {
+    const feedback = createHelarcUnknownCallableRejection(call(submitted), catalog(names));
+
+    expect(feedback.name).toBe(submitted);
+    expect(feedback.message).not.toContain("Only the letter case differs");
+    expect(feedback.message).toContain(JSON.stringify(names));
   });
 
   it("quotes model-supplied names and bounds only their displayed text", () => {

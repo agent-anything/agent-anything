@@ -81,7 +81,7 @@ export async function readOpenAIResponseStream(
   if (!done) incompleteStream();
   const ordered = [...calls].sort(([left], [right]) => left - right);
   const toolCalls = ordered.map(([index, call], ordinal) => {
-    if (index !== ordinal || !call.id || call.type !== "function" || !call.name) malformedStream();
+    if (index !== ordinal || (finish !== "length" && (!call.id || call.type !== "function" || !call.name))) malformedStream();
     return { id: call.id, type: call.type, function: { name: call.name, arguments: call.arguments } };
   });
   return { id: responseId, choices: [{ index: 0, finish_reason: finish,

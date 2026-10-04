@@ -103,6 +103,45 @@ pub fn active(job: &OwnedHandle) -> io::Result<u32> {
 }
 pub fn terminate(job: &OwnedHandle) -> io::Result<()> { unsafe { check(TerminateJobObject(job.as_raw_handle(), 1)) } }
 
+#[derive(serde::Serialize)]
+pub struct JobMember { pid: u32, identity: Option<String>, executable: Option<String> }
+#[derive(serde::Serialize)]
+pub struct JobMembers { pub members: Vec<JobMember>, pub omitted_count: u32 }
+
+pub fn members(job: &OwnedHandle) -> io::Result<JobMembers> {
+    // Match JOBOBJECT_BASIC_PROCESS_ID_LIST with room for a bounded PID prefix.
+    #[repr(C)]
+    struct List { assigned: u32, count: u32, ids: [usize; 32] }
+    unsafe {
+        let mut list: List = zeroed();
+        let ok = QueryInformationJobObject(job.as_raw_handle(), JobObjectBasicProcessIdList,
+            (&mut list as *mut List).cast(), size_of::<List>() as u32, null_mut());
+        if ok == 0 && GetLastError() != ERROR_MORE_DATA { return Err(io::Error::last_os_error()); }
+        let mut members = Vec::new();
+        for raw in list.ids.iter().take((list.count as usize).min(list.ids.len())) {
+            let pid = *raw as u32;
+            let mut member = JobMember { pid, identity: None, executable: None };
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if !handle.is_null() {
+                let handle = OwnedHandle::from_raw_handle(handle);
+                let mut belongs = 0;
+                if IsProcessInJob(handle.as_raw_handle(), job.as_raw_handle(), &mut belongs) != 0 && belongs != 0 {
+                    let mut creation: FILETIME = zeroed(); let mut exit = zeroed(); let mut kernel = zeroed(); let mut user = zeroed();
+                    if GetProcessTimes(handle.as_raw_handle(), &mut creation, &mut exit, &mut kernel, &mut user) != 0 {
+                        member.identity = Some(format!("{:08x}{:08x}", creation.dwHighDateTime, creation.dwLowDateTime));
+                    }
+                    let mut path = [0u16; 4096]; let mut length = path.len() as u32;
+                    if QueryFullProcessImageNameW(handle.as_raw_handle(), 0, path.as_mut_ptr(), &mut length) != 0 {
+                        member.executable = Some(String::from_utf16_lossy(&path[..length as usize]));
+                    }
+                }
+            }
+            members.push(member);
+        }
+        Ok(JobMembers { omitted_count: list.assigned.saturating_sub(members.len() as u32), members })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

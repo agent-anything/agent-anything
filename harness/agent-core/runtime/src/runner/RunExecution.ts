@@ -1,6 +1,7 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
 import { deriveRunStatusAfterPendingChange } from "./RunPendingStatus.js";
 import { RunExecutionFlow } from "./RunExecutionFlow.js";
+import { RunInputNotifications } from "./RunInputNotifications.js";
 import { RUN_CONTROL_EXECUTION_FLOW, RUN_SUSPENSION_WAIT_FLOW } from "./RunControlExecutionFlow.js";
 import { DESCENDANT_TRANSFER_EXECUTION_FLOW } from "./DescendantTransferExecutionFlow.js";
 import { createExecutionFlowDefinition, ExecutionFlowInvocation, ExecutionFlowPath, type ExecutionFlowContext, type ExecutionFlowOccurrenceRef, type ExecutionFlowStep } from "@agent-anything/observability/execution-flow";
@@ -529,6 +530,7 @@ export class RunExecution<TOutput> {
   private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
   private readonly decisionBasis = new RunDecisionBasis();
+  private readonly inputNotifications = new RunInputNotifications();
   private pendingCompletionCall: {
     readonly call: ModelToolCall;
     readonly turn: ControllerTurnRef;
@@ -1477,6 +1479,7 @@ export class RunExecution<TOutput> {
     }
     const terminal = this.completionLimitFailure();
     if (terminal !== null) return terminal;
+    if (this.deferCompletionForNotifications(turn, step)) return null;
     const changed = this.drainSteering("apply") > 0 || this.completionBasisChanged(turn);
     const current = this.writer.getSnapshot();
     step.check("active_state", current.status === "running" || current.status === "waiting" ? "passed" : "not_satisfied", {status: current.status, revision: current.revision});
@@ -1566,7 +1569,8 @@ export class RunExecution<TOutput> {
         this.decisionBasis.release(turn.id);
       }
     }
-    this.flow.enter("acceptance", {turnId: turn.id, revision: this.writer.getSnapshot().revision});
+    const acceptance = this.flow.enter("acceptance", {turnId: turn.id, revision: this.writer.getSnapshot().revision});
+    if (this.deferCompletionForNotifications(turn, acceptance)) return null;
     const accepted = this.acceptRunCompletion({ id: turn.id, revision: String(turn.sequence) }, decision.completionSource);
     this.settleCompletionCall("succeeded", "completion_candidate_accepted", accepted.source);
     return {status: "completed", output: decision.output, source: accepted.source};
@@ -1576,6 +1580,26 @@ export class RunExecution<TOutput> {
     if (this.resourceFailure !== null) return this.resourceFailureCandidate(this.resourceFailure);
     const deadline = evaluateRunDeadline({deadlineAt: this.writer.getSnapshot().deadlineAt, now: this.now()});
     return deadline === null ? null : {status: "failed", failure: runtimeFailure(deadline.code, deadline.message, deadline.metadata)};
+  }
+
+  private collectInputNotifications(): void {
+    const facts = this.inputNotifications.collect(this.runId, this.dependencies.inputNotifications,
+      this.dependencies.contextProjection.maxContributionPayloadBytes);
+    for (const notification of facts) {
+      this.writer.commitItems([{kind: "input_notification", notification}]);
+      publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
+        occurredAt: notification.occurredAt, source: {...notification.source, observedAt: notification.occurredAt}, value: notification});
+    }
+  }
+
+  private deferCompletionForNotifications(turn: ControllerTurnRef, step: ExecutionFlowStep): boolean {
+    this.collectInputNotifications();
+    const pending = this.inputNotifications.undelivered;
+    step.check("input_notifications", pending > 0 ? "not_satisfied" : "passed", {undelivered: pending});
+    if (pending === 0) return false;
+    this.declineCompletion(turn, "completion_input_pending",
+      "New execution facts arrived after the input used for this ending proposal. Read input_notifications in the next context before deciding whether to continue or submit a new final response. Do not repeat successful calls merely because this proposal was deferred.");
+    return true;
   }
 
   private completionBasisChanged(turn: ControllerTurnRef): boolean {
@@ -1860,7 +1884,9 @@ export class RunExecution<TOutput> {
     const flow = new ExecutionFlowPath(CONTROLLER_EXECUTION_FLOW, this.flow.context, this.runId, []);
     let flowDisposition: "returned" | "failed" | "interrupted" = "interrupted";
     try {
+    this.collectInputNotifications();
     this.synchronizeCurrentContext();
+    const notificationCheckpoint = this.inputNotifications.checkpoint;
     const state = this.writer.getSnapshot();
     const iteration = state.counters.controllerTurns + 1;
     const turn: ControllerTurnRef = Object.freeze({
@@ -1987,6 +2013,7 @@ export class RunExecution<TOutput> {
       let decision: ControllerDecision<TOutput>;
       try {
         decision = validateControllerDecision(candidate, prepared.input);
+        this.inputNotifications.delivered(notificationCheckpoint);
         decisionStep.check("decision_contract", "passed", {kind: decision.kind});
       } catch (error) {
         decisionStep.check("decision_contract", "error", {reason: "invalid_controller_decision"});
@@ -2128,7 +2155,7 @@ export class RunExecution<TOutput> {
       ?? this.id("context_contribution");
     const revision = String(state.revision + 1);
     const plan = state.plan === null ? null : projectPlan(state.plan);
-    const contributions = createCurrentRunContextContributions({
+    const currentContributions = createCurrentRunContextContributions({
       runStateId,
       planId,
       revision,
@@ -2136,11 +2163,14 @@ export class RunExecution<TOutput> {
       plan,
       createdAt: this.now(),
     });
+    const notificationContribution = this.inputNotifications.contribution(this.runId);
+    const contributions = notificationContribution === null ? currentContributions : [...currentContributions, notificationContribution];
     for (const contribution of contributions) {
       publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
         occurredAt: contribution.source.observedAt, source: contribution.source,
+        ...(contribution.source.kind === "input_notifications" ? {inputs: this.inputNotifications.sources} : {}),
         value: contribution.source.kind === "run_state" ? {revision: state.revision, status: state.status, activeAgent: state.activeAgent, pending: state.pending}
-          : plan});
+          : contribution.source.kind === "run_plan" ? plan : contribution.payload});
     }
     this.writer.commitState((current) => Object.freeze({
       context: this.applyContextContributions(

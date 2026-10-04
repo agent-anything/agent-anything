@@ -41,6 +41,7 @@ import type { RetryClassification, RetryFailure } from "../retry/index.js";
 import type { RetryExhaustedEvent } from "../retry/index.js";
 import type { RetryOperation } from "../retry/index.js";
 import type { ModelFailure } from "./ModelFailure.js";
+import { createModelOutputRecoverySection, type ModelOutputRecovery } from "./ModelOutputRecovery.js";
 import type { ModelInputRecoveryPort } from "./ModelInputRecovery.js";
 import { unsupportedModelInputRecovery } from "./ModelInputRecovery.js";
 import type {
@@ -73,6 +74,7 @@ export type ParseProviderResponse<TOutput = unknown> = (
 export type ControllerFailureCode =
   | "model_request_failed"
   | "model_output_invalid"
+  | "model_output_limit_exhausted"
   | "model_structured_output_retry_exhausted"
   | "model_context_capacity_exceeded"
   | "model_input_recovery_failed"
@@ -122,7 +124,7 @@ export interface ProviderBackedControllerInput<TOutput = unknown> {
         readonly contractId: string;
         readonly maxProviderOutputLength: number;
       }
-    | { readonly kind: "native_tool_turn" };
+    | { readonly kind: "native_tool_turn"; readonly maximumOutputRecoveryAttempts?: number };
   readonly retryExecutor: RetryExecutor;
   readonly retryClock: RetryClock;
   readonly continuation?: ModelContinuationLifecycle;
@@ -191,6 +193,12 @@ export class ProviderBackedController<TOutput = unknown>
   }
 
   constructor(private readonly input: ProviderBackedControllerInput<TOutput>) {
+    if (input.responseProtocol.kind === "native_tool_turn") {
+      const maximum = input.responseProtocol.maximumOutputRecoveryAttempts ?? 2;
+      if (!Number.isSafeInteger(maximum) || maximum < 0) {
+        throw new TypeError("maximumOutputRecoveryAttempts must be a non-negative safe integer.");
+      }
+    }
     if (input.delivery?.mode === "streaming" &&
         (input.responseProtocol.kind !== "native_tool_turn" || !input.provider.descriptor.capabilities.streaming.supported)) {
       throw new TypeError("Streaming requires native Tool interaction and a streaming-capable Provider.");
@@ -251,46 +259,78 @@ export class ProviderBackedController<TOutput = unknown>
     const delivery = new ControllerResponseDelivery(controllerInput.runId,
       controllerInput.toolExposure.controllerRequestId, this.input.delivery ?? { mode: "buffered" });
     let providerRequestNumber = 0;
+    let outputRecovery: ModelOutputRecovery | undefined;
+    const maximumRecoveryAttempts = this.input.responseProtocol.kind === "native_tool_turn"
+      ? this.input.responseProtocol.maximumOutputRecoveryAttempts ?? 2 : 0;
     try {
-    const build = flow.advance("build", {controllerRequestId: controllerInput.toolExposure.controllerRequestId},
-      [{owner: "runtime", kind: "request", id: controllerInput.toolExposure.controllerRequestId, revision: null}]);
-    const request = await this.buildRequest(controllerInput, Object.freeze({
-      executionFlow: flow.callContext,
-      attemptNumber: 1,
-      correction: null,
-      target: this.input.provider.modelContext.target,
-      requestedOutput: this.input.provider.modelContext.requestedOutput,
-    }));
-    build.check("request_contract", "passed", {requestId: request.requestId, compositionId: request.composition.id});
-    const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
-    build.output(requestRef);
-    const send = flow.advance("send", {requestId: request.requestId}, [requestRef]);
-    const response = await this.sendRequest(
-      request,
-      controllerInput,
-      {...callContext, executionFlow: flow.callContext},
-      () => ++providerRequestNumber,
-      0,
-      delivery,
-    );
-    const responseRef = flow.material("Normalized Provider response", "received", response, "provider");
-    send.output(responseRef);
-    if (response.kind !== "native_tool_turn") {
-      throw invalidOutput(
-        "Provider returned a response kind that does not match native Tool interaction.",
-      );
-    }
-    const parse = flow.advance("parse", {}, [responseRef]);
-    const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
-    const decision = validateControllerDecision(parsed, controllerInput);
-    parse.check("decision_contract", "passed", {kind: decision.kind});
-    assertProviderBackedDecisionProvenance(
-      decision,
-      controllerInput.toolExposure.controllerRequestId,
-    );
-    throwIfCancelled(callContext);
-    delivery.finish("validated", decision.modelItems);
-    return decision;
+      for (let recoveryAttempt = 0; ; recoveryAttempt++) {
+        throwIfCancelled(callContext);
+        const build = flow.advance("build", {controllerRequestId: controllerInput.toolExposure.controllerRequestId},
+          [{owner: "runtime", kind: "request", id: controllerInput.toolExposure.controllerRequestId, revision: null}]);
+        const request = await this.buildRequest(controllerInput, Object.freeze({
+          executionFlow: flow.callContext,
+          attemptNumber: recoveryAttempt + 1,
+          correction: null,
+          target: this.input.provider.modelContext.target,
+          requestedOutput: this.input.provider.modelContext.requestedOutput,
+          ...(outputRecovery ? { outputRecovery } : {}),
+        }));
+        build.check("request_contract", "passed", {requestId: request.requestId, compositionId: request.composition.id});
+        const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
+        build.output(requestRef);
+        const send = flow.advance("send", {requestId: request.requestId}, [requestRef]);
+        const response = await this.sendRequest(
+          request,
+          controllerInput,
+          {...callContext, executionFlow: flow.callContext},
+          () => ++providerRequestNumber,
+          0,
+          delivery,
+        );
+        const responseRef = flow.material("Normalized Provider response", "received", response, "provider");
+        send.output(responseRef);
+        if (response.kind !== "native_tool_turn") {
+          throw invalidOutput(
+            "Provider returned a response kind that does not match native Tool interaction.",
+          );
+        }
+        const parse = flow.advance("parse", {}, [responseRef]);
+        throwIfCancelled(callContext);
+        parse.check("output_complete", response.turn.finish.kind === "output_limit" ? "not_satisfied" : "passed",
+          {finish: response.turn.finish.kind, recoveryAttempt, maximumRecoveryAttempts});
+        if (response.turn.finish.kind === "output_limit") {
+          delivery.finish("rejected");
+          parse.check("decision_contract", "not_evaluated", {reason: "output_limit"});
+          if (recoveryAttempt >= maximumRecoveryAttempts) {
+            throw createControllerError("model", "model_output_limit_exhausted",
+              `Model output was truncated at the configured ${request.modelContext.requestedOutput.maximum}-token limit ` +
+              `after ${recoveryAttempt + 1} generation attempts. No calls from the truncated responses were executed.`,
+              false, {
+                finishKind: "output_limit", requestId: response.turn.responseRef.requestId,
+                responseId: response.turn.responseRef.responseId, turnId: response.turn.turnId,
+                maximumOutputTokens: request.modelContext.requestedOutput.maximum,
+                generationAttempts: recoveryAttempt + 1, recoveryAttempts: recoveryAttempt,
+              }, "settled_failure");
+          }
+          outputRecovery = Object.freeze({
+            sourceRequestId: response.turn.responseRef.requestId,
+            turnId: response.turn.turnId,
+            attemptNumber: recoveryAttempt + 1,
+            requestedOutput: request.modelContext.requestedOutput,
+          });
+          continue;
+        }
+        const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
+        const decision = validateControllerDecision(parsed, controllerInput);
+        parse.check("decision_contract", "passed", {kind: decision.kind});
+        assertProviderBackedDecisionProvenance(
+          decision,
+          controllerInput.toolExposure.controllerRequestId,
+        );
+        throwIfCancelled(callContext);
+        delivery.finish("validated", decision.modelItems);
+        return decision;
+      }
     } catch (error) {
       delivery.finish(callContext.cancellation.signal.aborted ? "cancelled"
         : error instanceof RetryInvocationInvalidatedError ? "interrupted" : "rejected");
@@ -521,6 +561,14 @@ export class ProviderBackedController<TOutput = unknown>
         request.modelContext.assessment !== null
       ) {
         throw new TypeError("Provider request does not match its admitted model target and output request.");
+      }
+      const recovery = createModelOutputRecoverySection(context.outputRecovery);
+      if (recovery !== null && (
+        request.requestId === context.outputRecovery!.sourceRequestId ||
+        request.composition.sections.filter(section => section.kind === "model_output_recovery").length !== 1 ||
+        !request.composition.sections.some(section => JSON.stringify(section) === JSON.stringify(recovery))
+      )) {
+        throw new TypeError("Output recovery requires a new request containing the exact attributed recovery section.");
       }
       return request;
     } catch (error) {
@@ -851,6 +899,10 @@ export class ProviderBackedController<TOutput = unknown>
       providerRequestNumber,
       this.input.retryClock,
     );
+    throwIfCancelled(callContext);
+    if (Date.parse(operation.startedAt) >= Date.parse(callContext.retry.deadlineAt)) {
+      throw operationDeadlineError(operation, operation.startedAt, 0, 0, null, this.input.provider.descriptor.id);
+    }
     const budgetId = `${operation.operationId}:budget:1`;
     let result;
     try {
@@ -909,6 +961,17 @@ export class ProviderBackedController<TOutput = unknown>
 
     switch (result.kind) {
       case "succeeded":
+        if (result.value.kind === "response" && result.value.response.kind === "native_tool_turn") {
+          const turn = result.value.response.turn;
+          if (turn.responseRef.requestId !== request.requestId ||
+              turn.responseRef.providerId !== this.input.provider.descriptor.id ||
+              turn.assistant.content.some(block => block.kind === "model_tool_call" && (
+                block.call.modelCallRef.controllerRequestId !== request.correlation.controllerRequestId ||
+                block.call.modelCallRef.branchId !== request.correlation.branchId
+              ))) {
+            throw invalidOutput("Provider Model Turn does not correlate to the actual request.");
+          }
+        }
         return result.value;
 
       case "failed":
@@ -963,6 +1026,10 @@ export class ProviderBackedController<TOutput = unknown>
           "Provider returned continuation state while declaring it unsupported.",
         );
       }
+      return;
+    }
+    if (response.kind === "native_tool_turn" && response.turn.finish.kind === "output_limit") {
+      await this.continuation.failed(preparation, "model_output_truncated", "Truncated output cannot advance model continuation.");
       return;
     }
     const responseId = response.kind === "native_tool_turn"

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createRunFailureCause,
   createRunResult,
+  type RunFailureCause,
   type RunSettlementCauseRecord,
 } from "../run/index.js";
 import {
@@ -292,6 +293,61 @@ describe("delegation result", () => {
       })).toThrow();
     },
   );
+
+  it("transfers bounded failure diagnostics separately from absent child narrative", () => {
+    const result = diagnosticResult(createRunFailureCause("model", {
+      code: "model_output_limit_exhausted",
+      message: "Model output was truncated at the configured 2048-token limit after 3 generation attempts.",
+      retryable: false,
+      metadata: { requestBody: "private request", generationAttempts: 3 },
+    }));
+
+    expect(result.terminal).toMatchObject({
+      status: "failed", code: "model_output_limit_exhausted", failureKind: "model",
+      failureDiagnostic: {
+        message: expect.stringContaining("2048-token limit after 3 generation attempts"),
+        messageTruncated: false, retryable: false, category: null, underlyingCode: null,
+      },
+    });
+    expect(result.narrative).toBeNull();
+    expect(JSON.stringify(result)).not.toContain("private request");
+    expect(Object.isFrozen(result.terminal.failureDiagnostic)).toBe(true);
+    expect(snapshotDelegationResult(JSON.parse(JSON.stringify(result)))).toEqual(result);
+    expect(() => snapshotDelegationResult({
+      ...result, terminal: { ...result.terminal, failureDiagnostic: null },
+    })).toThrow(/diagnostic is inconsistent/);
+    expect(() => snapshotDelegationResult({
+      ...result, terminal: { ...result.terminal, status: "completed", code: "completion_accepted", failureKind: null },
+    })).toThrow(/diagnostic is inconsistent/);
+  });
+
+  it("preserves provider category and underlying code without copying arbitrary metadata", () => {
+    const result = diagnosticResult(createRunFailureCause("provider", {
+      code: "provider_request_failed", message: "Provider authentication failed.", category: "authentication",
+      metadata: { providerErrorCode: "invalid_api_key", authorization: "secret", responseBody: "private body" },
+    }));
+    expect(result.terminal.failureDiagnostic).toEqual({
+      message: "Provider authentication failed.", messageTruncated: false, retryable: null,
+      category: "authentication", underlyingCode: "invalid_api_key",
+    });
+    expect(JSON.stringify(result)).not.toMatch(/secret|private body/);
+    const untrustedCode = diagnosticResult(createRunFailureCause("provider", {
+      code: "provider_request_failed", message: "Provider request failed.",
+      metadata: { providerFailureCategory: "transport", providerErrorCode: "unexpected response body with spaces" },
+    }));
+    expect(untrustedCode.terminal.failureDiagnostic).toMatchObject({ category: "transport", underlyingCode: null });
+  });
+
+  it("explicitly bounds a long diagnostic without turning it into a report", () => {
+    const result = diagnosticResult(createRunFailureCause("runtime", {
+      code: "child_execution_failed", message: "x".repeat(3_000), retryable: false, metadata: {},
+    }));
+    expect(result.terminal.failureDiagnostic?.message).toHaveLength(2_048);
+    expect(result.terminal.failureDiagnostic?.message).toMatch(/\[diagnostic truncated\]$/);
+    expect(result.terminal.failureDiagnostic?.messageTruncated).toBe(true);
+    expect(result.narrative).toBeNull();
+    expect(snapshotDelegationResult(result)).toEqual(result);
+  });
 
   it("rejects a result for another child and a forged immutable revision", () => {
     const accepted = request();
@@ -618,13 +674,12 @@ function succeededChildResult(
   });
 }
 
-function failedChildResult(runId: string) {
-  const failure = createRunFailureCause("runtime", {
+function failedChildResult(runId: string, failure: RunFailureCause = createRunFailureCause("runtime", {
     code: "child_execution_failed",
     message: "The child failed after a possible effect.",
     retryable: false,
     metadata: {},
-  });
+  })) {
   const cause: Extract<RunSettlementCauseRecord, { kind: "failure" }> = {
     ref: causeRef(runId),
     kind: "failure",
@@ -643,6 +698,16 @@ function failedChildResult(runId: string) {
     },
     cause,
     settlementCauses: [cause],
+  });
+}
+
+function diagnosticResult(failure: RunFailureCause) {
+  const accepted = request();
+  return createDelegationResult({
+    resultId: "diagnostic-result", request: accepted, correlation: childCorrelation(accepted),
+    childResult: failedChildResult("run-child", failure), narrative: null,
+    effects: noEffects(), usage: usage(), limitDisposition: withinLimits(),
+    createdAt: "2026-08-25T00:02:01.000Z",
   });
 }
 

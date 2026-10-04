@@ -77,7 +77,9 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
     } else if (value.kind === "context_source") {
       r.offer({subject: ref(value.source.owner, "contribution", contextSourceId(value.source), value.source.revision), occurredAt: value.occurredAt,
         payload: {kind: "event", name: `context.source.${value.source.kind}`, sequence: null, code: null},
-        links: [inspectionLink("contains", run, ref(value.source.owner, "contribution", contextSourceId(value.source), value.source.revision))],
+        links: [inspectionLink("contains", run, ref(value.source.owner, "contribution", contextSourceId(value.source), value.source.revision)),
+          ...(value.inputs ?? []).map(input => inspectionLink("includes", ref(input.owner, "contribution", contextSourceId(input), input.revision),
+            ref(value.source.owner, "contribution", contextSourceId(value.source), value.source.revision), {operation: "context_source_assembly"}))],
         contents: content("Context source material", {source: value.source, value: value.value}, "source")});
     } else if (value.kind === "context_committed") {
       const context = ref("context", "context", value.context.ref.id, String(value.context.ref.version));

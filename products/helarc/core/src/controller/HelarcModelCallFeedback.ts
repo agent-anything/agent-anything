@@ -13,8 +13,15 @@ export function createHelarcUnknownCallableRejection(
     ? " (name truncated for display)"
     : "";
   const availableNames = catalog.definitions.map(({ name }) => name);
+  const foldedName = foldAsciiCase(call.name);
+  const caseMatches = availableNames.filter((name) => foldAsciiCase(name) === foldedName);
+  const caseHint = caseMatches.length === 1 && caseMatches[0] !== call.name
+    ? `Only the letter case differs from an available function: ${JSON.stringify(caseMatches[0])}. Names are case-sensitive; submit a new call using that exact name.`
+    : undefined;
   const message = [
     `Unknown function name ${displayedName}${abbreviation}: this name was not provided in this request. This call was not executed.`,
+    "No requested state update was applied by this call.",
+    ...(caseHint === undefined ? [] : [caseHint]),
     `Available function names for this request: ${JSON.stringify(availableNames)}.`,
     availableNames.length === 0
       ? "No functions were available in this request. Do not invent a function name."
@@ -29,4 +36,8 @@ export function createHelarcUnknownCallableRejection(
     message,
     modelCallRef: call.modelCallRef,
   });
+}
+
+function foldAsciiCase(name: string): string {
+  return name.replace(/[A-Z]/gu, (character) => character.toLowerCase());
 }

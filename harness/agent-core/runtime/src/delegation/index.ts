@@ -66,7 +66,7 @@ export {
   snapshotDelegationRequest,
   snapshotDelegationResultExpectation,
 } from "./DelegationRequest.js";
-export type { DelegationEffectStatus, DelegationEffectSummary, DelegationLimitDisposition, DelegationLimitKind, DelegationNarrative, DelegationReferenceTransfer, DelegationResult, DelegationResultExpectationCoverage, DelegationTerminalSummary, DelegationUncertainty, DelegationUsageMeasurement, DelegationUsageSummary, DelegationUsageUnavailableReason } from "./DelegationResult.js";
+export type { DelegationEffectStatus, DelegationEffectSummary, DelegationFailureDiagnostic, DelegationLimitDisposition, DelegationLimitKind, DelegationNarrative, DelegationReferenceTransfer, DelegationResult, DelegationResultExpectationCoverage, DelegationTerminalSummary, DelegationUncertainty, DelegationUsageMeasurement, DelegationUsageSummary, DelegationUsageUnavailableReason } from "./DelegationResult.js";
 export {
   DelegationResultValidationError,
   createDelegationResult,

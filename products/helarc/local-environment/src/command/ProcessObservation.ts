@@ -1,5 +1,5 @@
 import type { CanonicalProcessIdentity } from "@agent-anything/canonical-action/subject";
-import type { ProcessBackendDescriptor, ProcessStream } from "./ProcessBackend.js";
+import type { ProcessBackendDescriptor, ProcessScopeMembers, ProcessStream } from "./ProcessBackend.js";
 import type { ProcessTextProjection } from "./ProcessOutputText.js";
 
 export interface ProcessExecutionRef { readonly runId: string; readonly executionId: string; }
@@ -52,7 +52,7 @@ export interface ProcessObservation {
   readonly requestedWaitMs: number;
   readonly effectiveWaitMs: number;
   readonly elapsedWaitMs: number;
-  readonly returnReason: "initial_wait_limit" | "observation_wait_limit" | "immediate_snapshot" | "output_available" | "lifecycle_changed" | "process_settled";
+  readonly returnReason: "initial_wait_limit" | "observation_wait_limit" | "immediate_snapshot" | "output_available" | "lifecycle_changed" | "command_completed" | "process_settled";
   readonly stdout: ProcessOutputSlice;
   readonly stderr: ProcessOutputSlice;
   readonly nextCursor: string;
@@ -60,7 +60,7 @@ export interface ProcessObservation {
 }
 
 export interface ProcessExecutionFact {
-  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired";
+  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "scope_members" | "input_notified" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired";
   readonly sequence: number;
   readonly occurredAt: string;
   readonly snapshot: ProcessSnapshot;
@@ -72,9 +72,20 @@ export interface ProcessExecutionFact {
   readonly cursor?: string | null;
   readonly requestId?: string;
   readonly cleanupConfirmed?: boolean;
+  readonly scopeMembers?: ProcessScopeMembers;
+  readonly notification?: ProcessInputNotification;
   readonly outputPositions?: Readonly<Record<ProcessStream, {readonly received: number; readonly retained: number; readonly projected: number; readonly omitted: number; readonly encoding: string | null; readonly integrity: string | null}>>;
 }
 export type ProcessExecutionObserver = (fact: ProcessExecutionFact) => void;
+
+/** Reliable Run input, independent of optional diagnostic observers. */
+export interface ProcessInputNotification {
+  readonly runId: string;
+  readonly sequence: number;
+  readonly source: { readonly owner: string; readonly kind: string; readonly id: string; readonly revision: string };
+  readonly occurredAt: string;
+  readonly data: Readonly<Record<string, unknown>>;
+}
 
 export interface ProcessCleanupSummary {
   readonly runId: string;

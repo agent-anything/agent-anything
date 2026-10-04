@@ -727,6 +727,7 @@ const expectedValueExports = {
     "ProviderBackedController",
     "StructuredOutputError",
     "createControllerModelItems",
+    "createModelOutputRecoverySection",
     "projectModelInteraction",
     "snapshotControllerFeedback",
     "unsupportedModelInputRecovery",

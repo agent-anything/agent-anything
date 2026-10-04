@@ -33,7 +33,7 @@ export function conversationDelegatedActivity(
   const commandOrigins = new Set(commands.flatMap(command => command.origin ? [key(command.runId, command.origin.modelItemId)] : []));
   const commandInvocations = new Set(commands.flatMap(command => command.invocationId ? [key(command.runId, command.invocationId)] : []));
   for (const command of commands) {
-    if (command.phase === "settled") continue;
+    if (command.outcome !== null || command.phase === "settled") continue;
     const { detail: _detail, child: _child, ...row } = commandActivity(command, true);
     items.push({...row, id: key(command.runId, row.id), attribution: name(command.runId)});
   }

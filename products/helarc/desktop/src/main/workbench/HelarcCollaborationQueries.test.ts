@@ -810,6 +810,15 @@ describe("conversation-local activity reads", () => {
     expect(window).toMatchObject({revision: 22, entries: [{blocks: [{item: {status: "Completed (root exit code 0)"}}]}]});
     expect((await blocks(api)).blocks).toHaveLength(1);
   });
+  it("shows a completed command separately from its still-managed descendant resources", async () => {
+    const {p, api, retain} = fixture();
+    Object.assign(p.product, {commands: [{...commandRecord(), phase: "running", outcome: "succeeded", exitCode: 0}]});
+    const expected = {item: {state: "settled", status: "Completed (root exit code 0); resources still managed"}};
+    expect((await blocks(api)).blocks[0]).toMatchObject(expected);
+    retain();
+    expect((await blocks(api)).blocks[0]).toMatchObject(expected);
+  });
+
   it("retains multiple executions, never joins by text, and reports missing origins", async () => {
     const {p, api} = fixture();
     Object.assign(p.product, {commands: [commandRecord(), {...commandRecord(),executionId:"second"}, {...commandRecord(),executionId:"unknown",origin:null}]});

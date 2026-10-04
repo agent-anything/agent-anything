@@ -147,8 +147,10 @@ export interface DelegationPreparationResult {
 export type DescendantOperationOutcome =
   | { readonly status: "succeeded"; readonly output: unknown; readonly failure: null }
   | { readonly status: "partial"; readonly output: unknown; readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure }
+  // Failure can retain terminal facts and diagnostics without claiming useful partial work.
+  | { readonly status: "failed"; readonly output: unknown; readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure }
   | {
-      readonly status: "failed" | "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect";
+      readonly status: "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect";
       readonly output: null;
       readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure;
     };
@@ -277,6 +279,7 @@ export interface RunnerDependencies {
   readonly executionObserver?: RunExecutionObserver;
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly resourceFinalizers?: readonly RunResourceFinalizerPort[];
+  readonly inputNotifications?: import("./RunInputNotifications.js").RunInputNotificationSource;
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => string;
   readonly createRunId?: CreateRunIdentity;

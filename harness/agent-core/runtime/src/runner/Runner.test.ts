@@ -113,6 +113,7 @@ import {
 import { Runner } from "./Runner.js";
 import type { ActiveDelegationProjection, RunHandle } from "./RunHandle.js";
 import { createStaticOperationToolAvailabilityParticipant } from "./RunToolExposureCoordinator.js";
+import type { RunInputNotification } from "./RunInputNotifications.js";
 
 function captureRunHandles(): Map<string, ActiveRunHandle<TestOutput>> {
   const handles = new Map<string, ActiveRunHandle<TestOutput>>();
@@ -1618,6 +1619,55 @@ describe("Runner semantic integration", () => {
     expect(handle.getSnapshot().runTree.settlement.complete).toBe(true);
   });
 
+  it("delivers failed descendant diagnostics to the Parent's next model interaction", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const message = "Model output was truncated at the configured 2048-token limit after 3 generation attempts.";
+    let rootTurn = 0;
+    const controller: Controller<TestOutput> = {
+      resourceMetering: { modelInputTokens: "not_applicable", modelOutputTokens: "not_applicable", costUnits: "not_applicable" },
+      async next(input) {
+        if (input.runId !== "run_001") {
+          throw new ControllerError({ kind: "model", failure: {
+            code: "model_output_limit_exhausted", message, retryable: false, metadata: {},
+          } }, "settled_failure");
+        }
+        if (++rootTurn === 1) {
+          return advance([toolCandidate("Agent", { prompt: "Inspect." }, input.toolExposure.controllerRequestId)], ["model_agent_1"]);
+        }
+        const results = input.interaction.messages.flatMap(entry => entry.role === "tool" ? entry.content : []);
+        expect(results).toMatchObject([{ kind: "model_tool_result", result: {
+          settlement: "failed", content: {
+            kind: "descendant_run", status: "failed",
+            output: { summary: "", diagnostic: { message, messageTruncated: false } },
+            failure: { code: "model_output_limit_exhausted", message },
+          },
+        } }]);
+        return complete("Parent received the diagnostic", "model_parent_complete");
+      },
+    };
+    const delegation: RunnerDelegationComposition = {
+      ...createTestDelegation(childAgent),
+      resultProjection: { project({ result }) {
+        expect(result.terminal.status).toBe("failed");
+        expect(result.narrative).toBeNull();
+        return {
+          status: "failed", output: { summary: "", diagnostic: result.terminal.failureDiagnostic },
+          failure: { owner: "test", code: result.terminal.code,
+            message: result.terminal.failureDiagnostic!.message, retryable: false, metadata: {} },
+        };
+      } },
+    };
+    const operations = createOperationFixture([], [], { delegation });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent", agent: { id: childAgent.id, revision: childAgent.revision }, revision: "descendant-binding-1",
+    });
+    const result = await createRunner(controller, operations).run(
+      createAgent(), createRunInput(), createRunConfig(operations, { tools }),
+    );
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
+    expect(rootTurn).toBe(2);
+  });
+
   it("rejects a concurrent Agent group when action capacity cannot admit the requested shape", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     const events: RuntimeEvent[] = [];
@@ -2737,6 +2787,120 @@ describe("Runner semantic integration", () => {
     expect(result.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(3);
     expect(result.items.filter(item => item.payload.kind === "state_transition" && item.payload.transition === "plan").at(-1)?.payload)
       .toMatchObject({plan: {status: "abandoned", steps: [{status: "in_progress"}]}});
+  });
+
+  it("delivers asynchronous facts before accepting a new ending proposal with no Hook registered", async () => {
+    const operations = createOperationFixture([]);
+    const facts: RunInputNotification[] = [];
+    const controller = new ScriptedController([
+      () => {
+        facts.push({runId: "run_001", sequence: 1, occurredAt: NOW,
+          source: {owner: "execution", kind: "command_completed", id: "command-1", revision: "5"},
+          data: {exitCode: 1, output: "Build failed."}});
+        return completionWithPlan([{step: "Inspect", status: "completed"}], "Stale result", "stale-async-final");
+      },
+      input => {
+        expect(JSON.stringify(input.context)).toContain("Build failed.");
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        expect(input.plan?.version).toBe(1);
+        return completionWithCalls([], "Command failure acknowledged", "fresh-async-final");
+      },
+    ]);
+    const source = {read: (runId: string, after: number) => facts.filter(fact => fact.runId === runId && fact.sequence > after)};
+    const result = await createRunner(controller, operations, {inputNotifications: source}).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.finalOutput).toEqual({summary: "Command failure acknowledged"});
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(item => item.payload.kind === "input_notification")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "completion_acceptance")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "state_transition" && item.payload.transition === "plan"))
+      .toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement").map(item => item.payload.result.settlement))
+      .toEqual(["invalidated", "succeeded"]);
+  });
+
+  it("does not invalidate or replay ordinary calls when new execution facts arrive during their decision", async () => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("handler.read-file", "code-workspace", {content: "hello"});
+    const operations = createOperationFixture([operationSpec(operation, "internal", {
+      requestOrigins: ["tool_request"], handlerId: handler.id,
+    })], [handler]);
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const facts: RunInputNotification[] = [];
+    const controller = new ScriptedController([
+      input => {
+        facts.push({runId: "run_001", sequence: 1, occurredAt: NOW,
+          source: {owner: "execution", kind: "command_completed", id: "background", revision: "3"}, data: {exitCode: 0}});
+        return advance([{kind: "tool_request", tool: {name: "codeAgent.readFile", revision: "1", input: {path: "README.md"},
+          origin: "model", controllerRequestId: input.toolExposure.controllerRequestId}}], "read-while-notified");
+      },
+      input => {
+        expect(JSON.stringify(input.context)).toContain("command_completed");
+        return completionWithCalls([], "Both results consumed", "read-and-background-final");
+      },
+    ]);
+    const result = await createRunner(controller, operations, {
+      inputNotifications: {read: (runId, after) => facts.filter(fact => fact.runId === runId && fact.sequence > after)},
+    }).run(createAgent(), createRunInput(), createRunConfig(operations, {tools}));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(item => item.payload.kind === "controller_feedback")).toHaveLength(0);
+  });
+
+  it("rechecks notifications immediately after an asynchronous beforeCompletion callback", async () => {
+    const operations = createOperationFixture([]);
+    const facts: RunInputNotification[] = [];
+    const controller = new ScriptedController([
+      completionWithCalls([], "Before asynchronous check", "before-check-final"),
+      input => {
+        expect(JSON.stringify(input.context)).toContain("resource cleanup failed");
+        return completionWithCalls([], "New fact acknowledged", "after-check-final");
+      },
+    ]);
+    let checks = 0;
+    Object.assign(controller, {beforeCompletion: async () => {
+      await Promise.resolve();
+      if (++checks === 1) facts.push({runId: "run_001", sequence: 1, occurredAt: NOW,
+        source: {owner: "execution", kind: "resource_failure", id: "scope-1", revision: "6"}, data: {message: "resource cleanup failed"}});
+      return {kind: "allow"};
+    }});
+    const result = await createRunner(controller, operations, {
+      inputNotifications: {read: (runId, after) => facts.filter(fact => fact.runId === runId && fact.sequence > after)},
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(checks).toBe(2);
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(item => item.payload.kind === "completion_acceptance")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement").map(item => item.payload.result.settlement))
+      .toEqual(["invalidated", "succeeded"]);
+  });
+
+  it("delivers preexisting facts once without requiring a redundant ending turn", async () => {
+    const operations = createOperationFixture([]);
+    const fact: RunInputNotification = {runId: "run_001", sequence: 3, occurredAt: NOW,
+      source: {owner: "execution", kind: "command_completed", id: "command-1", revision: "9"}, data: {exitCode: 0}};
+    const controller = new ScriptedController([input => {
+      expect(JSON.stringify(input.context)).toContain("command_completed");
+      return completionWithCalls([], "Already current", "current-final");
+    }]);
+    const result = await createRunner(controller, operations, {
+      inputNotifications: {read: (runId, after) => runId === fact.runId && after < fact.sequence ? [fact] : []},
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "input_notification")).toHaveLength(1);
+  });
+
+  it("fails rather than accepting an ending proposal when its notification source is unavailable", async () => {
+    const operations = createOperationFixture([]);
+    let failed = false;
+    const controller = new ScriptedController([() => {failed = true; return completionWithCalls([], "Candidate", "unavailable-final");}]);
+    const result = await createRunner(controller, operations, {
+      inputNotifications: {read: () => {if (failed) throw new Error("execution source lost"); return [];}},
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("failed");
+    expect(result.items.filter(item => item.payload.kind === "completion_acceptance")).toHaveLength(0);
   });
 
   it("processes Plan-only calls through shared admission without Tool execution or feedback", async () => {

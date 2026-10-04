@@ -32,21 +32,20 @@ pub fn read(reader: &mut impl Read, token: &[u8; 16], sequence: u32) -> io::Resu
 pub fn writer(token: [u8; 16], controls: Receiver<Frame>, output: Receiver<Frame>) {
     let stdout = io::stdout(); let mut writer = stdout.lock(); let mut sequence = 0u32;
     loop {
-        let frame = match controls.try_recv() {
-            Ok(frame) => frame,
+        let (frame, from_output) = match controls.try_recv() {
+            Ok(frame) => (frame, false),
             Err(_) => match output.recv_timeout(Duration::from_millis(10)) {
-                Ok(frame) => frame, Err(mpsc::RecvTimeoutError::Timeout) => continue, Err(_) => return,
+                Ok(frame) => (frame, true), Err(mpsc::RecvTimeoutError::Timeout) => continue, Err(_) => return,
             },
         };
         // Facts can arrive while recv_timeout is waiting on output. Drain them
         // before that output, especially before the final capture-closed frame.
-        if frame.kind != 1 || frame.done.is_some() {
+        if from_output {
             for fact in controls.try_iter() {
                 if write_frame(&mut writer, &token, &mut sequence, &fact).is_err() { return; }
             }
         }
         if write_frame(&mut writer, &token, &mut sequence, &frame).is_err() { return; }
-        if let Some(done) = frame.done { let _ = done.send(()); return; }
     }
 }
 
@@ -57,7 +56,10 @@ fn write_frame(writer: &mut impl Write, token: &[u8; 16], sequence: &mut u32, fr
     header[4..8].copy_from_slice(&sequence.to_le_bytes());
     header[8..12].copy_from_slice(&(frame.bytes.len() as u32).to_le_bytes());
     header[12] = frame.kind; header[16..32].copy_from_slice(token);
-    writer.write_all(&header)?; writer.write_all(&frame.bytes)?; writer.flush()
+    writer.write_all(&header)?; writer.write_all(&frame.bytes)?; writer.flush()?;
+    // A delivery acknowledgement closes neither the transport nor the other lifecycle.
+    if let Some(done) = &frame.done { let _ = done.send(()); }
+    Ok(())
 }
 
 pub fn metadata(value: serde_json::Value) -> Frame { Frame { kind: 1, bytes: serde_json::to_vec(&value).unwrap(), done: None } }

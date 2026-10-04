@@ -583,6 +583,8 @@ function mapNativeChatCompletionResponse(
     if (typeof refusal === "string" && refusal.length > 0 && transportCalls.length > 0) {
       throw new TypeError("A refusal cannot contain executable Tool calls.");
     }
+    const finish = openAIFinish(choice.finish_reason, transportCalls.length > 0,
+      typeof refusal === "string" ? refusal : null);
 
     const turnId = createModelTurnId({
       providerId: PROVIDER_ID,
@@ -596,7 +598,8 @@ function mapNativeChatCompletionResponse(
     if (typeof content === "string" && content.length > 0) {
       assistantContent.push({ kind: "text", text: content });
     }
-    for (const candidate of transportCalls) {
+    // Truncated arguments are diagnostics, never callable input to repair or execute.
+    for (const candidate of finish.kind === "output_limit" ? [] : transportCalls) {
       const ordinal = assistantContent.length;
       assistantContent.push({
         kind: "model_tool_call",
@@ -605,6 +608,7 @@ function mapNativeChatCompletionResponse(
     }
     if (
       assistantContent.length === 0 &&
+      finish.kind !== "output_limit" &&
       !(typeof refusal === "string" && refusal.trim().length > 0)
     ) {
       return failed(
@@ -619,11 +623,7 @@ function mapNativeChatCompletionResponse(
       turn: {
         turnId,
         assistant: { role: "assistant", content: assistantContent },
-        finish: openAIFinish(
-          choice.finish_reason,
-          transportCalls.length > 0,
-          typeof refusal === "string" ? refusal : null,
-        ),
+        finish,
         usage: readUsage(isRecord(value) ? value.usage : null),
         responseRef: {
           providerId: PROVIDER_ID,
@@ -632,7 +632,10 @@ function mapNativeChatCompletionResponse(
         },
       },
       continuation: null,
-      metadata: providerContextMetadata(request, inputPreservationRevision),
+      metadata: {
+        ...providerContextMetadata(request, inputPreservationRevision),
+        ...(finish.kind === "output_limit" ? { outputTruncation: { discardedToolCallCount: transportCalls.length } } : {}),
+      },
     });
   } catch (error) {
     return failed(

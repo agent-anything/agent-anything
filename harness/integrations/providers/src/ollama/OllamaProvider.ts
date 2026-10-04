@@ -590,6 +590,7 @@ function mapOllamaChatResponse(
     }
 
     const responseId = null;
+    const finish = ollamaFinish(value.done_reason);
     const turnId = createModelTurnId({
       providerId: PROVIDER_ID,
       requestId: request.requestId,
@@ -600,14 +601,15 @@ function mapOllamaChatResponse(
       | { readonly kind: "model_tool_call"; readonly call: ModelToolCall }
     > = [];
     if (content.length > 0) assistantContent.push({ kind: "text", text: content });
-    for (const candidate of transportCalls) {
+    // An output-limit finish rejects the entire call set, including complete-looking calls.
+    for (const candidate of finish.kind === "output_limit" ? [] : transportCalls) {
       const ordinal = assistantContent.length;
       assistantContent.push({
         kind: "model_tool_call",
         call: readOllamaToolCall(candidate, request, turnId, ordinal),
       });
     }
-    if (assistantContent.length === 0) {
+    if (assistantContent.length === 0 && finish.kind !== "output_limit") {
       return failed(
         "response",
         "provider_response_empty",
@@ -620,7 +622,7 @@ function mapOllamaChatResponse(
       turn: {
         turnId,
         assistant: { role: "assistant", content: assistantContent },
-        finish: ollamaFinish(value.done_reason),
+        finish,
         usage: readOllamaUsage(value),
         responseRef: {
           providerId: PROVIDER_ID,
@@ -629,7 +631,10 @@ function mapOllamaChatResponse(
         },
       },
       continuation: null,
-      metadata: providerContextMetadata(request, inputPreservationRevision),
+      metadata: {
+        ...providerContextMetadata(request, inputPreservationRevision),
+        ...(finish.kind === "output_limit" ? { outputTruncation: { discardedToolCallCount: transportCalls.length } } : {}),
+      },
     });
   } catch (error) {
     return failed(

@@ -88,6 +88,46 @@ describe("Helarc descendant Agent contribution", () => {
     },
   );
 
+  it.each([null, "Useful findings collected before the failure."])(
+    "delivers a failed Child's actual cause without treating diagnostic text as narrative: %j",
+    (narrative) => {
+      const agent = createHelarcDelegatedWorkerAgent({ providerId: "test", modelId: "test" });
+      const { delegation } = createHelarcDescendantAgentContribution(agent, "2026-09-01T00:00:00.000Z");
+      const diagnostic = {
+        message: "Model output was truncated at the configured 2048-token limit after 3 generation attempts.",
+        messageTruncated: false, retryable: false, category: null, underlyingCode: null,
+      };
+      const outcome = delegation.resultProjection.project({
+        result: {
+          ref: { id: "failed-result", revision: "1" },
+          correlation: { child: { run: { id: "child-run" } } },
+          terminal: {
+            status: "failed", code: "model_output_limit_exhausted", failureKind: "model",
+            failureDiagnostic: diagnostic,
+          },
+          narrative: narrative === null ? null : { text: narrative },
+          artifacts: { refs: [] }, effects: { status: "known" }, uncertainty: [],
+          expectationCoverage: [{ required: true, disposition: narrative === null ? "failed" : "present" }],
+          limitDisposition: { status: "within_limits" },
+        } as unknown as DelegationResult,
+        continuation: { id: "child-reference", revision: "1" },
+      });
+      expect(outcome).toEqual({
+        status: narrative === null ? "failed" : "partial",
+        output: {
+          agent_id: "child-reference", status: "failed", summary: narrative ?? "",
+          artifact_refs: [], effect_status: "known", uncertainty: [],
+          failure_code: "model_output_limit_exhausted",
+          failure: { kind: "model", code: "model_output_limit_exhausted", ...diagnostic },
+        },
+        failure: {
+          owner: "helarc", code: "model_output_limit_exhausted", message: diagnostic.message,
+          retryable: false, metadata: {},
+        },
+      });
+    },
+  );
+
   it("does not substitute a failed Child's cause for absent narrative", () => {
     expect(projectNarrative("failed", [["  "], []])).toBeNull();
   });

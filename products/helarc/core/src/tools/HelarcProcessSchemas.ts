@@ -13,7 +13,7 @@ export const HELARC_PROCESS_OBSERVATION_SCHEMA:ToolJsonObject=object({
   phase:{enum:["starting","running","stopping","draining","settled","unresolved"]},
   outcome:nullable({enum:["succeeded","failed","cancelled","timed_out","unknown"]}),
   requested_wait_ms:integer,effective_wait_ms:integer,elapsed_wait_ms:number,
-  return_reason:{enum:["initial_wait_limit","observation_wait_limit","immediate_snapshot","output_available","lifecycle_changed","process_settled"]},
+  return_reason:{enum:["initial_wait_limit","observation_wait_limit","immediate_snapshot","output_available","lifecycle_changed","command_completed","process_settled"]},
   stdout:stream,stderr:stream,next_cursor:text,has_more:{type:"boolean"},process_id:nullable(integer),helper_process_id:nullable(integer),
   started_at:nullable(text),finished_at:nullable(text),deadline_at:nullable(text),
   root_exit:nullable(object({code:nullable({type:"integer"}),signal:nullable(text),observedAt:text})),

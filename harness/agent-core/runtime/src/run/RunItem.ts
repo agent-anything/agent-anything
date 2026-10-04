@@ -105,6 +105,7 @@ export type RunItemPayload<TOutput = unknown> =
     }
   | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
   | { readonly kind: "controller_feedback"; readonly feedback: ControllerFeedback }
+  | { readonly kind: "input_notification"; readonly notification: import("../runner/RunInputNotifications.js").RunInputNotification }
   | {
       readonly kind: "completion_acceptance";
       readonly source: RunCauseSourceRef;

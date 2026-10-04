@@ -12,7 +12,7 @@ const transitions = [
   ["unresolved","draining"],["unresolved","stopping"],["unresolved","settled"],
 ] as const;
 const steps = ["reserved","launching","started","root_exit","termination_requested","scope_empty","output_settled","settled","unresolved"] as const;
-const processFlow = createExecutionFlowDefinition({owner:"helarc-command",id:"process-lifetime",revision:"1",label:"Managed process lifetime",
+const processFlow = createExecutionFlowDefinition({owner:"helarc-command",id:"process-lifetime",revision:"2",label:"Managed process lifetime",
   description:"Run-owned process facts, independent of startup and observation invocation lifetimes.",
   steps:steps.map(id=>({id,label:id.replaceAll("_"," "),kind:id === "reserved" ? "entry" as const:id === "settled" ? "exit" as const:"process" as const,
     checks:id === "scope_empty" ? ["containment_empty"]:id === "settled" ? ["output_persisted"]:[]})),
@@ -50,6 +50,12 @@ export class ProcessInspectionAdapter {
     if(fact.requestId) eventLinks.push(link("trigger",ref("action",fact.requestId,null,"action-execution"),event));
     offer(event,{kind:"event",name:`process.${fact.kind}`,sequence:fact.sequence,code:fact.cleanupConfirmed === false ? "process_cleanup_unconfirmed":null},
       [content("Process fact",fact,"owner_fact")],eventLinks,recordId);
+    if(fact.notification) {
+      const n=fact.notification;
+      const notification=ref("contribution",n.source.id,n.source.revision,n.source.owner);
+      offer(notification,{kind:"event",name:`process.notification.${n.source.kind}`,sequence:n.sequence,code:null},
+        [content("Run input notification",n,"published")],[link("produces",process,notification),link("trigger",event,notification)]);
+    }
     if(fact.kind === "retention_expired") {this.phases.delete(s.ref.executionId);return;}
     const links:Link[]=[link("contains",run,process)];
     if(fact.kind === "reserved") {
@@ -68,8 +74,8 @@ export class ProcessInspectionAdapter {
 
     const interval=(subject:InspectionSubjectRef,activity:"process"|"process-output"|"wait",phase:"started"|"settled",status:string|null)=>
       offer(subject,{kind:"interval",phase,activity,status,clock:r.manifest.producerInstanceId});
-    if(fact.kind === "started") interval(process,"process","started",null);
-    if(fact.kind === "scope_empty" && s.startedAt!==null) {interval(process,"process","settled","empty");interval(process,"process-output","started",null);}
+    if(fact.kind === "started") {interval(process,"process","started",null);interval(process,"process-output","started",null);}
+    if(fact.kind === "root_exit" && s.startedAt!==null) interval(process,"process","settled",s.outcome);
     if(fact.kind === "output_settled" && s.startedAt!==null) interval(process,"process-output","settled",s.output.persistence);
     const lifetime=this.processFlows.get(s.ref.executionId);
     if(lifetime && (steps as readonly string[]).includes(fact.kind)) {

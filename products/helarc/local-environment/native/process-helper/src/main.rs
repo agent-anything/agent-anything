@@ -46,11 +46,12 @@ fn run() -> io::Result<()> {
     let stop_reading = Arc::new(AtomicBool::new(false)); let (drained, drain_rx) = mpsc::sync_channel(2);
     reader(process.stdout, 2, output.clone(), drained.clone(), stop_reading.clone());
     reader(process.stderr, 3, output.clone(), drained, stop_reading.clone());
-    let mut root_exited = false; let mut empty_at = None; let mut streams_closed = 0; let mut read_failed = false;
+    let mut root_exited = false; let mut empty_at = None; let mut streams_closed = 0; let mut read_failed = false; let mut output_reported = false;
     loop {
         if windows::ended(&host) { let _ = windows::terminate(&process.job); break; }
         match control_rx.recv_timeout(Duration::from_millis(10)) {
             Ok(Ok(Control::Terminate { request_id })) => {
+                report_members(&facts, &process.job, "termination")?;
                 let applied = windows::terminate(&process.job).is_ok();
                 send(&facts, json!({"type":"termination_ack","request_id":request_id,"applied":applied}))?;
             }
@@ -60,12 +61,19 @@ fn run() -> io::Result<()> {
         }
         if !root_exited && windows::ended(&process.root) {
             root_exited = true; send(&facts, json!({"type":"root_exit","code":windows::exit_code(&process.root)?}))?;
+            report_members(&facts, &process.job, "root_exit")?;
         }
-        if empty_at.is_none() && windows::active(&process.job)? == 0 {
-            empty_at = Some(Instant::now()); send(&facts, json!({"type":"scope_empty"}))?;
+        // Termination may empty the Job between polls. Deliver the root result first.
+        if root_exited && empty_at.is_none() && windows::active(&process.job)? == 0 {
+            empty_at = Some(Instant::now());
+            // EOF can precede Job emptiness; flush this final fact even when output already closed.
+            let (done, done_rx) = mpsc::sync_channel(1);
+            let mut frame = metadata(json!({"type":"scope_empty"})); frame.done = Some(done);
+            facts.try_send(frame).map_err(|_| protocol::invalid("scope disposition transport unavailable"))?;
+            done_rx.recv_timeout(Duration::from_secs(2)).map_err(|_| protocol::invalid("scope disposition delivery timed out"))?;
         }
         while let Ok(complete) = drain_rx.try_recv() { streams_closed += 1; read_failed |= !complete; }
-        if empty_at.is_some_and(|instant| streams_closed == 2 || instant.elapsed() >= Duration::from_secs(2)) {
+        if !output_reported && (streams_closed == 2 || empty_at.is_some_and(|instant| instant.elapsed() >= Duration::from_secs(2))) {
             stop_reading.store(true, Ordering::SeqCst);
             let (done, done_rx) = mpsc::sync_channel(1);
             let mut last = metadata(json!({"type":"output_closed","incomplete":streams_closed != 2 || read_failed})); last.done = Some(done);
@@ -80,13 +88,22 @@ fn run() -> io::Result<()> {
                     Err(mpsc::TrySendError::Disconnected(_)) => return Err(protocol::invalid("output transport closed")),
                 }
             }
-            let _ = done_rx.recv_timeout(Duration::from_secs(2)); break;
+            done_rx.recv_timeout(Duration::from_secs(2)).map_err(|_| protocol::invalid("output disposition delivery timed out"))?;
+            output_reported = true;
         }
+        if empty_at.is_some() && output_reported { break; }
     }
     Ok(())
 }
 fn send(channel: &SyncSender<Frame>, value: serde_json::Value) -> io::Result<()> {
     channel.try_send(metadata(value)).map_err(|_| protocol::invalid("lifecycle transport capacity exceeded"))
+}
+fn report_members(channel: &SyncSender<Frame>, job: &std::os::windows::io::OwnedHandle, reason: &str) -> io::Result<()> {
+    let value = match windows::members(job) {
+        Ok(snapshot) => json!({"type":"scope_members","reason":reason,"members":snapshot.members,"omitted_count":snapshot.omitted_count,"limitation":null}),
+        Err(error) => json!({"type":"scope_members","reason":reason,"members":[],"omitted_count":null,"limitation":error.to_string()}),
+    };
+    send(channel, value)
 }
 fn reader(mut input: impl Read + Send + 'static, kind: u8, output: SyncSender<Frame>, done: SyncSender<bool>, stopped: Arc<AtomicBool>) {
     thread::spawn(move || {

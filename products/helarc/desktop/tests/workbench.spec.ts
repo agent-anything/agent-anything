@@ -728,6 +728,52 @@ test("response-owned activity follows its text and refreshes while reading histo
   expect(await page.evaluate(()=>(window as any).calls.filter((c:any)=>["steer","submit","cancel"].includes(c.method)))).toEqual([]);
 });
 
+test("scrolling to the loaded tail reads newer retained messages after work ends", async ({ page }) => {
+  await setup(page, false, true);
+  await page.evaluate(() => {
+    const w = window as any;
+    const original = w.helarc.readConversation;
+    w.newRetainedMessage = false;
+    w.helarc.readConversation = async (query: any) => {
+      w.calls.push({ method: "conversation", query });
+      const result = await original(query);
+      const entries = result.entries.map((entry: any) => entry.id === "final"
+        ? { ...entry, content: "Retained conversation paragraph.\n\n".repeat(100) }
+        : entry);
+      if (w.newRetainedMessage && query.position.kind === "latest") {
+        entries.push({ ...entries.at(-1), id: "newest", sourceId: "newest", modelItemIds: [],
+          position: [241, 0], content: "Newest retained model reply." });
+      }
+      return { ...result, entries, latestPosition: w.newRetainedMessage ? [241, 0] : [240, 0] };
+    };
+    w.emitWorkbench("revision");
+  });
+  const viewport = page.locator(".wb-conversation-scroll");
+  await expect(viewport).toContainText("Retained conversation paragraph.");
+  await expect.poll(() => viewport.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(2);
+  await viewport.evaluate(node => {
+    node.scrollTop = 0;
+    node.dispatchEvent(new Event("scroll"));
+  });
+  await page.evaluate(() => {
+    const w = window as any;
+    w.newRetainedMessage = true;
+    w.emitWorkbench("revision");
+  });
+  await expect(page.getByRole("button", { name: "Latest messages (new content)", exact: true })).toBeVisible();
+  await expect(viewport.getByText("Newest retained model reply.", { exact: true })).toHaveCount(0);
+  expect(await viewport.evaluate(node => node.scrollTop)).toBeLessThan(100);
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.method === "conversation").at(-1).query.position.kind)).toBe("window");
+  await viewport.evaluate(node => {
+    node.scrollTop = node.scrollHeight;
+    node.dispatchEvent(new Event("scroll"));
+  });
+  await expect(viewport.getByText("Newest retained model reply.", { exact: true })).toBeVisible();
+  await expect.poll(() => viewport.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(2);
+  await expect(page.getByRole("button", { name: "Latest messages", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.method === "conversation").at(-1).query.position.kind)).toBe("latest");
+});
+
 test("request duration is continuous while command duration starts displaying at five seconds", async ({ page }, info) => {
   await page.clock.install({ time: new Date("2026-09-24T08:00:00Z") });
   await page.clock.pauseAt(new Date("2026-09-24T08:00:01Z"));

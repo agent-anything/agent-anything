@@ -97,6 +97,30 @@ describe("Inspection recording", () => {
     }
     expect(recorder.health().rejected).toBe(0);
   });
+  it("links owner input notifications through Run admission and Context batch assembly", async () => {
+    const {recorder, query, selection} = await setup(true);
+    const adapter = new RunExecutionInspectionAdapter(recorder);
+    const transcript = new RunTranscriptInspectionAdapter(recorder);
+    const now = "2026-10-03T00:00:00Z";
+    const source = {owner: "command", kind: "command_completed", id: "process-1", revision: "4", observedAt: now};
+    const batch = {owner: "agent-runtime", kind: "input_notifications", id: "run-1:input-notifications", revision: "1-1", observedAt: now};
+    const notification = {runId: "run-1", sequence: 1, source, occurredAt: now, data: {exitCode: 1}};
+    adapter.observe({kind: "context_source", runId: "run-1", occurredAt: now, source, value: notification});
+    transcript.observe({runId: "run-1", sequence: 1, item: {ref: {id: "notification-item", sequence: 1}, createdAt: now,
+      payload: {kind: "input_notification", notification}}} as never);
+    adapter.observe({kind: "context_source", runId: "run-1", occurredAt: now, source: batch, inputs: [source], value: {notifications: [notification]}});
+    adapter.observe({kind: "context_committed", runId: "run-1", occurredAt: now, context: {ref: {id: "context", version: 2},
+      items: [{lifecycle: {kind: "active"}, contribution: {ref: {id: batch.id, revision: batch.revision}, source: batch}}]}} as never);
+    await recorder.flush();
+    const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
+    const graph = (await query.query({...scope, kind: "get_data_flow", subject: recorder.ref(source.owner, "contribution", source.id, "run-1", source.revision)})).graph!;
+    expect(graph.links).toEqual(expect.arrayContaining([
+      expect.objectContaining({kind: "delivers", from: expect.objectContaining({id: source.id, revision: "4"}), to: expect.objectContaining({id: "notification-item"})}),
+      expect.objectContaining({kind: "includes", from: expect.objectContaining({id: source.id, revision: "4"}), to: expect.objectContaining({id: batch.id, revision: "1-1"})}),
+    ]));
+    expect(recorder.health().rejected).toBe(0);
+  });
+
   it("shares source identity across producers and defers retirement while a reader holds a lease", async () => {
     const { directory, recorder, selection } = await setup();
     const other = await InspectionRecorder.create({ root: directory, application: "test", name: "Test" });

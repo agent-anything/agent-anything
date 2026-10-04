@@ -22,7 +22,7 @@ export async function resolveWindowsProcessHelper(directory = fileURLToPath(new 
 }
 
 export class WindowsJobProcessBackend implements ProcessBackend {
-  readonly descriptor = Object.freeze({ kind: "windows_job" as const, revision: "1",
+  readonly descriptor = Object.freeze({ kind: "windows_job" as const, revision: "2",
     limitations: Object.freeze(["External services and remote work are outside Job containment.", "Pipe execution uses forced Job termination, not graceful console Ctrl+C."]) });
   constructor(private readonly helperPath: string) {
     if (!isAbsolute(helperPath)) throw new TypeError("A trusted absolute helper path is required.");
@@ -35,7 +35,7 @@ export class WindowsJobProcessBackend implements ProcessBackend {
       const child = spawn(this.helperPath, [token.toString("hex")], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
       let sequence = 0, sentSequence = 0, requestId = 0;
       let buffer = Buffer.alloc(0), diagnostics = "";
-      let launched = false, launchSent = false, ended = false, outputClosed = false, hello = false;
+      let launched = false, launchSent = false, ended = false, outputClosed = false, scopeEmpty = false, hello = false;
       let exited!: () => void;
       const exit = new Promise<void>((done) => { exited = done; });
       const terminations = new Map<number, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -56,7 +56,7 @@ export class WindowsJobProcessBackend implements ProcessBackend {
       const abort = () => fail("process_start_cancelled", "Process startup was cancelled.");
       const timer = setTimeout(() => fail("process_start_timeout", "Native process startup timed out."), request.startupTimeoutMs);
       request.signal.addEventListener("abort", abort, { once: true });
-      child.stdin.on("error", () => { if (!ended && !outputClosed) fail("process_control_lost", "Native control transport closed."); });
+      child.stdin.on("error", () => { if (!ended && (!outputClosed || !scopeEmpty)) fail("process_control_lost", "Native control transport closed."); });
       child.stderr.on("data", (chunk: Buffer) => { if (diagnostics.length < 4096) diagnostics += chunk.toString("utf8").slice(0, 4096 - diagnostics.length); });
       child.once("error", (error) => fail("process_helper_start_failed", error.message, "none"));
       child.once("close", () => {
@@ -64,7 +64,7 @@ export class WindowsJobProcessBackend implements ProcessBackend {
         for (const pending of terminations.values()) { clearTimeout(pending.timer); pending.reject(new Error("Process termination acknowledgement lost.")); }
         terminations.clear();
         if (!launched) reject(new ProcessLaunchFailure("process_helper_closed", diagnostics || "Native helper closed before startup.", launchSent ? "unknown" : "none"));
-        else if (!outputClosed) publish({ kind: "failure", code: "process_backend_lost", message: diagnostics || "Native helper closed without final output disposition." });
+        else if (!outputClosed || !scopeEmpty) publish({ kind: "failure", code: "process_backend_lost", message: diagnostics || "Native helper closed without confirmed output and scope disposition." });
       });
       const metadata = (value: any) => {
         if (value.type === "hello") {
@@ -94,7 +94,20 @@ export class WindowsJobProcessBackend implements ProcessBackend {
         else {
           if (!launched) throw new Error("Process fact precedes startup acknowledgement.");
           if (value.type === "root_exit" && Number.isInteger(value.code)) publish({ kind: "root_exit", code: value.code, signal: null });
-          else if (value.type === "scope_empty") publish({ kind: "scope_empty" });
+          else if (value.type === "scope_members") {
+            if (!["root_exit", "termination"].includes(value.reason) || !Array.isArray(value.members) || value.members.length > 32 ||
+                (value.omitted_count !== null && (!Number.isSafeInteger(value.omitted_count) || value.omitted_count < 0)) ||
+                (value.limitation !== null && (typeof value.limitation !== "string" || value.limitation.length > 4096)) ||
+                value.members.some((member: any) => !member || !Number.isSafeInteger(member.pid) || member.pid < 1 ||
+                  (member.identity !== null && (typeof member.identity !== "string" || !/^[a-f0-9]{16}$/u.test(member.identity))) ||
+                  (member.executable !== null && (typeof member.executable !== "string" || member.executable.length > 4096)))) {
+              throw new Error("Invalid Job member snapshot.");
+            }
+            publish({kind: "scope_members", snapshot: {reason: value.reason,
+              members: value.members.map((member: any) => ({pid: member.pid, identity: member.identity, executable: member.executable})),
+              omittedCount: value.omitted_count, limitation: value.limitation}});
+          }
+          else if (value.type === "scope_empty") { scopeEmpty = true; publish({ kind: "scope_empty" }); }
           else if (value.type === "output_closed" && typeof value.incomplete === "boolean") {
             outputClosed = true; publish({ kind: "output_closed", incomplete: value.incomplete });
           } else if (value.type === "termination_ack") {

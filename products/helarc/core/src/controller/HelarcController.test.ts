@@ -838,6 +838,33 @@ describe("Helarc native Tool controller", () => {
     });
   });
 
+  it("keeps a case-only control typo rejected while preserving a valid sibling Tool", () => {
+    const input = createControllerInput();
+    const protocol = createTestControllerProtocol(input);
+    const catalog = protocol.createCallableCatalog(input.toolExposure, input.planLimits, input.plan !== null);
+    const read = toolCallable(catalog, "Read");
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [
+      { kind: "call", name: "Update_plan", input: { plan: [{ step: "Inspect", status: "completed" }] } },
+      { kind: "call", name: read, input: { file_path: "README.md" } },
+    ]), input);
+
+    expect(decision).toMatchObject({
+      kind: "advance",
+      candidates: [
+        { kind: "model_call_rejection", name: "Update_plan", code: "model_callable_unknown",
+          message: expect.stringContaining('Only the letter case differs from an available function: "update_plan".') },
+        { kind: "tool_request", tool: { name: "Read" } },
+      ],
+    });
+    if (decision.kind !== "advance") throw new Error("Expected advance decision.");
+    expect(decision.candidates).toHaveLength(2);
+    expect(decision.modelItems.filter(item => item.kind === "model_tool_call")
+      .map(item => item.metadata.helarcCallableBinding)).toMatchObject([
+        null,
+        { kind: "tool", callableName: read, toolName: "Read" },
+      ]);
+  });
+
   it("rejects abnormal finishes and mismatched call correlation", () => {
     const input = createControllerInput();
     expectControllerFailure(
@@ -875,6 +902,51 @@ describe("Helarc native Tool controller", () => {
       });
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]?.interaction.kind).toBe("native_tool_turn");
+  });
+
+  it("recovers a truncated native response under its actual request identity without enabling Instructions", async () => {
+    const settings = createDefaultHelarcInstructionSettings();
+    const original = createControllerInput();
+    const agent = createHelarcAgent({
+      target: "production", providerId: "fake-provider", modelId: "helarc-controller-test-model", instructionSettings: settings,
+    });
+    const input = { ...original, agent, instructionBinding: createAgentInstructionBinding({
+      run: { id: original.runId }, agent, effectiveFromRunRevision: 0, supersedes: null,
+    }) };
+    const baseline = createTestControllerProtocol(input);
+    const protocol = createHelarcControllerProtocolComposition({
+      toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance, instructionSettings: settings,
+    });
+    const qualification = createTestQualification(input, protocol);
+    const provider = new FakeProvider((request) => {
+      const response = nativeFinalResponseFromRequest(request, provider.requests.length === 1 ? "Rejected answer." : "Done.");
+      if (response.kind !== "native_tool_turn") throw new Error("Expected native response.");
+      return provider.requests.length === 1
+        ? { ...response, turn: { ...response.turn, finish: { kind: "output_limit" } } }
+        : response;
+    });
+    const controller = new ProviderBackedController<HelarcAgentOutput>({
+      provider,
+      buildRequest: (input, context) => buildProviderRequest(input, context, protocol, qualification),
+      parseResponse: (response, input) => parseProviderResponse(response, input, protocol, qualification),
+      responseProtocol: { kind: "native_tool_turn" },
+      retryExecutor: createSystemRetryExecutor(), retryClock: systemRetryClock,
+    });
+    const decision = await controller.next(input, controllerCallContext());
+    expect(decision).toMatchObject({ kind: "propose_completion", output: { summary: "Done." } });
+    expect(JSON.stringify(decision)).not.toContain("Rejected answer.");
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests.map(({ requestId }) => requestId)).toEqual([
+      `${input.runId}:model-input:${input.iteration}:1`,
+      `${input.runId}:model-input:${input.iteration}:2`,
+    ]);
+    expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
+    expect(provider.requests[1]!.interaction).toEqual(provider.requests[0]!.interaction);
+    expect(provider.requests[1]!.composition.sections.at(-1)).toMatchObject({
+      kind: "model_output_recovery", role: "user", source: { owner: "agent-runtime" },
+    });
+    expect(requestText(provider.requests[1]!)).toContain("None of its function calls were executed.");
+    expect(requestText(provider.requests[1]!)).not.toContain("Rejected answer.");
   });
 });
 

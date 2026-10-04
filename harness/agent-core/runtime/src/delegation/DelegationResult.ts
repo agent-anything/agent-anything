@@ -9,12 +9,14 @@ import type { ArtifactRef } from "@agent-anything/agent-core/run";
 import type { EvidenceRef } from "@agent-anything/context/evidence";
 import {
   runSettlementCauseCode,
+  type RunFailureCause,
   type RunResult,
   type RunResultStatus,
   type RunSettlementCauseRef,
 } from "../run/index.js";
 import {
   createDelegationContractIdentity,
+  boundedText,
   deepFreeze,
   isoDateTime,
   nonNegativeInteger,
@@ -111,7 +113,16 @@ export interface DelegationTerminalSummary {
   readonly cause: RunSettlementCauseRef;
   readonly code: string;
   readonly failureKind: string | null;
+  readonly failureDiagnostic: DelegationFailureDiagnostic | null;
   readonly cancellationOrigin: string | null;
+}
+
+export interface DelegationFailureDiagnostic {
+  readonly message: string;
+  readonly messageTruncated: boolean;
+  readonly retryable: boolean | null;
+  readonly category: string | null;
+  readonly underlyingCode: string | null;
 }
 
 export interface DelegationNarrative {
@@ -517,6 +528,7 @@ function terminalSummary(result: RunResult): DelegationTerminalSummary {
     cause: result.settlement.cause,
     code: runSettlementCauseCode(result.cause),
     failureKind: result.cause.kind === "failure" ? result.cause.failure.kind : null,
+    failureDiagnostic: result.cause.kind === "failure" ? projectFailureDiagnostic(result.cause.failure) : null,
     cancellationOrigin: result.cause.kind === "cancellation"
       ? result.cause.cancellation.origin
       : null,
@@ -531,6 +543,7 @@ function snapshotTerminal(
     "cause",
     "code",
     "failureKind",
+    "failureDiagnostic",
     "cancellationOrigin",
   ]);
   if (!["completed", "failed", "cancelled"].includes(input.status)) {
@@ -545,6 +558,7 @@ function snapshotTerminal(
   const failureKind = input.failureKind === null
     ? null
     : token(input.failureKind, "terminal.failureKind");
+  const failureDiagnostic = input.failureDiagnostic === null ? null : snapshotFailureDiagnostic(input.failureDiagnostic);
   const cancellationOrigin = input.cancellationOrigin === null
     ? null
     : token(input.cancellationOrigin, "terminal.cancellationOrigin");
@@ -553,6 +567,9 @@ function snapshotTerminal(
   }
   if ((input.status === "failed") !== (failureKind !== null)) {
     throw new TypeError("Delegation terminal failure attribution is inconsistent.");
+  }
+  if ((input.status === "failed") !== (failureDiagnostic !== null)) {
+    throw new TypeError("Delegation terminal failure diagnostic is inconsistent.");
   }
   if (input.status === "cancelled" && code !== "runtime_cancelled") {
     throw new TypeError("Cancelled delegation must preserve runtime_cancelled.");
@@ -565,8 +582,38 @@ function snapshotTerminal(
     cause,
     code,
     failureKind,
+    failureDiagnostic,
     cancellationOrigin,
   });
+}
+
+function projectFailureDiagnostic(cause: RunFailureCause): DelegationFailureDiagnostic {
+  const failure = cause.failure;
+  const marker = " [diagnostic truncated]";
+  const messageTruncated = failure.message.length > 2_048;
+  return snapshotFailureDiagnostic({
+    message: messageTruncated ? failure.message.slice(0, 2_048 - marker.length) + marker : failure.message,
+    messageTruncated,
+    retryable: "retryable" in failure && typeof failure.retryable === "boolean" ? failure.retryable : null,
+    category: cause.kind === "provider" ? diagnosticToken(cause.failure.category ?? failure.metadata.providerFailureCategory) : null,
+    underlyingCode: cause.kind === "provider" ? diagnosticToken(failure.metadata.providerErrorCode) : null,
+  });
+}
+
+function diagnosticToken(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : null;
+}
+
+function snapshotFailureDiagnostic(input: DelegationFailureDiagnostic): DelegationFailureDiagnostic {
+  strictRecord(input, "DelegationFailureDiagnostic", ["message", "messageTruncated", "retryable", "category", "underlyingCode"]);
+  const message = boundedText(input.message, "failureDiagnostic.message", 2_048);
+  if (typeof input.messageTruncated !== "boolean" || (input.retryable !== null && typeof input.retryable !== "boolean") ||
+      (input.category !== null && diagnosticToken(input.category) === null) ||
+      (input.underlyingCode !== null && diagnosticToken(input.underlyingCode) === null)) {
+    throw new TypeError("Delegation failure diagnostic fields are invalid.");
+  }
+  return Object.freeze({ message, messageTruncated: input.messageTruncated, retryable: input.retryable,
+    category: input.category, underlyingCode: input.underlyingCode });
 }
 
 function transferRefs<TRef extends string>(

@@ -1,6 +1,7 @@
 import {
   ControllerError,
   createControllerModelItems,
+  createModelOutputRecoverySection,
   type ControllerDecision,
   type ControllerInput,
   type ProgressionCandidate,
@@ -100,12 +101,13 @@ function buildRequest(
     protocolInstructions: protocol.protocolInstructions,
   });
   const commandSection = createHelarcCommandStateSection(input.runId, commandState);
+  const recoverySection = createModelOutputRecoverySection(context.outputRecovery);
   const composition = composeModelInput({
     id: `${input.runId}:model-input:${input.iteration}:${context.attemptNumber}`,
     providerId: context.target.providerId,
     model: context.target.model,
     interaction,
-    sections: commandSection === null ? promptAssembly.sections : [...promptAssembly.sections, commandSection],
+    sections: [...promptAssembly.sections, ...(commandSection ? [commandSection] : []), ...(recoverySection ? [recoverySection] : [])],
     lineage: Object.freeze({
       instructionBinding: source("agent-runtime", "agent_instruction_binding", input.instructionBinding.ref.id, input.instructionBinding.ref.revision),
       agent: source("agent-core", "agent_revision", input.agent.id, input.agent.revision),
@@ -374,10 +376,7 @@ function assertTurnCorrelation(
   response: Extract<ProviderResponse, { readonly kind: "native_tool_turn" }>,
   input: ControllerInput<HelarcAgentOutput>,
 ): void {
-  const expectedRequestId = `${input.runId}:model-input:${input.iteration}:1`;
-  if (response.turn.responseRef.requestId !== expectedRequestId) {
-    return nativeTurnFailure("helarc_model_response_request_mismatch");
-  }
+  // ProviderBackedController checks the actual request ID, including recovery attempts.
   for (const block of response.turn.assistant.content) {
     if (
       block.kind === "model_tool_call" &&

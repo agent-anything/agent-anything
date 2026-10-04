@@ -294,6 +294,11 @@ function projectDescendantResult(
     effect_status: result.effects.status,
     uncertainty: result.uncertainty,
     failure_code: result.terminal.status === "failed" ? result.terminal.code : null,
+    failure: result.terminal.status === "failed" ? Object.freeze({
+      kind: result.terminal.failureKind,
+      code: result.terminal.code,
+      ...result.terminal.failureDiagnostic,
+    }) : null,
   });
   const requiredMissing = result.expectationCoverage.some(
     ({ required, disposition }) => required && disposition !== "present",
@@ -318,7 +323,7 @@ function projectDescendantResult(
       output,
       failure: descendantFailure(
         result.terminal.code ?? "delegation_result_incomplete",
-        "Descendant result is incomplete, limited, or uncertain.",
+        result.terminal.failureDiagnostic?.message ?? "Descendant result is incomplete, limited, or uncertain.",
       ),
     });
   }
@@ -334,10 +339,10 @@ function projectDescendantResult(
   }
   return Object.freeze({
     status: "failed" as const,
-    output: null,
+    output,
     failure: descendantFailure(
       result.terminal.code ?? "descendant_run_failed",
-      "Descendant Run failed.",
+      result.terminal.failureDiagnostic!.message,
     ),
   });
 }

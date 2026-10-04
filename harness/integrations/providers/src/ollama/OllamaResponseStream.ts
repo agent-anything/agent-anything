@@ -30,11 +30,11 @@ export async function readOllamaResponseStream(
         if (!Array.isArray(message.tool_calls)) malformedStream();
         for (const call of message.tool_calls) {
           if (calls.length >= MAX_STREAM_CALLS) streamLimit();
-          const candidate = streamRecord(call);
-          const fn = streamRecord(candidate.function);
-          if (typeof fn.name !== "string" || !fn.name.trim()) malformedStream();
-          const args = streamRecord(fn.arguments);
-          delivery.tool(calls.length, fn.name, JSON.stringify(args));
+          // The final finish reason determines whether an unfinished call is truncation.
+          const fn = isRecord(call) && isRecord(call.function) ? call.function : null;
+          if (fn !== null && typeof fn.name === "string" && fn.name.trim() && isRecord(fn.arguments)) {
+            delivery.tool(calls.length, fn.name, JSON.stringify(fn.arguments));
+          }
           calls.push(call);
         }
       }
@@ -56,4 +56,8 @@ export async function readOllamaResponseStream(
   return { ...(terminal as Record<string, unknown>), message: {
     role: "assistant", content, ...(thinking ? { thinking } : {}), tool_calls: calls,
   } };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

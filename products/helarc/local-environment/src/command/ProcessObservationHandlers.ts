@@ -44,7 +44,7 @@ export function createProcessObservationHandlers(input:{
           cursor:request.cursor as string|undefined,waitMs:Math.min(requested,Math.floor(remaining)),requestedWaitMs:requested,signal:context.interruption.signal,initial});
         const output=projectProcessObservation(observed);
         let commandFailure:null|{code:string;message:string;retryable:false;metadata:Record<string,unknown>}=null;
-        if(initial && observed.snapshot.phase === "settled") {
+        if(initial && observed.snapshot.outcome !== null) {
           const semantics=input.semantics.get(executionId);
           if(!semantics) throw new TypeError("Command interpretation is unavailable.");
           const result=interpretShellCommandOutcome({...semantics,exitCode:observed.snapshot.rootExit?.code ?? null,

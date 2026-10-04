@@ -134,19 +134,120 @@ describe("RunProcessManager", () => {
     expect((await t.observe()).stdout.text).toBe("retained");
   });
 
-  it("preserves root exit zero when its remaining scope reaches the execution deadline", async () => {
+  it("ends the command timeout at root exit without releasing descendant ownership", async () => {
     const t = await setup();
     vi.mocked(t.handle.terminate).mockImplementation(async () => {
       t.emit({kind: "scope_empty"});
       t.emit({kind: "output_closed", incomplete: false});
       return "forced";
     });
-    await t.manager.start({...t.input, timeoutMs: 100});
+    await t.manager.start({...t.input, timeoutMs: 40});
     t.emit({kind: "root_exit", code: 0, signal: null});
-    await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
-    expect((await t.observe()).snapshot).toMatchObject({rootExit: {code: 0}, outcome: "timed_out",
-      containment: {disposition: "empty"}, termination: {reason: "execution_timeout"}});
+    const first = await t.observe({initial: true, waitMs: 80});
+    expect(first).toMatchObject({returnReason: "command_completed", snapshot: {rootExit: {code: 0}, outcome: "succeeded",
+      phase: "running", containment: {disposition: "active"}, output: {capture: "open"}, termination: null}});
+    expect(t.handle.terminate).not.toHaveBeenCalled();
+    expect(t.handle.close).not.toHaveBeenCalled();
+    const identity = first.snapshot.process!;
+    expect(t.manager.isExactActive(identity)).toBe(true);
     await t.cleanup();
+    expect((await t.observe()).snapshot).toMatchObject({outcome: "succeeded", rootExit: {code: 0},
+      containment: {disposition: "empty"}, termination: {reason: "run_finalization"}});
+    expect(t.manager.isExactActive(identity)).toBe(false);
+    expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([]);
+  });
+
+  it("keeps the Run deadline effective after command completion without rewriting its outcome", async () => {
+    const t = await setup();
+    await t.manager.start({...t.input, timeoutMs: 20, deadlineAt: new Date(Date.now() + 150).toISOString()});
+    t.emit({kind: "root_exit", code: 0, signal: null});
+    await t.observe({initial: true});
+    await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+    expect((await t.observe()).snapshot).toMatchObject({outcome: "succeeded", rootExit: {code: 0}, termination: {reason: "run_deadline"}});
+    expect(t.manager.readInputNotifications(t.input.runId, 0).map(fact => fact.source.kind))
+      .toEqual(["process_scope_termination", "process_output_completed"]);
+    await t.cleanup();
+  });
+
+  it("persists pipe EOF before scope settlement and commits foreground cwd at command exit", async () => {
+    const t = await setup();
+    const consume = vi.fn(async () => t.directory), commit = vi.fn(async (path: string) => path);
+    await t.manager.start({...t.input, consumeFinalCwd: consume, commitFinalCwd: commit});
+    t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("command output")});
+    t.emit({kind: "output_closed", incomplete: false});
+    await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).output.persistence).toBe("complete");
+    expect(t.handle.close).not.toHaveBeenCalled();
+    t.emit({kind: "root_exit", code: 0, signal: null});
+    const initial = await t.observe({initial: true, waitMs: 1000});
+    expect(initial).toMatchObject({returnReason: "command_completed", stdout: {text: "command output"},
+      snapshot: {outcome: "succeeded", phase: "running", cwdDisposition: "committed", sessionCwd: t.directory}});
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(t.handle.close).not.toHaveBeenCalled();
+    await t.manager.stop(initial.snapshot.process!);
+    expect((await t.observe()).snapshot).toMatchObject({outcome: "succeeded", termination: {reason: "model_stop"}});
+    await t.cleanup();
+  });
+
+  it("retains later output when the initial observation returns a completed command with open pipes", async () => {
+    const t = await setup(); await t.manager.start(t.input);
+    t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("first")});
+    t.emit({kind: "root_exit", code: 0, signal: null});
+    const first = await t.observe({initial: true, waitMs: 5});
+    expect(first.snapshot.output.capture).toBe("open");
+    t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("later")});
+    expect((await t.observe({cursor: first.nextCursor})).stdout.text).toBe("later");
+    t.finish(); await t.cleanup();
+    expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([]);
+  });
+
+  it("delivers one terminal fact for a continuing command independently of observers and readers", async () => {
+    const t = await setup({observerThrows: true}); await t.manager.start(t.input);
+    await t.observe({initial: true});
+    t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("result")});
+    expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([]);
+    t.finish(2);
+    await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+    const facts = t.manager.readInputNotifications(t.input.runId, 0);
+    expect(facts).toHaveLength(2);
+    expect(facts[0]).toMatchObject({source: {kind: "command_completed"}, data: {outcome: "failed", rootExit: {code: 2}, capture: {stdout: {text: "result"}}}});
+    expect(facts[1]).toMatchObject({source: {kind: "process_output_completed"}, data: {output: {capture: "closed", persistence: "complete"}}});
+    expect(Object.isFrozen(facts[0]?.data)).toBe(true);
+    await t.observe();
+    expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual(facts);
+    expect(t.manager.readInputNotifications(t.input.runId, facts[1]!.sequence)).toEqual([]);
+    expect(t.manager.readInputNotifications("other-run", 0)).toEqual([]);
+    await t.cleanup();
+  });
+
+  it("does not replace a known command result when cleanup cannot be confirmed", async () => {
+    const t = await setup();
+    vi.mocked(t.handle.terminate).mockResolvedValue("forced");
+    await t.manager.start(t.input); await t.observe({initial: true});
+    t.emit({kind: "root_exit", code: 0, signal: null});
+    t.emit({kind: "failure", code: "lost_helper", message: "Helper unavailable."});
+    await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).limitations).toContain("process_cleanup_unconfirmed");
+    expect((await t.observe()).snapshot).toMatchObject({outcome: "succeeded", phase: "unresolved", rootExit: {code: 0}, containment: {disposition: "unknown"}});
+    expect(t.manager.readInputNotifications(t.input.runId, 0).map(fact => fact.source.kind))
+      .toEqual(["command_completed", "process_resource_failure", "process_scope_termination", "process_cleanup_unconfirmed"]);
+    t.finish(); await t.cleanup();
+  });
+
+  it("retains undelivered facts after the settled process record has expired", async () => {
+    const t = await setup();
+    const manager = new RunProcessManager({backend: t.backend, maximumActive: 2, maximumSettled: 1});
+    await manager.start(t.input);
+    await manager.observe({runId: t.input.runId, executionId: t.input.executionId, invocationId: "initial", initial: true,
+      waitMs: 0, signal: new AbortController().signal});
+    t.finish();
+    await expect.poll(() => manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+    const notifications = manager.readInputNotifications(t.input.runId, 0);
+    const paths = Object.fromEntries(Object.entries(t.paths).map(([key, path]) => [key, `${path}.next`])) as unknown as ProcessOutputPaths;
+    await manager.start({...t.input, executionId: "second", paths}); t.finish();
+    await expect.poll(() => manager.get(t.input.runId, "second").phase).toBe("settled");
+    expect(() => manager.get(t.input.runId, t.input.executionId)).toThrow("process_execution_expired");
+    expect(manager.readInputNotifications(t.input.runId, 0)).toEqual(notifications);
+    await manager.finalizeRun({runId: t.input.runId, deadlineAt: t.input.deadlineAt, signal: new AbortController().signal});
   });
 
   it("never renews the execution deadline when observations repeat", async () => {

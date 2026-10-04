@@ -21,7 +21,15 @@ export type ProcessBackendEvent =
   | { readonly kind: "root_exit"; readonly code: number | null; readonly signal: string | null }
   | { readonly kind: "scope_empty" }
   | { readonly kind: "output_closed"; readonly incomplete: boolean }
+  | { readonly kind: "scope_members"; readonly snapshot: ProcessScopeMembers }
   | { readonly kind: "failure"; readonly code: string; readonly message: string };
+
+export interface ProcessScopeMembers {
+  readonly reason: "root_exit" | "termination";
+  readonly members: readonly { readonly pid: number; readonly identity: string | null; readonly executable: string | null }[];
+  readonly omittedCount: number | null;
+  readonly limitation: string | null;
+}
 
 export interface ProcessBackendHandle {
   readonly processId: number;

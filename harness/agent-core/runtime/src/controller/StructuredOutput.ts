@@ -22,6 +22,7 @@ export interface ProviderRequestBuildContext {
   readonly correction: StructuredOutputCorrection | null;
   readonly target: ProviderModelTarget;
   readonly requestedOutput: ProviderRequestedOutput;
+  readonly outputRecovery?: import("./ModelOutputRecovery.js").ModelOutputRecovery;
 }
 
 export interface StructuredOutputCorrection {

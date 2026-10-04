@@ -73,6 +73,11 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
   const state = useRef({ page, commitKey });
   state.current = { page, commitKey };
   const reader = useRef<(older?: boolean) => void>(() => {});
+  function returnToLatest() {
+    following.current = true;
+    anchor.current = null;
+    reader.current();
+  }
   function saveAnchor() {
     const node = viewport.current;
     if (!node || following.current) {
@@ -247,8 +252,12 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
         onScroll={() => {
           if (!viewport.current || reading.current) return;
           const v = viewport.current;
-          following.current =
-            v.scrollHeight - v.scrollTop - v.clientHeight < 64 && !newContent;
+          const atTail = v.scrollHeight - v.scrollTop - v.clientHeight < 64;
+          if (atTail && (!following.current || newContent)) {
+            returnToLatest();
+            return;
+          }
+          following.current = atTail;
           saveAnchor();
         }}
       >
@@ -295,10 +304,7 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
           {error && (
             <button
               className="wb-link"
-              onClick={() => {
-                following.current = true;
-                reader.current();
-              }}
+              onClick={returnToLatest}
             >
               {error} Reload
             </button>
@@ -307,10 +313,7 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
       </div>
       <button
         className={`wb-latest ${newContent ? "has-new" : ""}`}
-        onClick={() => {
-          following.current = true;
-          reader.current();
-        }}
+        onClick={returnToLatest}
       >
         <ArrowDown size={14} />
         Latest messages{newContent ? " (new content)" : ""}

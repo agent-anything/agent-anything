@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import type { CanonicalProcessIdentity } from "@agent-anything/canonical-action/subject";
 import { ProcessLaunchFailure, type ProcessBackend, type ProcessBackendEvent, type ProcessBackendHandle } from "./ProcessBackend.js";
 import { ProcessOutputStore, type ProcessOutputPaths } from "./ProcessOutputStore.js";
-import type { ProcessCleanupSummary, ProcessExecutionFact, ProcessExecutionObserver, ProcessObservation, ProcessSnapshot, ProcessTerminationReason } from "./ProcessObservation.js";
+import type { ProcessCleanupSummary, ProcessExecutionFact, ProcessExecutionObserver, ProcessInputNotification, ProcessObservation, ProcessSnapshot, ProcessTerminationReason } from "./ProcessObservation.js";
 
 export interface ManagedProcessStart {
   readonly runId: string;
@@ -33,6 +33,7 @@ interface Execution {
   handle: ProcessBackendHandle | null;
   launchFinished: boolean;
   timer: ReturnType<typeof setTimeout> | null;
+  runDeadlineTimer: ReturnType<typeof setTimeout> | null;
   terminationTimer: ReturnType<typeof setTimeout> | null;
   readonly listeners: Set<() => void>;
   readonly launchAbort: AbortController;
@@ -40,9 +41,12 @@ interface Execution {
   readonly settled: Promise<void>;
   readonly resolve: () => void;
   closePromise: Promise<void> | null;
+  outputClosePromise: Promise<void> | null;
+  cwdPromise: Promise<void> | null;
   stopPromise: Promise<void> | null;
   observationSequence: number;
   initialObservation: boolean;
+  initialDelivery: "pending" | "inline" | "continuing";
   lastOutputNotification: number;
 }
 
@@ -63,6 +67,8 @@ export class RunProcessManager {
   private readonly closedRuns = new Set<string>();
   private sequence = 0;
   private revision = 0;
+  private readonly notifications = new Map<string, ProcessInputNotification[]>();
+  private notificationSequence = 0;
   private now(): string { return this.options.now?.() ?? new Date().toISOString(); }
 
   constructor(private readonly options: RunProcessManagerOptions) {
@@ -80,9 +86,9 @@ export class RunProcessManager {
     const settled = new Promise<void>((done) => { resolve = done; });
     const launchAbort = new AbortController();
     const entry: Execution = {
-      input, output: null, handle: null, launchFinished: false, timer: null, terminationTimer: null, listeners: new Set(), launchAbort,
+      input, output: null, handle: null, launchFinished: false, timer: null, runDeadlineTimer: null, terminationTimer: null, listeners: new Set(), launchAbort,
       abort: () => { void this.requestTermination(entry, "run_cancelled"); }, settled, resolve,
-      closePromise: null, stopPromise: null, observationSequence: 0, initialObservation: false, lastOutputNotification: 0,
+      closePromise: null, outputClosePromise: null, cwdPromise: null, stopPromise: null, observationSequence: 0, initialObservation: false, initialDelivery: "pending", lastOutputNotification: 0,
       snapshot: immutable({ ref: { runId: input.runId, executionId: input.executionId }, revision: 0, phase: "starting",
         backend: this.options.backend.descriptor, process: null, helperProcessId: null, actionId: input.actionId, origin: input.origin ?? null,
         startedAt: null, finishedAt: null, deadlineAt: null, initialCwd: input.cwd, finalCwd: null, sessionCwd: null,
@@ -124,8 +130,10 @@ export class RunProcessManager {
       this.publish(entry, "started");
       for(const event of earlyEvents)this.event(entry,event);
       if (entry.snapshot.containment.disposition !== "empty") {
-        entry.timer = setTimeout(() => { void this.requestTermination(entry,
-          remainingAtStart <= input.timeoutMs ? "run_deadline" : "execution_timeout"); }, timeout);
+        entry.runDeadlineTimer = setTimeout(() => { void this.requestTermination(entry, "run_deadline"); }, Math.max(0, remainingAtStart));
+        if (entry.snapshot.rootExit === null && input.timeoutMs < remainingAtStart) {
+          entry.timer = setTimeout(() => { void this.requestTermination(entry, "execution_timeout"); }, timeout);
+        }
       }
       if (input.runSignal.aborted || entry.snapshot.termination !== null || this.closedRuns.has(input.runId)) {
         entry.stopPromise = null;
@@ -153,6 +161,9 @@ export class RunProcessManager {
   getDisplayDescriptor(runId: string, executionId: string) {
     const entry = this.find(runId, executionId);
     return { shell: entry.input.displayCommand?.shell ?? null, command: entry.input.displayCommand?.command ?? null };
+  }
+  readInputNotifications(runId: string, afterSequence: number): readonly ProcessInputNotification[] {
+    return Object.freeze((this.notifications.get(runId) ?? []).filter(fact => fact.sequence > afterSequence));
   }
   readOutput(runId: string, executionId: string, cursor?: string) {
     const entry = this.find(runId, executionId);
@@ -193,6 +204,7 @@ export class RunProcessManager {
     this.publish(entry, "observation_started", details);
     try {
       await this.wait(entry, input.signal, input.waitMs, () => entry.snapshot.phase === "settled" || entry.snapshot.phase === "unresolved" ||
+        (input.initial && entry.snapshot.outcome !== null && entry.snapshot.output.capture !== "open" && entry.snapshot.output.persistence !== "pending") ||
         (!input.initial && (entry.output!.hasUnread(input.cursor) || entry.snapshot.revision !== before)));
     } catch (error) {
       if(input.initial && entry.snapshot.cwdDisposition === "eligible") this.change(entry, {cwdDisposition:"detached"});
@@ -200,7 +212,8 @@ export class RunProcessManager {
       throw error;
     }
     if (input.initial) {
-      if (entry.snapshot.phase === "settled" && entry.snapshot.cwdDisposition === "eligible") {
+      if (entry.snapshot.rootExit !== null && entry.snapshot.cwdDisposition === "eligible") {
+        await this.consumeCwd(entry);
         const committed = entry.snapshot.finalCwd === null ? null : await entry.input.commitFinalCwd?.(entry.snapshot.finalCwd) ?? null;
         this.change(entry, { sessionCwd: committed, cwdDisposition: committed !== null ? "committed" : entry.snapshot.finalCwd === null ? "unavailable" : "unchanged" });
       } else if (entry.snapshot.cwdDisposition === "eligible") this.change(entry, { cwdDisposition: "detached" });
@@ -210,11 +223,12 @@ export class RunProcessManager {
     const changed = entry.snapshot.revision !== before;
     const output = entry.output.read(input.cursor);
     this.refreshOutput(entry);
+    if (input.initial) entry.initialDelivery = entry.snapshot.outcome === null ? "continuing" : "inline";
     const observation: ProcessObservation = immutable({
       id: observationId, invocationId: input.invocationId,
       execution: entry.snapshot.ref, snapshot: entry.snapshot, requestedWaitMs: input.requestedWaitMs ?? input.waitMs, effectiveWaitMs: input.waitMs,
       elapsedWaitMs: Math.max(0, performance.now() - started),
-      returnReason: entry.snapshot.phase === "settled" ? "process_settled" : input.waitMs === 0 ? "immediate_snapshot" :
+      returnReason: entry.snapshot.phase === "settled" ? "process_settled" : input.initial && entry.snapshot.rootExit !== null ? "command_completed" : input.waitMs === 0 ? "immediate_snapshot" :
         input.initial ? "initial_wait_limit" : output.stdout.text.length + output.stderr.text.length > 0 ? "output_available" :
         changed ? "lifecycle_changed" : "observation_wait_limit", ...output,
     });
@@ -263,19 +277,32 @@ export class RunProcessManager {
         entry.lastOutputNotification = performance.now(); this.publish(entry, "output");
       }
     } else if (event.kind === "root_exit") {
-      this.change(entry, { rootExit: { code: event.code, signal: event.signal, observedAt: this.now() } });
+      if (entry.snapshot.rootExit !== null) return;
+      if (entry.timer !== null) clearTimeout(entry.timer);
+      const finishedAt = this.now();
+      const reason = entry.snapshot.termination?.reason;
+      const outcome = reason === "execution_timeout" || reason === "run_deadline" ? "timed_out" :
+        reason && reason !== "backend_failure" ? "cancelled" : event.code === 0 ? "succeeded" : "failed";
+      this.change(entry, { rootExit: { code: event.code, signal: event.signal, observedAt: finishedAt }, outcome, finishedAt });
+      void this.consumeCwd(entry);
+      if (entry.initialDelivery === "continuing") this.notifyInput(entry, "command_completed");
       this.publish(entry, "root_exit");
+    } else if (event.kind === "scope_members") {
+      this.publish(entry, "scope_members", {scopeMembers: event.snapshot});
     } else if (event.kind === "scope_empty") {
       if (entry.timer !== null) clearTimeout(entry.timer);
+      if (entry.runDeadlineTimer !== null) clearTimeout(entry.runDeadlineTimer);
       if (entry.terminationTimer !== null) clearTimeout(entry.terminationTimer);
       this.change(entry, { phase: "draining", containment: { disposition: "empty", confirmedAt: this.now() } });
       this.publish(entry, "scope_empty"); this.maybeSettle(entry);
     } else if (event.kind === "output_closed") {
       this.change(entry, { output: { ...entry.snapshot.output, capture: event.incomplete ? "incomplete" : "closed" } });
+      void this.closeOutput(entry).then(() => this.maybeSettle(entry));
       this.maybeSettle(entry);
     } else {
       this.change(entry, { phase: "unresolved", limitations: [...entry.snapshot.limitations, event.code],
-        containment: { disposition: entry.snapshot.containment.disposition === "empty" ? "empty" : "unknown", confirmedAt: entry.snapshot.containment.confirmedAt }, outcome: "unknown" });
+        containment: { disposition: entry.snapshot.containment.disposition === "empty" ? "empty" : "unknown", confirmedAt: entry.snapshot.containment.confirmedAt }, outcome: entry.snapshot.outcome ?? "unknown" });
+      this.notifyInput(entry, "process_resource_failure");
       this.publish(entry, "unresolved");
       void this.requestTermination(entry, "backend_failure");
     }
@@ -289,32 +316,15 @@ export class RunProcessManager {
     if (entry.closePromise !== null) return entry.closePromise;
     entry.closePromise = (async () => {
       if (entry.timer !== null) clearTimeout(entry.timer);
+      if (entry.runDeadlineTimer !== null) clearTimeout(entry.runDeadlineTimer);
       if (entry.terminationTimer !== null) clearTimeout(entry.terminationTimer);
       entry.input.runSignal.removeEventListener("abort", entry.abort);
-      let persistence: "complete" | "failed" = "complete";
-      try {
-        if (!entry.output) throw new Error("Output capture was not created.");
-        await entry.output.close();
-      } catch { persistence = "failed"; }
-      if (persistence === "complete" && this.options.retainOutput) {
-        try { await this.options.retainOutput(entry.input.runId, entry.input.executionId, entry.input.paths); }
-        catch {
-          persistence = "failed";
-          this.change(entry, { limitations: [...entry.snapshot.limitations, "process_output_retention_failed"] });
-        }
-      }
-      let finalCwd: string | null = null;
-      try { finalCwd = await entry.input.consumeFinalCwd?.() ?? null; }
-      catch { this.change(entry, { limitations: [...entry.snapshot.limitations, "process_final_cwd_unavailable"] }); }
+      await this.closeOutput(entry);
+      await this.consumeCwd(entry);
       try { await entry.handle?.close(); } catch { this.change(entry, { limitations: [...entry.snapshot.limitations, "process_backend_close_failed"] }); }
       this.refreshOutput(entry);
-      const termination = entry.snapshot.termination?.reason;
-      const outcome = termination === "execution_timeout" || termination === "run_deadline" ? "timed_out" :
-        termination && termination !== "backend_failure" ? "cancelled" : entry.snapshot.rootExit === null ? entry.snapshot.outcome ?? "unknown" :
-        entry.snapshot.rootExit.code === 0 ? "succeeded" : "failed";
-      this.change(entry, { phase: "settled", finishedAt: this.now(), finalCwd,
-        output: { ...entry.snapshot.output, persistence }, outcome });
-      this.publish(entry, "output_settled"); this.publish(entry, "settled"); entry.resolve();
+      this.change(entry, { phase: "settled", finishedAt: entry.snapshot.finishedAt ?? this.now(), outcome: entry.snapshot.outcome ?? "unknown" });
+      this.publish(entry, "settled"); entry.resolve();
       const settled = [...this.executions.values()].filter((candidate) => candidate.snapshot.phase === "settled" && candidate !== entry &&
         (candidate.snapshot.output.persistence !== "failed" || this.closedRuns.has(candidate.input.runId)));
       while (settled.length >= this.options.maximumSettled) {
@@ -329,12 +339,68 @@ export class RunProcessManager {
     return entry.closePromise;
   }
 
+  private closeOutput(entry: Execution): Promise<void> {
+    if (entry.outputClosePromise !== null) return entry.outputClosePromise;
+    entry.outputClosePromise = (async () => {
+      let persistence: "complete" | "failed" = "complete";
+      try {
+        if (!entry.output) throw new Error("Output capture was not created.");
+        await entry.output.close();
+      } catch { persistence = "failed"; }
+      if (persistence === "complete" && this.options.retainOutput) {
+        try { await this.options.retainOutput(entry.input.runId, entry.input.executionId, entry.input.paths); }
+        catch {
+          persistence = "failed";
+          this.change(entry, { limitations: [...entry.snapshot.limitations, "process_output_retention_failed"] });
+        }
+      }
+      this.refreshOutput(entry);
+      this.change(entry, { output: { ...entry.snapshot.output, persistence } });
+      this.notifyInput(entry, persistence === "failed" || entry.snapshot.output.capture === "incomplete"
+        ? "process_output_limited" : "process_output_completed");
+      this.publish(entry, "output_settled");
+    })();
+    return entry.outputClosePromise;
+  }
+
+  private consumeCwd(entry: Execution): Promise<void> {
+    return entry.cwdPromise ??= (async () => {
+      let finalCwd: string | null = null;
+      try { finalCwd = await entry.input.consumeFinalCwd?.() ?? null; }
+      catch { this.change(entry, { limitations: [...entry.snapshot.limitations, "process_final_cwd_unavailable"] }); }
+      this.change(entry, { finalCwd });
+    })();
+  }
+
+  private notifyInput(entry: Execution, kind: string): void {
+    if (entry.initialDelivery === "pending" || this.closedRuns.has(entry.input.runId)) return;
+    const snapshot = entry.snapshot;
+    const capture = entry.output?.read(undefined, 24_576);
+    // Segment text is diagnostic detail; duplicating it would double the model payload.
+    const stream = (value: NonNullable<typeof capture>["stdout"]) => {
+      const {segments: _segments, ...projection} = value;
+      return projection;
+    };
+    const fact: ProcessInputNotification = immutable({runId: entry.input.runId, sequence: ++this.notificationSequence,
+      source: {owner: "helarc-command", kind, id: entry.input.executionId, revision: String(snapshot.revision)},
+      occurredAt: this.now(), data: {kind, task_id: entry.input.executionId, command: entry.input.displayCommand?.command ?? null,
+        outcome: snapshot.outcome, rootExit: snapshot.rootExit, termination: snapshot.termination,
+        containment: snapshot.containment, output: snapshot.output, limitations: snapshot.limitations,
+        ...(capture ? {capture: {stdout: stream(capture.stdout), stderr: stream(capture.stderr),
+          nextCursor: capture.nextCursor, hasMore: capture.hasMore}} : {})}});
+    const facts = this.notifications.get(entry.input.runId) ?? [];
+    facts.push(fact);
+    this.notifications.set(entry.input.runId, facts);
+    this.publish(entry, "input_notified", {notification: fact});
+  }
+
   private requestTermination(entry: Execution, reason: ProcessTerminationReason, requestId?: string): Promise<void> {
     if (entry.snapshot.phase === "settled") return Promise.resolve();
     if (entry.stopPromise !== null) return entry.stopPromise;
     if (entry.snapshot.termination === null) {
       this.change(entry, { phase: entry.snapshot.containment.disposition === "empty" ? "draining" : "stopping",
         termination: { reason, requestedAt: this.now(), method: "none" } });
+      if (entry.snapshot.rootExit !== null) this.notifyInput(entry, "process_scope_termination");
       this.publish(entry, "termination_requested", requestId ? {requestId} : {});
     }
     entry.launchAbort.abort();
@@ -347,7 +413,8 @@ export class RunProcessManager {
       }
       await this.wait(entry, new AbortController().signal, this.options.terminationTimeoutMs ?? 2500, () => entry.snapshot.phase === "settled");
       if (entry.snapshot.phase !== "settled") {
-        this.change(entry, { phase: "unresolved", outcome: "unknown", limitations: [...entry.snapshot.limitations, "process_cleanup_unconfirmed"] });
+        this.change(entry, { phase: "unresolved", outcome: entry.snapshot.outcome ?? "unknown", limitations: [...entry.snapshot.limitations, "process_cleanup_unconfirmed"] });
+        this.notifyInput(entry, "process_cleanup_unconfirmed");
         this.publish(entry, "unresolved");
       }
     })();

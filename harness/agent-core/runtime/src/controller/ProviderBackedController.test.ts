@@ -31,6 +31,7 @@ import {
   validateControllerDecision,
 } from "./ProviderBackedController.js";
 import { createControllerModelItems } from "./ControllerModelItems.js";
+import { createModelOutputRecoverySection } from "./ModelOutputRecovery.js";
 import {
   StructuredOutputError,
   type ProviderRequestBuildContext,
@@ -1301,6 +1302,7 @@ describe("ProviderBackedController native streaming", () => {
     readonly send: Provider["send"];
     readonly events: ControllerResponseObservation[];
     readonly continuation?: boolean;
+    readonly maximumOutputRecoveryAttempts?: number;
     readonly parseResponse?: (response: ProviderResponse) => ControllerDecision<TestOutput>;
   }) {
     const base = new FakeProvider({ results: [] });
@@ -1317,7 +1319,7 @@ describe("ProviderBackedController native streaming", () => {
       send: input.send,
     };
     return new ProviderBackedController<TestOutput>({
-      provider, responseProtocol: { kind: "native_tool_turn" },
+      provider, responseProtocol: { kind: "native_tool_turn", maximumOutputRecoveryAttempts: input.maximumOutputRecoveryAttempts },
       delivery: { mode: "streaming", observer: { observe(event) { input.events.push(event); } } },
       buildRequest(input, context) {
         return accountTestRequest({ ...request("Continue"), interaction: createNativeToolTurnInteraction([
@@ -1406,6 +1408,126 @@ describe("ProviderBackedController native streaming", () => {
     });
     await expect(controller.next(createControllerInput(), callContext())).rejects.toBeDefined();
     expect(events.at(-1)).toMatchObject({ kind: "interpretation", disposition: "rejected", parts: [] });
+  });
+
+  function truncated(request: ProviderRequest): ProviderCallResult {
+    const result = complete(request);
+    if (result.kind !== "succeeded" || result.response.kind !== "native_tool_turn") throw new Error("Expected native turn");
+    return { ...result, response: { ...result.response, turn: { ...result.response.turn,
+      turnId: `truncated:${request.requestId}`,
+      finish: { kind: "output_limit" },
+      assistant: { role: "assistant", content: [{ kind: "text", text: "Rejected fragment" }, {
+        kind: "model_tool_call", call: {
+          modelCallRef: { controllerRequestId: request.correlation.controllerRequestId!, branchId: request.correlation.branchId!,
+            turnId: `truncated:${request.requestId}`, contentBlockOrdinal: 1 },
+          providerCallRef: null, name: "Read", input: {}, ordinal: 1,
+        },
+      }] },
+    } } };
+  }
+
+  it("regenerates truncated output without interpreting any rejected calls or raising the output cap", async () => {
+    const events: ControllerResponseObservation[] = [];
+    const requests: ProviderRequest[] = [];
+    const controller = setup({ events, async send(request, _context, options) {
+      requests.push(request);
+      const session = new ProviderDeliverySession(options!, request);
+      session.start(); session.text(requests.length === 1 ? "Rejected fragment" : "Done");
+      const result = requests.length === 1 ? truncated(request) : complete(request);
+      session.settle(result); return result;
+    } });
+    const result = await controller.next(createControllerInput(), callContext());
+    expect(result.kind).toBe("propose_completion");
+    expect(result.modelItems.some(item => item.kind === "model_tool_call")).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("Rejected fragment");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]!.requestId).not.toBe(requests[0]!.requestId);
+    expect(requests[1]!.instructions).toEqual(requests[0]!.instructions);
+    expect(requests[1]!.interaction).toEqual(requests[0]!.interaction);
+    expect(requests[1]!.modelContext.requestedOutput).toEqual(requests[0]!.modelContext.requestedOutput);
+    expect(requests[1]!.modelContext.assessment?.compositionId).toBe(requests[1]!.composition.id);
+    expect(requests[1]!.composition.sections.at(-1)).toMatchObject({ role: "user", kind: "model_output_recovery",
+      content: { text: expect.stringContaining("None of its function calls were executed") } });
+    expect(JSON.stringify(requests[1])).not.toContain("Rejected fragment");
+    expect(events.filter(event => event.kind === "interpretation")).toMatchObject([
+      { disposition: "rejected", parts: [] }, { disposition: "validated" },
+    ]);
+  });
+
+  it("exhausts exactly two recovery requests and retains the concrete truncation diagnostic", async () => {
+    const events: ControllerResponseObservation[] = [];
+    const requests: ProviderRequest[] = [];
+    const controller = setup({ events, async send(request, _context, options) {
+      requests.push(request);
+      const session = new ProviderDeliverySession(options!, request);
+      session.start(); session.text("Rejected fragment");
+      const result = truncated(request); session.settle(result); return result;
+    } });
+    await expect(controller.next(createControllerInput(), callContext())).rejects.toMatchObject({
+      failure: { kind: "model", failure: { code: "model_output_limit_exhausted", retryable: false,
+        message: expect.stringContaining("3 generation attempts"),
+        metadata: { finishKind: "output_limit", generationAttempts: 3, recoveryAttempts: 2 } } },
+    });
+    expect(requests).toHaveLength(3);
+    expect(new Set(requests.map(request => request.requestId)).size).toBe(3);
+    expect(requests.map(request => request.composition.sections.filter(section => section.kind === "model_output_recovery").length))
+      .toEqual([0, 1, 1]);
+    expect(events.filter(event => event.kind === "interpretation").map(event => event.disposition))
+      .toEqual(["rejected", "rejected", "rejected"]);
+    expect(new Set(events.filter(event => event.kind === "interpretation").map(event => event.invocationId)).size).toBe(3);
+  });
+
+  it("can disable recovery and never treats foreign responses as recoverable truncation", async () => {
+    const send = vi.fn(async (request: ProviderRequest) => truncated(request));
+    const controller = setup({ events: [], maximumOutputRecoveryAttempts: 0, send });
+    await expect(controller.next(createControllerInput(), callContext())).rejects.toMatchObject({
+      failure: { failure: { code: "model_output_limit_exhausted", metadata: { generationAttempts: 1 } } },
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    const foreign = vi.fn(async (request: ProviderRequest) => truncated({ ...request, requestId: "foreign-request" }));
+    await expect(setup({ events: [], send: foreign }).next(createControllerInput(), callContext())).rejects.toMatchObject({
+      failure: { failure: { code: "model_output_invalid" } },
+    });
+    expect(foreign).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not regenerate after cancellation wins at a truncated response", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const send = vi.fn(async (request: ProviderRequest) => {
+      cancellation.requestCancellation({ origin: "host", reasonCode: "host_requested" });
+      return truncated(request);
+    });
+    await expect(setup({ events: [], send }).next(createControllerInput(), callContext(cancellation.context))).rejects.toBeDefined();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start another generation after the operation deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-14T00:00:00.000Z");
+    const send = vi.fn(async (request: ProviderRequest) => {
+      vi.setSystemTime("2026-07-14T00:00:00.100Z");
+      return truncated(request);
+    });
+    await expect(setup({ events: [], send }).next(createControllerInput(), callContext(undefined, {
+      deadlineAt: "2026-07-14T00:00:00.050Z",
+    }))).rejects.toMatchObject({ failure: { failure: { code: "provider_operation_deadline_exceeded" } } });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse continuation state from a rejected truncated response", async () => {
+    let count = 0;
+    const controller = setup({ events: [], continuation: true, async send(request) {
+      count += 1;
+      expect(request.continuation).toBeNull();
+      const result = count === 1 ? truncated(request) : complete(request);
+      if (result.kind !== "succeeded" || result.response.kind !== "native_tool_turn") throw new Error("Expected native turn");
+      return { ...result, response: { ...result.response,
+        continuation: { kind: "opaque_provider_state", handle: `continuation-${count}`, sensitivity: "restricted" },
+        turn: { ...result.response.turn, responseRef: { ...result.response.turn.responseRef, responseId: `response-${count}` } },
+      } };
+    } });
+    await expect(controller.next(createControllerInput(), callContext())).resolves.toMatchObject({ kind: "propose_completion" });
+    expect(count).toBe(2);
   });
 
   it("allocates a new native invocation when existing continuation is reset", async () => {
@@ -1750,7 +1872,8 @@ function accountTestRequest(
     necessity: "mandatory" as const,
     content: Object.freeze({ kind: "model_message" as const, message }),
   }));
-  const sections = Object.freeze([...instructionSections, ...requestSections]);
+  const recoverySection = createModelOutputRecoverySection(context.outputRecovery);
+  const sections = Object.freeze([...instructionSections, ...requestSections, ...(recoverySection ? [recoverySection] : [])]);
   const composition = composeModelInput({
     id: `${input.runId}:test-model-input:${context.attemptNumber}`,
     providerId: context.target.providerId,

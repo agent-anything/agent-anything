@@ -70,6 +70,11 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
         payload: { kind: "transfer", stage: transferred ? "delivered" : "produced", producerId: observation.runAction.id, consumerId: record.runId, operation: observation.payload.kind }, links,
         contents: [{ name: "Run Observation", class: "agent", stage: transferred ? "delivered" : "produced", mediaType: "application/json", value: observation as unknown as InspectionJson }],
       });
+    } else if (payload.kind === "input_notification") {
+      const notification = payload.notification;
+      r.offer({subject, occurredAt: item.createdAt, payload: {kind: "event", name: "input_notification.admitted", sequence: item.ref.sequence, code: null},
+        links: [inspectionLink("delivers", ref(notification.source.owner, "contribution", notification.source.id, notification.source.revision), subject)],
+      });
     } else if (payload.kind === "controller_turn") {
       const turn = ref("runtime", "turn", payload.turn.id);
       r.offer({ subject: turn, occurredAt: item.createdAt, payload: { kind: "event", name: "controller_turn.committed", sequence: null, code: null },
