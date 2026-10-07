@@ -34,7 +34,7 @@ try {
 
 const electron = spawn(
   process.execPath,
-  [pnpmRunner, "exec", "electron", "."],
+  [join(appRoot, "scripts/run-electron.mjs"), "."],
   {
     cwd: appRoot,
     stdio: "inherit",
@@ -45,9 +45,9 @@ const electron = spawn(
   },
 );
 
-electron.once("exit", (code) => {
+electron.once("close", (code) => {
   shutdown();
-  process.exit(code ?? 0);
+  process.exitCode = code ?? 1;
 });
 
 process.once("SIGINT", () => {

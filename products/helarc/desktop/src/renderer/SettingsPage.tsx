@@ -3,11 +3,12 @@ import * as React from "react";
 import { InstructionSettingsPanel } from "./InstructionSettingsPanel.js";
 import { InspectionSettingsPanel } from "./InspectionSettingsPanel.js";
 import { QualificationSettingsPanel } from "./QualificationSettingsPanel.js";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
   HelarcModelUsePolicy,
   HelarcProviderKind,
+  HelarcProviderProfileSnapshot,
 } from "../shared/HelarcDesktopApi.js";
 import {
   HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE,
@@ -116,9 +117,43 @@ function ProviderSettingsPanel({
     useState<HelarcProviderKind>(
       provider?.providerKind ?? HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind,
     );
+  const [drafts, setDrafts] = useState(() => ({
+    ollama: createProviderDraft("ollama", provider),
+    "openai-compatible": createProviderDraft("openai-compatible", provider),
+  }));
+  const draft = drafts[selectedProviderKind];
+  const canKeepCredential = provider?.credentialStatus === "present" &&
+    provider.providerKind === selectedProviderKind &&
+    sameApiBase(provider.baseUrl, draft.baseUrl);
+  const credentialStatus = draft.apiKey.trim() || canKeepCredential
+    ? "present"
+    : provider?.providerKind === selectedProviderKind && sameApiBase(provider.baseUrl, draft.baseUrl)
+      ? provider.credentialStatus : "missing";
   const formKey = provider
     ? `${provider.id}:${provider.providerKind}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.ollamaRuntime?.contextWindowTokens ?? "managed"}:${provider.ollamaRuntime?.maximumOutputTokens ?? "managed"}:${provider.credentialStatus}:${provider.qualificationPolicy}`
     : "unconfigured-provider";
+
+  useEffect(() => {
+    if (!provider) return;
+    setSelectedProviderKind(provider.providerKind);
+    setDrafts(current => ({
+      ...current,
+      [provider.providerKind]: createProviderDraft(provider.providerKind, provider),
+    }));
+    setDirty(false);
+  }, [formKey]);
+
+  function updateDraft<K extends keyof ProviderSettingsDraft>(key: K, value: ProviderSettingsDraft[K]) {
+    setDrafts(current => ({
+      ...current,
+      [selectedProviderKind]: {
+        ...current[selectedProviderKind],
+        ...(key === "baseUrl" ? { apiKey: "" } : {}),
+        [key]: value,
+      },
+    }));
+    setDirty(true);
+  }
 
   async function saveProviderConfig(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -178,14 +213,18 @@ function ProviderSettingsPanel({
         apiKeyUpdate:
           submittedApiKey.trim().length > 0
             ? "set"
-            : provider?.credentialStatus === "present"
+            : canKeepCredential
               ? "keep"
               : "clear",
         apiKey: submittedApiKey,
       });
       if (receipt.status === "handled") {
         onSaved(receipt.result);
-        if (receipt.result.provider.configured) setDirty(false);
+        if (receipt.result.provider.configured) {
+          const saved = receipt.result.provider.activeProfile;
+          setDrafts(current => ({ ...current, [saved.providerKind]: createProviderDraft(saved.providerKind, saved) }));
+          setDirty(false);
+        }
       }
     } finally {
       setIsSaving(false);
@@ -195,24 +234,20 @@ function ProviderSettingsPanel({
   return (
     <>
     <form
-      key={formKey}
       className="settings-panel"
       aria-label="Provider settings"
       onSubmit={saveProviderConfig}
-      onChange={() => setDirty(true)}
     >
       <strong>Provider</strong>
       <label>
         <span>Type</span>
         <select
           name="providerKind"
-          defaultValue={
-            provider?.providerKind ??
-            HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind
-          }
-          onChange={(event) =>
-            setSelectedProviderKind(readProviderKindValue(event.target.value))
-          }
+          value={selectedProviderKind}
+          onChange={(event) => {
+            setSelectedProviderKind(readProviderKindValue(event.target.value));
+            setDirty(true);
+          }}
           disabled={isSaving}
         >
           <option value="openai-compatible">OpenAI-compatible</option>
@@ -223,10 +258,8 @@ function ProviderSettingsPanel({
         <span>Name</span>
         <input
           name="displayName"
-          defaultValue={
-            provider?.displayName ??
-            HELARC_DEFAULT_PROVIDER_SETTINGS.displayName
-          }
+          value={draft.displayName}
+          onChange={event => updateDraft("displayName", event.target.value)}
           autoComplete="off"
           disabled={isSaving}
         />
@@ -235,9 +268,9 @@ function ProviderSettingsPanel({
         <span>Base URL</span>
         <input
           name="baseUrl"
-          defaultValue={
-            provider?.baseUrl ?? HELARC_DEFAULT_PROVIDER_SETTINGS.baseUrl
-          }
+          value={draft.baseUrl}
+          onChange={event => updateDraft("baseUrl", event.target.value)}
+          required
           autoComplete="off"
           disabled={isSaving}
         />
@@ -246,9 +279,9 @@ function ProviderSettingsPanel({
         <span>Model</span>
         <input
           name="model"
-          defaultValue={
-            provider?.model ?? HELARC_DEFAULT_PROVIDER_SETTINGS.model
-          }
+          value={draft.model}
+          onChange={event => updateDraft("model", event.target.value)}
+          required
           autoComplete="off"
           disabled={isSaving}
         />
@@ -260,9 +293,9 @@ function ProviderSettingsPanel({
           type="number"
           min="1000"
           step="1000"
-          defaultValue={(
-            provider?.timeoutMs ?? HELARC_DEFAULT_PROVIDER_SETTINGS.timeoutMs
-          ).toString()}
+          value={draft.timeoutMs}
+          onChange={event => updateDraft("timeoutMs", event.target.value)}
+          required
           autoComplete="off"
           disabled={isSaving}
         />
@@ -276,10 +309,9 @@ function ProviderSettingsPanel({
               type="number"
               min="4096"
               step="1024"
-              defaultValue={(
-                provider?.ollamaRuntime?.contextWindowTokens ??
-                HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.contextWindowTokens
-              ).toString()}
+              value={draft.contextWindowTokens}
+              onChange={event => updateDraft("contextWindowTokens", event.target.value)}
+              required
               autoComplete="off"
               disabled={isSaving}
             />
@@ -291,10 +323,9 @@ function ProviderSettingsPanel({
               type="number"
               min="256"
               step="256"
-              defaultValue={(
-                provider?.ollamaRuntime?.maximumOutputTokens ??
-                HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.maximumOutputTokens
-              ).toString()}
+              value={draft.maximumOutputTokens}
+              onChange={event => updateDraft("maximumOutputTokens", event.target.value)}
+              required
               autoComplete="off"
               disabled={isSaving}
             />
@@ -305,10 +336,8 @@ function ProviderSettingsPanel({
         <span>Model qualification</span>
         <select
           name="qualificationPolicy"
-          defaultValue={
-            provider?.qualificationPolicy ??
-            HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy
-          }
+          value={draft.qualificationPolicy}
+          onChange={event => updateDraft("qualificationPolicy", event.target.value as HelarcModelUsePolicy)}
           disabled={isSaving}
         >
           <option value="require_qualified">Require qualified</option>
@@ -320,11 +349,12 @@ function ProviderSettingsPanel({
         <input
           name="apiKey"
           type="password"
-          defaultValue=""
+          value={draft.apiKey}
+          onChange={event => updateDraft("apiKey", event.target.value)}
           autoComplete="off"
           disabled={isSaving}
           placeholder={
-            provider?.credentialStatus === "present"
+            canKeepCredential
               ? "Stored key is present"
               : "Optional for local endpoints"
           }
@@ -332,13 +362,12 @@ function ProviderSettingsPanel({
       </label>
       <div className="settings-status">
         <span>Credential</span>
-        <strong>{provider?.credentialStatus ?? "missing"}</strong>
+        <strong>{credentialStatus}</strong>
       </div>
       <div className="settings-status">
         <span>Qualification policy</span>
         <strong>
-          {provider?.qualificationPolicy ??
-            HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy}
+          {draft.qualificationPolicy}
         </strong>
       </div>
       {snapshot.provider.configured ? null : (
@@ -355,6 +384,41 @@ function ProviderSettingsPanel({
     <QualificationSettingsPanel api={getHelarcApi()} dirty={dirty || isSaving} />
     </>
   );
+}
+
+interface ProviderSettingsDraft {
+  displayName: string;
+  baseUrl: string;
+  model: string;
+  timeoutMs: string;
+  contextWindowTokens: string;
+  maximumOutputTokens: string;
+  qualificationPolicy: HelarcModelUsePolicy;
+  apiKey: string;
+}
+
+function createProviderDraft(kind: HelarcProviderKind, profile: HelarcProviderProfileSnapshot | null): ProviderSettingsDraft {
+  const saved = profile?.providerKind === kind ? profile : null;
+  const defaults = HELARC_DEFAULT_PROVIDER_SETTINGS;
+  const ollama = HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE;
+  return {
+    displayName: saved?.displayName ?? (kind === "ollama" ? defaults.displayName : "OpenAI-compatible Provider"),
+    baseUrl: saved?.baseUrl ?? (kind === "ollama" ? defaults.baseUrl : ""),
+    model: saved?.model ?? (kind === "ollama" ? defaults.model : ""),
+    timeoutMs: String(saved?.timeoutMs ?? defaults.timeoutMs),
+    contextWindowTokens: String(saved?.ollamaRuntime?.contextWindowTokens ?? ollama.contextWindowTokens),
+    maximumOutputTokens: String(saved?.ollamaRuntime?.maximumOutputTokens ?? ollama.maximumOutputTokens),
+    qualificationPolicy: saved?.qualificationPolicy ?? defaults.qualificationPolicy,
+    apiKey: "",
+  };
+}
+
+function sameApiBase(left: string, right: string): boolean {
+  try {
+    return new URL(left).href.replace(/\/+$/, "") === new URL(right).href.replace(/\/+$/, "");
+  } catch {
+    return false;
+  }
 }
 
 function readFormString(formData: FormData, key: string): string {

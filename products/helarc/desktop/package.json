@@ -18,13 +18,13 @@
     "test:ui": "playwright test",
     "dev": "vite --host 127.0.0.1",
     "dev:electron": "node ../../../scripts/run-pnpm.mjs run build:main && node ../../../scripts/run-pnpm.mjs run copy:preload && node scripts/dev-electron.mjs",
-    "debug:main": "electron --inspect=9229 .",
-    "debug:main:break": "electron --inspect-brk=9229 .",
+    "debug:main": "node scripts/run-electron.mjs --inspect=9229 .",
+    "debug:main:break": "node scripts/run-electron.mjs --inspect-brk=9229 .",
     "debug:test": "vitest run --inspect-brk --pool forks --poolOptions.forks.singleFork",
     "debug:test:provider": "node ../../../scripts/run-pnpm.mjs --filter @agent-anything/provider-integrations debug:test",
     "clean:user-data": "node scripts/clear-user-data.mjs",
     "clean:command-output": "node scripts/clear-user-data.mjs --command-output",
-    "start": "electron ."
+    "start": "node scripts/run-electron.mjs ."
   },
   "agentAnything": {
     "architecture": {
