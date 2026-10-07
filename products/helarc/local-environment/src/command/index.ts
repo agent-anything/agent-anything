@@ -21,3 +21,4 @@ export { readRetainedProcessOutput, registerRetainedProcessOutput, RetainedProce
 export type { RetainedProcessOutputLocator } from "./RetainedProcessOutput.js";
 export type { ProcessOutputPaths } from "./ProcessOutputStore.js";
 export { ProcessOutputRepository } from "./ProcessOutputRepository.js";
+export { selectNativeShell, projectNativeShellRuntimeProfile } from "./CommandActionIdentity.js";

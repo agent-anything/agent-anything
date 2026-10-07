@@ -87,7 +87,11 @@ export function resolveHelarcModelQualification(input: {
       {
         providerKind: input.providerProfile.providerKind,
         model: input.providerProfile.model,
-        generationPolicy: "provider-defaults.v1",
+        generationPolicy: input.provider.descriptor.metadata.generationConfiguration === undefined
+          ? "provider-defaults.v1" : "provider-resolved.v1",
+        ...(input.provider.descriptor.metadata.generationConfiguration === undefined ? {} : {
+          settings: input.provider.descriptor.metadata.generationConfiguration,
+        }),
       },
     ),
     agentInstructionBinding: digest(
@@ -102,18 +106,32 @@ export function resolveHelarcModelQualification(input: {
       },
     ),
     toolGuidanceBinding: digest(
-      "agent-anything.helarc.tool-guidance-target-binding.v1",
+      "agent-anything.helarc.tool-guidance-target-binding.v2",
       {
-        id: input.controllerProtocol.toolGuidance.id,
         release: input.controllerProtocol.toolGuidance.release,
         profileRevision:
           input.controllerProtocol.toolGuidance.guidanceProfileRevision,
-        contentDigest: input.controllerProtocol.toolGuidance.contentDigest,
+        resolverRevision: input.controllerProtocol.toolGuidance.resolverRevision,
+        // Qualification follows definitions, not a Run's time-specific admission.
+        entries: input.controllerProtocol.toolGuidance.entries.map(entry => ({
+          tool: entry.tool,
+          name: entry.name,
+          source: entry.source,
+          modelDescription: entry.modelDescription,
+          inputFieldDescriptions: entry.inputFieldDescriptions,
+          inputSchema: entry.inputSchema,
+          descriptorFingerprint: entry.descriptorFingerprint,
+          bindingDigest: entry.bindingDigest,
+        })),
       },
     ),
     toolSelectionRevision:
       input.controllerProtocol.toolGuidance.toolSelection.toolSelectionRevision,
-    modelInteractionRevision: HELARC_NATIVE_TOOL_PROTOCOL_REVISION,
+    modelInteractionRevision: digest("helarc.qualification.model-interaction.v2", {
+      protocol: HELARC_NATIVE_TOOL_PROTOCOL_REVISION,
+      controls: input.controllerProtocol.controlGuidance,
+      instructions: input.controllerProtocol.protocolInstructions,
+    }),
     operatingProfileRevision:
       input.operatingProfileRevision ?? HELARC_OPERATING_PROFILE_REVISION,
     qualificationProtocolRevision: HELARC_MODEL_QUALIFICATION_PROTOCOL_REVISION,

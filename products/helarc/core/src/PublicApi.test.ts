@@ -5,6 +5,7 @@ import * as configurationApi from "./configuration/index.js";
 import * as controllerApi from "./controller/index.js";
 import * as helarcApi from "./index.js";
 import * as modelQualificationApi from "./model-qualification/index.js";
+import * as qualificationExecutionApi from "./qualification-execution/index.js";
 import * as runApi from "./run/index.js";
 import * as toolsApi from "./tools/index.js";
 import * as workContextApi from "./work-context/index.js";
@@ -82,6 +83,9 @@ describe("Helarc public API", () => {
     expect(compositionApi).toHaveProperty("resolveHelarcModelQualification");
     expect(compositionApi).toHaveProperty("admitHelarcModelUse");
     expect(modelQualificationApi).toHaveProperty("deriveHelarcModelUseDisposition");
+    expect(modelQualificationApi).not.toHaveProperty("runHelarcQualificationTrial");
+    expect(qualificationExecutionApi).toHaveProperty("runHelarcQualificationTrial");
+    expect(qualificationExecutionApi).toHaveProperty("createHelarcQualificationProfile");
   });
 
   it("does not expose Code Agent or Host execution values from the Product root", () => {

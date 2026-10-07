@@ -18,6 +18,11 @@ import { HelarcResponseProgress } from "./workbench/HelarcResponseProgress.js";
 import { readToken, workScopeValid } from "./workbench/WorkbenchReadLimits.js";
 
 export const HELARC_IPC_CHANNELS = {
+  getQualification: "helarc:get-qualification",
+  readQualificationEvidence: "helarc:read-qualification-evidence",
+  startQualification: "helarc:start-qualification",
+  cancelQualification: "helarc:cancel-qualification",
+  publishQualification: "helarc:publish-qualification",
   saveProject: "helarc:save-project",
   selectProject: "helarc:select-project",
   chooseProjectFolder: "helarc:choose-project-folder",
@@ -55,6 +60,7 @@ export const HELARC_IPC_CHANNELS = {
 } as const;
 
 export interface RegisterHelarcIpcInput {
+  qualification?: import("./qualification/HelarcQualificationService.js").HelarcQualificationService;
   projectStore?: FileHelarcProjectStore;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   instructionSettingsStore?: FileHelarcInstructionSettingsStore | null;
@@ -68,6 +74,15 @@ export interface RegisterHelarcIpcInput {
 export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   const trustedSender = (event: IpcMainInvokeEvent) => event.sender === input.window.webContents &&
     event.senderFrame === input.window.webContents.mainFrame && event.senderFrame?.url === input.window.webContents.getURL();
+  ipcMain.handle(HELARC_IPC_CHANNELS.getQualification, (event) => {
+    if (!trustedSender(event) || !input.qualification) throw new Error("Qualification is unavailable.");
+    return input.qualification.snapshot();
+  });
+  ipcMain.handle(HELARC_IPC_CHANNELS.readQualificationEvidence, (event, query) => {
+    if (!trustedSender(event) || !input.qualification || !query || Object.keys(query).length !== 2 ||
+      !readToken(query.campaignId) || (query.trialId !== null && !readToken(query.trialId))) return { ok: false, error: "Invalid evidence request." };
+    return input.qualification.evidence(query.campaignId, query.trialId);
+  });
   for (const method of ["listThreadRuns", "readCommandDetails", "readWorkbenchItem", "readCommandOutput",
     "readConversation", "readConversationTurn", "readCurrentWork", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
     ipcMain.handle(HELARC_IPC_CHANNELS[method], (event, query) => {
@@ -117,6 +132,9 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   const productCommands = createHelarcProductCommandDispatcher({
     handlers: {
+      "qualification.start": ({ targetId }) => input.qualification?.start(targetId) ?? { ok: false, error: "Qualification is unavailable." },
+      "qualification.cancel": ({ campaignId }) => input.qualification?.cancel(campaignId) ?? { ok: false, error: "Qualification is unavailable." },
+      "qualification.publish": ({ campaignId, targetId, reviewed }) => input.qualification?.publish(campaignId, targetId, reviewed) ?? { ok: false, error: "Qualification is unavailable." },
       "project.select": ({ projectId }) => projectHelarcDesktopSnapshot(input.controller.selectProject(projectId)),
       "project.chooseFolder": async () => {
         if (!input.workspaceProfileStore) throw new Error("Folder storage is unavailable.");
@@ -280,6 +298,9 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     },
   });
   for (const [channel, kind] of [
+    [HELARC_IPC_CHANNELS.startQualification, "qualification.start"],
+    [HELARC_IPC_CHANNELS.cancelQualification, "qualification.cancel"],
+    [HELARC_IPC_CHANNELS.publishQualification, "qualification.publish"],
     [HELARC_IPC_CHANNELS.saveProject, "project.save"],
     [HELARC_IPC_CHANNELS.selectProject, "project.select"],
     [HELARC_IPC_CHANNELS.chooseProjectFolder, "project.chooseFolder"],

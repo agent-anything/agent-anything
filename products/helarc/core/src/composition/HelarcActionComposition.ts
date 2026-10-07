@@ -89,6 +89,32 @@ export interface HelarcActionComposition {
 export function createHelarcActionComposition(
   input: CreateHelarcActionCompositionInput,
 ): HelarcActionComposition {
+  const { command, operationCatalog, operationBindings, toolSelection } = createHelarcToolProfile(input);
+  const physical = [input.file, input.command];
+  const registrations = createActionRegistrationSnapshot(
+    physical.flatMap((contribution) =>
+      contribution.registrations.registrations.map(actionRegistrationInput)
+    ),
+  );
+  assertActionRegistrationsBelongToCatalog(registrations, operationCatalog);
+  const operationAvailability = createOperationAvailability(operationCatalog, input.command);
+  return Object.freeze({
+    operationCatalog, operationBindings, toolSelection, registrations,
+    adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
+    executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
+    operationAvailability,
+    internalHandlers: input.command.internalHandlers,
+    composite: command.composite,
+  });
+}
+
+/** Definitions only: resolving a Tool profile grants no execution authority. */
+export function createHelarcToolProfile(input: {
+  readonly admittedAt: string;
+  readonly file: Pick<HelarcFileActionContribution, "actionAdapterIds">;
+  readonly command: Pick<HelarcCommandActionContribution, "shellTool" | "shellActionAdapterId" | "taskStopActionAdapterId">;
+  readonly semanticTools: readonly ToolRegistrationInput[];
+}) {
   requireIsoDate(input.admittedAt);
   const file = createCodeFileOperationContribution({
     actionAdapterIds: input.file.actionAdapterIds,
@@ -129,20 +155,20 @@ export function createHelarcActionComposition(
       origins: registration.allowedOrigins,
     })),
   );
-  const physical = [input.file, input.command];
-  const registrations = createActionRegistrationSnapshot(
-    physical.flatMap((contribution) =>
-      contribution.registrations.registrations.map(actionRegistrationInput)
-    ),
-  );
-  assertActionRegistrationsBelongToCatalog(registrations, operationCatalog);
+  return Object.freeze({ command, operationCatalog, operationBindings, toolSelection });
+}
+
+function createOperationAvailability(
+  operationCatalog: OperationCatalogSnapshot,
+  command: HelarcCommandActionContribution,
+): readonly OperationToolAvailabilityParticipant[] {
   const operationAvailability = Object.freeze(operationCatalog.entries.map(
     (entry): OperationToolAvailabilityParticipant => {
-      if (sameOperationBinding(entry.binding.ref, input.command.taskStopBinding) || sameOperationBinding(entry.binding.ref, HELARC_TASK_OUTPUT_BINDING)) {
+      if (sameOperationBinding(entry.binding.ref, command.taskStopBinding) || sameOperationBinding(entry.binding.ref, HELARC_TASK_OUTPUT_BINDING)) {
         return Object.freeze({
           binding: entry.binding.ref,
           assess({ run }: { readonly run: import("@agent-anything/agent-core/run").RunRef }) {
-            const current = input.command.taskAvailability.getRunAvailability(run.id);
+            const current = command.taskAvailability.getRunAvailability(run.id);
             const available = sameOperationBinding(entry.binding.ref,HELARC_TASK_OUTPUT_BINDING) ? current.retainedTaskCount > 0 : current.activeTaskCount > 0;
             return Object.freeze({
               basisRefs: Object.freeze([Object.freeze({
@@ -178,17 +204,7 @@ export function createHelarcActionComposition(
       });
     },
   ));
-  return Object.freeze({
-    operationCatalog,
-    operationBindings,
-    toolSelection,
-    registrations,
-    adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
-    executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
-    operationAvailability,
-    internalHandlers:input.command.internalHandlers,
-    composite:command.composite,
-  });
+  return operationAvailability;
 }
 
 function sameOperationBinding(

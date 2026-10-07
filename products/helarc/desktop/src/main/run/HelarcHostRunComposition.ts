@@ -91,7 +91,7 @@ import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionCom
 import { createHelarcHostActionPolicy } from "./HelarcHostActionPolicy.js";
 
 const HELARC_RUN_MAX_DURATION_MS = 30 * 60_000;
-const DEFAULT_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
+export const DEFAULT_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxIterations: 64,
   maxActions: 64,
   maxConsecutiveActionFailures: 8,

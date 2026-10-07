@@ -11,6 +11,26 @@ interface ExposedHelarcApi {
 }
 
 describe("Helarc preload bridge", () => {
+  it("forwards only qualification identities and review acknowledgement", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let api!: HelarcDesktopApi;
+    const invoke = vi.fn(async () => ({ status: "handled" }));
+    runInNewContext(source, { require: () => ({
+      contextBridge: { exposeInMainWorld: (_key: string, value: HelarcDesktopApi) => { api = value; } },
+      ipcRenderer: { invoke, on: vi.fn(), removeListener: vi.fn() },
+    }) });
+    await api.getQualification();
+    expect(invoke).toHaveBeenLastCalledWith("helarc:get-qualification");
+    const input = { commandId: "start", targetId: "target", outcome: "qualified", apiKey: "must-not-cross" };
+    await api.startQualification(input);
+    expect(invoke).toHaveBeenLastCalledWith("helarc:start-qualification", { version: 1, commandId: "start", kind: "qualification.start", payload: { targetId: "target" } });
+    await api.cancelQualification({ commandId: "cancel", campaignId: "campaign" });
+    expect(invoke).toHaveBeenLastCalledWith("helarc:cancel-qualification", { version: 1, commandId: "cancel", kind: "qualification.cancel", payload: { campaignId: "campaign" } });
+    await api.publishQualification({ commandId: "publish", campaignId: "campaign", targetId: "target", reviewed: true });
+    expect(invoke).toHaveBeenLastCalledWith("helarc:publish-qualification", { version: 1, commandId: "publish", kind: "qualification.publish", payload: { campaignId: "campaign", targetId: "target", reviewed: true } });
+    await api.readQualificationEvidence({ campaignId: "campaign", trialId: null });
+    expect(invoke).toHaveBeenLastCalledWith("helarc:read-qualification-evidence", { campaignId: "campaign", trialId: null });
+  });
   it("forwards exact conversation windows and Turn scope through read-only channels", async () => {
     const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
     let api!: HelarcDesktopApi;

@@ -54,6 +54,42 @@ describe("OpenAICompatibleProvider", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("snapshots explicit non-thinking configuration for native and structured requests", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const settings = { ...config(), thinking: { type: "disabled" as const } };
+    const provider = new OpenAICompatibleProvider(settings, async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return okResponse({ id: "reply", choices: [{ index: 0, finish_reason: "stop",
+        message: { role: "assistant", content: '{"action":"complete","summary":"done"}' } }] });
+    });
+    Object.assign(settings.thinking, { type: "enabled" });
+    expect((await provider.send(createNativeProviderRequest(provider), context())).kind).toBe("succeeded");
+    expect((await provider.send(request(provider), context())).kind).toBe("succeeded");
+    expect(bodies.every(body => (body.thinking as { type: string }).type === "disabled")).toBe(true);
+    expect(provider.descriptor.metadata.generationConfiguration).toEqual({
+      maximumOutputTokens: config().maximumOutputTokens, thinking: { type: "disabled" },
+    });
+    expect(Object.isFrozen(provider.descriptor.metadata.generationConfiguration)).toBe(true);
+    expect(JSON.stringify(provider.descriptor)).not.toContain("secret-key");
+  });
+
+  it("does not infer thinking mode from the endpoint or model name", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const provider = new OpenAICompatibleProvider({ ...config(), baseUrl: "https://api.deepseek.com", model: "deepseek-flash" },
+      async (_url, init) => { bodies.push(JSON.parse(init.body)); return okResponse({ id: "reply", choices: [{ index: 0,
+        finish_reason: "stop", message: { role: "assistant", content: "Done." } }] }); });
+    expect((await provider.send(createNativeProviderRequest(provider), context())).kind).toBe("succeeded");
+    expect(bodies[0]).not.toHaveProperty("thinking");
+    expect(provider.descriptor.metadata.generationConfiguration).toMatchObject({ thinking: null });
+  });
+
+  it.each([null, { type: "enabled" }, { type: "disabled", extra: true }, "disabled"])(
+    "rejects unsupported thinking configuration %j", thinking => {
+      expect(() => new OpenAICompatibleProvider({ ...config(), thinking } as unknown as
+        ConstructorParameters<typeof OpenAICompatibleProvider>[0])).toThrow("thinking configuration");
+    },
+  );
+
   it("omits the system message for empty instructions while retaining native Tools", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const provider = new OpenAICompatibleProvider(config(), async (_url, init) => {

@@ -52,6 +52,7 @@ import {
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "../tools/HelarcCommandOperation.js";
+import { createHelarcQualificationProfile } from "../qualification-execution/HelarcQualificationProfile.js";
 import {
   createHelarcModelQualificationCatalog,
   createHelarcModelQualificationDecision,
@@ -86,6 +87,34 @@ function createTestProviderProfile(
 }
 
 describe("HelarcProductComposition", () => {
+  it("resolves the same qualification target from a definition-only Settings profile and a real Run", async () => {
+    const provider = new UnusedProvider();
+    const contributions = createLocalContributions();
+    const providerProfile = createTestProviderProfile(provider);
+    const { createDefaultHelarcInstructionSettings } = await import("../instructions/index.js");
+    const instructionSettings = createDefaultHelarcInstructionSettings();
+    const profile = createHelarcQualificationProfile({ provider, providerProfile, instructionSettings,
+      fileActionAdapterIds: contributions.fileActions.actionAdapterIds,
+      shellRuntime: contributions.commandActions.shellRuntime,
+      shellActionAdapterId: contributions.commandActions.shellActionAdapterId,
+      taskStopActionAdapterId: contributions.commandActions.taskStopActionAdapterId,
+      planLimits: { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2000 },
+    });
+    const composition = await createHelarcProductComposition({
+      runId: "qualification-profile-parity", ...createTask("D:/workspace"), provider, providerProfile,
+      instructionSettings, ...contributions, now: fixedNow,
+    });
+    expect(profile.qualification.target).toEqual(composition.qualification.target);
+    expect(profile.protocol.toolGuidance.id).not.toBe(composition.controllerProtocol.toolGuidance.id);
+    expect(profile.protocol.protocolInstructions).toEqual(composition.controllerProtocol.protocolInstructions);
+    const changed = createHelarcQualificationProfile({ provider, providerProfile,
+      instructionSettings: { ...instructionSettings, protocol: instructionSettings.protocol.map((s, i) => i === 0 ? { ...s, enabled: true, content: "Changed protocol." } : s) },
+      fileActionAdapterIds: contributions.fileActions.actionAdapterIds, shellRuntime: contributions.commandActions.shellRuntime,
+      shellActionAdapterId: contributions.commandActions.shellActionAdapterId, taskStopActionAdapterId: contributions.commandActions.taskStopActionAdapterId,
+      planLimits: { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2000 },
+    });
+    expect(changed.qualification.target.id).not.toBe(profile.qualification.target.id);
+  });
   it("registers only the instruction-driven Stop handler for root and descendant Runs", async () => {
     const composition = await createHelarcProductComposition({
       runId: "stop-composition-run",

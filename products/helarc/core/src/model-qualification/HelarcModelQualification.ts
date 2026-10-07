@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { HelarcModelUsePolicy } from "../configuration/HelarcProviderProfile.js";
 
 export const HELARC_MODEL_QUALIFICATION_PROTOCOL_REVISION =
-  "helarc.model-qualification.v1";
+  "helarc.model-qualification.v3";
 
 export const HELARC_MODEL_QUALIFICATION_SCOPES = Object.freeze([
   "agent_loop",

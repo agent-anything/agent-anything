@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import * as React from "react";
 import { InstructionSettingsPanel } from "./InstructionSettingsPanel.js";
 import { InspectionSettingsPanel } from "./InspectionSettingsPanel.js";
+import { QualificationSettingsPanel } from "./QualificationSettingsPanel.js";
 import { useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
@@ -110,6 +111,7 @@ function ProviderSettingsPanel({
     ? snapshot.provider.activeProfile
     : null;
   const [isSaving, setIsSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [selectedProviderKind, setSelectedProviderKind] =
     useState<HelarcProviderKind>(
       provider?.providerKind ?? HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind,
@@ -183,6 +185,7 @@ function ProviderSettingsPanel({
       });
       if (receipt.status === "handled") {
         onSaved(receipt.result);
+        if (receipt.result.provider.configured) setDirty(false);
       }
     } finally {
       setIsSaving(false);
@@ -190,11 +193,13 @@ function ProviderSettingsPanel({
   }
 
   return (
+    <>
     <form
       key={formKey}
       className="settings-panel"
       aria-label="Provider settings"
       onSubmit={saveProviderConfig}
+      onChange={() => setDirty(true)}
     >
       <strong>Provider</strong>
       <label>
@@ -347,6 +352,8 @@ function ProviderSettingsPanel({
         Save
       </button>
     </form>
+    <QualificationSettingsPanel api={getHelarcApi()} dirty={dirty || isSaving} />
+    </>
   );
 }
 

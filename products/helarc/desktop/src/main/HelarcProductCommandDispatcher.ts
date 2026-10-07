@@ -115,6 +115,26 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
   assertProductCommandKind(candidate.kind, "Helarc Product command kind");
 
   switch (candidate.kind) {
+    case "qualification.start": {
+      assertRecord(candidate.payload, "Qualification start");
+      assertExactKeys(candidate.payload, ["targetId"], "Qualification start");
+      return envelope(commandId, candidate.kind, { targetId: identity(candidate.payload.targetId, "Qualification target") });
+    }
+    case "qualification.cancel": {
+      assertRecord(candidate.payload, "Qualification cancel");
+      assertExactKeys(candidate.payload, ["campaignId"], "Qualification cancel");
+      return envelope(commandId, candidate.kind, { campaignId: identity(candidate.payload.campaignId, "Qualification campaign") });
+    }
+    case "qualification.publish": {
+      assertRecord(candidate.payload, "Qualification publish");
+      assertExactKeys(candidate.payload, ["targetId", "campaignId", "reviewed"], "Qualification publish");
+      if (typeof candidate.payload.reviewed !== "boolean") invalid("Qualification review acknowledgement is required.");
+      return envelope(commandId, candidate.kind, {
+        targetId: identity(candidate.payload.targetId, "Qualification target"),
+        campaignId: identity(candidate.payload.campaignId, "Qualification campaign"),
+        reviewed: candidate.payload.reviewed,
+      });
+    }
     case "project.chooseFolder":
       return envelope(commandId, candidate.kind, snapshotEmptyPayload(candidate.payload));
     case "project.select": {
@@ -187,6 +207,12 @@ function invokeHandler(
 ): Promise<HelarcProductCommandResultMap[HelarcProductCommandKind]>
   | HelarcProductCommandResultMap[HelarcProductCommandKind] {
   switch (command.kind) {
+    case "qualification.start":
+      return handlers[command.kind](command.payload);
+    case "qualification.cancel":
+      return handlers[command.kind](command.payload);
+    case "qualification.publish":
+      return handlers[command.kind](command.payload);
     case "project.save":
       return handlers[command.kind](command.payload);
     case "project.select":
@@ -407,6 +433,9 @@ function assertHandlers(handlers: HelarcProductCommandHandlers): void {
 }
 
 const PRODUCT_COMMAND_KINDS = [
+  "qualification.start",
+  "qualification.cancel",
+  "qualification.publish",
   "project.save",
   "project.select",
   "project.chooseFolder",

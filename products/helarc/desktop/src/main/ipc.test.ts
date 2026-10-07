@@ -31,6 +31,30 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  it("authorizes qualification commands and evidence reads without accepting supplied outcomes", async () => {
+    const frame = { url: "file:///helarc/index.html" };
+    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };
+    const qualification = { snapshot: vi.fn(async () => ({ available: true })),
+      start: vi.fn(async () => ({ ok: true })), evidence: vi.fn(async () => ({ ok: true, text: "evidence" })) };
+    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller: controllerDouble(mainSnapshot()),
+      qualification: qualification as unknown as import("./qualification/HelarcQualificationService.js").HelarcQualificationService });
+    const event = { sender: contents, senderFrame: frame };
+    const start = requiredHandler(HELARC_IPC_CHANNELS.startQualification);
+    const command = { version: 1, commandId: "qualification", kind: "qualification.start", payload: { targetId: "target" } };
+    expect(() => start({ ...event, senderFrame: {} }, command)).toThrow("Untrusted");
+    expect(await start(event, { ...command, payload: { ...command.payload, outcome: "qualified" } })).toMatchObject({ status: "rejected" });
+    expect(await start(event, command)).toMatchObject({ status: "handled" });
+    await start(event, command);
+    expect(qualification.start).toHaveBeenCalledOnce();
+    expect(() => requiredHandler(HELARC_IPC_CHANNELS.getQualification)({ ...event, sender: {} })).toThrow("unavailable");
+    expect(await requiredHandler(HELARC_IPC_CHANNELS.getQualification)(event)).toEqual({ available: true });
+    const read = requiredHandler(HELARC_IPC_CHANNELS.readQualificationEvidence);
+    const query = { campaignId: "campaign", trialId: null };
+    expect(await read({ ...event, senderFrame: {} }, query)).toMatchObject({ ok: false });
+    expect(await read(event, { ...query, path: "private-file" })).toMatchObject({ ok: false });
+    expect(await read(event, query)).toEqual({ ok: true, text: "evidence" });
+    expect(qualification.evidence).toHaveBeenCalledOnce();
+  });
   it("validates Project folders in Main without switching the active workspace", async () => {
     const frame = { url: "file:///helarc/index.html" };
     const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };

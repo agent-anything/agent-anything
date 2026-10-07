@@ -675,6 +675,9 @@ export interface HelarcChooseWorkspaceInput {
 }
 
 export interface HelarcProductCommandResultMap {
+  readonly "qualification.start": import("./HelarcQualification.js").HelarcQualificationCommandResult;
+  readonly "qualification.cancel": import("./HelarcQualification.js").HelarcQualificationCommandResult;
+  readonly "qualification.publish": import("./HelarcQualification.js").HelarcQualificationCommandResult;
   readonly "project.select": HelarcMainSnapshot;
   readonly "project.save": { readonly ok: boolean; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
   readonly "project.chooseFolder": { readonly profile: HelarcWorkspaceProfileSnapshot | null; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
@@ -946,6 +949,11 @@ export interface HelarcDesktopApi {
   readCommandOutput(input: import("./HelarcWorkbench.js").CommandOutputQuery): Promise<import("./HelarcWorkbench.js").CommandOutputPage>;
   openExternalLink(input: { url: string }): Promise<{ ok: boolean }>;
   getInstructionSettings(): Promise<import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot>;
+  getQualification(): Promise<import("./HelarcQualification.js").HelarcQualificationSnapshot>;
+  readQualificationEvidence(input: { campaignId: string; trialId: string | null }): Promise<import("./HelarcQualification.js").HelarcQualificationEvidence>;
+  startQualification(input: { commandId: string; targetId: string }): Promise<HelarcProductCommandReceipt<"qualification.start">>;
+  cancelQualification(input: { commandId: string; campaignId: string }): Promise<HelarcProductCommandReceipt<"qualification.cancel">>;
+  publishQualification(input: { commandId: string; campaignId: string; targetId: string; reviewed: boolean }): Promise<HelarcProductCommandReceipt<"qualification.publish">>;
   getInspectionSettings(): Promise<import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot>;
   saveInspectionSettings(input: { readonly commandId: string; readonly settings: import("./HelarcInspectionSettings.js").HelarcInspectionSettings }): Promise<HelarcProductCommandReceipt<"inspection.save">>;
   saveInstructionSettings(input: {

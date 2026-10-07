@@ -67,6 +67,7 @@ export interface OpenAICompatibleProviderConfig {
   readonly model: string;
   readonly timeoutMs: number;
   readonly maximumOutputTokens: number;
+  readonly thinking?: { readonly type: "disabled" };
   readonly nativeToolInteraction: {
     readonly supported: boolean;
   };
@@ -106,7 +107,7 @@ export class OpenAICompatibleProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "openai-compatible.chat-completions.adapter.v5",
+      adapterRevision: "openai-compatible.chat-completions.adapter.v6",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -153,7 +154,12 @@ export class OpenAICompatibleProvider implements Provider {
         }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
-      metadata: Object.freeze({}),
+      metadata: Object.freeze({
+        generationConfiguration: Object.freeze({
+          maximumOutputTokens: this.config.maximumOutputTokens,
+          thinking: this.config.thinking ?? null,
+        }),
+      }),
     });
   }
 
@@ -372,6 +378,7 @@ function prepareEncodedRequest(
       request.messages,
       request.interaction,
       streaming,
+      config.thinking,
     );
     const accounting = accountProviderTransport({
       encodedBody: body,
@@ -419,10 +426,12 @@ function encodeOpenAIRequest(
   messages: readonly ModelMessage[],
   interaction: ProviderInteraction,
   streaming: boolean,
+  thinking: OpenAICompatibleProviderConfig["thinking"],
 ): string {
   return JSON.stringify({
     model,
     max_tokens: maximumOutputTokens,
+    ...(thinking === undefined ? {} : { thinking }),
     messages: interaction.kind === "native_tool_turn"
       ? encodeOpenAINativeMessages(instructions, messages)
       : [
@@ -968,12 +977,19 @@ function snapshotConfig(
   ) {
     throw new TypeError("OpenAI-compatible native Tool interaction configuration is invalid.");
   }
+  if (input.thinking !== undefined && (
+    !isRecord(input.thinking) || input.thinking.type !== "disabled" ||
+    Object.keys(input.thinking).length !== 1
+  )) {
+    throw new TypeError("OpenAI-compatible thinking configuration only supports explicit non-thinking mode.");
+  }
   return Object.freeze({
     baseUrl: validatedBaseUrl(input.baseUrl),
     apiKey: requiredString(input.apiKey, "OpenAI-compatible API key", true),
     model: requiredString(input.model, "OpenAI-compatible model"),
     timeoutMs: positiveTimeout(input.timeoutMs),
     maximumOutputTokens: positiveInteger(input.maximumOutputTokens, "OpenAI-compatible maximum output tokens"),
+    ...(input.thinking === undefined ? {} : { thinking: Object.freeze({ type: "disabled" as const }) }),
     nativeToolInteraction: Object.freeze({
       supported: input.nativeToolInteraction.supported,
     }),

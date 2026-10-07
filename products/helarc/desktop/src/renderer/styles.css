@@ -57,6 +57,29 @@ form {
   padding: 0;
 }
 
+.qualification-panel { margin-top: 28px; padding-top: 24px; border-top: 1px solid #d8ddda; display: grid; gap: 16px; min-width: 0; }
+.qualification-panel h2 { font-size: 18px; }
+.qualification-panel h3 { margin: 8px 0 0; font-size: 15px; }
+.qualification-heading, .qualification-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.qualification-heading { justify-content: space-between; }
+.qualification-heading span, .qualification-budget { color: #59675f; font-size: 13px; }
+.qualification-panel button { display: inline-flex; align-items: center; gap: 6px; }
+.qualification-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.qualification-table th, .qualification-table td { padding: 8px; border-bottom: 1px solid #e1e5e2; overflow-wrap: anywhere; }
+.qualification-table th { color: #59675f; font-weight: 600; }
+.qualification-panel summary { cursor: pointer; padding: 6px 0; overflow-wrap: anywhere; }
+.qualification-panel ul { padding-left: 20px; font-size: 13px; line-height: 1.6; }
+.qualification-campaign { border-top: 1px solid #d8ddda; padding-top: 8px; }
+.qualification-trials { list-style: none; padding: 0 !important; }
+.qualification-trials li { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 5px 0; }
+.qualification-trials button { border: 0; background: transparent; color: #226c55; padding: 0; cursor: pointer; text-decoration: underline; text-align: left; }
+.qualification-trials span { color: #59675f; font-size: 12px; }
+.qualification-publication { display: grid; gap: 12px; margin-top: 16px; font-size: 13px; }
+.qualification-publication label { display: flex; align-items: flex-start; gap: 8px; }
+.qualification-publication input { width: auto; flex: 0 0 auto; }
+.qualification-publication button { justify-self: start; }
+.qualification-evidence pre { background: #f4f6f4; padding: 12px; max-height: 400px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+
 .settings-page {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

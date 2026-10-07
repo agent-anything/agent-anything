@@ -67,6 +67,18 @@ function context(): InvocationInterruptionContext {
 }
 afterEach(() => vi.useRealTimers());
 
+it("preserves explicit non-thinking mode in streamed OpenAI-compatible requests", async () => {
+  const fetch = vi.fn(async () => response(body(frames("openai").join(""))));
+  const provider = new OpenAICompatibleProvider({
+    baseUrl: "https://provider.local/v1", apiKey: "", model: "test-model", timeoutMs: 1000,
+    maximumOutputTokens: 2048, thinking: { type: "disabled" },
+    nativeToolInteraction: { supported: true }, requestBodyTransportLimit: limit,
+  }, fetch);
+  const result = await provider.send(createNativeProviderRequest(provider), context(), { mode: "streaming", invocationId: "non-thinking" });
+  expect(result.kind).toBe("succeeded");
+  expect(JSON.parse(fetch.mock.calls[0]![1].body)).toMatchObject({ stream: true, thinking: { type: "disabled" } });
+});
+
 describe.each(["ollama", "openai"] as const)("%s streaming", (format) => {
   const create = factories[format];
   it("normalizes split UTF-8 and protocol frames identically to buffered native Tools", async () => {

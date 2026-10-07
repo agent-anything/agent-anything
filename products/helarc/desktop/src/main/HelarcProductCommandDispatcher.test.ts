@@ -198,6 +198,9 @@ function createHandlers(
 ): HelarcProductCommandHandlers {
   return {
     "workspace.choose": vi.fn(() => snapshot()),
+    "qualification.start": vi.fn(() => ({ ok: true as const })),
+    "qualification.cancel": vi.fn(() => ({ ok: true as const })),
+    "qualification.publish": vi.fn(() => ({ ok: true as const })),
     "project.select": vi.fn(() => snapshot()),
     "project.save": vi.fn(() => ({ ok: true, error: null, snapshot: snapshot() })),
     "project.chooseFolder": vi.fn(() => ({ profile: null, error: null, snapshot: snapshot() })),

@@ -23,12 +23,16 @@ export function createHelarcProvider(config: HelarcProviderConfig, observer?: Pr
       requestBodyTransportLimit,
     }, undefined, observer);
   }
+  const endpoint = new URL(config.baseUrl);
+  const deepSeekNonThinking = endpoint.origin === "https://api.deepseek.com" &&
+    ["", "/v1"].includes(endpoint.pathname.replace(/\/+$/, ""));
   return new OpenAICompatibleProvider({
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
     model: config.model,
     timeoutMs: config.timeoutMs,
     maximumOutputTokens: 4_096,
+    ...(deepSeekNonThinking ? { thinking: { type: "disabled" as const } } : {}),
     nativeToolInteraction: { supported: true },
     requestBodyTransportLimit,
   }, undefined, observer);

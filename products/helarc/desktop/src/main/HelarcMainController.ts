@@ -62,8 +62,9 @@ import {
   type HelarcModelUseAdmissionErrorCode,
   type HelarcProductResult,
 } from "@agent-anything/helarc/composition";
-import type {
-  HelarcModelQualificationCatalog,
+import {
+  createHelarcModelQualificationCatalog,
+  type HelarcModelQualificationCatalog,
 } from "@agent-anything/helarc/model-qualification";
 import {
   type HelarcTaskInputError,
@@ -353,7 +354,7 @@ export class HelarcMainController {
     | ContextManifestPersistencePort
     | undefined;
   private readonly runTranscriptPort: RunTranscriptPort | undefined;
-  private readonly qualificationCatalog: HelarcModelQualificationCatalog | undefined;
+  private qualificationCatalog: HelarcModelQualificationCatalog | undefined;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private instructionSettings: HelarcInstructionSettings;
@@ -473,6 +474,16 @@ export class HelarcMainController {
 
   getInstructionSettings() {
     return Object.freeze({ settings: this.instructionSettings, defaults: createDefaultHelarcInstructionSettings() });
+  }
+
+  getQualificationConfiguration() {
+    if (!this.providerInstance || !this.provider.configured) return null;
+    return { provider: this.providerInstance, providerProfile: this.provider.activeProfile,
+      instructionSettings: this.instructionSettings };
+  }
+
+  configureQualificationCatalog(catalog: HelarcModelQualificationCatalog): void {
+    this.qualificationCatalog = createHelarcModelQualificationCatalog({ decisions: catalog.decisions });
   }
 
   configureInstructions(settings: HelarcInstructionSettings) {

@@ -70,6 +70,10 @@
       "types": "./src/observability/index.ts",
       "import": "./dist/observability/index.js"
     },
+    "./qualification-execution": {
+      "types": "./src/qualification-execution/index.ts",
+      "import": "./dist/qualification-execution/index.js"
+    },
     "./model-qualification": {
       "types": "./src/model-qualification/index.ts",
       "import": "./dist/model-qualification/index.js"

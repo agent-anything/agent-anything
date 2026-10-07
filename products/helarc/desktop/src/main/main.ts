@@ -18,16 +18,26 @@ import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
 import { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 import { HelarcInspection } from "./inspection/HelarcInspection.js";
 import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
+import { HelarcQualificationStore } from "./qualification/HelarcQualificationStore.js";
+import { HelarcQualificationService } from "./qualification/HelarcQualificationService.js";
+import { DEFAULT_HELARC_RUN_LIMITS } from "./run/HelarcHostRunComposition.js";
+import { HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS } from "@agent-anything/helarc-local-environment/filesystem";
+import { HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID,
+  selectNativeShell, projectNativeShellRuntimeProfile } from "@agent-anything/helarc-local-environment/command";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 let inspection: Promise<HelarcInspection> | null = null;
 let inspectionClosed = false;
+const qualifications = new Set<HelarcQualificationService>();
 
 app.on("before-quit", (event) => {
   if (!inspection || inspectionClosed) return;
   event.preventDefault();
   inspectionClosed = true;
-  void inspection.then((source) => source.close()).catch(() => {}).finally(() => app.quit());
+  void (async () => {
+    for (const qualification of qualifications) await qualification.close();
+    await inspection!.then((source) => source.close());
+  })().catch(() => {}).finally(() => app.quit());
 });
 
 app.whenReady().then(() => {
@@ -97,7 +107,26 @@ async function createWindow(): Promise<void> {
     contextManifestPersistence: contextManifestStore,
     runTranscriptPort: runTranscriptStore,
   });
+  const shellRuntime = projectNativeShellRuntimeProfile(await selectNativeShell({
+    platform: process.platform === "win32" ? "win32" : "posix", cwd: userDataPath,
+    environment: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+  }));
+  const qualification = new HelarcQualificationService({
+    store: new HelarcQualificationStore(join(userDataPath, "model-qualification.json")),
+    configuration() {
+      const current = controller.getQualificationConfiguration();
+      return current ? { ...current, shellRuntime, planLimits: DEFAULT_HELARC_RUN_LIMITS.plan,
+        fileActionAdapterIds: HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS,
+        shellActionAdapterId: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID,
+        taskStopActionAdapterId: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID } : null;
+    },
+    publishCatalog: catalog => controller.configureQualificationCatalog(catalog),
+  });
+  await qualification.initialize();
+  qualifications.add(qualification);
+  window.once("closed", () => { void qualification.close().finally(() => qualifications.delete(qualification)); });
   registerHelarcIpc({
+    qualification,
     projectStore,
     inspection: inspectionSource,
     instructionSettingsStore,
