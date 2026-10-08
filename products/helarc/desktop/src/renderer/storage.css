@@ -1,0 +1,21 @@
+.storage-panel { display: grid; gap: 16px; min-width: 0; }
+.settings-page .storage-panel { max-width: none; }
+.storage-panel h2 { font-size: 18px; }
+.storage-panel h3 { margin: 0; font-size: 15px; }
+.storage-heading, .storage-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.storage-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.storage-note { color: #59675f; font-size: 13px; line-height: 1.5; }
+.storage-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; table-layout: fixed; }
+.storage-table th, .storage-table td { padding: 10px 8px; border-bottom: 1px solid #e1e5e2; overflow-wrap: anywhere; vertical-align: top; }
+.storage-table th { font-weight: 500; }
+.storage-table thead th { color: #59675f; }
+.storage-table th:first-child { width: 48%; }
+.storage-recordings { border-top: 1px solid #d8ddda; padding-top: 20px; display: grid; gap: 12px; min-width: 0; }
+.storage-recording-table th:first-child { width: 36px; }
+.storage-recording-table th:nth-child(2) { width: 43%; }
+.storage-recording-table th:nth-child(3) { width: 16%; }
+.storage-recording-table input[type="checkbox"] { width: 16px; height: 16px; padding: 0; margin: 1px 0; }
+.storage-recording-table code, .storage-recording-table small { display: block; margin-top: 4px; color: #637169; font-size: 11px; overflow-wrap: anywhere; }
+.storage-confirmation { border: 1px solid #cfd9d2; border-radius: 6px; padding: 16px; display: grid; gap: 12px; background: #f4f7f5; font-size: 13px; line-height: 1.5; }
+.storage-actions { justify-content: flex-end; }
+.storage-cleanup-result { font-size: 13px; overflow-wrap: anywhere; }

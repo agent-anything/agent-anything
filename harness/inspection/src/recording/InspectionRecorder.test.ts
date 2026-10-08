@@ -153,6 +153,10 @@ describe("Inspection recording", () => {
     expect(recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "after fault", sequence: null, code: null } })).toBe(false);
     expect((await query.query({ kind: "list_records", ...snapshot })).records.map((record) => record.id)).toEqual(["before-fault"]);
     await expect(recorder.flush(true)).resolves.toBeUndefined();
+    expect(JSON.parse(readFileSync(join(datasetDirectory(directory, selection.sourceId, selection.datasetId), "manifest.json"), "utf8"))).toMatchObject({
+      status: "closed", captureFailure: "inspection_storage_unavailable",
+    });
+    expect(retireInspectionDatasets(directory, selection.sourceId, { datasetId: selection.datasetId, before: new Date().toISOString(), apply: true })[0]?.status).toBe("removed");
   });
 
   it("bounds query concurrency, cancels without changing records, and pages telemetry at the same watermark", async () => {

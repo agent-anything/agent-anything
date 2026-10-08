@@ -79,6 +79,13 @@ describe("Helarc baseline Tool Guidance", () => {
       .toContain("Opaque continuation identity");
   });
 
+  it("keeps clarification answers separate from permission and execution limits", () => {
+    const question = guidanceSource("AskUserQuestion");
+    expect(question.modelDescription).toContain("clarification only");
+    expect(question.modelDescription).toContain("answers do not grant permission or change execution limits");
+    expect(question.inputFieldDescriptions["/properties/questions"]).toContain("clarification questions");
+  });
+
   it("rejects a Shell runtime profile attached to another Tool", () => {
     expect(() => createHelarcBaselineToolGuidanceSource(
       "Read",

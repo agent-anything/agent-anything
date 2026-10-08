@@ -8,6 +8,7 @@ import {
   snapshotModelCallableDefinition,
   snapshotModelMessage,
   snapshotModelMessages,
+  snapshotModelInstructions,
   snapshotModelToolResult,
   snapshotModelTurn,
   snapshotModelTurnFinish,
@@ -73,6 +74,29 @@ describe("provider-neutral Model Interaction contracts", () => {
     expect(() => snapshotModelMessage({ role: "tool", content: [] })).toThrow(
       "must contain correlated results",
     );
+  });
+
+  it("preserves large semantic text blocks without a separate character budget", () => {
+    const text = "context-record \u4e2d\u6587\n".repeat(16_000);
+    expect(text.length).toBeGreaterThan(131_072);
+    const content = [{ kind: "text" as const, text }];
+    for (const role of ["user", "assistant"] as const) {
+      const message = snapshotModelMessage({ role, content });
+      expect(message).toEqual({ role, content });
+      expect(Object.isFrozen(message.content[0])).toBe(true);
+    }
+    expect(snapshotModelInstructions({ content })).toEqual({ content });
+  });
+
+  it("still rejects malformed text and structurally oversized messages", () => {
+    for (const text of [null, 42, {}, undefined]) {
+      expect(() => snapshotModelMessage({
+        role: "user", content: [{ kind: "text", text }],
+      } as unknown as ModelMessage)).toThrow("must be a text block");
+    }
+    expect(() => snapshotModelMessage({
+      role: "user", content: Array.from({ length: 257 }, () => ({ kind: "text", text: "x" })),
+    })).toThrow("must be a bounded array");
   });
 
   it("rejects duplicate, malformed, and out-of-order call references", () => {

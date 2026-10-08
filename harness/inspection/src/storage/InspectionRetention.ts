@@ -19,7 +19,7 @@ export function retireInspectionDatasets(root: string, sourceId: string, options
       const manifestPath = containedInspectionPath(root, "sources", sourceId, "datasets", datasetId, "manifest.json");
       if (statSync(manifestPath).size > 64 * 1024) throw new Error("inspection_manifest_invalid");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as InspectionDatasetManifest;
-      if (manifest.formatVersion !== INSPECTION_FORMAT_VERSION || manifest.sourceId !== sourceId || manifest.datasetId !== datasetId) throw new Error("inspection_manifest_invalid");
+      if (manifest.formatVersion !== INSPECTION_FORMAT_VERSION || manifest.sourceId !== sourceId || manifest.datasetId !== datasetId || !Number.isFinite(Date.parse(manifest.createdAt))) throw new Error("inspection_manifest_invalid");
       if (manifest.status !== "closed") return { datasetId, status: "active" as const };
       if (Date.parse(manifest.createdAt) >= Date.parse(options.before)) return { datasetId, status: "unavailable" as const };
       if (!options.apply) return { datasetId, status: "eligible" as const };

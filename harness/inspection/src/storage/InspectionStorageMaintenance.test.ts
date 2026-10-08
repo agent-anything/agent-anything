@@ -55,7 +55,7 @@ it("delivers a complete measurement and stops all timeout work", async () => {
   const result = maintenance.measure();
   const worker = vi.mocked(Worker).mock.results.at(-1)!.value as Worker;
   const measurement = { bytes: 123, visited: 2, datasetFiles: [] };
-  worker.emit("message", { kind: "measured", measurement });
+  worker.emit("message", { kind: "completed", result: measurement });
   expect(await result).toEqual(measurement);
   expect(vi.getTimerCount()).toBe(0);
   maintenance.close();

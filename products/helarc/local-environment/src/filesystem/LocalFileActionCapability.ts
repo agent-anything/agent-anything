@@ -765,7 +765,8 @@ function settleFileOperation(
     failure: succeeded ? null : {
       owner: settlement.causeOwner ?? "helarc.local-environment",
       code: settlement.causeRef ?? `file_${settlement.status}`,
-      message: settlement.causeRef ?? `File operation ${settlement.status}.`,
+      message: settlement.failureDetail?.description ?? settlement.causeRef ?? `File operation ${settlement.status}.`,
+      ...(settlement.failureDetail === undefined ? {} : { detail: settlement.failureDetail }),
     },
   });
 }

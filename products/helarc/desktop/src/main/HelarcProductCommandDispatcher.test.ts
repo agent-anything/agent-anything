@@ -15,6 +15,19 @@ import {
 } from "./HelarcProductCommandDispatcher.js";
 
 describe("Helarc Product command dispatcher", () => {
+  it("accepts only bounded recording identities and deduplicates cleanup commands", async () => {
+    const handlers = createHandlers();
+    const dispatcher = createHelarcProductCommandDispatcher({ handlers });
+    for (const [index, payload] of [{ recordingIds: ["../outside"] }, { recordingIds: [] },
+      { recordingIds: ["one", "one"] }, { recordingIds: ["one"], root: "D:/forged" }].entries()) {
+      expect(await dispatcher.dispatch(command("storage.cleanup", `invalid-cleanup-${index}`, payload), "storage.cleanup")).toMatchObject({ status: "rejected" });
+    }
+    expect(handlers["storage.cleanup"]).not.toHaveBeenCalled();
+    const request = command("storage.cleanup", "cleanup-once", { recordingIds: ["one"] });
+    expect(await dispatcher.dispatch(request, "storage.cleanup")).toMatchObject({ status: "handled" });
+    await dispatcher.dispatch(request, "storage.cleanup");
+    expect(handlers["storage.cleanup"]).toHaveBeenCalledOnce();
+  });
   it("allows saving a connection without a model but rejects a blank Run model override", async () => {
     const handlers = createHandlers();
     const dispatcher = createHelarcProductCommandDispatcher({ handlers });
@@ -225,6 +238,7 @@ function createHandlers(
     "provider.delete": vi.fn(() => snapshot()),
     "instructions.save": vi.fn(({ settings }) => ({ settings, defaults: createDefaultHelarcInstructionSettings() })),
     "inspection.save": vi.fn(({ settings }) => ({ settings, health: { available: true, queued: 0, dropped: 0, rejected: 0, code: null } })),
+    "storage.cleanup": vi.fn(() => ({ recordings: [] })),
     "run.start": vi.fn(() => ({
       ok: true as const,
       taskId: "task-1",

@@ -1,6 +1,28 @@
+import type { OperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
+
+export interface RunTreeApprovalAdmissionDetail extends OperationLimitFailureDetail {
+  readonly kind: "capacity";
+  readonly stage: "approval_admission";
+  readonly scope: { readonly owner: "agent-runtime"; readonly kind: "run_tree" };
+  readonly limit: {
+    readonly name: "total_requests" | "equivalent_operation_requests" | "consecutive_declines" |
+      "consecutive_reviewer_failures" | "active_reviews";
+    readonly count: number;
+    readonly maximum: number;
+  };
+}
+
+const APPROVAL_QUOTA_LABELS = Object.freeze({
+  total_requests: "total approval requests",
+  equivalent_operation_requests: "approval requests for this equivalent operation",
+  consecutive_declines: "consecutive declined reviews",
+  consecutive_reviewer_failures: "consecutive reviewer failures",
+  active_reviews: "active approval reviews",
+});
+
 export interface RunTreeApprovalLimits {
-  readonly maxTotalRequests: number;
-  readonly maxRequestsPerOperationFingerprint: number;
+  readonly maxTotalRequests: number | null;
+  readonly maxRequestsPerOperationFingerprint: number | null;
   readonly maxConsecutiveDeclines: number;
   readonly maxConsecutiveReviewerFailures: number;
   readonly maxActiveReviews: number;
@@ -32,6 +54,7 @@ export type RunTreeApprovalAdmission =
   | {
       readonly status: "limit_exceeded";
       readonly code: RunTreeApprovalLimitCode;
+      readonly detail: RunTreeApprovalAdmissionDetail;
       readonly revision: number;
     };
 
@@ -81,11 +104,11 @@ export class RunTreeApprovalAccount {
     if (this.seenRequestIds.has(request.requestId)) {
       throw new TypeError(`Approval request '${request.requestId}' was already admitted.`);
     }
-    const exhaustedCode = this.currentLimitCode(request.operationFingerprint);
-    if (exhaustedCode !== null) {
+    const rejection = this.currentLimit(request.operationFingerprint);
+    if (rejection !== null) {
       return Object.freeze({
         status: "limit_exceeded" as const,
-        code: exhaustedCode,
+        ...rejection,
         revision: this.revision,
       });
     }
@@ -137,34 +160,54 @@ export class RunTreeApprovalAccount {
       maxEquivalentOperationRequests: counts.length === 0 ? 0 : Math.max(...counts),
       consecutiveDeclines: this.consecutiveDeclines,
       consecutiveReviewerFailures: this.consecutiveReviewerFailures,
-      exhaustedCode: this.currentLimitCode(null),
+      exhaustedCode: this.currentLimit(null)?.code ?? null,
     });
   }
 
-  private currentLimitCode(
+  private currentLimit(
     operationFingerprint: string | null,
-  ): RunTreeApprovalLimitCode | null {
-    if (this.totalRequests >= this.limits.maxTotalRequests) {
-      return "approval_tree_total_limit_exceeded";
+  ): { readonly code: RunTreeApprovalLimitCode; readonly detail: RunTreeApprovalAdmissionDetail } | null {
+    const rejection = (
+      code: RunTreeApprovalLimitCode,
+      name: RunTreeApprovalAdmissionDetail["limit"]["name"],
+      count: number,
+      limit: number,
+    ) => Object.freeze({ code, detail: Object.freeze({
+      kind: "capacity" as const, stage: "approval_admission" as const,
+      scope: Object.freeze({owner: "agent-runtime" as const, kind: "run_tree" as const}),
+      limit: Object.freeze({name, count, maximum: limit}),
+      description: `Approval capacity reached for ${APPROVAL_QUOTA_LABELS[name]} across the whole run tree (${count}/${limit}). ` +
+        "This admission rejection is not a user denial; the action was never dispatched." +
+        (name === "total_requests" || name === "equivalent_operation_requests"
+          ? " Retrying does not reset this cumulative quota."
+          : name === "active_reviews" ? " Active review capacity is released when reviews settle." : ""),
+      dispatch: "never_dispatched" as const,
+    }) });
+    if (this.limits.maxTotalRequests !== null && this.totalRequests >= this.limits.maxTotalRequests) {
+      return rejection("approval_tree_total_limit_exceeded", "total_requests", this.totalRequests, this.limits.maxTotalRequests);
     }
     if (
       operationFingerprint !== null &&
+      this.limits.maxRequestsPerOperationFingerprint !== null &&
       (this.operationCounts.get(operationFingerprint) ?? 0) >=
         this.limits.maxRequestsPerOperationFingerprint
     ) {
-      return "approval_tree_operation_limit_exceeded";
+      return rejection("approval_tree_operation_limit_exceeded", "equivalent_operation_requests",
+        this.operationCounts.get(operationFingerprint) ?? 0, this.limits.maxRequestsPerOperationFingerprint);
     }
     if (this.consecutiveDeclines >= this.limits.maxConsecutiveDeclines) {
-      return "approval_tree_decline_limit_exceeded";
+      return rejection("approval_tree_decline_limit_exceeded", "consecutive_declines",
+        this.consecutiveDeclines, this.limits.maxConsecutiveDeclines);
     }
     if (
       this.consecutiveReviewerFailures >=
       this.limits.maxConsecutiveReviewerFailures
     ) {
-      return "approval_tree_reviewer_failure_limit_exceeded";
+      return rejection("approval_tree_reviewer_failure_limit_exceeded", "consecutive_reviewer_failures",
+        this.consecutiveReviewerFailures, this.limits.maxConsecutiveReviewerFailures);
     }
     if (this.active.size >= this.limits.maxActiveReviews) {
-      return "approval_tree_active_limit_exceeded";
+      return rejection("approval_tree_active_limit_exceeded", "active_reviews", this.active.size, this.limits.maxActiveReviews);
     }
     return null;
   }
@@ -183,8 +226,11 @@ export function snapshotRunTreeApprovalLimits(
     "maxConsecutiveReviewerFailures",
     "maxActiveReviews",
   ] as const) {
-    if (!Number.isSafeInteger(limits[field]) || limits[field] <= 0) {
-      throw new TypeError(`RunTreeApprovalLimits.${field} must be a positive safe integer.`);
+    const nullable = field === "maxTotalRequests" || field === "maxRequestsPerOperationFingerprint";
+    const value = limits[field];
+    if (nullable && value === null) continue;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+      throw new TypeError(`RunTreeApprovalLimits.${field} must be a positive safe integer${nullable ? " or null" : ""}.`);
     }
   }
   return Object.freeze({ ...limits });

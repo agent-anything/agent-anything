@@ -24,7 +24,7 @@ describe("Helarc workbench shell", () => {
     expect(html).not.toContain("Templates");
   });
 
-  it("renders the fresh local Ollama Provider defaults", () => {
+  it("requires a new configuration before showing an unsaved Service form", () => {
     const html = renderToStaticMarkup(
       <SettingsPanel
         snapshot={unconfiguredSnapshot()}
@@ -35,14 +35,9 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain(
       '<option value="ollama" selected="">Ollama</option>',
     );
-    expect(html).toContain('value="Ollama Provider"');
-    expect(html).toContain('value="http://localhost:11435"');
-    expect(html).toContain('value="163840"');
-    expect(html).toContain('value="gemma4:e4b"');
-    expect(html).toContain('value="300000000"');
-    expect(html).toContain(
-      '<option value="allow_experimental" selected="">Allow experimental</option>',
-    );
+    expect(html).toContain("No saved configurations");
+    expect(html).toContain('aria-label="New configuration"');
+    expect(html).not.toContain("<input");
   });
 
   it("renders Settings as a standalone page with a close action", () => {
@@ -55,7 +50,7 @@ describe("Helarc workbench shell", () => {
     );
 
     expect(html).toContain('aria-label="Close settings"');
-    expect(html).toContain('aria-label="Provider settings"');
+    expect(html).toContain('aria-label="Provider configuration"');
     expect(html).toContain('role="tab"');
     expect(html).not.toContain('class="workbench"');
     expect(html).not.toContain('class="task-composer"');

@@ -483,7 +483,8 @@ function settleRemoteOperation<TOutput>(
       : {
           owner: settlement.causeOwner ?? registration.semanticOwner,
           code: settlement.causeRef ?? `remote_${status}`,
-          message: settlement.causeRef ?? `Remote Operation ${status}.`,
+          message: settlement.failureDetail?.description ?? settlement.causeRef ?? `Remote Operation ${status}.`,
+          ...(settlement.failureDetail === undefined ? {} : { detail: settlement.failureDetail }),
         },
   });
 }

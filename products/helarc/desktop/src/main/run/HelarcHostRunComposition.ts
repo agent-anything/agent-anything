@@ -456,8 +456,8 @@ export async function prepareHelarcHostRun(
       runTreeLimits,
       runTreeResources,
       runTreeApprovals: {
-        maxTotalRequests: 8,
-        maxRequestsPerOperationFingerprint: 2,
+        maxTotalRequests: null,
+        maxRequestsPerOperationFingerprint: null,
         maxConsecutiveDeclines: 3,
         maxConsecutiveReviewerFailures: 3,
         maxActiveReviews: 2,

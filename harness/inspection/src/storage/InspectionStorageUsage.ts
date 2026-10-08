@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
 import { containedInspectionPath } from "../sources/index.js";
 import type { InspectionStorageMeasurement } from "./InspectionStorageScan.js";
+import { INSPECTION_STORAGE_POLICY } from "./InspectionStoragePolicy.js";
 
 export class InspectionStorageUsage {
   private files = new Map<string, number>();
@@ -51,7 +52,7 @@ export class InspectionStorageUsage {
     for (const [path, bytes] of changes) this.physicalFileChanged(path, bytes);
   }
   check(additional = 0): void {
-    if (this.datasetBytes + additional > 511 * 1024 * 1024 || this.sourceBytes + additional > 2047 * 1024 * 1024) {
+    if (this.datasetBytes + additional > INSPECTION_STORAGE_POLICY.datasetLimitBytes || this.sourceBytes + additional > INSPECTION_STORAGE_POLICY.sourceLimitBytes) {
       throw new Error("inspection_storage_budget_exhausted");
     }
   }

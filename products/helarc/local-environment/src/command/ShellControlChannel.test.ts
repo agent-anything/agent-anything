@@ -66,7 +66,7 @@ describe("Shell final-working-directory control channel", () => {
         environment,
       });
       const command = shell.toolName === "PowerShell"
-        ? "Write-Output 'visible'"
+        ? "[pscustomobject]@{ Marker = 'visible'; Count = 42 }"
         : "printf 'visible\\n'";
       const controller = new AbortController();
       const backend = process.platform === "win32"
@@ -88,6 +88,7 @@ describe("Shell final-working-directory control channel", () => {
       await handle.close();
       const stdout = Buffer.concat(chunks).toString("utf8");
       expect(stdout).toContain("visible");
+      if (shell.toolName === "PowerShell") expect(stdout).toContain("42");
       expect(stdout).not.toContain("HELARC_FINAL_CWD");
       await expect(consumeFinalWorkingDirectory(controlPath)).resolves.toBe(
         await realpath(process.cwd()),
@@ -133,3 +134,92 @@ describe.skipIf(process.platform !== "win32")("PowerShell command sequencing", (
     }
   }, 15_000);
 });
+
+describe.skipIf(process.platform !== "win32").each(["foreground", "background"])("PowerShell %s wrapper", mode => {
+  const objectCommand = "[pscustomobject]@{ Name = 'object-sentinel'; Count = 42 }";
+  const nativeCommand = `& '${process.execPath.replaceAll("'", "''")}' -e`;
+
+  it.each([
+    { behavior: "drains default object formatting", command: objectCommand, stdout: ["Name", "Count", "object-sentinel", "42"], stderr: "", exitCode: 0 },
+    { behavior: "drains explicitly buffered tables", command: `${objectCommand} | Format-Table -AutoSize`, stdout: ["Name", "Count", "object-sentinel", "42"], stderr: "", exitCode: 0 },
+    { behavior: "drains output after an early return", command: `return (${objectCommand}); Write-Output 'unreachable-sentinel'`, stdout: ["object-sentinel", "42"], stderr: "", exitCode: 0 },
+    { behavior: "reports a final non-terminating error", command: "Write-Error 'error-sentinel'", stdout: [], stderr: "error-sentinel", exitCode: 1 },
+    { behavior: "captures status after a trailing comment", command: "Write-Error 'error-sentinel' # trailing comment", stdout: [], stderr: "error-sentinel", exitCode: 1 },
+    { behavior: "reports a final cmdlet failure", command: "Get-Item -LiteralPath './missing-item'", stdout: [], stderr: "PathNotFound", exitCode: 1 },
+    { behavior: "continues after a non-terminating error", command: `Write-Error 'error-sentinel'; ${objectCommand}`, stdout: ["object-sentinel", "42"], stderr: "error-sentinel", exitCode: 0 },
+    { behavior: "preserves native success and output", command: `${nativeCommand} 'console.log(42)'`, stdout: ["42"], stderr: "", exitCode: 0 },
+    { behavior: "mixed sequence: native zero does not mask a final cmdlet failure", command: `${nativeCommand} 'process.exit(0)'; Get-Item -LiteralPath './missing-item'`, stdout: [], stderr: "PathNotFound", exitCode: 1 },
+    { behavior: "mixed sequence: native zero and a cmdlet failure allow later success", command: `${nativeCommand} 'process.exit(0)'; Get-Item -LiteralPath './missing-item'; ${objectCommand}`, stdout: ["object-sentinel", "42"], stderr: "PathNotFound", exitCode: 0 },
+    { behavior: "mixed sequence: nonzero native exit retains precedence over a cmdlet failure", command: `${nativeCommand} 'process.exit(7)'; Get-Item -LiteralPath './missing-item'`, stdout: [], stderr: "PathNotFound", exitCode: 7 },
+    { behavior: "preserves an exact nonzero native exit", command: `${nativeCommand} 'console.log(42); process.exit(7)'`, stdout: ["42"], stderr: "", exitCode: 7 },
+    { behavior: "preserves native exit state after object output", command: `${nativeCommand} 'process.exit(7)'; ${objectCommand}`, stdout: ["object-sentinel", "42"], stderr: "", exitCode: 7 },
+    { behavior: "preserves native exit state after an early return", command: `${nativeCommand} 'process.exit(7)'; return; Write-Output 'unreachable-sentinel'`, stdout: [], stderr: "", exitCode: 7 },
+    { behavior: "keeps stdout and stderr separate", command: `${nativeCommand} 'console.log(42); console.error(73); process.exit(9)'`, stdout: ["42"], stderr: "73", exitCode: 9 },
+  ])("$behavior", async ({ command, stdout, stderr, exitCode }) => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-shell-output-"));
+    const controlPath = join(directory, "cwd.txt");
+    try {
+      const result = runWindowsPowerShell(commandWithFinalWorkingDirectory(
+        "PowerShell", command, mode === "foreground" ? controlPath : null,
+      ), directory);
+
+      expect(result.status).toBe(exitCode);
+      if (stdout.length === 0) expect(result.stdout).toBe("");
+      for (const text of stdout) expect(result.stdout).toContain(text);
+      if (stderr === "") expect(result.stderr).toBe("");
+      else {
+        expect(result.stderr).toContain(stderr);
+        expect(result.stdout).not.toContain(stderr);
+      }
+      expect(result.stdout).not.toContain(directory);
+      expect(result.stdout).not.toContain("__helarc");
+      expect(result.stdout).not.toContain("unreachable-sentinel");
+      await expect(consumeFinalWorkingDirectory(controlPath)).resolves.toBe(
+        mode === "foreground" ? await realpath(directory) : null,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { behavior: "explicit successful exit", ending: "exit 0", exitCode: 0, stderr: "" },
+    { behavior: "explicit failing exit", ending: "exit 7", exitCode: 7, stderr: "" },
+    { behavior: "throw", ending: "throw 'throw-sentinel'", exitCode: 1, stderr: "throw-sentinel" },
+    { behavior: "explicit terminating cmdlet error", ending: "Write-Error 'stop-sentinel' -ErrorAction Stop", exitCode: 1, stderr: "stop-sentinel" },
+  ])("preserves native $behavior semantics", async ({ ending, exitCode, stderr }) => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-shell-termination-"));
+    const controlPath = join(directory, "cwd.txt");
+    try {
+      const command = `${objectCommand}; ${ending}; Write-Output 'unreachable-sentinel'`;
+      const direct = runWindowsPowerShell(command, directory);
+      const wrapped = runWindowsPowerShell(commandWithFinalWorkingDirectory(
+        "PowerShell", command, mode === "foreground" ? controlPath : null,
+      ), directory);
+
+      expect(direct.status).toBe(exitCode);
+      expect(wrapped.status).toBe(direct.status);
+      // Native exit/throw can discard buffered formatting; the wrapper must not promise a drain there.
+      expect(wrapped.stdout).toBe(direct.stdout);
+      expect(wrapped.stdout).not.toContain("unreachable-sentinel");
+      if (stderr === "") expect(wrapped.stderr).toBe("");
+      else {
+        expect(direct.stderr).toContain(stderr);
+        expect(wrapped.stderr).toContain(stderr);
+      }
+      await expect(access(controlPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+function runWindowsPowerShell(command: string, cwd: string) {
+  const shell = join(process.env.SystemRoot!, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const result = spawnSync(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
+    cwd, encoding: "utf8", timeout: 5000, windowsHide: true,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.signal).toBeNull();
+  return result;
+}

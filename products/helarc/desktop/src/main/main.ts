@@ -3,6 +3,8 @@ import { BrowserWindow, app, dialog } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
+import { HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
+import { HelarcStorageService } from "./storage/HelarcStorageService.js";
 import { registerHelarcIpc } from "./ipc.js";
 import { FileHelarcContextManifestStore } from "./context-manifest/index.js";
 import { FileHelarcModelContinuationStore } from "./model-continuity/index.js";
@@ -63,6 +65,8 @@ async function createWindow(): Promise<void> {
   const userDataPath = app.getPath("userData");
   inspection ??= HelarcInspection.create(join(userDataPath, "inspection-settings.json"));
   const inspectionSource = await inspection;
+  const storage = new HelarcStorageService(userDataPath, () => inspectionSource.snapshot().health);
+  window.once("closed", () => storage.close());
   const instructionSettingsStore = new FileHelarcInstructionSettingsStore(join(userDataPath, "instruction-settings.json"));
   const providerCredentialStore = createElectronProviderCredentialStore(userDataPath);
   const providerProfileStore = new FileHelarcProviderProfileStore(
@@ -108,6 +112,7 @@ async function createWindow(): Promise<void> {
     workspaceProfiles: await workspaceProfileStore.listProfiles(),
     threadSummaries: await threadStore.listThreadSummaries(),
     threadStore,
+    persistenceDiagnostics: new HelarcPersistenceDiagnostics(join(userDataPath, "persistence-diagnostics.json")),
     modelContinuationStore,
     contextManifestPersistence: contextManifestStore,
     runTranscriptPort: runTranscriptStore,
@@ -135,6 +140,7 @@ async function createWindow(): Promise<void> {
   qualifications.add(qualification);
   window.once("closed", () => { void qualification.close().finally(() => qualifications.delete(qualification)); });
   registerHelarcIpc({
+    storage,
     qualification,
     projectStore,
     inspection: inspectionSource,

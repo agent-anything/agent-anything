@@ -29,6 +29,7 @@ export type {
 } from "./RunTreeResourceAccount.js";
 export type {
   RunTreeApprovalAdmission,
+  RunTreeApprovalAdmissionDetail,
   RunTreeApprovalAdmissionInput,
   RunTreeApprovalLimitCode,
   RunTreeApprovalLimits,

@@ -88,6 +88,22 @@ describe("createHelarcLocalCommandActionCapability", () => {
     expect(capability.internalHandlers.map(handler=>handler.id)).toEqual(["test.initial","test.output"]);
   });
 
+  it("preserves approval admission detail through both command adapters without a process result", async () => {
+    const capability = await createCapability();
+    const detail = {kind: "capacity", stage: "approval_admission", scope: {owner: "agent-runtime", kind: "run_tree"},
+      limit: {name: "equivalent_operation_requests", count: 2, maximum: 2}, dispatch: "never_dispatched",
+      description: "Equivalent-operation approval capacity reached; action was never dispatched."} as const;
+    const settlement: CanonicalActionSettlement = {...shellSettlement(), status: "failed",
+      payload: null, attempts: [], effectCertainty: "none", completionExtent: "none",
+      causeOwner: "agent-runtime", causeRef: "approval_tree_operation_limit_exceeded", failureDetail: detail};
+    for (const {adapter} of capability.adapters) {
+      const result = await adapter.settle(shellPreparedAction("PowerShell", "unused"), settlement);
+      expect(result).toMatchObject({status: "failed", output: null,
+        failure: {owner: "agent-runtime", code: settlement.causeRef, message: detail.description, detail}});
+      expect(result.settlement).toBe(settlement);
+    }
+  });
+
 });
 
 async function createCapability() {

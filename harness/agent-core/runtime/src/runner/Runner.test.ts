@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActiveRunHandle } from "./RunHandle.js";
 const recordedFlows: import("@agent-anything/observability/execution-flow").ExecutionFlowObservation[] = [];
+function recordedFailureCounts(): unknown[] {
+  return recordedFlows.flatMap(fact => fact.kind === "constraint" && fact.checkId === "numeric_limits"
+    ? [fact.basis.consecutiveActionFailures] : []);
+}
 afterEach(() => {
   vi.restoreAllMocks();
   const facts = recordedFlows.splice(0);
@@ -1010,6 +1014,100 @@ describe("Runner semantic integration", () => {
     expect(handler.execute).toHaveBeenCalledTimes(2);
     expect(result.items.flatMap(({ payload }) => payload.kind === "model_call_settlement" ? [payload.result.settlement] : []))
       .toEqual(["failed", "succeeded"]);
+  });
+
+  it.each(["plan_success", "plan_failure", "interaction", "protocol_rejection", "unknown_callable"])(
+    "does not spend or reset execution recovery on %s", async mode => {
+      const operation = operationRef("failing-inspection");
+      const handler = internalHandler("failing-inspection", "code-workspace", {});
+      handler.execute.mockRejectedValue(new Error("Inspection failed"));
+      const operations = createOperationFixture([operationSpec(operation, "internal", {
+        requestOrigins: ["controller_protocol"], handlerId: handler.id,
+      })], [handler]);
+      const interaction = testInteractionProtocol();
+      const tools = createSemanticToolSelection(operations, "Question", {
+        kind: "interaction", protocol: interaction.ref, blockingScope: "run", revision: "1",
+      });
+      const controller = new ScriptedController([
+        advance([operationCandidate(operation, {})], "failure-1"),
+        mode === "interaction"
+          ? input => advance([toolCandidate("Question", {question: "Which target?"}, input.toolExposure.controllerRequestId)], "question")
+          : mode === "protocol_rejection" || mode === "unknown_callable"
+          ? advance([{kind: "model_call_rejection", name: mode === "protocol_rejection" ? "final_result" : "unknown",
+              code: "call_invalid", message: "Invalid model call."}], "protocol")
+          : updateState({plan: [{step: "Inspect", status: mode === "plan_success" ? "in_progress" : "invalid"}]}, "plan"),
+        advance([operationCandidate(operation, {})], "failure-2"),
+        complete("Must not be requested"),
+      ]);
+      const handle = createRunner(controller, operations, {interactions: interaction.registry}).start(
+        createAgent(), createRunInput(), createRunConfig(operations, {tools, limits: {maxConsecutiveActionFailures: 1}}),
+      );
+      if (mode === "interaction") {
+        const pending = await waitForPendingInteraction(handle);
+        expect(handle.submitInteraction({request: pending.envelope.request, submissionId: "answer",
+          contentDigest: "sha256:answer", payload: {accepted: true}, receivedAt: NOW}).status).toBe("accepted_for_resolution");
+      }
+      const result = await handle.wait();
+      expect(result.cause).toMatchObject({kind: "failure", failure: {kind: "runtime", failure: {code: "runtime_limit_exceeded"}}});
+      expect(controller.calls).toHaveLength(3);
+      expect(recordedFailureCounts()).toEqual([0, 1, 1, 2]);
+    },
+  );
+
+  it("resets execution recovery only after a successful execution request", async () => {
+    const operation = operationRef("inspection");
+    const handler = internalHandler("inspection", "code-workspace", {});
+    handler.execute.mockRejectedValueOnce(new Error("first failure"));
+    const operations = createOperationFixture([operationSpec(operation, "internal", {
+      requestOrigins: ["controller_protocol"], handlerId: handler.id,
+    })], [handler]);
+    const controller = new ScriptedController([
+      advance([operationCandidate(operation, {})], "first"),
+      advance([operationCandidate(operation, {})], "second"),
+      () => {
+        handler.execute.mockRejectedValueOnce(new Error("next failure"));
+        return advance([operationCandidate(operation, {})], "third");
+      },
+      complete("Done"),
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(),
+      createRunConfig(operations, {limits: {maxConsecutiveActionFailures: 1}}));
+    expect(result.status).toBe("completed");
+    expect(recordedFailureCounts()).toEqual([0, 1, 0, 1]);
+  });
+
+  it.each([false, true])("accounts concurrent execution in candidate order (reverse=%s)", async reverse => {
+    const operation = operationRef("parallel-inspection");
+    const handler = internalHandler("parallel-inspection", "code-workspace", {});
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    handler.execute.mockImplementation(async context => {
+      const first = context.binding.request.index === 0;
+      if (first === reverse) await gate;
+      else setTimeout(release, 10);
+      if (first) throw new Error("first candidate failed");
+      return createOperationResult({ref: {invocation: context.binding.invocation, id: `${context.binding.invocation.id}:result`},
+        binding: context.binding.binding, semanticOwner: "code-workspace", status: "succeeded", output: {}, failure: null,
+        startedAt: NOW, finishedAt: NOW, lowerRefs: [], metadata: {}});
+    });
+    const operations = createOperationFixture([operationSpec(operation, "internal", {
+      requestOrigins: ["tool_request"], handlerId: handler.id,
+    })], [handler], {availability: [{binding: {operation, revision: "binding-1"},
+      scheduling: {group: "independent-inspections", maxParallel: 2},
+      assess: () => ({basisRefs: [{owner: "test", kind: "independence", id: "inspection", revision: "1"}], disposition: "available", reason: null}),
+    }]});
+    const tools = createToolSelection(operations, operation, "Inspect");
+    const controller = new ScriptedController([
+      input => advance([toolCandidate("Inspect", {index: 0}, input.toolExposure.controllerRequestId),
+        toolCandidate("Inspect", {index: 1}, input.toolExposure.controllerRequestId)], ["first", "second"]),
+      complete("Done"),
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(),
+      createRunConfig(operations, {tools, limits: {maxConsecutiveActionFailures: 0}}));
+    expect(result.status).toBe("completed");
+    expect(recordedFailureCounts()).toEqual([0, 0]);
+    expect(result.items.flatMap(({payload}) => payload.kind === "model_call_settlement" ? [payload.result.settlement] : []))
+      .toEqual(reverse ? ["succeeded", "failed"] : ["failed", "succeeded"]);
   });
 
   it("routes an exposed interaction Tool directly through its Interaction protocol", async () => {
@@ -3544,6 +3642,121 @@ describe("Runner semantic integration", () => {
     ]);
   });
 
+  it.each(["operation", "tool", "composite"] as const)("returns actual approval quota rejection through %s feedback without redispatch", async route => {
+    const operation = operationRef("approval-limited-write");
+    const actionExecution = createDirectActionExecutionFixture(operation, undefined, {
+      category: "fileChange", environmentId: "test-local", applicabilityKeys: [], reason: "Review file change.",
+      payload: {changes: [{operation: "update", canonicalPath: "D:/workspace/README.md", displayPath: "README.md",
+        destinationCanonicalPath: null, destinationDisplayPath: null, baselineFingerprint: SHA_A}],
+        baselineFingerprint: SHA_A, additionalPermissions: null},
+      decisionOptions: [{id: "accept.action", kind: "accept", scope: "action", label: "Approve once",
+        description: null, trustedProposalRef: null, metadata: {}}],
+      trustedProposals: [], deadlineAt: "2026-08-13T00:01:00.000Z", metadata: {},
+    });
+    const compositeOperation = operationRef("approval-limited-composite");
+    const definition = snapshotCompositeDefinition({
+      ref: {id: "approval-limited-composite", revision: "1"}, inputSchemaRevision: "input-1",
+      resultSchemaRevision: "result-1", graphRevision: "graph-1",
+      nodes: [{id: "write", operation, allowedBindings: ["direct"], dependencies: [], transformId: "identity",
+        conditionId: null, resourceClaims: [], required: true}],
+      join: {kind: "all_required_succeeded"}, reducerId: "collect", conflictPolicyRevision: "conflict-1",
+      limits: {maxNodes: 1, maxParallel: 1}, cancellationPolicy: "cancel_unstarted_and_signal_active",
+      sensitivity: "internal", retiredAt: null,
+    });
+    const operations = createOperationFixture([
+      operationSpec(operation, "direct", {requestOrigins: ["tool_request", "controller_protocol", "trusted_workflow"],
+        actionAdapterId: actionExecution.adapterId}),
+      operationSpec(compositeOperation, "composite", {requestOrigins: ["controller_protocol"], compositeDefinitionRef: "approval-limited-composite"}),
+    ], [], {actionExecution: actionExecution.dependencies, composite: {resolve: () => ({definition, execution: {
+      transforms: [{id: "identity", transform: ({compositeInput}) => compositeInput}], conditions: [],
+      reducer: {id: "collect", reduce: () => ({status: "succeeded", output: {written: true}, failure: null})}, conflicts: null,
+    }})}});
+    const tools = createToolSelection(operations, operation, "LimitedWrite");
+    const request = (input: ControllerInput, id: string) => advance([route === "tool"
+      ? toolCandidate("LimitedWrite", {}, input.toolExposure.controllerRequestId)
+      : operationCandidate(route === "composite" ? compositeOperation : operation, {})], id);
+    const assertRejection = (input: ControllerInput) => {
+      const last = input.interaction.messages.filter(message => message.role === "tool").at(-1);
+      const detail = {kind: "capacity", stage: "approval_admission", scope: {owner: "agent-runtime", kind: "run_tree"},
+        limit: {name: "equivalent_operation_requests", count: 1, maximum: 1}, dispatch: "never_dispatched",
+        description: expect.stringContaining("Retrying does not reset this cumulative quota.")};
+      const failure = {owner: "agent-runtime", code: "approval_tree_operation_limit_exceeded", detail};
+      expect(last).toMatchObject({content: [{result: {content: route === "composite"
+        ? {status: "failed", composite: {children: [{nodeId: "write", effectCertainty: "none", completionExtent: "none", failure}]}}
+        : {status: "failed", effectCertainty: "none", completionExtent: "none", failure},
+      }}]});
+    };
+    let reviews = 0;
+    const controller = new ScriptedController([
+      input => request(input, "first-approved"),
+      input => request(input, "quota-rejected"),
+      input => { assertRejection(input); return request(input, "quota-still-rejected"); },
+      input => { assertRejection(input); return complete("Capacity rejection observed", "done"); },
+    ]);
+    const config = createRunConfig(operations, {tools, actionExecution: createDirectActionExecutionConfig()});
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), {
+      ...config, runTreeApprovals: {...config.runTreeApprovals, maxTotalRequests: null, maxRequestsPerOperationFingerprint: 1},
+      permissions: {...config.permissions, approvalPolicy: "on-request", reviewer: {
+        kind: "auto_review", bindingId: "quota-test-reviewer", reviewTimeoutMs: 1_000,
+        descriptor: {id: "quota-test-reviewer", kind: "auto_review", displayName: "Test reviewer", source: "test", metadata: {}},
+        reviewer: {async review(input: import("@agent-anything/permission").ApprovalReviewInput) {
+          reviews += 1;
+          return {status: "decided", submission: {submissionId: "approved", runId: input.request.runId,
+            requestId: input.request.id, pendingVersion: input.pendingVersion, optionId: "accept.action",
+            grantedPermissions: null, reason: null}, rationale: null};
+        }},
+      }},
+    });
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
+    expect(reviews).toBe(1);
+    expect(actionExecution.execute).toHaveBeenCalledTimes(1);
+    expect(controller.calls).toHaveLength(4);
+  });
+
+  it.each([false, true])("projects bounded limit detail into operation and Tool results (tool=%s)", async throughTool => {
+    const operation = operationRef("limit-detail-projection");
+    const handler = internalHandler("limit-detail-projection", "code-workspace", {});
+    const detail = {kind: "capacity", stage: "approval_admission", scope: {owner: "agent-runtime", kind: "run_tree"},
+      limit: {name: "total_requests", count: 8, maximum: 8}, dispatch: "never_dispatched",
+      description: "Approval capacity reached; action was never dispatched."} as const;
+    handler.execute.mockImplementation(async context => createOperationResult({
+      ref: {invocation: context.binding.invocation, id: "quota-rejection"}, binding: context.binding.binding,
+      semanticOwner: "code-workspace", status: "failed", output: null,
+      failure: {owner: "agent-runtime", code: "approval_tree_total_limit_exceeded", message: detail.description,
+        detail: {...detail, private: "not-for-model"}, retryable: false, metadata: {secret: "not-for-model"}},
+      startedAt: NOW, finishedAt: NOW,
+      lowerRefs: [{owner: "canonical-action", kind: "action_settlement", id: "not-dispatched", revision: "1"}],
+      metadata: {effectCertainty: "none", completionExtent: "none"},
+    }));
+    const operations = createOperationFixture([operationSpec(operation, "internal", {
+      requestOrigins: ["tool_request", "controller_protocol"], handlerId: handler.id,
+    })], [handler]);
+    const tools = createToolSelection(operations, operation, "LimitedTool");
+    const controller = new ScriptedController([
+      input => advance([throughTool
+        ? toolCandidate("LimitedTool", {}, input.toolExposure.controllerRequestId)
+        : operationCandidate(operation, {})], "limit-request"),
+      input => {
+        const messages = input.interaction.messages.filter(message => message.role === "tool");
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({content: [{result: {content: {
+          status: "failed", effectCertainty: "none", completionExtent: "none",
+          failure: {owner: "agent-runtime", code: "approval_tree_total_limit_exceeded", detail},
+        }}}]});
+        expect(JSON.stringify(messages)).not.toContain("not-for-model");
+        return complete("Rejection observed", "complete-after-limit");
+      },
+    ]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(),
+      createRunConfig(operations, {tools}));
+    expect(result.status).toBe("completed");
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    if (throughTool) {
+      expect(observations(result).find(item => item.payload.kind === "operation")?.payload)
+        .toMatchObject({toolResult: {status: "failed", error: {detail}}});
+    }
+  });
+
   it.each([false, true])("returns Composite settlement details to the next turn (child rejected: %s)", async rejected => {
     const composite = operationRef("inspect-workspace");
     const child = operationRef("read-metadata");
@@ -3627,11 +3840,11 @@ describe("Runner semantic integration", () => {
       },
     });
     const controller = new ScriptedController([
-      advance([operationCandidate(composite, { path: "." })], "model_operation"),
+      ...Array.from({length: 5}, (_, index) => advance([operationCandidate(composite, { path: "." })], `model_operation_${index}`)),
       input => {
         const results = input.interaction.messages.filter(message => message.role === "tool");
-        expect(results).toHaveLength(1);
-        expect(results[0]).toMatchObject({content: [{result: {content: {
+        expect(results).toHaveLength(5);
+        expect(results.at(-1)).toMatchObject({content: [{result: {content: {
           status: rejected ? "failed" : "succeeded",
           composite: {childCount: 2, omittedChildCount: 0, children: expect.arrayContaining([
             expect.objectContaining(rejected ? {nodeId: "read-metadata", status: "invalid", effectCertainty: "none", completionExtent: "none",
@@ -3646,16 +3859,17 @@ describe("Runner semantic integration", () => {
     const result = await createRunner(controller, operations).run(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations),
+      createRunConfig(operations, {limits: {maxConsecutiveActionFailures: 5}}),
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
-    expect(childHandler.execute).toHaveBeenCalledTimes(rejected ? 1 : 2);
-    expect(controller.calls).toHaveLength(2);
+    expect(childHandler.execute).toHaveBeenCalledTimes(rejected ? 5 : 10);
+    expect(controller.calls).toHaveLength(6);
+    expect(recordedFailureCounts()).toEqual(rejected ? [0, 1, 2, 3, 4, 5] : [0, 0, 0, 0, 0, 0]);
     expect(result.items.filter(({ payload }) => payload.kind === "run_action"))
-      .toHaveLength(rejected ? 2 : 3);
+      .toHaveLength(rejected ? 10 : 15);
     expect(observations(result).filter(({ payload }) => payload.kind === "operation"))
-      .toHaveLength(rejected ? 2 : 3);
+      .toHaveLength(rejected ? 10 : 15);
   });
 
   it("cancels an active Controller boundary and does not commit its late decision", async () => {
@@ -4991,6 +5205,7 @@ function createDirectActionExecutionFixture(
     effectState: "settled",
     payload: { passed: true },
   },
+  approval: import("@agent-anything/permission/approval").ApprovalRequirementDraft | null = null,
 ) {
   const adapterDescriptor: ActionAdapterDescriptor = {
     id: `adapter.${operation.operation.name}`,
@@ -5026,7 +5241,7 @@ function createDirectActionExecutionFixture(
             kind: "effects",
             values: [{
               kind: "file_system",
-              operation: "read",
+              operation: approval === null ? "read" : "write",
               targets: [{
                 platform: "win32",
                 path: "D:/workspace/README.md",
@@ -5038,12 +5253,12 @@ function createDirectActionExecutionFixture(
           },
           requestedAuthority: null,
           targetAssertions: [],
-          approval: null,
+          approval,
           safeSummary: {
             kind: "file_system",
             headline: "Validate workspace state",
             operations: [{
-              operation: "read",
+              operation: approval === null ? "read" : "update",
               sourceLabel: "README.md",
               destinationLabel: null,
             }],
@@ -5080,7 +5295,8 @@ function createDirectActionExecutionFixture(
           : {
               owner: settlement.causeOwner ?? "action-execution",
               code: settlement.causeRef ?? settlement.status,
-              message: settlement.causeRef ?? settlement.status,
+              message: settlement.failureDetail?.description ?? settlement.causeRef ?? settlement.status,
+              ...(settlement.failureDetail === undefined ? {} : {detail: settlement.failureDetail}),
             },
       };
     },

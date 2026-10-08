@@ -43,6 +43,8 @@ export const HELARC_IPC_CHANNELS = {
   readCommandOutput: "helarc:read-command-output",
   openExternalLink: "helarc:open-external-link",
   getInspectionSettings: "helarc:get-inspection-settings",
+  getStorage: "helarc:get-storage",
+  cleanupStorage: "helarc:cleanup-storage",
   saveInspectionSettings: "helarc:save-inspection-settings",
   getInstructionSettings: "helarc:get-instruction-settings",
   saveInstructionSettings: "helarc:save-instruction-settings",
@@ -68,6 +70,7 @@ export interface RegisterHelarcIpcInput {
   qualification?: import("./qualification/HelarcQualificationService.js").HelarcQualificationService;
   projectStore?: FileHelarcProjectStore;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
+  storage?: import("./storage/HelarcStorageService.js").HelarcStorageService;
   instructionSettingsStore?: FileHelarcInstructionSettingsStore | null;
   window: BrowserWindow;
   controller: HelarcMainController;
@@ -218,6 +221,10 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       "inspection.save": async ({ settings }) => {
         if (!input.inspection) throw new Error("Inspection source is unavailable.");
         return input.inspection.save(settings);
+      },
+      "storage.cleanup": ({ recordingIds }) => {
+        if (!input.storage) throw new Error("Storage maintenance is unavailable.");
+        return input.storage.cleanup(recordingIds);
       },
       "instructions.save": async ({ settings }) => {
         if (!input.instructionSettingsStore) throw new Error("Instruction settings storage is unavailable.");
@@ -386,6 +393,14 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     return input.inspection.snapshot();
   });
   ipcMain.handle(HELARC_IPC_CHANNELS.saveInspectionSettings, (_event, command: unknown) => productCommands.dispatch(command, "inspection.save"));
+  ipcMain.handle(HELARC_IPC_CHANNELS.getStorage, (event) => {
+    if (!trustedSender(event) || !input.storage) throw new Error("Storage is unavailable.");
+    return input.storage.snapshot();
+  });
+  ipcMain.handle(HELARC_IPC_CHANNELS.cleanupStorage, (event, command: unknown) => {
+    if (!trustedSender(event)) throw new Error("Storage is unavailable.");
+    return productCommands.dispatch(command, "storage.cleanup");
+  });
   ipcMain.handle(HELARC_IPC_CHANNELS.saveInstructionSettings, (_event, command: unknown) =>
     productCommands.dispatch(command, "instructions.save"));
 

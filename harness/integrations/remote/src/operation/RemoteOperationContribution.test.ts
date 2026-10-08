@@ -87,6 +87,27 @@ describe("createRemoteOperationContribution", () => {
       transport: { async invoke() { throw new Error("not executed"); } },
     })).toThrow("requires a hosted endpoint reference");
   });
+
+  it("preserves approval quota detail instead of replacing it with a remote failure", async () => {
+    const expected = registration();
+    const contribution = createRemoteOperationContribution({registration: expected,
+      transport: {async invoke() { throw new Error("Approval rejection must not invoke transport."); }}});
+    const detail = {kind: "capacity", stage: "approval_admission", scope: {owner: "agent-runtime", kind: "run_tree"},
+      limit: {name: "total_requests", count: 8, maximum: 8}, dispatch: "never_dispatched",
+      description: "Approval capacity reached; action was never dispatched."} as const;
+    const action = {id: "not-dispatched"};
+    const settlement: CanonicalActionSettlement = {
+      ref: {action, id: "settlement"}, action, subject: {action, revision: 1},
+      operationInvocation: {id: "invocation", operation: expected.operation}, binding: expected.binding,
+      status: "failed", attempts: [], effectCertainty: "none", completionExtent: "none", payload: null,
+      causeOwner: "agent-runtime", causeRef: "approval_tree_total_limit_exceeded", failureDetail: detail,
+      reconciliationRequired: false, settledAt: NOW,
+    };
+    const result = await contribution.adapters[0]!.adapter.settle({} as PreparedAction, settlement);
+    expect(result).toMatchObject({status: "failed", output: null, failure: {
+      owner: "agent-runtime", code: "approval_tree_total_limit_exceeded", message: detail.description, detail,
+    }});
+  });
 });
 
 function registration(

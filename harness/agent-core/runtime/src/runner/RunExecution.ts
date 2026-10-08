@@ -69,6 +69,7 @@ import {
   type ActionExecutionResult,
 } from "@agent-anything/action-execution/enforcement";
 import { createCanonicalSha256Digest } from "@agent-anything/canonical-action/subject";
+import { readOperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
 import { createActionPermissionAssessmentPort } from "@agent-anything/permission/authority";
 import {
   APPROVAL_INTERACTION_PROTOCOL,
@@ -485,6 +486,7 @@ export class RunExecution<TOutput> {
 
   private readonly flow: RunExecutionFlow;
   private readonly actionFlows = new Map<string, ExecutionFlowPath>();
+  private readonly executionFailureSettlements = new Map<string, "failure" | "success" | "unchanged" | null>();
   private readonly operationFlows = new Map<string, ExecutionFlowPath>();
   private readonly startedAt: string;
   private readonly startedAtMs: number;
@@ -1755,8 +1757,55 @@ export class RunExecution<TOutput> {
     this.writer.commit({
       kind: "model_call_settlement",
       result,
-    }, current => ({ status: this.statusAfterPendingChange(current, current.pending, action.ref.id) }));
+    }, current => ({
+      status: this.statusAfterPendingChange(current, current.pending, action.ref.id),
+      counters: {
+        ...current.counters,
+        consecutiveActionFailures: this.countExecutionSettlement(
+          current.counters.consecutiveActionFailures, action, observation, result.settlement,
+        ),
+      },
+    }));
     this.closeModelCallFlow(action.ref.id, call.modelCallRef.id, result.settlement);
+  }
+
+  private countExecutionSettlement(
+    current: number,
+    action: RuntimeRunAction,
+    observation: RunObservation | null,
+    settlement: ModelCallSettlementKind,
+  ): number {
+    if (!this.executionFailureSettlements.has(action.ref.id)) return current;
+    this.executionFailureSettlements.set(action.ref.id, this.executionFailureAdjustment(observation, settlement));
+    // Settlement arrival is concurrent; recovery accounting follows dispatch order.
+    for (const [id, adjustment] of this.executionFailureSettlements) {
+      if (adjustment === null) break;
+      if (adjustment === "failure") current += 1;
+      else if (adjustment === "success") current = 0;
+      this.executionFailureSettlements.delete(id);
+    }
+    return current;
+  }
+
+  private executionFailureAdjustment(
+    observation: RunObservation | null,
+    settlement: ModelCallSettlementKind,
+  ): "failure" | "success" | "unchanged" {
+    const payload = observation?.payload;
+    if (payload?.kind === "interaction" || payload?.kind === "descendant_progress" ||
+        payload?.kind === "descendant_result_transfer") return "unchanged";
+    if (payload?.kind === "tool_rejected" && payload.attempt.selectedTool !== null &&
+        findSelectedTool(this.config.tools, payload.attempt.selectedTool, payload.attempt.origin)
+          ?.registration.descriptor.binding.kind === "interaction") return "unchanged";
+    if (payload?.kind === "operation" && payload.result.status === "unknown_effect") return "unchanged";
+    switch (settlement) {
+      case "succeeded": return "success";
+      case "failed":
+      case "denied":
+      case "invalid": return "failure";
+      case "cancelled":
+      case "invalidated": return "unchanged";
+    }
   }
 
   private closeModelCallFlow(actionId: string, callId: string, settlement: ModelCallSettlementKind): void {
@@ -2555,6 +2604,13 @@ export class RunExecution<TOutput> {
     }));
     const flow = new ExecutionFlowPath(RUN_CALL_EXECUTION_FLOW, this.flow.context, this.runId, [{owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null}]);
     const admission = basis.admissions.get(candidate);
+    const binding = admission?.status === "trusted" ? admission.binding
+      : admission?.selectedTool ? findSelectedTool(this.config.tools, admission.selectedTool, admission.candidate.origin)?.registration.descriptor.binding
+        : undefined;
+    if (candidate.kind === "operation_request" ||
+        (candidate.kind === "tool_request" && binding?.kind !== "interaction")) {
+      this.executionFailureSettlements.set(action.ref.id, null);
+    }
     flow.advance("admission", {candidateIndex, kind:candidate.kind, runActionId:action.ref.id}).check("admission", admission?.status === "rejected" ? "not_satisfied" : admission ? "passed" : "not_applicable", {status:admission?.status ?? null});
     flow.advance("execute", {runActionId:action.ref.id});
     this.actionFlows.set(action.ref.id, flow);
@@ -4838,7 +4894,6 @@ export class RunExecution<TOutput> {
       lowerRefs: Object.freeze([...lowerRefs]),
       payload,
     });
-    const failed = observationFailed(observation);
     const contribution = createObservationContextContribution({
       id: this.id("context_contribution"),
       observation,
@@ -4858,9 +4913,6 @@ export class RunExecution<TOutput> {
       counters: Object.freeze({
         ...current.counters,
         observations: sequence,
-        consecutiveActionFailures: failed
-          ? current.counters.consecutiveActionFailures + 1
-          : 0,
       }),
     }));
     const context = this.writer.getSnapshot().context;
@@ -5246,6 +5298,7 @@ export class RunExecution<TOutput> {
           return Object.freeze({
             status: "limit_exceeded" as const,
             code: admission.code,
+            detail: admission.detail,
           });
         }
         if (admission.status === "rejected") {
@@ -6485,7 +6538,8 @@ function operationResultFromAction(
   const semantic = outcome.semanticResult;
   const failure = semantic.failure === null
     ? null
-    : operationFailure(semantic.failure.owner, semantic.failure.code, semantic.failure.message);
+    : {...operationFailure(semantic.failure.owner, semantic.failure.code, semantic.failure.message),
+        ...(semantic.failure.detail === undefined ? {} : {detail: semantic.failure.detail})};
   return createOperationResult({
     ref: Object.freeze({ invocation: binding.invocation, id: resultId }),
     binding: binding.binding,
@@ -6559,6 +6613,7 @@ function adaptToolResult(call: ToolCall, result: OperationResult): ToolResult | 
             code: result.failure.code,
             message: result.failure.message,
             metadata: result.failure.metadata,
+            ...(result.failure.detail === undefined ? {} : {detail: result.failure.detail}),
           }),
       startedAt: result.startedAt,
       finishedAt: result.finishedAt,
@@ -6611,6 +6666,7 @@ function partialToolResult(
       code: failure.code,
       message: failure.message,
       metadata: failure.metadata,
+      ...(failure.detail === undefined ? {} : {detail: failure.detail}),
     }),
     startedAt,
     finishedAt,
@@ -6688,32 +6744,6 @@ function toolResultLowerRef(result: ToolResult): RunObservation["lowerRefs"][num
     id: result.toolCall.id,
     revision: null,
   });
-}
-
-function observationFailed(observation: RunObservation): boolean {
-  switch (observation.payload.kind) {
-    case "operation":
-      return observation.payload.result.status !== "succeeded" &&
-        observation.payload.result.status !== "partial";
-    case "operation_rejected":
-    case "tool_rejected":
-    case "model_call_rejected":
-      return true;
-    case "handoff":
-      return observation.payload.status !== "applied";
-    case "interaction":
-      return observation.payload.status !== "resolved";
-    case "descendant_run":
-      return observation.payload.status !== "succeeded" &&
-        observation.payload.status !== "partial";
-    case "descendant_progress":
-      return false;
-    case "descendant_result_transfer":
-      return observation.payload.status !== "succeeded" &&
-        observation.payload.status !== "partial";
-    case "plan_update":
-      return observation.payload.result.status === "rejected";
-  }
 }
 
 function bindingMatchesResolution(
@@ -6992,6 +7022,7 @@ function projectObservationSettlement(observation: RunObservation): {
       );
     case "operation": {
       const composite = readCompositeResultSummary(payload.result.metadata.compositeSettlement);
+      const detail = readOperationLimitFailureDetail(payload.result.failure?.detail);
       return modelSettlement(
         operationModelSettlement(payload.result.status),
         {
@@ -7006,6 +7037,7 @@ function projectObservationSettlement(observation: RunObservation): {
                 owner: payload.result.failure.owner,
                 code: payload.result.failure.code,
                 message: payload.result.failure.message,
+                ...(detail === null ? {} : {detail}),
               },
         },
       );

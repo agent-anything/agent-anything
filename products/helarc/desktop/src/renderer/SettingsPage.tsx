@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import * as React from "react";
 import { InstructionSettingsPanel } from "./InstructionSettingsPanel.js";
 import { InspectionSettingsPanel } from "./InspectionSettingsPanel.js";
+import { StorageSettingsPanel } from "./StorageSettingsPanel.js";
 import { ProviderSettingsPanel } from "./provider/ProviderSettingsPanel.js";
 import { useState } from "react";
 import type { HelarcMainSnapshot } from "../shared/HelarcDesktopApi.js";
@@ -43,7 +44,7 @@ export function SettingsPanel({
   snapshot: HelarcMainSnapshot;
   onSaved: (snapshot: HelarcMainSnapshot) => void;
 }) {
-  const [tab, setTab] = useState<"provider" | "instructions" | "inspection">(
+  const [tab, setTab] = useState<"provider" | "instructions" | "inspection" | "storage">(
     "provider",
   );
   const [instructionsOpened, setInstructionsOpened] = useState(false);
@@ -77,6 +78,9 @@ export function SettingsPanel({
         >
           Inspection
         </button>
+        <button type="button" role="tab" aria-selected={tab === "storage"} onClick={() => setTab("storage")}>
+          Storage
+        </button>
       </div>
       <div hidden={tab !== "provider"}>
         <ProviderSettingsPanel snapshot={snapshot} onSaved={onSaved} />
@@ -87,6 +91,7 @@ export function SettingsPanel({
         )}
       </div>
       {tab === "inspection" && <InspectionSettingsPanel api={getHelarcApi()} />}
+      {tab === "storage" && <StorageSettingsPanel api={getHelarcApi()} />}
     </div>
   );
 }

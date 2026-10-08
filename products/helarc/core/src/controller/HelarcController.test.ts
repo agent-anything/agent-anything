@@ -13,6 +13,7 @@ import { createRunCancellationController } from "@agent-anything/agent-runtime/r
 import {
   createModelCallRef,
   createUnknownModelInputMeasurement,
+  snapshotProviderRequest,
   type ModelAssistantContentBlock,
   type ModelInputComposition,
   type ModelJsonValue,
@@ -29,6 +30,7 @@ import { createToolContractIdentity } from "@agent-anything/tools/identity";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
 import { buildHelarcPromptAssembly } from "../prompt/index.js";
+import { renderHelarcContextProjectionFragment } from "../prompt/HelarcPromptAssembly.js";
 import { createDefaultHelarcInstructionSettings } from "../instructions/index.js";
 import { createHelarcAgent } from "../agent/HelarcAgent.js";
 import {
@@ -359,6 +361,40 @@ describe("Helarc native Tool controller", () => {
     expect(general?.content).toContain("test_output");
     expect(assembly.sections.find(({ id }) => id === "helarc:model-input:context_projection")?.source)
       .toMatchObject({ owner: "context", id: "projection-1", revision: "1" });
+  });
+
+  it("preserves a complete admitted Context Projection larger than 128 Ki characters", () => {
+    const input = createControllerInput();
+    const blocks = Array.from({ length: 3 }, (_, index) => {
+      const block = {
+        id: `block-${index}`,
+        item: { id: `item-${index}` },
+        contribution: { id: `contribution-${index}`, revision: "1" },
+        instructionRole: "data" as const,
+        payload: { kind: "structured" as const, value: {
+          kind: "inspection_data", output: `${index}:${"x".repeat(80_000)}:end`,
+        } },
+        transformation: null,
+      };
+      const amount = Buffer.byteLength(renderHelarcContextProjectionFragment(block), "utf8");
+      expect(amount).toBeLessThan(128 * 1_024);
+      return { ...block, accounting: { unit: "bytes" as const, amount } };
+    });
+    const amount = blocks.reduce((total, block) => total + block.accounting.amount, 0);
+    expect(amount).toBeLessThan(input.contextManifest.budget.maximum);
+    const expected = "Context projection:" + blocks.map(renderHelarcContextProjectionFragment).join("");
+    expect(expected.length).toBeGreaterThan(131_072);
+    const request = snapshotProviderRequest(buildHelarcProviderRequest({
+      ...input,
+      context: { ...input.context, blocks, accounting: { unit: "bytes", amount } },
+    }, requestBuildContext()));
+    const section = request.composition.sections.find(section => section.kind === "context_projection");
+    expect(section?.content).toEqual({ kind: "text", text: expected });
+    expect(request.messages).toHaveLength(1);
+    expect(request.messages[0]?.role).toBe("user");
+    expect(request.messages[0]?.content).toContainEqual({ kind: "text", text: expected });
+    expect(request.composition.messages).toEqual(request.messages);
+    expect(request.composition.lineage.contextProjection?.id).toBe(input.context.id);
   });
 
   it("omits disabled system text without changing callable definitions, messages, or response parsing", () => {

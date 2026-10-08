@@ -144,11 +144,16 @@ describe("ActionExecutionCoordinator", () => {
   });
 
   it("attributes tree Approval-capacity exhaustion to Runtime rather than Permission denial", async () => {
+    const detail = {kind: "capacity", stage: "approval_admission", scope: {owner: "agent-runtime", kind: "run_tree"},
+      limit: {name: "equivalent_operation_requests", count: 2, maximum: 2}, dispatch: "never_dispatched",
+      description: "Equivalent-operation approval capacity reached; action was never dispatched."} as const;
+    const privateDetail = {...detail, secret: "private-review-payload"};
     const fixture = createFixture({
       permissionStatus: "approval_required",
       approvalResult: {
         status: "limit_exceeded",
         code: "approval_tree_operation_limit_exceeded",
+        detail: privateDetail,
       },
     });
 
@@ -160,9 +165,19 @@ describe("ActionExecutionCoordinator", () => {
         status: "failed",
         causeOwner: "agent-runtime",
         causeRef: "approval_tree_operation_limit_exceeded",
+        attempts: [], effectCertainty: "none", completionExtent: "none", failureDetail: detail,
       },
+      semanticResult: {status: "failed", output: null, failure: {
+        owner: "agent-runtime", code: "approval_tree_operation_limit_exceeded", detail,
+      }},
     });
+    if (result.status !== "settled") throw new Error("Expected settlement.");
+    expect(result.settlement.failureDetail).toEqual(detail);
+    expect(Object.isFrozen(result.settlement.failureDetail)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("private-review-payload");
     expect(fixture.order).not.toContain("executor.execute");
+    expect(fixture.order).not.toContain("adapter.revalidate");
+    expect(fixture.order).not.toContain("records.pre-effect");
   });
 
   it("settles an unknown physical effect without semantic success", async () => {
@@ -647,6 +662,7 @@ function semanticResult(settlement: CanonicalActionSettlement) {
           owner: settlement.causeOwner ?? "action-execution",
           code: settlement.causeRef ?? settlement.status,
           message: settlement.causeRef ?? settlement.status,
+          ...(settlement.failureDetail === undefined ? {} : {detail: settlement.failureDetail}),
         },
   };
 }

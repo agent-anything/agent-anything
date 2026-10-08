@@ -4,6 +4,26 @@ import type { CompositeNodeSettlement, CompositeResult } from "./CompositeResult
 import { createCompositeResultSummary, readCompositeResultSummary } from "./CompositeResultSummary.js";
 
 describe("CompositeResultSummary", () => {
+  it("preserves nested approval quota detail without flattening to the composite failure", () => {
+    const detail = {kind: "capacity", stage: "approval_admission", scope: {owner: "agent-runtime", kind: "run_tree"},
+      limit: {name: "total_requests", count: 8, maximum: 8}, dispatch: "never_dispatched",
+      description: "Approval capacity reached; action was never dispatched."} as const;
+    const rejected = child("start", "invalid", "approval_tree_total_limit_exceeded");
+    if (!rejected.result?.failure) throw new Error("Expected failed result.");
+    const result = {...rejected.result, status: "failed" as const, failure: {...rejected.result.failure,
+      owner: "agent-runtime", detail: {...detail, private: "private-detail"}}};
+    const inner = createCompositeResultSummary(composite([{...rejected, status: "failed", result}]));
+    const summary = createCompositeResultSummary(composite([{...rejected, result: {...rejected.result,
+      metadata: {compositeSettlement: inner}}}]));
+    expect(summary.children[0]?.composite?.children[0]).toMatchObject({
+      failure: {owner: "agent-runtime", code: "approval_tree_total_limit_exceeded", detail},
+      effectCertainty: "none", completionExtent: "none",
+    });
+    expect(readCompositeResultSummary(summary)).toEqual(summary);
+    expect(JSON.stringify(summary)).not.toContain("private-detail");
+    expect(JSON.stringify(summary)).not.toContain("private-payload");
+  });
+
   it("retains a failed step's operation, permission cause and no-effect facts without payload metadata", () => {
     const result = composite([child("start", "invalid", "interaction_expired")]);
     expect(createCompositeResultSummary(result)).toMatchObject({status: "failed", omittedChildCount: 0, children: [{

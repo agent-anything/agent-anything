@@ -9,7 +9,6 @@ import { strictRecord } from "./ModelInteractionContractValidation.js";
 import { snapshotModelReasoning, type ModelReasoning } from "./ModelReasoning.js";
 
 const MAX_MESSAGE_BLOCK_COUNT = 256;
-const MAX_TEXT_BLOCK_LENGTH = 131_072;
 
 export interface ModelTextContentBlock {
   readonly kind: "text";
@@ -140,12 +139,9 @@ export function snapshotModelTextContentBlock(
   path: string,
 ): ModelTextContentBlock {
   strictRecord(input, path, ["kind", "text"]);
-  if (
-    input.kind !== "text" ||
-    typeof input.text !== "string" ||
-    input.text.length > MAX_TEXT_BLOCK_LENGTH
-  ) {
-    throw new TypeError(`${path} must be a bounded text block.`);
+  // Capacity belongs to input budgets and Provider I/O limits, not text-block shape.
+  if (input.kind !== "text" || typeof input.text !== "string") {
+    throw new TypeError(`${path} must be a text block.`);
   }
   return Object.freeze({ kind: "text", text: input.text });
 }

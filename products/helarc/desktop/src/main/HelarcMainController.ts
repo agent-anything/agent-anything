@@ -1,3 +1,4 @@
+import { persistenceFailureCode, type HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
 import {
   createDefaultHelarcInstructionSettings,
   snapshotHelarcInstructionSettings,
@@ -307,6 +308,7 @@ export interface HelarcMainControllerInput {
   workspaceProfiles?: HelarcWorkspaceProfile[];
   threadSummaries?: HelarcThreadSummary[];
   threadStore?: HelarcThreadStore;
+  persistenceDiagnostics?: HelarcPersistenceDiagnostics;
   modelContinuationStore?: ModelContinuationStore;
   contextManifestPersistence?: ContextManifestPersistencePort;
   runTranscriptPort?: RunTranscriptPort;
@@ -328,7 +330,9 @@ type DesktopActiveRunSlot =
       readonly productRunId: string;
       readonly handle: HelarcHostActiveRun;
       projectionSequence: number;
-      threadRevision: number;
+      pendingProjection: { sequence: number; projection: HelarcRunProjection } | null;
+      progressWriting: boolean;
+      finishing: boolean;
       progressTail: Promise<void>;
       persistenceFailure: Error | null;
     };
@@ -349,6 +353,7 @@ export class HelarcMainController {
   private threadSummaries: HelarcThreadSummarySnapshot[] = [];
   private currentThreadRecord: HelarcThreadRecord | null = null;
   private readonly threadStore: HelarcThreadStore;
+  private readonly persistenceDiagnostics: HelarcPersistenceDiagnostics | undefined;
   private readonly modelContinuationStore: ModelContinuationStore | undefined;
   private readonly contextManifestPersistence:
     | ContextManifestPersistencePort
@@ -397,6 +402,7 @@ export class HelarcMainController {
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput) {
+    this.persistenceDiagnostics = input.persistenceDiagnostics;
     this.commandOutputDirectory = input.commandOutputDirectory;
     this.responseDelivery = input.responseDelivery ?? "buffered";
     this.commandOutputRegistry = input.commandOutputRegistry ?? new CommandOutputRegistry();
@@ -1015,6 +1021,8 @@ export class HelarcMainController {
     } catch {
       const failedSlot = this.activeRunSlot;
       if (failedSlot.kind !== "active" || failedSlot.token !== token) return;
+      failedSlot.finishing = true;
+      failedSlot.pendingProjection = null;
       await failedSlot.progressTail;
       this.lastError = {
         code: "run_execution_failed",
@@ -1026,6 +1034,8 @@ export class HelarcMainController {
     }
     const slot = this.activeRunSlot;
     if (slot.kind !== "active" || slot.token !== token) return;
+    slot.finishing = true;
+    slot.pendingProjection = null;
     await slot.progressTail;
 
     if (outcome.product.status === "failed") {
@@ -1040,7 +1050,9 @@ export class HelarcMainController {
 
     try {
       await this.persistWorkContextTerminal(outcome);
-    } catch {
+      if (slot.persistenceFailure !== null && this.lastError?.code === "run_persistence_failed") this.lastError = null;
+    } catch (cause) {
+      this.recordPersistenceFailure(slot, "run_terminal", cause);
       this.lastError = {
         code: "run_persistence_failed",
         message: "Helarc could not persist the terminal Run state.",
@@ -1070,7 +1082,9 @@ export class HelarcMainController {
       productRunId,
       handle: activeRun,
       projectionSequence: 0,
-      threadRevision: this.currentThreadRecord?.thread.revision ?? 0,
+      pendingProjection: null,
+      progressWriting: false,
+      finishing: false,
       progressTail: Promise.resolve(),
       persistenceFailure: null,
     };
@@ -1107,10 +1121,37 @@ export class HelarcMainController {
     slot: Extract<DesktopActiveRunSlot, { kind: "active" }>,
     projection: HelarcRunProjection,
   ): void {
+    if (slot.finishing) return;
     slot.projectionSequence += 1;
-    const projectionSequence = slot.projectionSequence;
-    const expectedThreadRevision = slot.threadRevision;
-    slot.threadRevision += 1;
+    slot.pendingProjection = { sequence: slot.projectionSequence, projection };
+    if (slot.progressWriting) return;
+    slot.progressWriting = true;
+    slot.progressTail = Promise.resolve().then(async () => {
+      try {
+        while (slot.pendingProjection !== null && !slot.finishing) {
+          const pending = slot.pendingProjection;
+          slot.pendingProjection = null;
+          try {
+            await this.persistRunProjection(slot, pending.sequence, pending.projection);
+          } catch (cause) {
+            if (slot.persistenceFailure === null) {
+              slot.persistenceFailure = cause instanceof Error ? cause : new Error("Run projection persistence failed.");
+              this.recordPersistenceFailure(slot, "run_projection", cause, pending.sequence);
+              this.lastError = { code: "run_persistence_failed", message: "Helarc could not persist the Run projection." };
+              this.publishSnapshot();
+            }
+          }
+        }
+      } finally { slot.progressWriting = false; }
+    });
+  }
+
+  private async persistRunProjection(
+    slot: Extract<DesktopActiveRunSlot, { kind: "active" }>,
+    projectionSequence: number,
+    projection: HelarcRunProjection,
+  ): Promise<void> {
+    const expectedThreadRevision = this.currentThreadRecord?.thread.revision ?? 0;
     const currentRun = this.currentThreadRecord?.runs.find(
       (run) => run.id === slot.productRunId,
     );
@@ -1132,20 +1173,27 @@ export class HelarcMainController {
         product: projection.product,
       },
     };
-    slot.progressTail = slot.progressTail.then(async () => {
-      const result = await this.threadStore.commitRunProjection(commit);
-      if (result.status === "rejected") {
-        throw new HelarcDesktopPersistenceError(result.code, result.message);
-      }
-      this.currentThreadRecord = result.aggregate.record;
-    }).catch((cause) => {
-      const failure = cause instanceof Error ? cause : new Error("Run projection persistence failed.");
-      slot.persistenceFailure ??= failure;
-      this.lastError = {
-        code: "run_persistence_failed",
-        message: "Helarc could not persist the Run projection.",
-      };
-      this.publishSnapshot();
+    const result = await this.threadStore.commitRunProjection(commit);
+    if (result.status === "rejected") throw new HelarcDesktopPersistenceError(result.code, result.message);
+    this.currentThreadRecord = result.aggregate.record;
+  }
+
+  private recordPersistenceFailure(
+    slot: Extract<DesktopActiveRunSlot, { kind: "active" }>,
+    operation: "run_projection" | "run_terminal",
+    cause: unknown,
+    projectionSequence = slot.projectionSequence,
+  ): void {
+    const diagnostic = {
+      operation, threadId: slot.threadId, runId: slot.productRunId,
+      projectionSequence,
+      expectedRevision: this.currentThreadRecord?.thread.revision ?? 0,
+      occurredAt: new Date().toISOString(),
+      code: cause instanceof HelarcDesktopPersistenceError ? cause.persistenceCode : persistenceFailureCode(cause),
+    };
+    console.error("Helarc persistence failed.", diagnostic);
+    void this.persistenceDiagnostics?.record(diagnostic).catch(() => {
+      console.error("Helarc persistence diagnostic could not be saved.");
     });
   }
 

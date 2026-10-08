@@ -463,7 +463,8 @@ function settleOperation(settlement: CanonicalActionSettlement, owner: string): 
     failure: succeeded ? null : {
       owner: settlement.causeOwner ?? "helarc.local-environment",
       code: settlement.causeRef ?? `${owner}_${settlement.status}`,
-      message: settlement.causeRef ?? `${owner} operation ${settlement.status}.`,
+      message: settlement.failureDetail?.description ?? settlement.causeRef ?? `${owner} operation ${settlement.status}.`,
+      ...(settlement.failureDetail === undefined ? {} : { detail: settlement.failureDetail }),
     },
   });
 }
@@ -568,7 +569,12 @@ export function commandWithFinalWorkingDirectory(
     const capture = controlPath === null
       ? ""
       : `; (Get-Location).ProviderPath | Out-File -LiteralPath '${powerShellLiteral(controlPath)}' -Encoding utf8 -NoNewline`;
-    return `${utf8}; & { ${command} }; $__helarc_exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }${capture}; exit $__helarc_exit`;
+    // Snapshot inside the command scope, then finish formatting before our own exit.
+    const execute = `& { ${command}\n$script:__helarc_success = $?; $script:__helarc_native_exit = $LASTEXITCODE } | Out-Default`;
+    // An explicit return skips the inner snapshot but still completes the pipeline normally.
+    const returned = "$__helarc_pipeline_success = $?; $__helarc_pipeline_exit = $LASTEXITCODE; if ($null -eq $__helarc_success) { $__helarc_success = $__helarc_pipeline_success; $__helarc_native_exit = $__helarc_pipeline_exit }";
+    // A prior native success must not mask a later PowerShell failure.
+    return `${utf8}; ${execute}; ${returned}; $__helarc_exit = if ($null -ne $__helarc_native_exit -and $__helarc_native_exit -ne 0) { $__helarc_native_exit } elseif ($__helarc_success) { 0 } else { 1 }${capture}; exit $__helarc_exit`;
   }
   const capture = controlPath === null
     ? ""

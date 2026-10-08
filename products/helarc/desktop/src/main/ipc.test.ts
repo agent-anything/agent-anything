@@ -31,6 +31,22 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  it("restricts storage inventory and cleanup to the trusted frame", async () => {
+    const frame = { url: "file:///helarc/index.html" };
+    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };
+    const storage = { snapshot: vi.fn(async () => ({ categories: [] })), cleanup: vi.fn(async () => ({ recordings: [] })) };
+    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller: controllerDouble(mainSnapshot()), storage: storage as never });
+    const event = { sender: contents, senderFrame: frame };
+    const get = requiredHandler(HELARC_IPC_CHANNELS.getStorage);
+    const cleanup = requiredHandler(HELARC_IPC_CHANNELS.cleanupStorage);
+    const command = { version: 1, commandId: "cleanup", kind: "storage.cleanup", payload: { recordingIds: ["closed"] } };
+    expect(() => get({ ...event, senderFrame: {} })).toThrow("unavailable");
+    expect(() => cleanup({ ...event, senderFrame: {} }, command)).toThrow("unavailable");
+    expect(storage.cleanup).not.toHaveBeenCalled();
+    await get(event);
+    expect(await cleanup(event, command)).toMatchObject({ status: "handled" });
+    expect(storage.cleanup).toHaveBeenCalledWith(["closed"]);
+  });
   it("returns only credential source metadata to the trusted frame and checks exact profile revision", async () => {
     const frame = { url: "file:///helarc/index.html" };
     const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };

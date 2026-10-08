@@ -6,6 +6,8 @@ import { validateInspectionCapturePolicy } from "../content/index.js";
 import { InspectionDatabase } from "../storage/index.js";
 import { InspectionStorageMaintenance } from "../storage/InspectionStorageMaintenance.js";
 import { InspectionStorageUsage } from "../storage/InspectionStorageUsage.js";
+import { INSPECTION_STORAGE_POLICY } from "../storage/InspectionStoragePolicy.js";
+import { closeFailedInspectionRecording } from "./InspectionRecordingFinalization.js";
 import { InspectionTelemetry } from "../telemetry/index.js";
 import type { RecorderCommand, RecorderReply } from "./InspectionRecorderProtocol.js";
 import { inspectionRecorderFailureCode } from "./InspectionRecorderError.js";
@@ -25,6 +27,7 @@ let failed = false;
 let closing = false;
 let heartbeat: ReturnType<typeof setInterval> | undefined;
 let reconciliation: ReturnType<typeof setTimeout> | undefined;
+let processing = Promise.resolve();
 const updateHealth = (dropped: number, rejected: number) => db.updateCoverage({ dropped, rejected: rejected + writerRejected, telemetryDropped: telemetry.dropped });
 function stopMaintenance(): void {
   clearInterval(heartbeat); clearTimeout(reconciliation); maintenance?.close();
@@ -33,24 +36,39 @@ function fail(error: unknown): void {
   if (failed || closing) return;
   failed = true; stopMaintenance();
   const code = inspectionRecorderFailureCode(error);
-  if (code === "inspection_storage_budget_exhausted") {
-    try { db.updateCoverage({ limitations: [...new Set([...db.snapshot().limitations, "storage_budget_exhausted"])] }); } catch { /* Preserve the first failure. */ }
-  }
+  try { if (db && manifest && directory) closeFailedInspectionRecording(db, directory, manifest, code); }
+  catch { /* Unconfirmed closure remains protected; preserve the first failure. */ }
+  void telemetry?.close(() => {}).catch(() => {});
   send({ kind: "failed", code });
+  port.close();
 }
-function refreshBudget(): void { usage.refreshDatabase(directory); usage.check(); pendingTelemetryBytes = 0; }
+function refreshBudget(): void { usage.refreshDatabase(directory); pendingTelemetryBytes = 0; }
+async function reconcileStorage(): Promise<void> {
+  usage.beginReconciliation();
+  const measurement = await maintenance!.measure({ datasetId: manifest.datasetId,
+    retireBefore: new Date(Date.now() - INSPECTION_STORAGE_POLICY.retentionDays * 86400000).toISOString(),
+    targetBytes: INSPECTION_STORAGE_POLICY.sourceTargetBytes });
+  if (failed || closing) return;
+  usage.reconcile(measurement);
+  refreshBudget();
+}
+async function ensureBudget(additional = 0): Promise<void> {
+  refreshBudget();
+  if (usage.datasetBytes + additional <= INSPECTION_STORAGE_POLICY.datasetLimitBytes &&
+      usage.sourceBytes + additional > INSPECTION_STORAGE_POLICY.sourceLimitBytes) await reconcileStorage();
+  usage.check(additional);
+}
 function scheduleReconciliation(): void {
   reconciliation = setTimeout(() => {
-    if (failed || closing) return;
-    usage.beginReconciliation();
-    void maintenance!.measure({ datasetId: manifest.datasetId }).then((measurement) => {
+    processing = processing.then(async () => {
       if (failed || closing) return;
-      usage.reconcile(measurement); refreshBudget(); scheduleReconciliation();
+      await reconcileStorage(); usage.check(); scheduleReconciliation();
     }).catch(fail);
   }, 60_000);
   reconciliation.unref();
 }
 function writeTelemetry(record: Parameters<InspectionDatabase["writeTelemetry"]>[0]): void {
+  if (failed) return;
   const reservation = Buffer.byteLength(record.data) * 2 + 8192;
   usage.check(pendingTelemetryBytes + reservation);
   db.writeTelemetry(record);
@@ -65,16 +83,13 @@ try {
   maintenance = new InspectionStorageMaintenance(workerData.root, source.sourceId);
   const measure = (retireBefore: string) => {
     let previous = 0;
-    return maintenance!.measure({ retireBefore, progress: (count) => {
+    return maintenance!.measure({ retireBefore, targetBytes: INSPECTION_STORAGE_POLICY.sourceTargetBytes, progress: (count) => {
       completed += count - previous; previous = count;
       send({ kind: "initializing", completed });
     } });
   };
-  let baseline = await measure(new Date(Date.now() - 7 * 86400000).toISOString());
-  if (baseline.bytes >= 2047 * 1024 * 1024) {
-    baseline = await measure(new Date().toISOString());
-    if (baseline.bytes >= 2047 * 1024 * 1024) throw new Error("inspection_storage_budget_exhausted");
-  }
+  const baseline = await measure(new Date(Date.now() - INSPECTION_STORAGE_POLICY.retentionDays * 86400000).toISOString());
+  if (baseline.bytes >= INSPECTION_STORAGE_POLICY.sourceLimitBytes) throw new Error("inspection_storage_budget_exhausted");
   usage = new InspectionStorageUsage(baseline);
   const policyPath = containedInspectionPath(workerData.root, "sources", source.sourceId, "read-policy.json");
   atomicInspectionJson(policyPath, validateInspectionCapturePolicy(workerData.policy));
@@ -82,11 +97,13 @@ try {
   directory = datasetDirectory(workerData.root, source.sourceId, manifest.datasetId);
   db = new InspectionDatabase(directory, manifest, (path, bytes) => usage.physicalFileChanged(path, bytes));
   atomicInspectionJson(join(directory, "manifest.json"), manifest);
-  refreshBudget(); progress();
+  refreshBudget(); usage.check(); progress();
   telemetry = new InspectionTelemetry(source.sourceId, manifest.datasetId);
   heartbeat = setInterval(() => {
-    if (failed || closing) return;
-    try { refreshBudget(); db.updateCoverage({}); refreshBudget(); } catch (error) { fail(error); }
+    processing = processing.then(async () => {
+      if (failed || closing) return;
+      await ensureBudget(); db.updateCoverage({}); refreshBudget(); usage.check();
+    }).catch(fail);
   }, 5000);
   heartbeat.unref();
   scheduleReconciliation();
@@ -97,13 +114,14 @@ try {
   port.close();
 }
 
-let processing = Promise.resolve();
 if (!failed) port.on("message", (message: RecorderCommand) => {
   processing = processing.then(async () => {
     if (failed || closing) return;
     try {
       if (message.kind === "batch") {
-        refreshBudget();
+        const reservation = message.offers.reduce((sum, offer) => sum + offer.bytes * 3 + 8192 +
+          offer.contents.reduce((bytes, content) => bytes + content.descriptor.retainedBytes, 0), 0);
+        await ensureBudget(reservation);
         let pendingSqlBytes = 0;
         const committedRecords: Parameters<InspectionTelemetry["accept"]>[0][] = [];
         db.writeBatch(() => {
@@ -131,8 +149,9 @@ if (!failed) port.on("message", (message: RecorderCommand) => {
         const exported: Parameters<typeof writeTelemetry>[0][] = [];
         await telemetry.flush(record => exported.push(record));
         if (failed) return;
+        await ensureBudget(exported.reduce((sum, record) => sum + Buffer.byteLength(record.data) * 2 + 8192, 0));
         db.writeBatch(() => { for (const record of exported) writeTelemetry(record); });
-        refreshBudget();
+        refreshBudget(); usage.check();
         send({ kind: "ack", coverage: db.snapshot() });
       } else {
         if (message.close) await telemetry.close(writeTelemetry);
@@ -142,12 +161,16 @@ if (!failed) port.on("message", (message: RecorderCommand) => {
         if (message.close) {
           closing = true; stopMaintenance();
           db.updateCoverage({ status: "closed" });
-          atomicInspectionJson(join(directory, "manifest.json"), { ...manifest, status: "closed" });
           db.checkpoint();
+          const coverage = db.snapshot();
+          db.close();
+          atomicInspectionJson(join(directory, "manifest.json"), { ...manifest, status: "closed" });
+          send({ kind: "flushed", id: message.id, coverage });
+          port.close();
+          return;
         }
-        refreshBudget();
+        await ensureBudget();
         send({ kind: "flushed", id: message.id, coverage: db.snapshot() });
-        if (message.close) { db.close(); port.close(); }
       }
     } catch (error) { closing = false; fail(error); }
   });

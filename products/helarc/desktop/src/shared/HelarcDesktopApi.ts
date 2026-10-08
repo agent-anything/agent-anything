@@ -692,6 +692,7 @@ export interface HelarcProductCommandResultMap {
   readonly "project.chooseFolder": { readonly profile: HelarcWorkspaceProfileSnapshot | null; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
   readonly "instructions.save": import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot;
   readonly "inspection.save": import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot;
+  readonly "storage.cleanup": import("./HelarcStorage.js").HelarcStorageCleanupResult;
   readonly "workspace.choose": HelarcMainSnapshot;
   readonly "workspace.select": HelarcMainSnapshot;
   readonly "provider.save": HelarcMainSnapshot;
@@ -964,6 +965,8 @@ export interface HelarcDesktopApi {
   cancelQualification(input: { commandId: string; campaignId: string }): Promise<HelarcProductCommandReceipt<"qualification.cancel">>;
   publishQualification(input: { commandId: string; campaignId: string; targetId: string; reviewed: boolean }): Promise<HelarcProductCommandReceipt<"qualification.publish">>;
   getInspectionSettings(): Promise<import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot>;
+  getStorage(): Promise<import("./HelarcStorage.js").HelarcStorageSnapshot>;
+  cleanupStorage(input: { readonly commandId: string; readonly recordingIds: readonly string[] }): Promise<HelarcProductCommandReceipt<"storage.cleanup">>;
   saveInspectionSettings(input: { readonly commandId: string; readonly settings: import("./HelarcInspectionSettings.js").HelarcInspectionSettings }): Promise<HelarcProductCommandReceipt<"inspection.save">>;
   saveInstructionSettings(input: {
     readonly commandId: string;

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { snapshotCredentialSelection } from "../shared/HelarcProviderCredentials.js";
 import { snapshotHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import { snapshotHelarcInspectionSettings } from "../shared/HelarcInspectionSettings.js";
+import { snapshotStorageRecordingIds } from "../shared/HelarcStorage.js";
 import {
   HELARC_PRODUCT_COMMAND_RECEIPT_LIMIT,
   HELARC_PRODUCT_COMMAND_VERSION,
@@ -159,6 +160,11 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
         primaryProfileId, additionalProfileIds,
       });
     }
+    case "storage.cleanup": {
+      assertRecord(candidate.payload, "Storage cleanup payload");
+      assertExactKeys(candidate.payload, ["recordingIds"], "Storage cleanup payload");
+      return envelope(commandId, candidate.kind, { recordingIds: snapshotStorageRecordingIds(candidate.payload.recordingIds) });
+    }
     case "inspection.save": {
       assertRecord(candidate.payload, "Inspection save payload");
       assertExactKeys(candidate.payload, ["settings"], "Inspection save payload");
@@ -231,6 +237,8 @@ function invokeHandler(
     case "instructions.save":
       return handlers[command.kind](command.payload);
     case "inspection.save":
+      return handlers[command.kind](command.payload);
+    case "storage.cleanup":
       return handlers[command.kind](command.payload);
     case "workspace.choose":
       return handlers[command.kind](command.payload);
@@ -474,6 +482,7 @@ const PRODUCT_COMMAND_KINDS = [
   "provider.delete",
   "instructions.save",
   "inspection.save",
+  "storage.cleanup",
   "run.start",
   "thread.open",
 ] as const satisfies readonly HelarcProductCommandKind[];

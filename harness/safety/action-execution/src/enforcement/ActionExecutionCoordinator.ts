@@ -2,6 +2,7 @@ import type { InvocationInterruptionContext } from "@agent-anything/agent-core/c
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { ACTION_EXECUTION_FLOW } from "./ActionExecutionFlow.js";
 import type { ResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
+import { readOperationLimitFailureDetail, type OperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
 import type {
   ActionPolicyAssessment,
   ActionPolicyContext,
@@ -65,9 +66,10 @@ export interface ActionApprovalResolutionPort {
         readonly authoritySnapshotId: string;
       }
     | {
-        readonly status: "denied" | "cancelled" | "expired" | "invalidated" | "limit_exceeded";
+        readonly status: "denied" | "cancelled" | "expired" | "invalidated";
         readonly code: string;
       }
+    | { readonly status: "limit_exceeded"; readonly code: string; readonly detail: OperationLimitFailureDetail }
     | { readonly status: "failed" | "interrupted" | "unknown_effect"; readonly code: string }
   >;
 }
@@ -409,6 +411,7 @@ export class ActionExecutionCoordinator {
                   : "failed",
           approval.status === "limit_exceeded" ? "agent-runtime" : "permission",
           approval.code,
+          approval.status === "limit_exceeded" ? approval.detail : undefined,
         );
       }
       await ledger.transition({
@@ -773,6 +776,7 @@ export class ActionExecutionCoordinator {
     status: CanonicalActionSettlementStatus,
     owner: string,
     code: string,
+    failureDetail?: OperationLimitFailureDetail,
   ): Promise<ActionExecutionResult<TOutput>> {
     const settlement = preparedSettlement(
       request,
@@ -783,6 +787,7 @@ export class ActionExecutionCoordinator {
       this.id("settlement"),
       this.now(),
       ledger.getSnapshot().attempts,
+      failureDetail,
     );
     await ledger.settle({ expectedRevision: ledger.getSnapshot().revision, settlement });
     await this.dependencies.records.recordPostEffect({ settlement, sandbox: null });
@@ -933,7 +938,12 @@ function preparedSettlement(
   settlementId: string,
   settledAt: string,
   attempts: readonly import("@agent-anything/canonical-action/subject").ActionAttemptRef[],
+  failureDetail?: OperationLimitFailureDetail,
 ): CanonicalActionSettlement {
+  const detail = readOperationLimitFailureDetail(failureDetail);
+  if (failureDetail !== undefined && (detail === null || attempts.length !== 0)) {
+    throw new TypeError("Approval quota rejection requires valid detail and no dispatched attempts.");
+  }
   return Object.freeze({
     ref: Object.freeze({ action: request.action, id: settlementId }),
     action: request.action,
@@ -947,6 +957,7 @@ function preparedSettlement(
     payload: null,
     causeOwner: owner,
     causeRef: code,
+    ...(detail === null ? {} : { failureDetail: detail }),
     reconciliationRequired: false,
     settledAt,
   });

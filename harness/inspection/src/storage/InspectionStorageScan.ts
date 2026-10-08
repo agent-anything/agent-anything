@@ -6,6 +6,7 @@ export interface InspectionStorageMeasurement {
   readonly bytes: number;
   readonly visited: number;
   readonly datasetFiles: readonly (readonly [string, number])[];
+  readonly datasetBytes?: readonly (readonly [string, number])[];
 }
 
 // Metadata only. Directory facts are rechecked across enumeration, never cached
@@ -16,6 +17,7 @@ export function scanInspectionSource(root: string, sourceId: string, datasetId?:
   const source = containedInspectionPath(root, "sources", sourceId);
   const own = datasetId ? join(source, "datasets", datasetId) : null;
   const datasetFiles: [string, number][] = [];
+  const datasetBytes = new Map<string, number>();
   let bytes = 0;
   let visited = 0;
   let lastProgress = Date.now();
@@ -50,6 +52,11 @@ export function scanInspectionSource(root: string, sourceId: string, datasetId?:
     if (!stat.isDirectory()) {
       if (!stat.isFile()) throw new Error("inspection_path_invalid");
       bytes += stat.size;
+      const parts = relative(source, path).split(sep);
+      if (parts[0] === "datasets" && parts.length >= 3) {
+        const id = parts[1]!;
+        datasetBytes.set(id, (datasetBytes.get(id) ?? 0) + stat.size);
+      }
       if (own && path.startsWith(own + sep)) datasetFiles.push([relative(own, path), stat.size]);
       return;
     }
@@ -66,5 +73,5 @@ export function scanInspectionSource(root: string, sourceId: string, datasetId?:
   };
   walk(source, 0);
   progress?.(visited);
-  return { bytes, visited, datasetFiles };
+  return { bytes, visited, datasetFiles, datasetBytes: [...datasetBytes] };
 }

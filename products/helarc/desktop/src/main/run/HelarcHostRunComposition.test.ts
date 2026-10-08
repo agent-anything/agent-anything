@@ -1379,6 +1379,29 @@ describe("Helarc Host Run composition", () => {
     await expect(access(targetPath)).rejects.toThrow();
   });
 
+  it("keeps approval review and statistics after the former cumulative request limit", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-unbounded-approvals-"));
+    let reviewCount = 0;
+    const provider = new ScriptedProvider([
+      ...Array.from({length: 9}, (_, index) => ({kind: "tool_call", toolName: "Write",
+        input: {file_path: `approved-${index}.txt`, content: "approved\n"}})),
+      {kind: "completion", summary: "All nine individually reviewed writes completed."},
+    ]);
+    try {
+      const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider,
+        permissionPreset: "approve_for_me", automaticApprovalReviewer: automaticReviewer("accept", () => { reviewCount += 1; })});
+      const composition = prepared.start();
+      const result = await composition.result;
+      expect(result.product.status).toBe("completed");
+      expect(reviewCount).toBe(9);
+      expect(composition.activeRun.getProjection().runTree.approvals).toMatchObject({totalRequests: 9, settledRequests: 9,
+        activeReviews: 0, exhaustedCode: null});
+      await expect(readFile(join(workspaceRoot, "approved-8.txt"), "utf8")).resolves.toBe("approved\n");
+    } finally {
+      await rm(workspaceRoot, {recursive: true, force: true});
+    }
+  });
+
   it("rejects an ambiguous Edit without changing the file", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-ambiguous-"));
     const targetPath = join(workspaceRoot, "duplicate.txt");

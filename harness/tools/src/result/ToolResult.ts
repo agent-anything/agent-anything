@@ -1,4 +1,5 @@
 import type { OperationInvocationRef } from "@agent-anything/operation-catalog/identity";
+import type { OperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
 import type { ToolCall, ToolCallAttemptRef } from "../invocation/index.js";
 
 export interface ToolSettlementRef {
@@ -19,6 +20,7 @@ export interface ToolResultBase {
 export interface ToolResultError {
   readonly code: string;
   readonly message: string;
+  readonly detail?: OperationLimitFailureDetail;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 

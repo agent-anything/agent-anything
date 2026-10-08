@@ -37,6 +37,7 @@ import type {
   CanonicalAdditionalPermissions,
 } from "@agent-anything/permission/approval";
 import type { CanonicalActionSettlement } from "@agent-anything/canonical-action/settlement";
+import type { OperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
 
 export interface ActionPreparationContext {
   readonly action: CanonicalActionRef;
@@ -183,6 +184,7 @@ export interface ActionSemanticResult<TOutput = unknown> {
     readonly owner: string;
     readonly code: string;
     readonly message: string;
+    readonly detail?: OperationLimitFailureDetail;
   } | null;
 }
 

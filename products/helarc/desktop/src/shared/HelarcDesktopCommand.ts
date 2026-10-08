@@ -17,6 +17,7 @@ export type HelarcProductCommandKind =
   | "provider.delete"
   | "instructions.save"
   | "inspection.save"
+  | "storage.cleanup"
   | "run.start"
   | "thread.open";
 
@@ -43,6 +44,7 @@ export interface HelarcProductCommandPayloadMap {
   readonly "project.select": { readonly projectId: string };
   readonly "project.chooseFolder": Record<string, never>;
   readonly "inspection.save": { readonly settings: import("./HelarcInspectionSettings.js").HelarcInspectionSettings };
+  readonly "storage.cleanup": { readonly recordingIds: readonly string[] };
   readonly "instructions.save": { readonly settings: HelarcInstructionSettings };
   readonly "workspace.choose": Record<string, never>;
   readonly "workspace.select": {

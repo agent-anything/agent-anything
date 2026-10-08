@@ -622,7 +622,7 @@ describe("HelarcMainController", () => {
     expect(JSON.stringify(snapshot)).not.toContain("sentinel-thread-store-secret");
   });
 
-  it("awaits every queued progress commit before the terminal aggregate commit", async () => {
+  it("waits for only the in-flight progress write and discards superseded snapshots at terminal", async () => {
     const threadStore = new InMemoryHelarcThreadStore();
     const order: string[] = [];
     const originalProgress = threadStore.commitRunProjection.bind(threadStore);
@@ -670,7 +670,8 @@ describe("HelarcMainController", () => {
     });
 
     await firstProgressStarted;
-    await Promise.resolve();
+    await waitForSnapshot(controller, snapshot => snapshot.run?.product.result !== null && snapshot.status === "completed");
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(order).not.toContain("terminal:started");
 
     releaseFirstProgress();
@@ -681,9 +682,41 @@ describe("HelarcMainController", () => {
       .map((entry, index) => entry.startsWith("projection:") && entry.endsWith(":settled") ? index : -1)
       .filter((index) => index >= 0);
     expect(terminalIndex).toBeGreaterThan(-1);
-    expect(settledProgressIndexes.length).toBeGreaterThan(0);
+    expect(settledProgressIndexes).toHaveLength(1);
     expect(settledProgressIndexes.every((index) => index < terminalIndex)).toBe(true);
     expect(order.filter((entry) => entry === "terminal:started")).toHaveLength(1);
+  });
+
+  it("does not reserve a Thread revision for a failed progress write", async () => {
+    const store = new InMemoryHelarcThreadStore();
+    const original = store.commitRunProjection.bind(store);
+    const commits: { expected: number; status: string }[] = [];
+    const progress = vi.spyOn(store, "commitRunProjection");
+    progress.mockImplementationOnce(async commit => {
+      commits.push({ expected: commit.expectedThreadRevision, status: "failed" });
+      throw Object.assign(new Error("private disk detail"), { code: "EIO" });
+    });
+    progress.mockImplementation(async commit => {
+      const result = await original(commit);
+      commits.push({ expected: commit.expectedThreadRevision, status: result.status });
+      return result;
+    });
+    const terminal = vi.spyOn(store, "commitRunTerminal");
+    const diagnostics = { record: vi.fn(async () => {}) };
+    const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider(), threadStore: store,
+      persistenceDiagnostics: diagnostics as never });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+    const done = waitForSnapshot(controller, snapshot => snapshot.threadSummaries[0]?.latestRun?.status === "completed");
+    await controller.startRun({ taskText: "Complete after a progress write failure", target: { kind: "new_thread" } });
+    await done;
+    expect(commits.some(commit => commit.status === "applied")).toBe(true);
+    expect(commits.find(commit => commit.status === "applied")?.expected).toBe(commits[0]?.expected);
+    expect(commits.some(commit => commit.status === "rejected")).toBe(false);
+    expect(terminal).toHaveBeenCalledOnce();
+    expect(diagnostics.record).toHaveBeenCalledOnce();
+    expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({ code: "EIO", operation: "run_projection" }));
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private disk detail");
+    expect(controller.getSnapshot().error).toBeNull();
   });
 
   it("does not expose trusted failure text or trusted-only objects in Renderer snapshots", async () => {

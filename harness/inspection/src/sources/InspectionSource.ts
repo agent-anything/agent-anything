@@ -18,6 +18,7 @@ export interface InspectionDatasetManifest {
   readonly producerInstanceId: string;
   readonly createdAt: string;
   readonly status: "open" | "closed";
+  readonly captureFailure?: string;
 }
 
 export function defaultInspectionRoot(): string {
@@ -57,7 +58,7 @@ export function registerInspectionSource(root: string, application: string, name
   const sources = containedInspectionPath(root, "sources");
   mkdirSync(sources, { recursive: true, mode: 0o700 });
   if (!application || application.length > 512 || !name || name.length > 512) throw new Error("inspection_source_invalid");
-  const sourceId = createHash("sha256").update(application).digest("hex");
+  const sourceId = inspectionSourceId(application);
   const source: InspectionSource = { formatVersion: INSPECTION_FORMAT_VERSION, sourceId, application, name };
   const dir = containedInspectionPath(root, "sources", source.sourceId);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -71,6 +72,11 @@ export function registerInspectionSource(root: string, application: string, name
   }
   atomicInspectionJson(path, source);
   return source;
+}
+
+export function inspectionSourceId(application: string): string {
+  if (!application || application.length > 512) throw new Error("inspection_source_invalid");
+  return createHash("sha256").update(application).digest("hex");
 }
 
 export function datasetDirectory(root: string, sourceId: string, datasetId: string): string {

@@ -1,4 +1,5 @@
 import type { OperationBindingRevisionRef, OperationInvocationRef } from "@agent-anything/operation-catalog/identity";
+import type { OperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
 import type { ActionAttemptRef, ActionSettlementRef, ActionSubjectRevisionRef, CanonicalActionRef } from "../subject/index.js";
 
 export type CanonicalActionSettlementStatus =
@@ -28,6 +29,7 @@ export interface CanonicalActionSettlement<TPayload = unknown> {
   readonly payload: TPayload | null;
   readonly causeOwner: string | null;
   readonly causeRef: string | null;
+  readonly failureDetail?: OperationLimitFailureDetail;
   readonly reconciliationRequired: boolean;
   readonly settledAt: string;
 }

@@ -1,5 +1,6 @@
 import type { CompositeResult } from "./CompositeResult.js";
 import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import { readOperationLimitFailureDetail, type OperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
 
 const MAX_CHILDREN = 32;
 const MAX_MESSAGE_LENGTH = 1_000;
@@ -16,7 +17,7 @@ export interface CompositeResultSummary {
     status: string;
     operation: OperationRevisionRef | null;
     resultId: string | null;
-    failure: Readonly<{owner: string; code: string; message: string; messageTruncated: boolean}> | null;
+    failure: Readonly<{owner: string; code: string; message: string; messageTruncated: boolean; detail?: OperationLimitFailureDetail}> | null;
     effectCertainty: string | null;
     completionExtent: string | null;
     composite: CompositeResultSummary | null;
@@ -44,6 +45,7 @@ export function createCompositeResultSummary(result: CompositeResult): Composite
         failure: failure === null ? null : {
           owner: child.result?.failure?.owner ?? "operation-composition",
           code: failure.code, message: failure.message,
+          detail: child.result?.failure?.detail,
         },
         effectCertainty: physical ? child.result?.metadata.effectCertainty : null,
         completionExtent: physical ? child.result?.metadata.completionExtent : null,
@@ -73,6 +75,7 @@ function readSummary(value: unknown, budget: {remaining: number}, depth: number)
     budget.remaining -= 1;
     const operation = record(child.operation), identity = record(operation?.operation);
     const failure = record(child.failure);
+    const detail = readOperationLimitFailureDetail(failure?.detail);
     const nested = child.composite == null || depth + 1 >= MAX_DEPTH || budget.remaining === 0
       ? null : readSummary(child.composite, budget, depth + 1);
     children.push(Object.freeze({
@@ -82,6 +85,7 @@ function readSummary(value: unknown, budget: {remaining: number}, depth: number)
       resultId: typeof child.resultId === "string" ? child.resultId : null,
       failure: typeof failure?.owner === "string" && typeof failure.code === "string" && typeof failure.message === "string"
         ? {owner: failure.owner, code: failure.code, message: failure.message.slice(0, MAX_MESSAGE_LENGTH),
+          ...(detail === null ? {} : {detail}),
           messageTruncated: failure.messageTruncated === true || failure.message.length > MAX_MESSAGE_LENGTH} : null,
       effectCertainty: oneOf(child.effectCertainty, ["none", "confirmed", "partial", "unknown"]),
       completionExtent: oneOf(child.completionExtent, ["none", "partial", "complete", "unknown"]),

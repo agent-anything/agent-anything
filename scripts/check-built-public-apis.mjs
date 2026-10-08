@@ -686,7 +686,7 @@ const expectedOperationCatalogValueExports = {
     "snapshotResolvedOperationBinding",
     "unavailableOperationBindingResolver",
   ],
-  "@agent-anything/operation-catalog/result": ["createOperationResult"],
+  "@agent-anything/operation-catalog/result": ["createOperationResult", "readOperationLimitFailureDetail"],
 };
 
 const expectedInteractionValueExports = {

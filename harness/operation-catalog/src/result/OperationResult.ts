@@ -1,4 +1,5 @@
 import type { OperationBindingRevisionRef, OperationInvocationRef } from "../identity/index.js";
+import type { OperationLimitFailureDetail } from "./OperationLimitFailureDetail.js";
 
 export interface OperationResultRef {
   readonly invocation: OperationInvocationRef;
@@ -9,6 +10,7 @@ export interface OperationFailure {
   readonly owner: string;
   readonly code: string;
   readonly message: string;
+  readonly detail?: OperationLimitFailureDetail;
   readonly retryable: boolean;
   readonly metadata: Readonly<Record<string, unknown>>;
 }

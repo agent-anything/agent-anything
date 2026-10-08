@@ -144,6 +144,34 @@ for (const adapter of ADAPTERS) {
       },
     );
 
+    it("encodes a large admitted text block without truncation or new messages", async () => {
+      const bodies: unknown[] = [];
+      const provider = adapter.create(adapter.response({ text: "done", calls: [], finish: "normal" }),
+        true, body => { bodies.push(body); });
+      const text = `Context projection:\n${"x".repeat(256 * 1024)}\nend`;
+      const request = createNativeProviderRequest(provider, {
+        instructions: { content: [] },
+        messages: [{ role: "user", content: [{ kind: "text", text }] }],
+      });
+      expect((await provider.send(request, context())).kind).toBe("succeeded");
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]).toMatchObject({ messages: [{ role: "user", content: text }] });
+    });
+
+    it("still enforces the complete transport budget for large text before dispatch", async () => {
+      const onRequest = vi.fn();
+      const provider = adapter.create(adapter.response({ text: "done", calls: [], finish: "normal" }),
+        true, onRequest);
+      const request = createNativeProviderRequest(provider, {
+        instructions: { content: [] },
+        messages: [{ role: "user", content: [{ kind: "text", text: "x".repeat(1_000_001) }] }],
+      });
+      await expect(provider.send(request, context())).resolves.toMatchObject({
+        kind: "failed", failure: { code: "provider_transport_request_too_large", category: "transport_limit" },
+      });
+      expect(onRequest).not.toHaveBeenCalled();
+    });
+
     it("declares the complete configured mechanical capability", () => {
       const provider = adapter.create(adapter.response({ text: "done", calls: [], finish: "normal" }));
       expect(provider.descriptor.capabilities.nativeToolInteraction).toEqual({

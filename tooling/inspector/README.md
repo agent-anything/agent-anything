@@ -87,6 +87,18 @@ Helarc's user-data reset. History remains available after Product exit. A crash
 can leave the dataset open with stale freshness and an unknown tail; that is not
 proof that a Run failed or completed.
 
+Helarc Settings > Storage shows application usage and this application's
+Inspection recordings. Closed recordings can be selected and explicitly deleted;
+open/unconfirmed recordings and active reader leases are protected. Other local
+data categories are currently usage-only. The UI and CLI use the same retirement
+service and do not delete user workspace files.
+
+The recorder retains seven days of eligible history and also reclaims the oldest
+closed recordings under capacity pressure. Its operational limits are 511 MiB per
+recording and 2047 MiB per Source, with one recording's worth of headroom as the
+reclamation target. Capture failure closes the writer with an explicit limitation
+when finalization succeeds; a closed recording does not imply complete capture.
+
 List closed datasets eligible for retirement, then explicitly apply:
 
 ```powershell

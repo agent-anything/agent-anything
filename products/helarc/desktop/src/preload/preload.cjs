@@ -10,6 +10,8 @@ const channels = Object.freeze({
   selectProject: "helarc:select-project",
   chooseProjectFolder: "helarc:choose-project-folder",
   getInspectionSettings: "helarc:get-inspection-settings",
+  getStorage: "helarc:get-storage",
+  cleanupStorage: "helarc:cleanup-storage",
   saveInspectionSettings: "helarc:save-inspection-settings",
   getInstructionSettings: "helarc:get-instruction-settings",
   saveInstructionSettings: "helarc:save-instruction-settings",
@@ -80,6 +82,8 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   readCommandOutput: (input) => ipcRenderer.invoke("helarc:read-command-output", { threadId: input?.threadId, productRunId: input?.productRunId, runId: input?.runId, executionId: input?.executionId, cursor: input?.cursor }),
   openExternalLink: (input) => ipcRenderer.invoke("helarc:open-external-link", { url: input?.url }),
   getInspectionSettings: () => ipcRenderer.invoke(channels.getInspectionSettings),
+  getStorage: () => ipcRenderer.invoke(channels.getStorage),
+  cleanupStorage: (input) => ipcRenderer.invoke(channels.cleanupStorage, productCommand("storage.cleanup", input?.commandId, { recordingIds: input?.recordingIds })),
   saveInspectionSettings: (input) => ipcRenderer.invoke(channels.saveInspectionSettings, productCommand("inspection.save", input?.commandId, { settings: input?.settings })),
   getInstructionSettings: () => ipcRenderer.invoke(channels.getInstructionSettings),
   saveInstructionSettings: (input) => ipcRenderer.invoke(
