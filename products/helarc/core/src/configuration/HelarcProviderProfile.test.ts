@@ -28,12 +28,24 @@ describe("createHelarcProviderProfile", () => {
         model: "model-a",
         timeoutMs: 1500,
         ollamaRuntime: null,
+        modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
         credentialStatus: "present",
         qualificationPolicy: "require_qualified",
         isActive: true,
       },
     });
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("allows a connection without a model but not model-specific thinking", () => {
+    const input = { id: "connection", providerKind: "openai-compatible" as const, displayName: "Connection",
+      baseUrl: "https://provider.test", model: "  ", timeoutMs: 30000, credentialStatus: "present" as const,
+      modelSettings: { service: "deepseek" as const, thinking: { mode: "default" as const }, maximumOutputTokens: 4096 } };
+    expect(createHelarcProviderProfile(input)).toMatchObject({ ok: true, profile: { model: "" } });
+    expect(createHelarcProviderProfile({ ...input,
+      modelSettings: { ...input.modelSettings, thinking: { mode: "enabled" } } })).toMatchObject({
+      ok: false, error: { code: "provider_profile_model_required" },
+    });
   });
 
   it("allows explicit empty credential status for trusted local endpoints", () => {

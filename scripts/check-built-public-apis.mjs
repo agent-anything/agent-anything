@@ -466,6 +466,7 @@ const expectedLowerValueExports = {
     "providerResponseUsage",
     "providerResultFromInterruption",
     "publishProviderDelivery",
+    "resolveModelThinkingSelection",
     "snapshotModelCallRef",
     "snapshotModelCallableDefinition",
     "snapshotModelCallableDefinitions",
@@ -475,6 +476,9 @@ const expectedLowerValueExports = {
     "snapshotModelMessage",
     "snapshotModelMessages",
     "snapshotModelOutputFormat",
+    "snapshotModelReasoning",
+    "snapshotModelThinkingCapability",
+    "snapshotModelThinkingSelection",
     "snapshotModelToolCall",
     "snapshotModelToolResult",
     "snapshotModelTurn",
@@ -1055,6 +1059,7 @@ const expectedValueExports = {
     "selectHelarcWorkspaceProfile",
     "snapshotHelarcInstructionSettings",
     "snapshotHelarcProject",
+    "snapshotHelarcProviderModelSettings",
   ],
   "@agent-anything/helarc/work-context": [
     "applyHelarcRunProjectionCommit",
@@ -1209,8 +1214,8 @@ const expectedProviderIntegrationValueExports = {
     "classifyProviderHttpFailure",
     "readProviderHttpFailureMetadata",
   ],
-  "@agent-anything/provider-integrations/ollama": ["OllamaProvider"],
-  "@agent-anything/provider-integrations/openai-compatible": ["OpenAICompatibleProvider"],
+  "@agent-anything/provider-integrations/ollama": ["OllamaProvider", "discoverOllamaModels"],
+  "@agent-anything/provider-integrations/openai-compatible": ["OpenAICompatibleProvider", "discoverChatCompletionModels"],
 };
 
 const expectedMcpValueExports = {

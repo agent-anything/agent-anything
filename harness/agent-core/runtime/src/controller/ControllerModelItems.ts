@@ -27,6 +27,10 @@ export function createControllerModelItems(
           metadata: safeMetadata,
         })
   );
+  if (turn.assistant.reasoning !== undefined) items.push(Object.freeze({
+    id: `${turn.turnId}:reasoning`, kind: "assistant_reasoning", turnId: turn.turnId,
+    reasoning: turn.assistant.reasoning, metadata: safeMetadata,
+  }));
   items.push(Object.freeze({
     id: `${turn.turnId}:finish`,
     kind: "model_turn_finish",

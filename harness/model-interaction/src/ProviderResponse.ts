@@ -5,8 +5,10 @@ import type { ModelJsonValue } from "./ModelInteractionContractValidation.js";
 import { snapshotJsonValue, strictRecord } from "./ModelInteractionContractValidation.js";
 import { snapshotModelTurn, type ModelTurn } from "./ModelTurn.js";
 import { snapshotProviderUsage, type ProviderUsage } from "./ProviderUsage.js";
+import { snapshotModelReasoning, type ModelReasoning } from "./ModelReasoning.js";
 
 interface ProviderResponseBase {
+  readonly reasoning?: ModelReasoning;
   readonly responseId: string | null;
   readonly usage: ProviderUsage | null;
   readonly continuation: ModelOpaqueContinuationState | null;
@@ -41,7 +43,7 @@ export interface ProviderFailure {
 
 export function snapshotProviderResponse(input: ProviderResponse): ProviderResponse {
   strictRecord(input as unknown, "ProviderResponse", [
-    "kind", "responseId", "output", "usage", "turn", "continuation", "metadata",
+    "kind", "responseId", "output", "usage", "turn", "continuation", "metadata", "reasoning",
   ]);
   const metadata = snapshotJsonValue(input.metadata, "ProviderResponse.metadata");
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
@@ -58,7 +60,7 @@ export function snapshotProviderResponse(input: ProviderResponse): ProviderRespo
   }
   if (input.kind === "text_generation" || input.kind === "structured_generation") {
     strictRecord(input as unknown, "ProviderResponse", [
-      "kind", "responseId", "output", "usage", "continuation", "metadata",
+      "kind", "responseId", "output", "usage", "continuation", "metadata", "reasoning",
     ]);
     const output = input.kind === "text_generation"
       ? input.output
@@ -71,6 +73,7 @@ export function snapshotProviderResponse(input: ProviderResponse): ProviderRespo
       responseId: input.responseId,
       output,
       usage: snapshotProviderUsage(input.usage),
+      ...(input.reasoning === undefined ? {} : { reasoning: snapshotModelReasoning(input.reasoning) }),
       continuation: input.continuation,
       metadata: metadata as { readonly [key: string]: ModelJsonValue },
     }) as ProviderResponse;

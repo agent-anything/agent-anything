@@ -8,6 +8,7 @@ import type {
   ModelAssistantContentBlock,
   ModelToolCall,
   ModelTurnFinish,
+  ModelReasoning,
   Provider,
   ProviderCallResult,
   ProviderFailure,
@@ -20,6 +21,7 @@ import {
   createProviderSemanticRequestDigest,
   modelCallRefKey,
   snapshotModelCallRef,
+  snapshotModelReasoning,
   snapshotModelToolCall,
   snapshotModelTurn,
   snapshotProviderRequest,
@@ -1284,6 +1286,9 @@ function validateModelItems(candidate: unknown): readonly ControllerModelItem[] 
 
     const metadata = Object.freeze({ ...item.metadata });
     switch (item.kind) {
+      case "assistant_reasoning":
+        return Object.freeze({ id, kind: "assistant_reasoning", turnId: nonEmptyDecisionText(item.turnId),
+          reasoning: snapshotModelReasoning(item.reasoning as ModelReasoning), metadata });
       case "assistant_text":
         return Object.freeze({
           id,
@@ -1355,9 +1360,13 @@ function validateModelItems(candidate: unknown): readonly ControllerModelItem[] 
       content.push(Object.freeze({ kind: "model_tool_call", call: item.call }));
     }
   }
+  const reasoning = items.filter(item => item.kind === "assistant_reasoning");
+  if (reasoning.length > 1 || reasoning.some(item => item.turnId !== finish.turnId)) {
+    throw decisionContractError("controller_model_reasoning_invalid");
+  }
   const turn = snapshotModelTurn({
     turnId: finish.turnId,
-    assistant: { role: "assistant", content },
+    assistant: { role: "assistant", content, ...(reasoning[0] ? { reasoning: reasoning[0].reasoning } : {}) },
     finish: finish.finish,
     usage: correlation.usage,
     responseRef: correlation.response,

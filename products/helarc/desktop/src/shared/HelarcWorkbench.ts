@@ -36,6 +36,7 @@ export interface HelarcRunPresentationRecord {
     readonly sequence: number;
   };
   readonly content:
+    | { readonly kind: "assistant_reasoning"; readonly turnId: string; readonly modelItemId: string; readonly text: string; readonly omittedBytes: number }
     | { readonly kind: "received_input"; readonly inputKind: "task" | "message" | "agent_result";
         readonly text: string; readonly omittedBytes: number; readonly senderRunId: string | null;
         readonly disposition: string | null }
@@ -162,9 +163,9 @@ export interface ConversationTurnEntry extends ConversationEntryBase {
 export type ConversationBlock = {
   readonly id: string;
   readonly modelItemId: string;
-  readonly ordinal: number;
+  readonly ordinal: number | null;
 } & ({
-  readonly kind: "text" | "final_response";
+  readonly kind: "text" | "final_response" | "reasoning";
   readonly text: string;
   readonly omittedBytes: number;
   readonly detail: WorkbenchItemQuery | null;
@@ -327,7 +328,7 @@ export type ArtifactContentRead =
 
 export interface ResponsePreviewPart {
   readonly id: string;
-  readonly kind: "text" | "tool_call" | "final_response";
+  readonly kind: "text" | "tool_call" | "final_response" | "reasoning";
   readonly name: string | null;
   readonly text: string;
   readonly offset: number;

@@ -29,7 +29,7 @@ export interface HelarcModelItemOrigin {
   readonly turnId: string;
   readonly turnSequence: number;
   readonly modelItemId: string;
-  readonly ordinal: number;
+  readonly ordinal: number | null;
   readonly callId: string | null;
   readonly source: { readonly id: string; readonly sequence: number };
 }
@@ -48,6 +48,7 @@ export interface HelarcRunPresentationRecord {
     readonly sequence: number;
   };
   readonly content:
+    | { readonly kind: "assistant_reasoning"; readonly turnId: string; readonly modelItemId: string; readonly text: string; readonly omittedBytes: number }
     | { readonly kind: "received_input"; readonly inputKind: "task" | "message" | "agent_result";
         readonly text: string; readonly omittedBytes: number; readonly senderRunId: string | null;
         readonly disposition: string | null }
@@ -371,6 +372,15 @@ export function appendHelarcRunPresentation(
   if (payload.kind === "controller_turn") {
     const turns = new Map<string, number>();
     for (const model of payload.modelItems) {
+      if (model.kind === "assistant_reasoning") {
+        if (!turns.has(model.turnId)) turns.set(model.turnId, nextSequence);
+        add(model.id, { kind: "assistant_reasoning", turnId: model.turnId, modelItemId: model.id,
+          ...boundedPresentationText(model.reasoning.text) }, {
+          runId: record.runId, turnId: model.turnId, turnSequence: turns.get(model.turnId)!, modelItemId: model.id,
+          ordinal: null, callId: null, source: { id: source.id, sequence: source.sequence },
+        });
+        continue;
+      }
       if (model.kind !== "assistant_text" && model.kind !== "model_tool_call") continue;
       const turnId = model.kind === "assistant_text" ? model.turnId : model.call.modelCallRef.turnId;
       if (!turns.has(turnId)) turns.set(turnId, nextSequence);

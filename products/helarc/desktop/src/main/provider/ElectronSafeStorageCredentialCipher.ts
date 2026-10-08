@@ -1,5 +1,5 @@
 import { safeStorage } from "electron";
-import type { ProviderCredentialCipher } from "./ProviderCredentialStore.js";
+import type { ProviderCredentialCipher } from "./SafeStorageCredentialBackend.js";
 
 export class ElectronSafeStorageCredentialCipher implements ProviderCredentialCipher {
   isEncryptionAvailable(): boolean {

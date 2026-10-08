@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { ToolSelectionRevision } from "@agent-anything/tools/selection";
 import type { ProviderDescriptor } from "@agent-anything/model-interaction";
@@ -25,6 +26,7 @@ export class DefinitionInspectionAdapter {
     }
   }
   provider(descriptor: ProviderDescriptor, revision: string): void {
+    revision = `sha256:${createHash("sha256").update(JSON.stringify({ targetRevision: revision, descriptor })).digest("hex")}`;
     this.recorder.offer({ id: `provider:${descriptor.id}:${revision}:${this.recorder.capturePolicyRevision}`, subject: this.recorder.ref("provider", "definition", descriptor.id, null, revision), occurredAt: null, payload: { kind: "definition", definitionKind: "provider", name: descriptor.name, revision, enabled: true }, contents: [{ name: "Provider descriptor", stage: "configured", class: "definition", mediaType: "application/json", value: descriptor as unknown as InspectionJson }] });
   }
   hooks(registrations: readonly AgentHookRegistration[]): void {

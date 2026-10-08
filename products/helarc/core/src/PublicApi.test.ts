@@ -32,6 +32,7 @@ describe("Helarc public API", () => {
       "selectHelarcWorkspaceProfile",
       "snapshotHelarcInstructionSettings",
       "snapshotHelarcProject",
+      "snapshotHelarcProviderModelSettings",
     ]);
     expect(Object.keys(workContextApi).sort()).toEqual([
       "applyHelarcRunProjectionCommit",

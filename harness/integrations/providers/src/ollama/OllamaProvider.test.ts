@@ -261,7 +261,9 @@ describe("OllamaProvider", () => {
         },
       ],
     });
-    expect(JSON.stringify(first)).not.toContain("must not enter normalized output");
+    if (first.kind !== "succeeded" || first.response.kind !== "native_tool_turn") throw Error("Expected Turn");
+    expect(JSON.stringify(first.response.turn.assistant.content)).not.toContain("must not enter normalized output");
+    expect(first.response.turn.assistant.reasoning?.text).toBe("must not enter normalized output");
   });
 
   it("projects a canonical discriminated union into the Ollama schema dialect", async () => {

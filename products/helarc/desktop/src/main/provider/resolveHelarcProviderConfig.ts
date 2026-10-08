@@ -11,6 +11,17 @@ import {
 } from "../../shared/HelarcDesktopApi.js";
 
 export interface HelarcProviderConfig {
+  selectionFacts?: {
+    requested: import("@agent-anything/model-interaction").ModelThinkingSelection;
+    effective: import("@agent-anything/model-interaction").ModelThinkingSelection;
+    capability: import("@agent-anything/model-interaction").ModelThinkingCapability;
+    source: string | null;
+    declarationRevision: string | null;
+    contextWindowTokens: number | null;
+    maximumOutputTokens: number | null;
+  };
+  modelSettings?: import("@agent-anything/helarc/configuration").HelarcProviderModelSettings;
+  modelArtifact?: string | null;
   providerKind: HelarcProviderKind;
   baseUrl: string;
   apiKey: string;
@@ -105,6 +116,7 @@ export function resolveHelarcProviderConfig(
       model,
       timeoutMs,
       ollamaRuntime,
+      modelSettings: profileResult.profile.modelSettings,
     },
     profile: profileResult.profile,
   };

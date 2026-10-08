@@ -1,3 +1,5 @@
+export type QualificationConfigurationValue = null | boolean | number | string
+  | readonly QualificationConfigurationValue[] | { readonly [key: string]: QualificationConfigurationValue };
 export type QualificationOutcome = "qualified" | "not_qualified" | "inconclusive";
 export interface QualificationScopeResult {
   readonly scope: string;
@@ -28,6 +30,7 @@ export interface HelarcQualificationSnapshot {
   readonly error: string | null;
   readonly targetId: string | null;
   readonly model: string | null;
+  readonly generationConfiguration?: QualificationConfigurationValue;
   readonly disposition: string | null;
   readonly scopes: readonly { readonly scope: string; readonly applicability: string; readonly outcome: QualificationOutcome | null }[];
   readonly activeCampaignId: string | null;

@@ -15,6 +15,21 @@ import {
 } from "./HelarcProductCommandDispatcher.js";
 
 describe("Helarc Product command dispatcher", () => {
+  it("allows saving a connection without a model but rejects a blank Run model override", async () => {
+    const handlers = createHandlers();
+    const dispatcher = createHelarcProductCommandDispatcher({ handlers });
+    expect(await dispatcher.dispatch(command("provider.save", "connection", {
+      providerKind: "openai-compatible", displayName: "Remote", baseUrl: "https://provider.test",
+      model: "", timeoutMs: 30000, ollamaRuntime: null, qualificationPolicy: "allow_experimental",
+      apiKeyUpdate: "set", apiKey: "fixture-key",
+    }), "provider.save")).toMatchObject({ status: "handled" });
+    expect(handlers["provider.save"]).toHaveBeenCalledOnce();
+    expect(await dispatcher.dispatch(command("run.start", "empty-model", {
+      taskText: "Hello", target: { kind: "new_thread" },
+      modelSelection: { profileId: "profile", profileRevision: "revision", model: "", thinking: { mode: "default" } },
+    }), "run.start")).toMatchObject({ status: "rejected" });
+    expect(handlers["run.start"]).not.toHaveBeenCalled();
+  });
   it("accepts Project references but rejects paths, duplicates and invalid revisions", async () => {
     const handlers = createHandlers();
     const dispatcher = createHelarcProductCommandDispatcher({ handlers });
@@ -206,6 +221,8 @@ function createHandlers(
     "project.chooseFolder": vi.fn(() => ({ profile: null, error: null, snapshot: snapshot() })),
     "workspace.select": vi.fn(() => snapshot()),
     "provider.save": vi.fn(() => snapshot()),
+    "provider.select": vi.fn(() => snapshot()),
+    "provider.delete": vi.fn(() => snapshot()),
     "instructions.save": vi.fn(({ settings }) => ({ settings, defaults: createDefaultHelarcInstructionSettings() })),
     "inspection.save": vi.fn(({ settings }) => ({ settings, health: { available: true, queued: 0, dropped: 0, rejected: 0, code: null } })),
     "run.start": vi.fn(() => ({

@@ -1,4 +1,8 @@
 export type { Provider, ProviderCallResult } from "./Provider.js";
+export { snapshotModelThinkingSelection, snapshotModelThinkingCapability, resolveModelThinkingSelection } from "./ModelThinking.js";
+export type { ModelThinkingSelection, ModelThinkingCapability } from "./ModelThinking.js";
+export { snapshotModelReasoning } from "./ModelReasoning.js";
+export type { ModelReasoning } from "./ModelReasoning.js";
 export { ProviderDeliverySession, publishProviderDelivery } from "./ProviderDelivery.js";
 export type {
   ProviderDeliveryOptions, ProviderDeliveryObserver, ProviderDeliveryProgress,
@@ -137,3 +141,4 @@ export {
 } from "./ProviderResponse.js";
 export type { ModelJsonValue } from "./ModelInteractionContractValidation.js";
 export { snapshotJsonValue as snapshotModelJsonValue } from "./ModelInteractionContractValidation.js";
+export type { DiscoveredModel, ModelDiscovery } from "./ModelCatalog.js";

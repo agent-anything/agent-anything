@@ -10,7 +10,7 @@ export async function readOllamaResponseStream(
 ): Promise<unknown> {
   let pending = "";
   let content = "";
-  let thinking = "";
+  let thinking: string | undefined;
   const calls: unknown[] = [];
   let terminal: Record<string, unknown> | null = null;
   function line(text: string): void {
@@ -24,7 +24,11 @@ export async function readOllamaResponseStream(
       if (message.role !== undefined && message.role !== "assistant") malformedStream();
       const previousLength = content.length;
       content = appendStreamText(content, message.content);
-      thinking = appendStreamText(thinking, message.thinking);
+      if (message.thinking !== undefined && message.thinking !== null) {
+        const prior = thinking ?? "";
+        thinking = appendStreamText(prior, message.thinking, 131_072);
+        delivery.reasoning(thinking.slice(prior.length));
+      }
       delivery.text(content.slice(previousLength));
       if (message.tool_calls !== undefined) {
         if (!Array.isArray(message.tool_calls)) malformedStream();
@@ -54,7 +58,7 @@ export async function readOllamaResponseStream(
   if (pending.trim()) line(pending);
   if (!terminal) incompleteStream();
   return { ...(terminal as Record<string, unknown>), message: {
-    role: "assistant", content, ...(thinking ? { thinking } : {}), tool_calls: calls,
+    role: "assistant", content, ...(thinking === undefined ? {} : { thinking }), tool_calls: calls,
   } };
 }
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { snapshotCredentialSelection } from "../shared/HelarcProviderCredentials.js";
 import { snapshotHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import { snapshotHelarcInspectionSettings } from "../shared/HelarcInspectionSettings.js";
 import {
@@ -176,6 +177,14 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
       return envelope(commandId, candidate.kind, snapshotWorkspaceSelection(candidate.payload));
     case "provider.save":
       return envelope(commandId, candidate.kind, snapshotProviderSave(candidate.payload));
+    case "provider.select":
+    case "provider.delete": {
+      assertRecord(candidate.payload, "Provider selection");
+      assertExactKeys(candidate.payload, candidate.kind === "provider.select" ? ["profileId"] : ["profileId", "expectedRevision"], "Provider selection");
+      const profileId = identity(candidate.payload.profileId, "Provider id");
+      return candidate.kind === "provider.select" ? envelope(commandId, candidate.kind, { profileId })
+        : envelope(commandId, candidate.kind, { profileId, expectedRevision: identity(candidate.payload.expectedRevision, "Provider revision") });
+    }
     case "run.start":
       return envelope(commandId, candidate.kind, snapshotRunStart(candidate.payload));
     case "thread.open":
@@ -229,6 +238,10 @@ function invokeHandler(
       return handlers[command.kind](command.payload);
     case "provider.save":
       return handlers[command.kind](command.payload);
+    case "provider.select":
+      return handlers[command.kind](command.payload);
+    case "provider.delete":
+      return handlers[command.kind](command.payload);
     case "run.start":
       return handlers[command.kind](command.payload);
     case "thread.open":
@@ -281,6 +294,7 @@ function snapshotProviderSave(
       "qualificationPolicy",
       "apiKeyUpdate",
       "apiKey",
+      ...["profileId", "expectedRevision", "modelSettings", "credential"].filter(key => Object.hasOwn(candidate, key)),
     ],
     "Provider save payload",
   );
@@ -293,7 +307,8 @@ function snapshotProviderSave(
   if (
     candidate.apiKeyUpdate !== "keep" &&
     candidate.apiKeyUpdate !== "set" &&
-    candidate.apiKeyUpdate !== "clear"
+    candidate.apiKeyUpdate !== "clear" &&
+    candidate.apiKeyUpdate !== "reference"
   ) {
     invalid("Provider credential update is invalid.");
   }
@@ -312,13 +327,17 @@ function snapshotProviderSave(
   }
   return Object.freeze({
     providerKind: candidate.providerKind,
+    ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId === null ? null : identity(candidate.profileId, "Provider id") }),
+    ...(candidate.expectedRevision === undefined ? {} : { expectedRevision: candidate.expectedRevision === null ? null : identity(candidate.expectedRevision, "Provider revision") }),
+    ...(candidate.modelSettings === undefined ? {} : { modelSettings: snapshotHelarcProviderModelSettings(candidate.modelSettings as import("@agent-anything/helarc/configuration").HelarcProviderModelSettings, candidate.providerKind) }),
     displayName: boundedText(candidate.displayName, "Provider display name", DISPLAY_NAME_MAX_LENGTH),
     baseUrl: boundedText(candidate.baseUrl, "Provider base URL", BASE_URL_MAX_LENGTH),
-    model: boundedText(candidate.model, "Provider model", MODEL_MAX_LENGTH),
+    model: boundedString(candidate.model, "Provider model", MODEL_MAX_LENGTH),
     timeoutMs: candidate.timeoutMs as number,
     ollamaRuntime,
     qualificationPolicy: candidate.qualificationPolicy,
     apiKeyUpdate: candidate.apiKeyUpdate,
+    ...(candidate.credential === undefined ? {} : { credential: snapshotCredentialSelection(candidate.credential) }),
     apiKey: boundedString(candidate.apiKey, "Provider API key", API_KEY_MAX_LENGTH),
   });
 }
@@ -356,9 +375,18 @@ function snapshotRunStart(
   candidate: unknown,
 ): HelarcProductCommandPayloadMap["run.start"] {
   assertRecord(candidate, "Run start payload");
-  assertExactKeys(candidate, ["taskText", "target"], "Run start payload");
+  assertExactKeys(candidate, ["taskText", "target", ...(candidate.modelSelection === undefined ? [] : ["modelSelection"])], "Run start payload");
+  let modelSelection: import("../shared/HelarcModelSelection.js").HelarcModelSelection | undefined;
+  if (candidate.modelSelection !== undefined) {
+    const value = candidate.modelSelection;
+    assertRecord(value, "Model selection");
+    assertExactKeys(value, ["profileId", "profileRevision", "model", "thinking"], "Model selection");
+    modelSelection = { profileId: identity(value.profileId, "Provider id"), profileRevision: identity(value.profileRevision, "Provider revision"),
+      model: boundedText(value.model, "Model", MODEL_MAX_LENGTH), thinking: snapshotModelThinkingSelection(value.thinking as ModelThinkingSelection) };
+  }
   return Object.freeze({
     taskText: boundedText(candidate.taskText, "Run Task text", TASK_TEXT_MAX_LENGTH),
+    ...(modelSelection === undefined ? {} : { modelSelection }),
     target: snapshotRunStartTarget(candidate.target),
   });
 }
@@ -442,6 +470,8 @@ const PRODUCT_COMMAND_KINDS = [
   "workspace.choose",
   "workspace.select",
   "provider.save",
+  "provider.select",
+  "provider.delete",
   "instructions.save",
   "inspection.save",
   "run.start",
@@ -542,3 +572,5 @@ function deepFreeze<TValue>(value: TValue): TValue {
   }
   return Object.freeze(value);
 }
+import { snapshotHelarcProviderModelSettings } from "@agent-anything/helarc/configuration";
+import { snapshotModelThinkingSelection, type ModelThinkingSelection } from "@agent-anything/model-interaction";

@@ -34,6 +34,7 @@ test("Settings verification, cancel, retained evidence and explicit publication"
     };
     (window as any).helarc = {
       getSnapshot: async () => snapshot, subscribeSnapshot: () => () => {},
+      getProviderCredentialSettings: async () => ({ windowsAvailable: false, selection: { source: "safe-storage" } }),
       getQualification: async () => structuredClone(qualification),
       startQualification: async () => {
         const id = `campaign-${qualification.campaigns.length}`;

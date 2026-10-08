@@ -20,6 +20,10 @@ const channels = Object.freeze({
   openThread: "helarc:open-thread",
   resumeDescendant: "helarc:resume-descendant",
   saveProviderConfig: "helarc:save-provider-config",
+  discoverModels: "helarc:discover-models",
+  getProviderCredentialSettings: "helarc:get-provider-credential-settings",
+  selectProvider: "helarc:select-provider",
+  deleteProvider: "helarc:delete-provider",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
   startRun: "helarc:start-run",
@@ -98,6 +102,10 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   saveProviderConfig: (input) => ipcRenderer.invoke(
     channels.saveProviderConfig,
     productCommand("provider.save", input?.commandId, {
+      ...(input?.profileId === undefined ? {} : { profileId: input.profileId }),
+      ...(input?.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
+      ...(input?.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
+        ...(input?.credential === undefined ? {} : { credential: input.credential }),
       providerKind: input?.providerKind,
       displayName: input?.displayName,
       baseUrl: input?.baseUrl,
@@ -120,9 +128,20 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
       profileId: input?.profileId,
     }),
   ),
+  getProviderCredentialSettings: (input) => ipcRenderer.invoke(channels.getProviderCredentialSettings, {
+    profileId: input?.profileId, profileRevision: input?.profileRevision,
+  }),
+  discoverModels: (input) => ipcRenderer.invoke(channels.discoverModels, {
+    profileId: input?.profileId, profileRevision: input?.profileRevision, model: input?.model, refresh: input?.refresh,
+  }),
+  selectProvider: (input) => ipcRenderer.invoke(channels.selectProvider,
+    productCommand("provider.select", input?.commandId, { profileId: input?.profileId })),
+  deleteProvider: (input) => ipcRenderer.invoke(channels.deleteProvider,
+    productCommand("provider.delete", input?.commandId, { profileId: input?.profileId, expectedRevision: input?.expectedRevision })),
   startRun: (input) => ipcRenderer.invoke(
     channels.startRun,
     productCommand("run.start", input?.commandId, {
+      ...(input?.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       taskText: input?.taskText,
       target: input?.target?.kind === "continue_thread"
         ? {

@@ -308,7 +308,7 @@ function projectProvider(snapshot: MainSnapshot["provider"]): DesktopSnapshot["p
     return {
       configured: false,
       nativeToolInteraction: { supported: false },
-      activeProfile: null,
+      activeProfile: snapshot.activeProfile ? projectProviderProfile(snapshot.activeProfile) : null,
       profiles: snapshot.profiles.map(projectProviderProfile),
       error: {
         code: snapshot.error.code,
@@ -329,6 +329,8 @@ function projectProviderProfile(
   profile: MainSnapshot["provider"]["profiles"][number],
 ): DesktopSnapshot["provider"]["profiles"][number] {
   return {
+    revision: profile.revision,
+    modelSettings: profile.modelSettings,
     id: profile.id,
     providerKind: profile.providerKind,
     displayName: profile.displayName,

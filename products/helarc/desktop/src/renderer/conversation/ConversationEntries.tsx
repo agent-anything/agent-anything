@@ -121,7 +121,7 @@ export function ConversationEntries(
             .includes(`${attempt.invocationId}:${attempt.revision}`);
         const parts = attempt.parts.filter(
           (part) =>
-            (part.kind === "text" || part.kind === "final_response") &&
+            (part.kind === "text" || part.kind === "final_response" || part.kind === "reasoning") &&
             part.text &&
             !(part.modelItemId && committed.has(part.modelItemId)) &&
             !synchronized,
@@ -149,7 +149,8 @@ export function ConversationEntries(
             </header>
             {parts.map((part) => (
               <React.Fragment key={part.id}>
-                {props.speaker ? <ConversationExcerpt identity={part.id}><MarkdownContent text={part.text} /></ConversationExcerpt>
+                {part.kind === "reasoning" ? <details className="wb-reasoning"><summary>Thinking{attempt.state === "receiving" ? "..." : ""}</summary><MarkdownContent text={part.text} /></details>
+                  : props.speaker ? <ConversationExcerpt identity={part.id}><MarkdownContent text={part.text} /></ConversationExcerpt>
                   : <MarkdownContent text={part.text} />}
                 {!!part.omittedBytes && (
                   <p className="wb-muted">Preview shortened.</p>
@@ -279,6 +280,10 @@ function ConversationTurn({
               />
             )}
           />
+        ) : group.kind === "reasoning" ? (
+          <details className="wb-reasoning" key={group.id}><summary>Thinking</summary>
+            <ConversationText text={group.text} omittedBytes={group.omittedBytes} detail={group.detail} compact={!!props.speaker} identity={group.id} />
+          </details>
         ) : (
           (
             <div className="wb-response-text" key={group.id}>

@@ -17,11 +17,28 @@ import { HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS } from "@agent-anything/helarc-loc
 import { HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID } from "@agent-anything/helarc-local-environment/command";
 import { HelarcQualificationService } from "./HelarcQualificationService.js";
 import { HelarcQualificationStore } from "./HelarcQualificationStore.js";
+import { createHelarcProvider } from "../provider/createHelarcProvider.js";
 
 const directories: string[] = [];
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }); });
 
 describe("Settings qualification closure", { timeout: 30_000 }, () => {
+  it("binds exact effort while excluding credential, display name and metadata refreshes", async () => {
+    const f = await fixture();
+    const input = f.configuration();
+    const profile = createHelarcProviderProfile({ ...input.providerProfile, providerKind: "openai-compatible",
+      baseUrl: "https://provider.test", ollamaRuntime: null,
+      modelSettings: { service: "deepseek", thinking: { mode: "default" }, maximumOutputTokens: 4096 } });
+    if (!profile.ok) throw Error("Invalid profile");
+    const target = (effort: string, name: string, key: string) => {
+      const provider = createHelarcProvider({ providerKind: "openai-compatible", baseUrl: "https://provider.test",
+        model: profile.profile.model, timeoutMs: profile.profile.timeoutMs, apiKey: key, ollamaRuntime: null,
+        modelSettings: { service: "deepseek", thinking: { mode: "enabled", effort }, maximumOutputTokens: 4096 } });
+      return createHelarcQualificationProfile({ ...input, provider, providerProfile: { ...profile.profile, displayName: name } }).qualification.target.id;
+    };
+    expect(target("high", "First", "secret-1")).toBe(target("high", "Renamed", "secret-2"));
+    expect(target("high", "First", "secret-1")).not.toBe(target("max", "First", "secret-1"));
+  });
   it("qualifies explicit non-thinking requests without extra instructions and rejects reuse after mode changes", async () => {
     const f = await fixture("pass", "openai-compatible", { type: "disabled" });
     const initial = await f.service.snapshot();
@@ -31,6 +48,8 @@ describe("Settings qualification closure", { timeout: 30_000 }, () => {
     expect(completed.results.every(r => r.outcome === "qualified")).toBe(true);
     expect(f.calls).toHaveLength(39);
     expect(f.calls.every(b => b.thinking?.type === "disabled")).toBe(true);
+    expect((await f.service.snapshot()).generationConfiguration).toMatchObject({ thinking: { type: "disabled" } });
+    expect((await f.store.read()).campaigns[0]?.material.generationConfiguration).toMatchObject({ thinking: { type: "disabled" } });
     expect(f.calls.every(b => !b.messages.some(m => m.role === "system"))).toBe(true);
     expect(await f.service.publish(completed.id, initial.targetId!, true)).toEqual({ ok: true });
     f.setThinking(undefined);
@@ -200,7 +219,7 @@ describe("Settings qualification closure", { timeout: 30_000 }, () => {
     });
     expect((await f.service.publish(completed.id, target, true)).ok).toBe(false);
     const document = JSON.parse(await readFile(f.path, "utf8"));
-    expect(document.version).toBe(2);
+    expect(document.version).toBe(3);
     expect(document.campaigns[0].suiteRevision).toBe("helarc.native-call-baseline.v2");
     expect(document.campaigns[0].target.qualificationProtocolRevision).toBe("helarc.model-qualification.v3");
     document.campaigns[0].trials[0].stage = "operation_request";
@@ -364,7 +383,7 @@ async function fixture(mode: Mode = "pass", kind: "ollama" | "openai-compatible"
   const makeProvider = (setting: typeof thinking) => kind === "ollama" ? new OllamaProvider({ ...providerConfig,
     runtime: { contextWindowTokens: 163840, maximumOutputTokens: 2048 } }, fetch)
     : new OpenAICompatibleProvider({ ...providerConfig, apiKey: "test-secret-not-retained", maximumOutputTokens: 2048,
-      ...(setting === undefined ? {} : { thinking: setting }) }, fetch);
+      service: "deepseek", ...(setting === undefined ? {} : { thinking: setting }) }, fetch);
   let provider = makeProvider(thinking);
   const p = createHelarcProviderProfile({ id: "test", displayName: "Test", providerKind: kind, baseUrl: "https://qualification.invalid",
     model: "test-model", timeoutMs: 10_000, credentialStatus: "empty_allowed", isActive: true, qualificationPolicy: "require_qualified",

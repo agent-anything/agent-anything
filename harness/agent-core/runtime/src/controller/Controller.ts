@@ -39,6 +39,11 @@ interface ControllerModelItemBase {
 
 export type ControllerModelItem =
   | ControllerModelItemBase & {
+      readonly kind: "assistant_reasoning";
+      readonly turnId: string;
+      readonly reasoning: import("@agent-anything/model-interaction").ModelReasoning;
+    }
+  | ControllerModelItemBase & {
       readonly kind: "assistant_text";
       readonly turnId: string;
       readonly contentBlockOrdinal: number;

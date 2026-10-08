@@ -18,8 +18,10 @@ export type {
 } from "./HelarcProviderProfile.js";
 export {
   createHelarcProviderProfile,
+  snapshotHelarcProviderModelSettings,
   selectHelarcProviderProfile,
 } from "./HelarcProviderProfile.js";
+export type { HelarcProviderModelSettings, HelarcProviderService } from "./HelarcProviderProfile.js";
 export {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,

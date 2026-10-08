@@ -6,7 +6,7 @@ import type { HelarcModelCallableCatalog } from "../../controller/HelarcModelCal
 
 export interface HelarcResponsePreviewPart {
   readonly id: string;
-  readonly kind: "text" | "tool_call" | "final_response";
+  readonly kind: "text" | "tool_call" | "final_response" | "reasoning";
   readonly text: string;
   readonly receivedLength: number;
   readonly omittedBytes: number;
@@ -159,13 +159,15 @@ export class HelarcResponsePreviewStore {
               ? "rejected"
               : progress.disposition,
         code: progress.code,
+        parts: old.parts.map(part => part.kind === "reasoning" && progress.reasoning
+          ? { ...part, turnId: progress.reasoning.turnId, modelItemId: `${progress.reasoning.turnId}:reasoning` } : part),
       };
     } else {
       const previous = old.parts.find((p) => p.id === progress.partId);
       if (!previous && old.parts.length >= 257) return;
       let part: HelarcResponsePreviewPart = previous ?? {
         id: progress.partId,
-        kind: progress.kind === "text_delta" ? "text" : "tool_call",
+        kind: progress.kind === "text_delta" ? "text" : progress.kind === "reasoning_delta" ? "reasoning" : "tool_call",
         text: "",
         receivedLength: 0,
         omittedBytes: 0,
@@ -174,8 +176,8 @@ export class HelarcResponsePreviewStore {
         turnId: null,
         committedRecordId: null,
       };
-      if (progress.kind === "text_delta") {
-        if (part.kind !== "text" || progress.offset !== part.receivedLength)
+      if (progress.kind === "text_delta" || progress.kind === "reasoning_delta") {
+        if (part.kind !== (progress.kind === "text_delta" ? "text" : "reasoning") || progress.offset !== part.receivedLength)
           return;
         const clipped = boundedPresentationText(
           progress.text,

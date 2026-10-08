@@ -325,6 +325,17 @@ Helarc desktop stores provider profiles locally and supports these provider kind
 The default Ollama context window is 163840 tokens, with a maximum output of
 2048 tokens. Saved profiles and explicit environment settings override defaults.
 
+Settings manages independent named connections and credentials. Select the
+service explicitly: Ollama, DeepSeek, or a generic compatible endpoint. Model
+discovery supplies supported thinking controls and exact effort values where
+available; unknown support is not guessed. A compact composer selection can
+override the next task without rewriting saved defaults. Active work and its
+subtasks retain their captured configuration.
+
+Ollama and DeepSeek reasoning is displayed separately and preserved for required
+history replay. Qualification applies to the exact effective configuration,
+not just a model name. Changing thinking mode or effort requires its own evidence.
+
 HTTP provider URLs are accepted only for loopback addresses.
 Provider timeout values use positive whole-second increments expressed in milliseconds.
 

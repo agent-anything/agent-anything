@@ -8,6 +8,8 @@ const appMetadata = JSON.parse(await readFile(join(appRoot, "app-metadata.json")
 if (process.platform === "win32") {
   const {resolveWindowsProcessHelper} = await import("../../local-environment/dist/command/WindowsJobProcessBackend.js");
   await resolveWindowsProcessHelper();
+  const {resolveWindowsCredentialHelper} = await import("../dist/main/provider/WindowsCredentialBackend.js");
+  await resolveWindowsCredentialHelper();
 }
 
 const requiredFiles = [

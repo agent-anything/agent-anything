@@ -117,7 +117,7 @@ export type HelarcProviderSnapshot =
   | {
       configured: false;
       nativeToolInteraction: { readonly supported: false };
-      activeProfile: null;
+      activeProfile: HelarcProviderProfile | null;
       profiles: HelarcProviderProfile[];
       error: HelarcMainError;
     };
@@ -438,6 +438,7 @@ export class HelarcMainController {
   }
 
   configureProvider(input: {
+    profiles?: HelarcProviderProfile[];
     provider: Provider | null;
     profile: HelarcProviderProfile | null;
     error?: HelarcMainError | null;
@@ -447,12 +448,18 @@ export class HelarcMainController {
       ? {
           configured: false,
           nativeToolInteraction: { supported: false },
-          activeProfile: null,
+          activeProfile: input.profile,
           profiles: [],
           error: input.error,
         }
       : createConfiguredProviderSnapshot(input.profile, input.provider);
+    if (input.profiles) this.provider = { ...this.provider, profiles: input.profiles };
     this.lastError = null;
+    return this.publishSnapshot();
+  }
+
+  reportProviderError(message: string): HelarcMainSnapshot {
+    this.lastError = { code: "provider_config_invalid", message };
     return this.publishSnapshot();
   }
 
@@ -591,17 +598,18 @@ export class HelarcMainController {
     return this.publishSnapshot();
   }
 
-  async startRun(input: StartHelarcRunInput): Promise<StartHelarcRunResult> {
-    if (!this.provider.configured) {
+  async startRun(input: StartHelarcRunInput, selection?: { provider: Provider; profile: HelarcProviderProfile }): Promise<StartHelarcRunResult> {
+    if (!selection && !this.provider.configured) {
       const error = this.setError("provider_config_missing", this.provider.error.message);
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    if (!this.providerInstance) {
+    if (!selection && !this.providerInstance) {
       const error = this.setError("provider_not_available", "Provider is not available.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-    const providerInstance = this.providerInstance;
+    const providerInstance = selection?.provider ?? this.providerInstance!;
+    const providerProfile = selection?.profile ?? this.provider.activeProfile!;
     const instructionSettings = this.instructionSettings;
 
     if (!this.selectedWorkspace) {
@@ -645,9 +653,9 @@ export class HelarcMainController {
       taskText: input.taskText,
       workspaceProfileId,
       additionalWorkspaceProfileIds,
-      providerProfileId: this.provider.activeProfile.id,
+      providerProfileId: providerProfile.id,
       workspaceProfiles,
-      providerProfiles: this.provider.profiles,
+      providerProfiles: [providerProfile],
       permissionPreset: "ask_for_approval",
       createdAt: startedAt,
       metadata: {
@@ -700,7 +708,7 @@ export class HelarcMainController {
         productRunId: runId,
         sessionId: threadId,
         provider: providerInstance,
-        providerProfile: this.provider.activeProfile,
+        providerProfile,
         qualificationCatalog: this.qualificationCatalog,
         modelContinuationStore: this.modelContinuationStore,
         contextManifestPersistence: this.contextManifestPersistence,

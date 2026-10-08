@@ -1,5 +1,6 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { randomUUID } from "node:crypto";
+import { readProviderReasoning, reasoningBinding, replayReasoning } from "../reasoning/ProviderReasoning.js";
 import { ProviderDeliverySession, type ProviderDeliveryOptions } from "@agent-anything/model-interaction";
 import { ProviderStreamError } from "../http/ProviderResponseStream.js";
 import { readOllamaResponseStream } from "./OllamaResponseStream.js";
@@ -59,6 +60,8 @@ interface OllamaHttpErrorDiagnostic {
 }
 
 export interface OllamaProviderConfig {
+  readonly modelArtifact?: string | null;
+  readonly think?: boolean | string;
   readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
@@ -93,7 +96,7 @@ export class OllamaProvider implements Provider {
     const target = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      revision: `ollama.api.target.v1:${this.config.model}`,
+      revision: `ollama.api.target.v1:${this.config.model}${this.config.modelArtifact ? `:${this.config.modelArtifact}` : ""}`,
     });
     const capacity = Object.freeze({
       supported: true as const,
@@ -114,7 +117,7 @@ export class OllamaProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "ollama.api.adapter.v5",
+      adapterRevision: "ollama.api.adapter.v6",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -161,7 +164,11 @@ export class OllamaProvider implements Provider {
         }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
-      metadata: Object.freeze({}),
+      metadata: Object.freeze({ generationConfiguration: Object.freeze({
+        think: this.config.think ?? null,
+        modelArtifact: this.config.modelArtifact ?? null,
+        maximumOutputTokens: this.config.runtime.maximumOutputTokens,
+      }) }),
     });
   }
 
@@ -334,6 +341,7 @@ export class OllamaProvider implements Provider {
         body,
         request,
         this.modelContext.inputPreservation.revision,
+        this.config,
       );
     } catch (error) {
       const interruption = providerResultFromInterruption(attempt.cause);
@@ -427,7 +435,8 @@ function encodeOllamaRequest(
   if (interaction.kind === "native_tool_turn") {
     return JSON.stringify({
       model: config.model,
-      messages: encodeOllamaChatMessages(instructions, messages),
+      messages: encodeOllamaChatMessages(instructions, messages, config),
+      ...(config.think === undefined ? {} : { think: config.think }),
       tools: interaction.callables.map((callable) => ({
         type: "function",
         function: {
@@ -443,6 +452,7 @@ function encodeOllamaRequest(
   }
   return JSON.stringify({
     model: config.model,
+    ...(config.think === undefined ? {} : { think: config.think }),
     prompt: [
       ...(instructions.content.length > 0 ? [`system: ${renderInstructions(instructions)}`] : []),
       ...messages.map((message) => `${message.role}: ${renderGenerationText(message)}`),
@@ -466,6 +476,7 @@ function ollamaRuntimeOptions(
 function encodeOllamaChatMessages(
   instructions: ModelInstructions,
   messages: readonly ModelMessage[],
+  config: Readonly<OllamaProviderConfig>,
 ): readonly unknown[] {
   const encoded: unknown[] = instructions.content.length === 0 ? [] : [{
     role: "system",
@@ -518,9 +529,11 @@ function encodeOllamaChatMessages(
         });
       }
     }
+    const thinking = replayReasoning(message, "ollama.thinking.v1", reasoningBinding(config.baseUrl, config.model, "ollama.thinking.v1"));
     encoded.push({
       role: "assistant",
       content: text,
+      ...(thinking === undefined ? {} : { thinking }),
       ...(calls.length === 0 ? {} : { tool_calls: calls }),
     });
   }
@@ -542,16 +555,18 @@ function mapOllamaResponse(
   value: unknown,
   request: ProviderRequest,
   inputPreservationRevision: string,
+  config: Readonly<OllamaProviderConfig>,
 ): ProviderCallResult {
   return request.interaction.kind === "native_tool_turn"
-    ? mapOllamaChatResponse(value, request, inputPreservationRevision)
-    : mapOllamaGenerateResponse(value, request, inputPreservationRevision);
+    ? mapOllamaChatResponse(value, request, inputPreservationRevision, config)
+    : mapOllamaGenerateResponse(value, request, inputPreservationRevision, config);
 }
 
 function mapOllamaChatResponse(
   value: unknown,
   request: ProviderRequest,
   inputPreservationRevision: string,
+  config: Readonly<OllamaProviderConfig>,
 ): ProviderCallResult {
   try {
     if (!isRecord(value) || value.done !== true || !isRecord(value.message)) {
@@ -571,6 +586,8 @@ function mapOllamaChatResponse(
       );
     }
     const content = value.message.content;
+    const reasoning = readProviderReasoning(value.message.thinking, "ollama.thinking.v1",
+      reasoningBinding(config.baseUrl, config.model, "ollama.thinking.v1"));
     if (typeof content !== "string" || content.length > MAX_RESPONSE_TEXT_LENGTH) {
       return failed(
         "response",
@@ -621,7 +638,7 @@ function mapOllamaChatResponse(
       kind: "native_tool_turn",
       turn: {
         turnId,
-        assistant: { role: "assistant", content: assistantContent },
+        assistant: { role: "assistant", content: assistantContent, ...(reasoning === undefined ? {} : { reasoning }) },
         finish,
         usage: readOllamaUsage(value),
         responseRef: {
@@ -712,6 +729,7 @@ function mapOllamaGenerateResponse(
   value: unknown,
   request: ProviderRequest,
   inputPreservationRevision: string,
+  config: Readonly<OllamaProviderConfig>,
 ): ProviderCallResult {
   const interaction = request.interaction;
   if (interaction.kind === "native_tool_turn") {
@@ -731,6 +749,16 @@ function mapOllamaGenerateResponse(
       "Provider response content is too large.",
     );
   }
+  if (value.done_reason === "length") {
+    return failed("response", "provider_output_limit_exceeded", "Provider exhausted the output limit before completing the response.");
+  }
+  let reasoning;
+  try {
+    reasoning = readProviderReasoning(value.thinking, "ollama.thinking.v1",
+      reasoningBinding(config.baseUrl, config.model, "ollama.thinking.v1"));
+  } catch {
+    return failed("response", "provider_response_malformed", "Provider reasoning was malformed.");
+  }
   if (interaction.kind === "structured_generation") {
     const decoded = decodeStructuredGenerationOutput(value.response);
     if (decoded.kind === "failed") {
@@ -745,6 +773,7 @@ function mapOllamaGenerateResponse(
       kind: "structured_generation",
       responseId: null,
       output: decoded.output,
+      ...(reasoning === undefined ? {} : { reasoning }),
       usage: readOllamaUsage(value),
       continuation: null,
       metadata: providerContextMetadata(request, inputPreservationRevision),
@@ -754,6 +783,7 @@ function mapOllamaGenerateResponse(
     kind: "text_generation",
     responseId: null,
     output: value.response,
+    ...(reasoning === undefined ? {} : { reasoning }),
     usage: readOllamaUsage(value),
     continuation: null,
     metadata: providerContextMetadata(request, inputPreservationRevision),
@@ -772,6 +802,9 @@ function providerContextMetadata(
 }
 
 function renderGenerationText(message: ModelMessage): string {
+  if (message.role === "assistant" && message.reasoning !== undefined) {
+    throw new TypeError("Ollama generate cannot replay assistant reasoning; use native chat history.");
+  }
   if (message.role === "tool") {
     throw new TypeError("Text and structured generation accept text-only Model Messages.");
   }
@@ -881,6 +914,12 @@ function requiredString(value: unknown, field: string): string {
 }
 
 function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderConfig> {
+  if (input.modelArtifact !== undefined && input.modelArtifact !== null &&
+      (typeof input.modelArtifact !== "string" || input.modelArtifact.length > 512 || !input.modelArtifact.trim())) throw new TypeError("Invalid model artifact identity.");
+  if (input.think !== undefined && typeof input.think !== "boolean" &&
+    (typeof input.think !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(input.think))) {
+    throw new TypeError("Ollama thinking must be a boolean or effort level token.");
+  }
   const baseUrl = requiredString(input.baseUrl, "Ollama base URL");
   const model = requiredString(input.model, "Ollama model");
   const url = new URL(baseUrl);
@@ -920,7 +959,9 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
   return Object.freeze({
     baseUrl,
     model,
+    ...(input.modelArtifact === undefined ? {} : { modelArtifact: input.modelArtifact }),
     timeoutMs: input.timeoutMs,
+    ...(input.think === undefined ? {} : { think: input.think }),
     runtime: Object.freeze({
       contextWindowTokens: input.runtime.contextWindowTokens,
       maximumOutputTokens: input.runtime.maximumOutputTokens,

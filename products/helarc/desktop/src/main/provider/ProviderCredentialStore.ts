@@ -1,349 +1,78 @@
-import type { HelarcProviderCredentialStatus } from "@agent-anything/helarc/configuration";
-import { join, resolve } from "node:path";
-import {
-  SerializedAtomicFile,
-  type AtomicFileTransaction,
-  type SerializedAtomicFileOptions,
-} from "../persistence/SerializedAtomicFile.js";
+import type { HelarcCredentialSelection } from "../../shared/HelarcProviderCredentials.js";
+import { snapshotCredentialSelection } from "../../shared/HelarcProviderCredentials.js";
+import { SafeStorageCredentialBackend, type ProviderCredentialStoreError as SafeStorageError,
+  type ResolveProviderCredentialResult as SafeStorageResult } from "./SafeStorageCredentialBackend.js";
 
-export interface PersistedProviderCredential {
-  readonly profileId: string;
-  readonly encryptedApiKey: string;
-  readonly updatedAt: string;
+export type ProviderCredentialRef =
+  | { readonly storage: "safe-storage"; readonly ownership: "managed"; readonly id: string }
+  | { readonly storage: "windows"; readonly ownership: "managed" | "external"; readonly id: string; readonly encoding: "utf16le" | "utf8" };
+export interface WindowsCredentialBackend {
+  available(): Promise<boolean>;
+  read(target: string, encoding: "utf16le" | "utf8"): Promise<string | null>;
+  create(target: string, secret: string): Promise<void>;
+  delete(target: string): Promise<void>;
 }
-
-export interface ProviderCredentialStoreDocumentV1 {
-  readonly formatVersion: 1;
-  readonly credential: PersistedProviderCredential;
-}
-
-export interface ProviderCredentialPersistence {
-  read(profileId: string): Promise<PersistedProviderCredential | null>;
-  write(record: PersistedProviderCredential): Promise<void>;
-  delete(profileId: string): Promise<void>;
-}
-
-export interface ProviderCredentialCipher {
-  isEncryptionAvailable(): boolean;
-  encryptString(value: string): string;
-  decryptString(value: string): string;
-}
-
-export type ProviderCredentialStoreErrorCode =
-  | "provider_credential_profile_id_required"
-  | "provider_credential_encryption_unavailable"
-  | "provider_credential_encryption_failed"
-  | "provider_credential_decryption_failed"
-  | "provider_credential_persistence_failed";
-
-export interface ProviderCredentialStoreError {
-  code: ProviderCredentialStoreErrorCode;
+export type ProviderCredentialStoreError = SafeStorageError | {
+  code: "provider_credential_unavailable" | "provider_credential_missing" | "provider_credential_invalid";
   message: string;
-}
-
-export type SaveProviderCredentialResult =
-  | { ok: true; credentialStatus: HelarcProviderCredentialStatus }
-  | { ok: false; error: ProviderCredentialStoreError };
-
-export type ResolveProviderCredentialResult =
-  | {
-      ok: true;
-      apiKey: string | null;
-      credentialStatus: Extract<HelarcProviderCredentialStatus, "present" | "missing">;
-    }
-  | { ok: false; error: ProviderCredentialStoreError };
-
-export class ProviderCredentialStoreCorruptionError extends Error {
-  readonly code = "provider_credential_store_corrupt";
-
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "ProviderCredentialStoreCorruptionError";
-  }
-}
-
+};
+type Result = SafeStorageResult | { ok: false; error: ProviderCredentialStoreError };
 export class ProviderCredentialStore {
-  constructor(
-    private readonly persistence: ProviderCredentialPersistence,
-    private readonly cipher: ProviderCredentialCipher,
-  ) {}
+  constructor(private readonly local: SafeStorageCredentialBackend, private readonly windows?: WindowsCredentialBackend) {}
+  async windowsAvailable(): Promise<boolean> { return this.windows?.available().catch(() => false) ?? false; }
 
-  async saveApiKey(input: {
-    profileId: string;
-    apiKey: string;
-  }): Promise<SaveProviderCredentialResult> {
-    const profileId = normalizeProfileId(input.profileId);
-    if (!profileId) {
-      return reject("provider_credential_profile_id_required", "Provider profile id is required.");
-    }
-
-    const apiKey = input.apiKey.trim();
-    if (apiKey.length === 0) {
-      try {
-        await this.persistence.delete(profileId);
-      } catch (error) {
-        rethrowCorruption(error);
-        return persistenceFailure();
-      }
-      return { ok: true, credentialStatus: "empty_allowed" };
-    }
-
-    let encryptionAvailable: boolean;
+  async resolveApiKey(ref: ProviderCredentialRef): Promise<Result> {
+    if (ref.storage === "safe-storage") return this.local.resolveApiKey(ref.id);
+    if (!await this.windowsAvailable()) return unavailable();
     try {
-      encryptionAvailable = this.cipher.isEncryptionAvailable();
-    } catch {
-      return reject(
-        "provider_credential_encryption_failed",
-        "Provider credential encryption availability could not be determined.",
-      );
-    }
-    if (!encryptionAvailable) {
-      return reject(
-        "provider_credential_encryption_unavailable",
-        "Provider credential encryption is unavailable.",
-      );
-    }
-
-    let encryptedApiKey: string;
-    try {
-      encryptedApiKey = this.cipher.encryptString(apiKey);
-    } catch {
-      return reject(
-        "provider_credential_encryption_failed",
-        "Provider credential could not be encrypted.",
-      );
-    }
-    if (encryptedApiKey.length === 0) {
-      return reject(
-        "provider_credential_encryption_failed",
-        "Provider credential could not be encrypted.",
-      );
-    }
-
-    try {
-      await this.persistence.write({
-        profileId,
-        encryptedApiKey,
-        updatedAt: new Date().toISOString(),
-      });
-    } catch (error) {
-      rethrowCorruption(error);
-      return persistenceFailure();
-    }
-
-    return { ok: true, credentialStatus: "present" };
+      const apiKey = await this.windows!.read(ref.id, ref.encoding);
+      if (apiKey !== null && (!apiKey.trim() || /[\r\n\u0000]/u.test(apiKey))) return invalid();
+      return { ok: true, apiKey, credentialStatus: apiKey === null ? "missing" : "present" };
+    } catch { return unavailable(); }
   }
 
-  async resolveApiKey(profileIdValue: string): Promise<ResolveProviderCredentialResult> {
-    const profileId = normalizeProfileId(profileIdValue);
-    if (!profileId) {
-      return reject("provider_credential_profile_id_required", "Provider profile id is required.");
+  async stage(id: string, apiKey: string, selection: HelarcCredentialSelection): Promise<
+    { ok: true; ref: ProviderCredentialRef } | { ok: false; error: ProviderCredentialStoreError }> {
+    if (selection.source === "windows-reference") return invalid();
+    if (selection.source === "safe-storage") {
+      const saved = await this.local.saveApiKey({ profileId: id, apiKey });
+      return saved.ok ? { ok: true, ref: { storage: "safe-storage", ownership: "managed", id } } : saved;
     }
-
-    let record: PersistedProviderCredential | null;
-    try {
-      record = await this.persistence.read(profileId);
-    } catch (error) {
-      rethrowCorruption(error);
-      return persistenceFailure();
-    }
-    if (!record) {
-      return { ok: true, apiKey: null, credentialStatus: "missing" };
-    }
-
-    try {
-      const apiKey = this.cipher.decryptString(record.encryptedApiKey);
-      if (typeof apiKey !== "string" || apiKey.length === 0) {
-        throw new TypeError("Decrypted Provider credential is empty.");
-      }
-      return {
-        ok: true,
-        apiKey,
-        credentialStatus: "present",
-      };
-    } catch {
-      return reject(
-        "provider_credential_decryption_failed",
-        "Provider credential could not be decrypted.",
-      );
-    }
+    if (!await this.windowsAvailable()) return unavailable();
+    if (!apiKey || Buffer.byteLength(apiKey, "utf16le") > 2560 || /[\r\n\u0000]/u.test(apiKey)) return invalid();
+    const ref: ProviderCredentialRef = { storage: "windows", ownership: "managed", id: `Helarc/Provider/${id}`, encoding: "utf16le" };
+    try { await this.windows!.create(ref.id, apiKey); return { ok: true, ref }; }
+    catch { return unavailable(); }
   }
 
-  async deleteApiKey(profileIdValue: string): Promise<SaveProviderCredentialResult> {
-    const profileId = normalizeProfileId(profileIdValue);
-    if (!profileId) {
-      return reject("provider_credential_profile_id_required", "Provider profile id is required.");
+  async deleteApiKey(ref: ProviderCredentialRef): Promise<void> {
+    if (ref.ownership === "external") return;
+    if (ref.storage === "safe-storage") {
+      const removed = await this.local.deleteApiKey(ref.id);
+      if (!removed.ok) throw new Error("Saved credential cleanup failed.");
+    } else {
+      if (!ref.id.startsWith("Helarc/Provider/") || !await this.windowsAvailable()) throw new Error("Windows credential cleanup unavailable.");
+      await this.windows!.delete(ref.id);
     }
-
-    try {
-      await this.persistence.delete(profileId);
-    } catch (error) {
-      rethrowCorruption(error);
-      return persistenceFailure();
-    }
-    return { ok: true, credentialStatus: "missing" };
   }
 }
 
-export class FileProviderCredentialPersistence implements ProviderCredentialPersistence {
-  private readonly directoryPath: string;
-
-  constructor(
-    directoryPath: string,
-    private readonly atomicFileOptions: SerializedAtomicFileOptions = {},
-  ) {
-    if (directoryPath.trim().length === 0) {
-      throw new TypeError("Provider Credential Store directory path is required.");
-    }
-    this.directoryPath = resolve(directoryPath);
-  }
-
-  async read(profileId: string): Promise<PersistedProviderCredential | null> {
-    return this.fileFor(profileId).transact(async (file) =>
-      this.readRecord(file, profileId)
-    );
-  }
-
-  async write(record: PersistedProviderCredential): Promise<void> {
-    await this.fileFor(record.profileId).transact(async (file) => {
-      await this.readRecord(file, record.profileId);
-      const validated = validateCredentialRecord(record, record.profileId);
-      await file.replaceText(`${JSON.stringify({
-        formatVersion: 1,
-        credential: validated,
-      } satisfies ProviderCredentialStoreDocumentV1, null, 2)}\n`);
-    });
-  }
-
-  async delete(profileId: string): Promise<void> {
-    await this.fileFor(profileId).transact(async (file) => {
-      const current = await this.readRecord(file, profileId);
-      if (current !== null) {
-        await file.remove();
-      }
-    });
-  }
-
-  private async readRecord(
-    file: AtomicFileTransaction,
-    expectedProfileId: string,
-  ): Promise<PersistedProviderCredential | null> {
-    const contents = await file.readText();
-    if (contents === null) {
-      return null;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(contents);
-    } catch {
-      throw new ProviderCredentialStoreCorruptionError(
-        "Provider Credential Store JSON is invalid.",
-      );
-    }
-    if (!isStoreDocument(parsed)) {
-      throw new ProviderCredentialStoreCorruptionError(
-        "Provider Credential Store document version or shape is invalid.",
-      );
-    }
-    return validateCredentialRecord(parsed.credential, expectedProfileId);
-  }
-
-  private fileFor(profileId: string): SerializedAtomicFile {
-    return new SerializedAtomicFile(
-      join(this.directoryPath, `${encodeURIComponent(profileId)}.json`),
-      this.atomicFileOptions,
-    );
-  }
+export function selectionFor(ref: ProviderCredentialRef | null): HelarcCredentialSelection {
+  return ref?.storage === "windows"
+    ? ref.ownership === "external" ? { source: "windows-reference", target: ref.id, encoding: ref.encoding } : { source: "windows-managed" }
+    : { source: "safe-storage" };
 }
 
-function validateCredentialRecord(
-  value: unknown,
-  expectedProfileId: string,
-): PersistedProviderCredential {
-  if (!isRecord(value) || !hasExactKeys(value, [
-    "profileId",
-    "encryptedApiKey",
-    "updatedAt",
-  ])) {
-    throw invalidCredentialRecord();
-  }
-  if (
-    value.profileId !== expectedProfileId ||
-    typeof value.profileId !== "string" ||
-    value.profileId.trim() !== value.profileId ||
-    value.profileId.length === 0 ||
-    typeof value.encryptedApiKey !== "string" ||
-    value.encryptedApiKey.length === 0 ||
-    typeof value.updatedAt !== "string" ||
-    !isCanonicalIsoTimestamp(value.updatedAt)
-  ) {
-    throw invalidCredentialRecord();
-  }
-  return Object.freeze({
-    profileId: value.profileId,
-    encryptedApiKey: value.encryptedApiKey,
-    updatedAt: value.updatedAt,
-  });
+export function validCredentialRef(value: unknown, profileId: string): value is ProviderCredentialRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.id !== "string") return false;
+  const ownedId = new RegExp(`^${profileId}-[a-f0-9-]{36}$`);
+  if (v.storage === "safe-storage") return Object.keys(v).sort().join() === "id,ownership,storage" && v.ownership === "managed" && ownedId.test(v.id);
+  if (v.storage !== "windows" || Object.keys(v).sort().join() !== "encoding,id,ownership,storage") return false;
+  if (v.ownership === "managed") return v.encoding === "utf16le" && v.id.startsWith("Helarc/Provider/") && ownedId.test(v.id.slice("Helarc/Provider/".length));
+  try { return v.ownership === "external" && !!snapshotCredentialSelection({ source: "windows-reference", target: v.id, encoding: v.encoding }); }
+  catch { return false; }
 }
-
-function invalidCredentialRecord(): ProviderCredentialStoreCorruptionError {
-  return new ProviderCredentialStoreCorruptionError(
-    "Provider Credential Store contains an invalid credential record.",
-  );
-}
-
-function isStoreDocument(value: unknown): value is {
-  readonly formatVersion: 1;
-  readonly credential: unknown;
-} {
-  return isRecord(value) &&
-    hasExactKeys(value, ["formatVersion", "credential"]) &&
-    value.formatVersion === 1;
-}
-
-function normalizeProfileId(value: string): string | null {
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function persistenceFailure(): {
-  ok: false;
-  error: ProviderCredentialStoreError;
-} {
-  return reject(
-    "provider_credential_persistence_failed",
-    "Provider credential storage is unavailable.",
-  );
-}
-
-function rethrowCorruption(error: unknown): void {
-  if (error instanceof ProviderCredentialStoreCorruptionError) {
-    throw error;
-  }
-}
-
-function reject(
-  code: ProviderCredentialStoreErrorCode,
-  message: string,
-): { ok: false; error: ProviderCredentialStoreError } {
-  return { ok: false, error: { code, message } };
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  expectedKeys: readonly string[],
-): boolean {
-  const actualKeys = Object.keys(value);
-  return actualKeys.length === expectedKeys.length &&
-    expectedKeys.every((key) => Object.hasOwn(value, key));
-}
-
-function isCanonicalIsoTimestamp(value: string): boolean {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+function unavailable() { return { ok: false as const, error: { code: "provider_credential_unavailable" as const, message: "Credential storage is unavailable or the selected entry cannot be decoded. Check its storage and encoding." } }; }
+function invalid() { return { ok: false as const, error: { code: "provider_credential_invalid" as const, message: "Credential value or storage selection is invalid." } }; }

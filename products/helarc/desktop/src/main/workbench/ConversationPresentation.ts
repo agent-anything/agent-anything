@@ -126,7 +126,7 @@ export function presentConversationWork(
     const created = labels.find(
       (label) => label.parentOrigin?.modelItemId === o.modelItemId,
     );
-    if (c?.kind === "assistant_text" || c?.kind === "final_response") {
+    if (c?.kind === "assistant_text" || c?.kind === "final_response" || c?.kind === "assistant_reasoning") {
       const message =
         runId === p.host.runId
           ? thread.messages.find(
@@ -143,7 +143,7 @@ export function presentConversationWork(
         id: o.modelItemId,
         modelItemId: o.modelItemId,
         ordinal: o.ordinal,
-        kind: c.kind === "final_response" ? "final_response" : "text",
+        kind: c.kind === "final_response" ? "final_response" : c.kind === "assistant_reasoning" ? "reasoning" : "text",
         text: text.text,
         omittedBytes: text.omittedBytes + (message ? 0 : c.omittedBytes),
         detail: detail(message ? `message:${message.id}` : r!.id),
@@ -329,7 +329,7 @@ export function presentConversationWork(
       disposition: null,
     });
   for (const turn of turns.values()) {
-    turn.blocks.sort((a, b) => a.ordinal - b.ordinal);
+    turn.blocks.sort((a, b) => (a.ordinal ?? -1) - (b.ordinal ?? -1));
     turn.entry = {
       ...turn.entry,
       modelItemIds: [...new Set(turn.blocks.map((b) => b.modelItemId))],

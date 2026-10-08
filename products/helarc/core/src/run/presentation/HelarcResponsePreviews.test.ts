@@ -47,6 +47,21 @@ function interpreted(
   };
 }
 describe("response display previews", () => {
+  it.each(["root", "child"])("settles %s reasoning independently of text/call ordinals", runId => {
+    const store = new HelarcResponsePreviewStore(() => {});
+    store.observe(delivery(1, { kind: "started", mode: "streaming" }, runId));
+    store.observe(delivery(2, { kind: "reasoning_delta", partId: "reasoning:0", offset: 0, text: "Consider" }, runId));
+    store.observe(delivery(3, { kind: "text_delta", partId: "text:0", offset: 0, text: "Answer" }, runId));
+    store.observe(delivery(4, { kind: "settled", disposition: "completed", code: null,
+      reasoning: { partId: "reasoning:0", turnId: "turn-1" },
+      parts: [{ partId: "text:0", turnId: "turn-1", contentBlockOrdinal: 0 }] }, runId));
+    store.observe({ ...interpreted(), runId, requestId: `${runId}:request`, controllerRequestId: `${runId}:controller` });
+    expect(store.snapshot().attempts[0]).toMatchObject({ state: "validated", parts: [
+      { kind: "reasoning", modelItemId: "turn-1:reasoning", turnId: "turn-1", text: "Consider" },
+      { kind: "text", modelItemId: "text-1", text: "Answer" },
+    ] });
+    store.close();
+  });
   afterEach(() => vi.useRealTimers());
   it("timestamps actual observations without a reader changing their recency", () => {
     let at = "2026-09-30T00:00:00.000Z";

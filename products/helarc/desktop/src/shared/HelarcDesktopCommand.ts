@@ -13,6 +13,8 @@ export type HelarcProductCommandKind =
   | "workspace.choose"
   | "workspace.select"
   | "provider.save"
+  | "provider.select"
+  | "provider.delete"
   | "instructions.save"
   | "inspection.save"
   | "run.start"
@@ -26,6 +28,8 @@ export type HelarcProductRunStartTarget =
     };
 
 export interface HelarcProductCommandPayloadMap {
+  readonly "provider.select": { readonly profileId: string };
+  readonly "provider.delete": { readonly profileId: string; readonly expectedRevision: string };
   readonly "qualification.start": { readonly targetId: string };
   readonly "qualification.cancel": { readonly campaignId: string };
   readonly "qualification.publish": { readonly campaignId: string; readonly targetId: string; readonly reviewed: boolean };
@@ -45,6 +49,9 @@ export interface HelarcProductCommandPayloadMap {
     readonly profileId: string;
   };
   readonly "provider.save": {
+    readonly profileId?: string | null;
+    readonly expectedRevision?: string | null;
+    readonly modelSettings?: import("./HelarcModelSelection.js").HelarcProviderModelSettings;
     readonly providerKind: "openai-compatible" | "ollama";
     readonly displayName: string;
     readonly baseUrl: string;
@@ -55,10 +62,12 @@ export interface HelarcProductCommandPayloadMap {
       readonly maximumOutputTokens: number;
     } | null;
     readonly qualificationPolicy: "require_qualified" | "allow_experimental";
-    readonly apiKeyUpdate: "keep" | "set" | "clear";
+    readonly apiKeyUpdate: "keep" | "set" | "clear" | "reference";
+    readonly credential?: import("./HelarcProviderCredentials.js").HelarcCredentialSelection;
     readonly apiKey: string;
   };
   readonly "run.start": {
+    readonly modelSelection?: import("./HelarcModelSelection.js").HelarcModelSelection;
     readonly taskText: string;
     readonly target: HelarcProductRunStartTarget;
   };

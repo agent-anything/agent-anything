@@ -6,6 +6,7 @@ import {
   type ModelToolResult,
 } from "./ModelCall.js";
 import { strictRecord } from "./ModelInteractionContractValidation.js";
+import { snapshotModelReasoning, type ModelReasoning } from "./ModelReasoning.js";
 
 const MAX_MESSAGE_BLOCK_COUNT = 256;
 const MAX_TEXT_BLOCK_LENGTH = 131_072;
@@ -39,6 +40,7 @@ export type ModelMessage =
   | {
       readonly role: "assistant";
       readonly content: readonly ModelAssistantContentBlock[];
+      readonly reasoning?: ModelReasoning;
     }
   | {
       readonly role: "tool";
@@ -48,7 +50,7 @@ export type ModelMessage =
 export type ModelMessageRole = ModelMessage["role"];
 
 export function snapshotModelMessage(input: ModelMessage): ModelMessage {
-  strictRecord(input, "ModelMessage", ["role", "content"]);
+  strictRecord(input, "ModelMessage", input.role === "assistant" ? ["role", "content", "reasoning"] : ["role", "content"]);
   if (!Array.isArray(input.content) || input.content.length > MAX_MESSAGE_BLOCK_COUNT) {
     throw new TypeError("ModelMessage.content must be a bounded array.");
   }
@@ -93,7 +95,9 @@ export function snapshotModelMessage(input: ModelMessage): ModelMessage {
       }
       return Object.freeze({ kind: "model_tool_call" as const, call });
     });
-    return Object.freeze({ role: "assistant", content: Object.freeze(content) });
+    return Object.freeze({ role: "assistant", content: Object.freeze(content),
+      ...(input.reasoning === undefined ? {} : { reasoning: snapshotModelReasoning(input.reasoning) }),
+    });
   }
   if (input.role === "tool") {
     if (input.content.length === 0) {

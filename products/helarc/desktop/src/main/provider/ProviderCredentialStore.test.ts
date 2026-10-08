@@ -1,322 +1,130 @@
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  FileProviderCredentialPersistence,
-  ProviderCredentialStore,
-  ProviderCredentialStoreCorruptionError,
-  type PersistedProviderCredential,
-  type ProviderCredentialCipher,
-  type ProviderCredentialPersistence,
-} from "./ProviderCredentialStore.js";
+import { basename, dirname, join, resolve } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { FileHelarcProviderProfileStore, type SaveHelarcProviderProfileInput } from "./HelarcProviderProfileStore.js";
+import { ProviderCredentialStore, type WindowsCredentialBackend } from "./ProviderCredentialStore.js";
+import { SafeStorageCredentialBackend, FileProviderCredentialPersistence } from "./SafeStorageCredentialBackend.js";
 
-describe("ProviderCredentialStore", () => {
-  it("stores encrypted credentials and resolves decrypted credentials in main", async () => {
-    const persistence = new MemoryCredentialPersistence();
-    const store = new ProviderCredentialStore(persistence, new PrefixCipher());
+const directories: string[] = [];
+afterEach(async () => {
+  for (const dir of directories.splice(0)) {
+    const target = resolve(dir);
+    if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-credential-tests-")) throw new Error("Invalid test cleanup target.");
+    await rm(target, { recursive: true, force: true });
+  }
+});
+async function setup() {
+  const directory = await mkdtemp(join(tmpdir(), "helarc-credential-tests-")); directories.push(directory);
+  const path = join(directory, "profiles.json");
+  const values = new Map<string, string>();
+  const windows: WindowsCredentialBackend = { available: vi.fn(async () => true),
+    read: vi.fn(async target => values.get(target) ?? null),
+    create: vi.fn(async (target, key) => { if (values.has(target)) throw new Error(); values.set(target, key); }),
+    delete: vi.fn(async target => { values.delete(target); }) };
+  const credentials = new ProviderCredentialStore(new SafeStorageCredentialBackend(new FileProviderCredentialPersistence(join(directory, "keys")),
+    { isEncryptionAvailable: () => true, encryptString: text => `encrypted:${text}`, decryptString: text => text.slice(10) }), windows);
+  const store = new FileHelarcProviderProfileStore(path);
+  return { path, values, windows, credentials, store };
+}
+function input(patch: Partial<SaveHelarcProviderProfileInput> = {}): SaveHelarcProviderProfileInput {
+  return { providerKind: "openai-compatible", displayName: "Provider", baseUrl: "https://provider.test/v1", model: "model",
+    timeoutMs: 30000, ollamaRuntime: null, modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+    apiKeyUpdate: "set", apiKey: "dummy-key", ...patch };
+}
 
-    await expect(store.saveApiKey({
-      profileId: "provider-a",
-      apiKey: " secret-key ",
-    })).resolves.toEqual({
-      ok: true,
-      credentialStatus: "present",
-    });
-
-    expect(persistence.records.get("provider-a")).toMatchObject({
-      profileId: "provider-a",
-      encryptedApiKey: "encrypted:c2VjcmV0LWtleQ==",
-    });
-    expect(JSON.stringify(persistence.records.get("provider-a"))).not.toContain("secret-key");
-
-    await expect(store.resolveApiKey("provider-a")).resolves.toEqual({
-      ok: true,
-      apiKey: "secret-key",
-      credentialStatus: "present",
-    });
+describe("credential storage ownership", () => {
+  it("references external Windows credentials without copying, updating or deleting them", async () => {
+    const { store, credentials, windows, values, path } = await setup();
+    values.set("Example/DeepSeek", "external-secret");
+    const saved = await store.saveActiveProfile(input({ apiKeyUpdate: "reference", apiKey: "",
+      credential: { source: "windows-reference", target: "Example/DeepSeek", encoding: "utf8" } }), credentials);
+    if (!saved.ok) throw new Error("save failed");
+    expect(saved.config.apiKey).toBe("external-secret");
+    expect(await store.credentialSelection(saved.profile.id, saved.profile.revision!)).toEqual({ source: "windows-reference", target: "Example/DeepSeek", encoding: "utf8" });
+    expect(windows.read).toHaveBeenCalledWith("Example/DeepSeek", "utf8");
+    expect(await readFile(path, "utf8")).not.toContain("external-secret");
+    const edit = await store.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      displayName: "Renamed", apiKeyUpdate: "keep", apiKey: "" }), credentials);
+    if (!edit.ok) throw new Error("save failed");
+    await store.deleteProfile(edit.profile.id, edit.profile.revision!, credentials);
+    expect(values.get("Example/DeepSeek")).toBe("external-secret");
+    expect(windows.create).not.toHaveBeenCalled(); expect(windows.delete).not.toHaveBeenCalled();
   });
-
-  it("reports missing credentials without exposing a raw key", async () => {
-    const store = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PrefixCipher(),
-    );
-
-    await expect(store.resolveApiKey("provider-a")).resolves.toEqual({
-      ok: true,
-      apiKey: null,
-      credentialStatus: "missing",
-    });
+  it("rejects a missing reference before commit and preserves the prior credential", async () => {
+    const { store, credentials, path } = await setup();
+    const saved = await store.saveActiveProfile(input(), credentials);
+    if (!saved.ok) throw new Error();
+    const before = await readFile(path, "utf8");
+    expect(await store.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      apiKeyUpdate: "reference", apiKey: "", credential: { source: "windows-reference", target: "Missing", encoding: "utf16le" } }), credentials))
+      .toMatchObject({ ok: false, error: { code: "provider_credential_missing" } });
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: true, config: { apiKey: "dummy-key" } });
   });
-
-  it("deletes credentials for empty or explicit delete requests", async () => {
-    const persistence = new MemoryCredentialPersistence();
-    const store = new ProviderCredentialStore(persistence, new PrefixCipher());
-
-    await store.saveApiKey({ profileId: "provider-a", apiKey: "secret-key" });
-    await expect(store.saveApiKey({ profileId: "provider-a", apiKey: " " })).resolves.toEqual({
-      ok: true,
-      credentialStatus: "empty_allowed",
-    });
-    await expect(store.resolveApiKey("provider-a")).resolves.toMatchObject({
-      ok: true,
-      credentialStatus: "missing",
-    });
-
-    await store.saveApiKey({ profileId: "provider-a", apiKey: "secret-key" });
-    await expect(store.deleteApiKey("provider-a")).resolves.toEqual({
-      ok: true,
-      credentialStatus: "missing",
-    });
-    expect(persistence.records.has("provider-a")).toBe(false);
+  it("moves a managed key between explicit backends without a renderer secret round trip", async () => {
+    const { store, credentials, windows, values } = await setup();
+    const saved = await store.saveActiveProfile(input(), credentials);
+    if (!saved.ok) throw new Error();
+    const moved = await store.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      apiKeyUpdate: "keep", apiKey: "", credential: { source: "windows-managed" } }), credentials);
+    if (!moved.ok) throw new Error();
+    expect(values.size).toBe(1);
+    expect(await store.credentialSelection(moved.profile.id, moved.profile.revision!)).toEqual({ source: "windows-managed" });
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: true, config: { apiKey: "dummy-key" } });
+    const back = await store.saveActiveProfile(input({ profileId: moved.profile.id, expectedRevision: moved.profile.revision,
+      apiKeyUpdate: "keep", apiKey: "", credential: { source: "safe-storage" } }), credentials);
+    expect(back).toMatchObject({ ok: true, config: { apiKey: "dummy-key" } });
+    expect(values.size).toBe(0); expect(windows.delete).toHaveBeenCalledOnce();
   });
-
-  it("does not persist non-empty credentials when encryption is unavailable", async () => {
-    const persistence = new MemoryCredentialPersistence();
-    const store = new ProviderCredentialStore(persistence, new UnavailableCipher());
-
-    await expect(store.saveApiKey({
-      profileId: "provider-a",
-      apiKey: "secret-key",
-    })).resolves.toEqual({
-      ok: false,
-      error: {
-        code: "provider_credential_encryption_unavailable",
-        message: "Provider credential encryption is unavailable.",
-      },
-    });
-    expect(persistence.records.size).toBe(0);
+  it("rolls back only the staged managed credential on failed profile commit", async () => {
+    const { store, credentials, values, path } = await setup();
+    const saved = await store.saveActiveProfile(input({ credential: { source: "windows-managed" } }), credentials);
+    if (!saved.ok) throw new Error();
+    const before = await readFile(path, "utf8"), target = [...values.keys()][0]!;
+    const failing = new FileHelarcProviderProfileStore(path, { operations: { async replace() { throw new Error(); } } });
+    expect(await failing.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      apiKey: "replacement", credential: { source: "windows-managed" } }), credentials)).toMatchObject({ ok: false });
+    expect(await readFile(path, "utf8")).toBe(before); expect([...values.keys()]).toEqual([target]);
+    expect(values.get(target)).toBe("dummy-key");
   });
-
-  it("does not persist a credential when encryption throws", async () => {
-    const persistence = new MemoryCredentialPersistence();
-    const store = new ProviderCredentialStore(persistence, new ThrowingCipher());
-
-    const result = await store.saveApiKey({
-      profileId: "provider-a",
-      apiKey: "secret-key",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: "provider_credential_encryption_failed",
-        message: "Provider credential could not be encrypted.",
-      },
-    });
-    expect(JSON.stringify(result)).not.toContain("secret-key");
-    expect(persistence.records.size).toBe(0);
+  it("allows repairing disappeared credentials and does not fall back to local storage", async () => {
+    const { store, credentials, values, windows } = await setup();
+    values.set("External", "external-secret");
+    const saved = await store.saveActiveProfile(input({ apiKeyUpdate: "reference", apiKey: "",
+      credential: { source: "windows-reference", target: "External", encoding: "utf16le" } }), credentials);
+    if (!saved.ok) throw new Error();
+    values.clear();
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: false, error: { code: "provider_credential_missing" } });
+    expect(await store.listProfiles(credentials)).toMatchObject([{ id: saved.profile.id, credentialStatus: "missing" }]);
+    vi.mocked(windows.available).mockResolvedValue(false);
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: false, error: { code: "provider_credential_unavailable" } });
+    const repaired = await store.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      credential: { source: "safe-storage" } }), credentials);
+    expect(repaired).toMatchObject({ ok: true });
+    expect(windows.create).not.toHaveBeenCalled(); expect(windows.delete).not.toHaveBeenCalled();
   });
-
-  it("persists encrypted credential records to files", async () => {
-    const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
-    await mkdir(directoryPath, { recursive: true });
-    const persistence = new FileProviderCredentialPersistence(directoryPath);
-    const store = new ProviderCredentialStore(persistence, new PrefixCipher());
-
-    await store.saveApiKey({ profileId: "provider/a", apiKey: "secret-key" });
-
-    const rawRecord = await readFile(join(directoryPath, "provider%2Fa.json"), "utf8");
-    expect(rawRecord).toContain("encrypted:c2VjcmV0LWtleQ==");
-    expect(rawRecord).not.toContain("secret-key");
-    expect(JSON.parse(rawRecord)).toMatchObject({
-      formatVersion: 1,
-      credential: {
-        profileId: "provider/a",
-      },
-    });
-    await expect(store.resolveApiKey("provider/a")).resolves.toMatchObject({
-      ok: true,
-      apiKey: "secret-key",
-    });
+  it("rejects forged ownership and implicit transfer across endpoints", async () => {
+    const { store, credentials, path } = await setup();
+    const saved = await store.saveActiveProfile(input({ credential: { source: "windows-managed" } }), credentials);
+    if (!saved.ok) throw new Error();
+    expect(await store.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      apiKeyUpdate: "keep", apiKey: "", baseUrl: "https://different.test", credential: { source: "safe-storage" } }), credentials)).toMatchObject({ ok: false });
+    expect(await store.saveActiveProfile(input({ apiKeyUpdate: "reference", apiKey: "", credential: {
+      source: "windows-reference", target: "hELARC/pROVIDER/something", encoding: "utf16le" } }), credentials)).toMatchObject({ ok: false });
+    const doc = JSON.parse(await readFile(path, "utf8"));
+    doc.profiles[0].credentialRef.id = "External";
+    await writeFile(path, JSON.stringify(doc));
+    await expect(store.listProfiles(credentials)).rejects.toThrow("shape is invalid");
   });
-
-  it("serializes credential writes across Persistence instances", async () => {
-    const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
-    const firstStore = new ProviderCredentialStore(
-      new FileProviderCredentialPersistence(directoryPath),
-      new PrefixCipher(),
-    );
-    const secondStore = new ProviderCredentialStore(
-      new FileProviderCredentialPersistence(directoryPath),
-      new PrefixCipher(),
-    );
-
-    const [first, second] = await Promise.all([
-      firstStore.saveApiKey({ profileId: "provider-a", apiKey: "first-key" }),
-      secondStore.saveApiKey({ profileId: "provider-a", apiKey: "second-key" }),
-    ]);
-
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    await expect(firstStore.resolveApiKey("provider-a")).resolves.toEqual({
-      ok: true,
-      apiKey: "second-key",
-      credentialStatus: "present",
-    });
-  });
-
-  it("preserves the prior credential when replacement or removal fails", async () => {
-    const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
-    const workingStore = new ProviderCredentialStore(
-      new FileProviderCredentialPersistence(directoryPath),
-      new PrefixCipher(),
-    );
-    await workingStore.saveApiKey({ profileId: "provider-a", apiKey: "first-key" });
-    const recordPath = join(directoryPath, "provider-a.json");
-    const before = await readFile(recordPath, "utf8");
-
-    const replacementFailure = new ProviderCredentialStore(
-      new FileProviderCredentialPersistence(directoryPath, {
-        createTemporaryId: () => "injected-replacement-failure",
-        operations: {
-          async replace() {
-            throw new Error("injected replacement failure");
-          },
-        },
-      }),
-      new PrefixCipher(),
-    );
-    await expect(replacementFailure.saveApiKey({
-      profileId: "provider-a",
-      apiKey: "second-key",
-    })).resolves.toMatchObject({
-      ok: false,
-      error: { code: "provider_credential_persistence_failed" },
-    });
-    expect(await readFile(recordPath, "utf8")).toBe(before);
-    expect(await readdir(directoryPath)).toEqual(["provider-a.json"]);
-
-    const removalFailure = new ProviderCredentialStore(
-      new FileProviderCredentialPersistence(directoryPath, {
-        operations: {
-          async remove() {
-            throw new Error("injected removal failure");
-          },
-        },
-      }),
-      new PrefixCipher(),
-    );
-    await expect(removalFailure.deleteApiKey("provider-a")).resolves.toMatchObject({
-      ok: false,
-      error: { code: "provider_credential_persistence_failed" },
-    });
-    expect(await readFile(recordPath, "utf8")).toBe(before);
-  });
-
-  it("fails closed for invalid JSON, old versions, malformed records, and identity mismatch", async () => {
-    const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
-    const recordPath = join(directoryPath, "provider-a.json");
-    const secret = "secret-provider-key";
-    const store = new ProviderCredentialStore(
-      new FileProviderCredentialPersistence(directoryPath),
-      new PrefixCipher(),
-    );
-
-    await writeFile(recordPath, `{invalid:${secret}`, "utf8");
-    try {
-      await store.resolveApiKey("provider-a");
-      throw new Error("Expected credential corruption.");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ProviderCredentialStoreCorruptionError);
-      expect(String(error)).not.toContain(secret);
-      expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
-    }
-
-    await writeFile(recordPath, JSON.stringify({
-      profileId: "provider-a",
-      encryptedApiKey: "encrypted:value",
-      updatedAt: "2026-08-04T00:00:00.000Z",
-    }), "utf8");
-    await expect(store.resolveApiKey("provider-a")).rejects
-      .toBeInstanceOf(ProviderCredentialStoreCorruptionError);
-
-    await writeFile(recordPath, JSON.stringify({
-      formatVersion: 2,
-      credential: {},
-    }), "utf8");
-    await expect(store.resolveApiKey("provider-a")).rejects
-      .toBeInstanceOf(ProviderCredentialStoreCorruptionError);
-
-    await writeFile(recordPath, JSON.stringify({
-      formatVersion: 1,
-      credential: {
-        profileId: "provider-b",
-        encryptedApiKey: "encrypted:value",
-        updatedAt: "2026-08-04T00:00:00.000Z",
-      },
-    }), "utf8");
-    await expect(store.saveApiKey({
-      profileId: "provider-a",
-      apiKey: "replacement-key",
-    })).rejects.toBeInstanceOf(ProviderCredentialStoreCorruptionError);
+  it("reports post-commit cleanup failure without claiming the save was rolled back", async () => {
+    const { store, credentials, windows } = await setup();
+    const saved = await store.saveActiveProfile(input({ credential: { source: "windows-managed" } }), credentials);
+    if (!saved.ok) throw new Error();
+    vi.mocked(windows.delete).mockRejectedValue(new Error("storage unavailable"));
+    const result = await store.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      credential: { source: "safe-storage" }, apiKey: "new-key" }), credentials);
+    expect(result).toMatchObject({ ok: true, cleanupWarning: expect.stringContaining("Provider saved") });
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: true, config: { apiKey: "new-key" } });
   });
 });
-
-class MemoryCredentialPersistence implements ProviderCredentialPersistence {
-  readonly records = new Map<string, PersistedProviderCredential>();
-
-  async read(profileId: string): Promise<PersistedProviderCredential | null> {
-    return this.records.get(profileId) ?? null;
-  }
-
-  async write(record: PersistedProviderCredential): Promise<void> {
-    this.records.set(record.profileId, record);
-  }
-
-  async delete(profileId: string): Promise<void> {
-    this.records.delete(profileId);
-  }
-}
-
-class PrefixCipher implements ProviderCredentialCipher {
-  isEncryptionAvailable(): boolean {
-    return true;
-  }
-
-  encryptString(value: string): string {
-    return `encrypted:${Buffer.from(value, "utf8").toString("base64")}`;
-  }
-
-  decryptString(value: string): string {
-    if (!value.startsWith("encrypted:")) {
-      throw new Error("Invalid encrypted payload.");
-    }
-    return Buffer.from(value.slice("encrypted:".length), "base64").toString("utf8");
-  }
-}
-
-class UnavailableCipher implements ProviderCredentialCipher {
-  isEncryptionAvailable(): boolean {
-    return false;
-  }
-
-  encryptString(_value: string): string {
-    throw new Error("Encryption unavailable.");
-  }
-
-  decryptString(_value: string): string {
-    throw new Error("Encryption unavailable.");
-  }
-}
-
-class ThrowingCipher implements ProviderCredentialCipher {
-  isEncryptionAvailable(): boolean {
-    return true;
-  }
-
-  encryptString(_value: string): string {
-    throw new Error("injected encryption failure");
-  }
-
-  decryptString(_value: string): string {
-    throw new Error("not used");
-  }
-}

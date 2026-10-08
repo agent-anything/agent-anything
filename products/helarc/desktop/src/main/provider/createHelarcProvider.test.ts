@@ -10,9 +10,9 @@ const settings = {
 describe("Desktop Provider composition", () => {
   it.each(["https://api.deepseek.com", "https://api.deepseek.com/", "https://api.deepseek.com/v1/"])(
     "selects explicit non-thinking mode for %s", baseUrl => {
-      const provider = createHelarcProvider({ ...settings, baseUrl });
+      const provider = createHelarcProvider({ ...settings, baseUrl, modelSettings: { service: "deepseek", thinking: { mode: "disabled" }, maximumOutputTokens: 4096 } });
       expect(provider.descriptor.metadata.generationConfiguration).toEqual({
-        maximumOutputTokens: 4096, thinking: { type: "disabled" },
+        maximumOutputTokens: 4096, thinking: { type: "disabled" }, service: "deepseek", reasoningEffort: null,
       });
       expect(JSON.stringify(provider.descriptor)).not.toContain(settings.apiKey);
     },
@@ -29,7 +29,7 @@ describe("Desktop Provider composition", () => {
     const provider = createHelarcProvider({ ...settings, providerKind: "ollama", baseUrl: "http://localhost:11435",
       model: "gemma4:e4b", apiKey: "", ollamaRuntime: { contextWindowTokens: 163840, maximumOutputTokens: 2048 } });
     expect(provider.descriptor.id).toBe("ollama.api");
-    expect(provider.descriptor.metadata).not.toHaveProperty("generationConfiguration");
+    expect(provider.descriptor.metadata.generationConfiguration).toEqual({ think: null, modelArtifact: null, maximumOutputTokens: 2048 });
     expect(provider.modelContext.requestedOutput.maximum).toBe(2048);
   });
 });

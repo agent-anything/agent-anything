@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { snapshotModelMessages, snapshotModelCallableDefinitions } from "@agent-anything/model-interaction";
+import { snapshotModelMessages, snapshotModelCallableDefinitions, snapshotModelJsonValue, type ModelJsonValue } from "@agent-anything/model-interaction";
 import {
   HELARC_QUALIFICATION_CASES, HELARC_QUALIFICATION_REPETITIONS, HELARC_QUALIFICATION_SUITE_REVISION,
   HELARC_QUALIFICATION_LIMITATIONS, qualificationDigest, summarizeQualificationScopes,
@@ -20,6 +20,8 @@ export interface QualificationCampaign {
   readonly suiteRevision: string;
   readonly material: Pick<HelarcQualificationProfile, "callables" | "tools" | "shellRuntime" | "planLimits"> & {
     readonly instructions: readonly ModelInputSectionCandidate[];
+    readonly generationConfiguration: ModelJsonValue;
+    readonly modelSelection: ModelJsonValue;
   };
   readonly materialDigest: string;
   readonly startedAt: string;
@@ -29,7 +31,7 @@ export interface QualificationCampaign {
   readonly publishedAt: string | null;
 }
 interface QualificationDocument {
-  readonly version: 2;
+  readonly version: 3;
   readonly campaigns: readonly QualificationCampaign[];
   readonly decisions: readonly HelarcModelQualificationDecision[];
 }
@@ -109,11 +111,11 @@ export class HelarcQualificationStore {
 }
 
 function parseDocument(text: string | null): QualificationDocument {
-  if (text === null) return { version: 2, campaigns: [], decisions: [] };
+  if (text === null) return { version: 3, campaigns: [], decisions: [] };
   if (Buffer.byteLength(text, "utf8") > MAX_DOCUMENT_BYTES) throw new Error("qualification_storage_full");
   try {
     const document = JSON.parse(text) as QualificationDocument;
-    if (document.version !== 2 || !Array.isArray(document.campaigns) || document.campaigns.length > MAX_CAMPAIGNS || !Array.isArray(document.decisions)) throw new Error();
+    if (document.version !== 3 || !Array.isArray(document.campaigns) || document.campaigns.length > MAX_CAMPAIGNS || !Array.isArray(document.decisions)) throw new Error();
     const ids = new Set<string>();
     const trials = new Map<string, { campaign: QualificationCampaign; trial: HelarcQualificationTrial }>();
     for (const c of document.campaigns) {
@@ -126,6 +128,8 @@ function parseDocument(text: string | null): QualificationDocument {
       if (createHelarcModelQualificationTarget(target).id !== targetId || c.materialDigest !== qualificationDigest(c.material) ||
         Buffer.byteLength(JSON.stringify(c.material), "utf8") > 2 * 1024 * 1024) throw new Error();
       snapshotModelCallableDefinitions(c.material.callables.definitions);
+      snapshotModelJsonValue(c.material.generationConfiguration, "generationConfiguration");
+      snapshotModelJsonValue(c.material.modelSelection, "modelSelection");
       if (!c.material.planLimits || [c.material.planLimits.maxSteps, c.material.planLimits.maxStepLength,
         c.material.planLimits.maxExplanationLength].some(n => !Number.isSafeInteger(n) || n < 1)) throw new Error();
       if (!Array.isArray(c.trials) || c.trials.length > HELARC_QUALIFICATION_CASES.length * HELARC_QUALIFICATION_REPETITIONS) throw new Error();

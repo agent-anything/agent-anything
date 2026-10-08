@@ -1,450 +1,235 @@
+import { randomUUID } from "node:crypto";
 import {
-  createHelarcProviderProfile,
-  type HelarcProviderKind,
-  type HelarcOllamaRuntimeProfile,
-  type HelarcProviderProfile,
-  type HelarcProviderProfileError,
+  createHelarcProviderProfile, type HelarcProviderKind, type HelarcOllamaRuntimeProfile,
+  type HelarcProviderProfile, type HelarcProviderProfileError, type HelarcProviderModelSettings,
+  type HelarcModelUsePolicy,
 } from "@agent-anything/helarc/configuration";
-import type { HelarcModelUsePolicy } from "@agent-anything/helarc/configuration";
 import { HELARC_DEFAULT_PROVIDER_SETTINGS } from "../../shared/HelarcDesktopApi.js";
-import {
-  SerializedAtomicFile,
-  type AtomicFileTransaction,
-  type SerializedAtomicFileOptions,
-} from "../persistence/SerializedAtomicFile.js";
+import { SerializedAtomicFile, type AtomicFileTransaction, type SerializedAtomicFileOptions } from "../persistence/SerializedAtomicFile.js";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
-import type {
-  ProviderCredentialStore,
-  ProviderCredentialStoreError,
-} from "./ProviderCredentialStore.js";
-
-const ACTIVE_PROVIDER_PROFILE_ID = "desktop-provider";
+import type { ProviderCredentialStore, ProviderCredentialStoreError } from "./ProviderCredentialStore.js";
+import { selectionFor, validCredentialRef, type ProviderCredentialRef } from "./ProviderCredentialStore.js";
+import { snapshotCredentialSelection, type HelarcCredentialSelection } from "../../shared/HelarcProviderCredentials.js";
 
 export interface SaveHelarcProviderProfileInput {
+  profileId?: string | null;
+  expectedRevision?: string | null;
   providerKind: HelarcProviderKind;
   displayName: string;
   baseUrl: string;
   model: string;
   timeoutMs: number;
   ollamaRuntime: HelarcOllamaRuntimeProfile | null;
+  modelSettings?: HelarcProviderModelSettings;
   qualificationPolicy?: HelarcModelUsePolicy;
-  apiKeyUpdate: "keep" | "set" | "clear";
+  apiKeyUpdate: "keep" | "set" | "clear" | "reference";
+  credential?: HelarcCredentialSelection;
   apiKey: string;
 }
-
 export interface PersistedHelarcProviderProfile {
   readonly id: string;
+  readonly revision: string;
   readonly providerKind: HelarcProviderKind;
   readonly displayName: string;
   readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
   readonly ollamaRuntime: Readonly<HelarcOllamaRuntimeProfile> | null;
+  readonly modelSettings: HelarcProviderModelSettings;
   readonly qualificationPolicy: HelarcModelUsePolicy;
+  readonly credentialRef: ProviderCredentialRef | null;
   readonly updatedAt: string;
 }
-
-export interface HelarcProviderProfileStoreDocumentV3 {
-  readonly formatVersion: 3;
-  readonly activeProfile: PersistedHelarcProviderProfile;
+interface StoreDocument {
+  readonly formatVersion: 5;
+  readonly activeProfileId: string | null;
+  readonly profiles: readonly PersistedHelarcProviderProfile[];
 }
-
 export interface HelarcProviderProfileStoreError {
-  readonly code: "provider_profile_persistence_failed";
+  readonly code: "provider_profile_persistence_failed" | "provider_profile_conflict";
   readonly message: string;
 }
-
 export type ResolveHelarcStoredProviderProfileResult =
-  | { ok: true; config: HelarcProviderConfig; profile: HelarcProviderProfile }
-  | {
-      ok: false;
-      error:
-        | HelarcProviderProfileError
-        | ProviderCredentialStoreError
-        | HelarcProviderProfileStoreError;
-    };
+  | { ok: true; config: HelarcProviderConfig; profile: HelarcProviderProfile; cleanupWarning?: string }
+  | { ok: false; error: HelarcProviderProfileError | ProviderCredentialStoreError | HelarcProviderProfileStoreError };
 
 export class HelarcProviderProfileStoreCorruptionError extends Error {
   readonly code = "provider_profile_store_corrupt";
-
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "HelarcProviderProfileStoreCorruptionError";
-  }
+  constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = "HelarcProviderProfileStoreCorruptionError"; }
 }
-
 export class FileHelarcProviderProfileStore {
   private readonly atomicFile: SerializedAtomicFile;
+  constructor(filePath: string, options: SerializedAtomicFileOptions = {}) { this.atomicFile = new SerializedAtomicFile(filePath, options); }
 
-  constructor(
-    filePath: string,
-    options: SerializedAtomicFileOptions = {},
-  ) {
-    this.atomicFile = new SerializedAtomicFile(filePath, options);
-  }
-
-  async resolveActiveProfile(
-    credentialStore: ProviderCredentialStore,
-  ): Promise<ResolveHelarcStoredProviderProfileResult | null> {
-    return this.atomicFile.transact(async (file) => {
-      const document = await this.readDocument(file);
-      if (document === null) {
-        return null;
-      }
-
-      const credential = await credentialStore.resolveApiKey(document.activeProfile.id);
-      if (!credential.ok) {
-        return { ok: false, error: credential.error };
-      }
-
-      return createResolvedProfile(
-        document.activeProfile,
-        credential.credentialStatus,
-        credential.apiKey ?? "",
-      );
+  async resolveActiveProfile(credentials: ProviderCredentialStore): Promise<ResolveHelarcStoredProviderProfileResult | null> {
+    return this.atomicFile.transact(async file => {
+      const doc = await this.readDocument(file);
+      const profile = doc.profiles.find(p => p.id === doc.activeProfileId);
+      return profile ? resolve(profile, true, credentials) : null;
     });
   }
-
-  async saveActiveProfile(
-    input: SaveHelarcProviderProfileInput,
-    credentialStore: ProviderCredentialStore,
-  ): Promise<ResolveHelarcStoredProviderProfileResult> {
-    return this.atomicFile.transact(async (file) => {
-      await this.readDocument(file);
-
-      const plannedCredential = await resolvePlannedCredential(input, credentialStore);
-      if (!plannedCredential.ok) {
-        return { ok: false, error: plannedCredential.error };
-      }
-
-      const updatedAt = new Date().toISOString();
-      const validated = createStoredProfile(
-        input,
-        plannedCredential.credentialStatus,
-        plannedCredential.apiKey,
-        updatedAt,
-      );
-      if (!validated.ok) {
-        return validated;
-      }
-
-      const credential = input.apiKeyUpdate === "keep"
-        ? plannedCredential
-        : await applyCredentialUpdate(input, credentialStore);
-      if (!credential.ok) {
-        return { ok: false, error: credential.error };
-      }
-
-      const completed = createStoredProfile(
-        input,
-        credential.credentialStatus,
-        credential.apiKey,
-        updatedAt,
-      );
-      if (!completed.ok) {
-        return completed;
-      }
-
-      try {
-        await file.replaceText(`${JSON.stringify({
-          formatVersion: 3,
-          activeProfile: completed.persisted,
-        } satisfies HelarcProviderProfileStoreDocumentV3, null, 2)}\n`);
-      } catch {
-        return {
-          ok: false,
-          error: {
-            code: "provider_profile_persistence_failed",
-            message: "Provider profile could not be persisted.",
-          },
-        };
-      }
-      return completed.resolved;
+  async resolveProfile(id: string, credentials: ProviderCredentialStore): Promise<ResolveHelarcStoredProviderProfileResult> {
+    return this.atomicFile.transact(async file => {
+      const doc = await this.readDocument(file);
+      const profile = doc.profiles.find(p => p.id === id);
+      return profile ? resolve(profile, id === doc.activeProfileId, credentials) : missing();
     });
   }
-
-  private async readDocument(
-    file: AtomicFileTransaction,
-  ): Promise<HelarcProviderProfileStoreDocumentV3 | null> {
-    const contents = await file.readText();
-    if (contents === null) {
+  async listProfiles(credentials: ProviderCredentialStore): Promise<HelarcProviderProfile[]> {
+    return this.atomicFile.transact(async file => {
+      const doc = await this.readDocument(file);
+      const profiles: HelarcProviderProfile[] = [];
+      for (const stored of doc.profiles) {
+        const result = await resolve(stored, stored.id === doc.activeProfileId, credentials);
+        const safe = result.ok ? result : createHelarcProviderProfile({ ...stored, credentialStatus: "missing", isActive: stored.id === doc.activeProfileId });
+        if (!safe.ok) throw new Error(safe.error.message);
+        profiles.push(safe.profile);
+      }
+      return profiles;
+    });
+  }
+  async credentialSelection(id: string, revision: string): Promise<HelarcCredentialSelection> {
+    return this.atomicFile.transact(async file => {
+      const profile = (await this.readDocument(file)).profiles.find(p => p.id === id && p.revision === revision);
+      if (!profile) throw new Error("Provider profile changed; reload settings.");
+      return selectionFor(profile.credentialRef);
+    });
+  }
+  async selectActiveProfile(id: string, credentials: ProviderCredentialStore): Promise<ResolveHelarcStoredProviderProfileResult> {
+    return this.atomicFile.transact(async file => {
+      const doc = await this.readDocument(file);
+      const stored = doc.profiles.find(p => p.id === id);
+      if (!stored) return missing();
+      const result = await resolve(stored, true, credentials);
+      await write(file, { ...doc, activeProfileId: id });
+      return result;
+    });
+  }
+  async deleteProfile(id: string, expectedRevision: string, credentials: ProviderCredentialStore): Promise<string | null> {
+    return this.atomicFile.transact(async file => {
+      const doc = await this.readDocument(file);
+      const stored = doc.profiles.find(p => p.id === id);
+      if (!stored || stored.revision !== expectedRevision) throw new Error("Provider profile changed; reload settings.");
+      const profiles = doc.profiles.filter(p => p.id !== id);
+      await write(file, { ...doc, profiles, activeProfileId: doc.activeProfileId === id ? profiles[0]?.id ?? null : doc.activeProfileId });
+      if (stored.credentialRef) {
+        try { await credentials.deleteApiKey(stored.credentialRef); }
+        catch { return "Provider deleted, but its managed credential could not be removed from storage."; }
+      }
       return null;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(contents);
-    } catch (error) {
-      throw new HelarcProviderProfileStoreCorruptionError(
-        "Provider Profile Store JSON is invalid.",
-        { cause: error },
-      );
-    }
-    if (!isStoreDocument(parsed)) {
-      throw new HelarcProviderProfileStoreCorruptionError(
-        "Provider Profile Store document version or shape is invalid.",
-      );
-    }
-
-    return Object.freeze({
-      formatVersion: 3,
-      activeProfile: parseStoredProfile(parsed.activeProfile),
     });
   }
-}
-
-type ResolvedCredentialUpdate =
-  | {
-      ok: true;
-      apiKey: string;
-      credentialStatus: HelarcProviderProfile["credentialStatus"];
-    }
-  | { ok: false; error: ProviderCredentialStoreError };
-
-async function resolvePlannedCredential(
-  input: SaveHelarcProviderProfileInput,
-  credentialStore: ProviderCredentialStore,
-): Promise<ResolvedCredentialUpdate> {
-  if (input.apiKeyUpdate === "keep") {
-    const resolved = await credentialStore.resolveApiKey(ACTIVE_PROVIDER_PROFILE_ID);
-    return resolved.ok
-      ? {
-          ok: true,
-          apiKey: resolved.apiKey ?? "",
-          credentialStatus: resolved.credentialStatus,
-        }
-      : resolved;
-  }
-
-  const apiKey = input.apiKeyUpdate === "set" ? input.apiKey.trim() : "";
-  return {
-    ok: true,
-    apiKey,
-    credentialStatus: apiKey.length > 0 ? "present" : "empty_allowed",
-  };
-}
-
-async function applyCredentialUpdate(
-  input: SaveHelarcProviderProfileInput,
-  credentialStore: ProviderCredentialStore,
-): Promise<ResolvedCredentialUpdate> {
-  const apiKey = input.apiKeyUpdate === "set" ? input.apiKey : "";
-  const saved = await credentialStore.saveApiKey({
-    profileId: ACTIVE_PROVIDER_PROFILE_ID,
-    apiKey,
-  });
-  return saved.ok
-    ? {
-        ok: true,
-        apiKey: apiKey.trim(),
-        credentialStatus: saved.credentialStatus,
+  async saveActiveProfile(input: SaveHelarcProviderProfileInput, credentials: ProviderCredentialStore,
+    validate?: (config: HelarcProviderConfig) => Promise<void>): Promise<ResolveHelarcStoredProviderProfileResult> {
+    return this.atomicFile.transact(async file => {
+      const doc = await this.readDocument(file);
+      const previous = input.profileId ? doc.profiles.find(p => p.id === input.profileId) : undefined;
+      if (input.profileId && (!previous || previous.revision !== input.expectedRevision)) return conflict();
+      if (!previous && doc.profiles.length >= 64) return conflict("At most 64 Provider profiles can be saved.");
+      const id = previous?.id ?? `provider-${randomUUID()}`;
+      const revision = randomUUID();
+      const validated = createHelarcProviderProfile({ ...input, id, revision, credentialStatus: "missing",
+        qualificationPolicy: input.qualificationPolicy ?? HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy, isActive: true });
+      if (!validated.ok) return validated;
+      let choice: HelarcCredentialSelection;
+      try { choice = snapshotCredentialSelection(input.credential ?? selectionFor(previous?.credentialRef ?? null)); }
+      catch { return conflict("Credential selection is invalid."); }
+      if ((input.apiKeyUpdate === "reference" && choice.source !== "windows-reference") ||
+          (input.apiKeyUpdate === "set" && choice.source === "windows-reference") ||
+          (input.apiKeyUpdate !== "set" && input.apiKey.length !== 0)) return conflict("Credential update intent does not match its source.");
+      if (input.apiKeyUpdate === "keep" && previous &&
+          (validated.profile.baseUrl.replace(/\/+$/, "") !== previous.baseUrl.replace(/\/+$/, "") ||
+           input.providerKind !== previous.providerKind || validated.profile.modelSettings?.service !== previous.modelSettings.service)) {
+        return conflict("Changing the service or endpoint requires setting or clearing the credential.");
       }
-    : saved;
-}
-
-function createStoredProfile(
-  input: SaveHelarcProviderProfileInput,
-  credentialStatus: HelarcProviderProfile["credentialStatus"],
-  apiKey: string,
-  updatedAt: string,
-):
-  | {
-      ok: true;
-      persisted: PersistedHelarcProviderProfile;
-      resolved: Extract<ResolveHelarcStoredProviderProfileResult, { ok: true }>;
+      let credentialRef = input.apiKeyUpdate === "keep" ? previous?.credentialRef ?? null : null;
+      let apiKey = input.apiKeyUpdate === "set" ? input.apiKey.trim() : "";
+      if (input.apiKeyUpdate === "reference" && choice.source === "windows-reference") {
+        credentialRef = { storage: "windows", ownership: "external", id: choice.target, encoding: choice.encoding };
+      }
+      if (credentialRef) {
+        const key = await credentials.resolveApiKey(credentialRef);
+        if (!key.ok) return key;
+        apiKey = key.apiKey ?? "";
+        if (!apiKey) return { ok: false, error: { code: "provider_credential_missing", message: "The selected credential does not exist. Check its target or replace it." } };
+      }
+      const sourceChanged = JSON.stringify(choice) !== JSON.stringify(selectionFor(credentialRef));
+      if (input.apiKeyUpdate === "keep" && sourceChanged && (credentialRef?.ownership !== "managed" || choice.source === "windows-reference")) {
+        return conflict("Changing an external credential source requires explicitly selecting the reference or entering a key.");
+      }
+      if (validate) {
+        try { await validate({ providerKind: validated.profile.providerKind, baseUrl: validated.profile.baseUrl,
+          model: validated.profile.model, timeoutMs: validated.profile.timeoutMs, ollamaRuntime: validated.profile.ollamaRuntime,
+          modelSettings: validated.profile.modelSettings, apiKey }); }
+        catch (error) { return conflict(error instanceof Error ? error.message : "Provider selection is invalid."); }
+      }
+      // Publish a new credential reference only with the atomic profile commit.
+      let stagedRef: ProviderCredentialRef | null = null;
+      if (apiKey && (input.apiKeyUpdate === "set" || (input.apiKeyUpdate === "keep" && sourceChanged))) {
+        const staged = await credentials.stage(`${id}-${revision}`, apiKey, choice);
+        if (!staged.ok) return staged;
+        stagedRef = staged.ref;
+        credentialRef = staged.ref;
+      }
+      const p = { ...validated.profile, credentialStatus: apiKey ? "present" as const : "empty_allowed" as const };
+      const stored: PersistedHelarcProviderProfile = { id, revision, providerKind: p.providerKind, displayName: p.displayName,
+        baseUrl: p.baseUrl, model: p.model, timeoutMs: p.timeoutMs, ollamaRuntime: p.ollamaRuntime,
+        modelSettings: p.modelSettings!, qualificationPolicy: p.qualificationPolicy, credentialRef, updatedAt: new Date().toISOString() };
+      try {
+        await write(file, { formatVersion: 5, activeProfileId: id,
+          profiles: previous ? doc.profiles.map(p => p.id === id ? stored : p) : [...doc.profiles, stored] });
+      } catch {
+        if (stagedRef) {
+          try { await credentials.deleteApiKey(stagedRef); }
+          catch { return conflict("Profile was not saved; staged credential cleanup also failed."); }
+        }
+        return { ok: false, error: { code: "provider_profile_persistence_failed", message: "Provider profile could not be persisted." } };
+      }
+      if (previous?.credentialRef && JSON.stringify(previous.credentialRef) !== JSON.stringify(credentialRef)) {
+        try { await credentials.deleteApiKey(previous.credentialRef); }
+        catch { return { ok: true, profile: p, config: configuration(stored, apiKey), cleanupWarning: "Provider saved, but the replaced managed credential could not be removed from storage." }; }
+      }
+      return { ok: true, profile: p, config: configuration(stored, apiKey) };
+    });
+  }
+  private async readDocument(file: AtomicFileTransaction): Promise<StoreDocument> {
+    const text = await file.readText();
+    if (text === null) return { formatVersion: 5, activeProfileId: null, profiles: [] };
+    try {
+      const doc = JSON.parse(text) as StoreDocument;
+      if (!doc || doc.formatVersion !== 5 || Object.keys(doc).sort().join() !== "activeProfileId,formatVersion,profiles" ||
+          !Array.isArray(doc.profiles) || doc.profiles.length > 64 ||
+          new Set(doc.profiles.map(p => p.id)).size !== doc.profiles.length ||
+          (doc.activeProfileId !== null && !doc.profiles.some(p => p.id === doc.activeProfileId)) ||
+          (doc.activeProfileId === null && doc.profiles.length !== 0)) throw new Error("shape");
+      for (const p of doc.profiles) {
+        if (Object.keys(p).sort().join() !== "baseUrl,credentialRef,displayName,id,model,modelSettings,ollamaRuntime,providerKind,qualificationPolicy,revision,timeoutMs,updatedAt" ||
+            !/^provider-[a-f0-9-]{36}$/.test(p.id) || typeof p.revision !== "string" || !/^[a-f0-9-]{36}$/.test(p.revision) ||
+            (p.credentialRef !== null && !validCredentialRef(p.credentialRef, p.id)) ||
+            !Number.isFinite(Date.parse(p.updatedAt)) || p.modelSettings === undefined ||
+            !createHelarcProviderProfile({ ...p, credentialStatus: "missing" }).ok) throw new Error("profile");
+      }
+      return doc;
+    } catch (cause) {
+      throw new HelarcProviderProfileStoreCorruptionError("Provider Profile Store document version or shape is invalid.", { cause });
     }
-  | Extract<ResolveHelarcStoredProviderProfileResult, { ok: false }> {
-  const profileResult = createHelarcProviderProfile({
-    id: ACTIVE_PROVIDER_PROFILE_ID,
-    providerKind: input.providerKind,
-    displayName: input.displayName,
-    baseUrl: input.baseUrl,
-    model: input.model,
-    timeoutMs: input.timeoutMs,
-    ollamaRuntime: input.ollamaRuntime,
-    credentialStatus,
-    qualificationPolicy: input.qualificationPolicy ??
-      HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy,
-    isActive: true,
-  });
-  if (!profileResult.ok) {
-    return { ok: false, error: profileResult.error };
   }
-
-  const persisted: PersistedHelarcProviderProfile = {
-    id: profileResult.profile.id,
-    providerKind: profileResult.profile.providerKind,
-    displayName: profileResult.profile.displayName,
-    baseUrl: profileResult.profile.baseUrl,
-    model: profileResult.profile.model,
-    timeoutMs: profileResult.profile.timeoutMs,
-    ollamaRuntime: profileResult.profile.ollamaRuntime,
-    qualificationPolicy: profileResult.profile.qualificationPolicy,
-    updatedAt,
-  };
-  return {
-    ok: true,
-    persisted,
-    resolved: {
-      ok: true,
-      config: {
-        providerKind: persisted.providerKind,
-        baseUrl: persisted.baseUrl,
-        apiKey,
-        model: persisted.model,
-        timeoutMs: persisted.timeoutMs,
-        ollamaRuntime: persisted.ollamaRuntime,
-      },
-      profile: profileResult.profile,
-    },
-  };
 }
-
-function createResolvedProfile(
-  persisted: PersistedHelarcProviderProfile,
-  credentialStatus: HelarcProviderProfile["credentialStatus"],
-  apiKey: string,
-): ResolveHelarcStoredProviderProfileResult {
-  const result = createStoredProfile({
-    providerKind: persisted.providerKind,
-    displayName: persisted.displayName,
-    baseUrl: persisted.baseUrl,
-    model: persisted.model,
-    timeoutMs: persisted.timeoutMs,
-    ollamaRuntime: persisted.ollamaRuntime,
-    qualificationPolicy: persisted.qualificationPolicy,
-    apiKeyUpdate: "keep",
-    apiKey: "",
-  }, credentialStatus, apiKey, persisted.updatedAt);
-  return result.ok ? result.resolved : result;
+function configuration(p: PersistedHelarcProviderProfile, apiKey: string): HelarcProviderConfig {
+  return { providerKind: p.providerKind, baseUrl: p.baseUrl, apiKey, model: p.model,
+    timeoutMs: p.timeoutMs, ollamaRuntime: p.ollamaRuntime, modelSettings: p.modelSettings };
 }
-
-function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
-  if (!isRecord(value) || !hasExactKeys(value, [
-    "id",
-    "providerKind",
-    "displayName",
-    "baseUrl",
-    "model",
-    "timeoutMs",
-    "ollamaRuntime",
-    "qualificationPolicy",
-    "updatedAt",
-  ])) {
-    throw invalidStoredProfile();
-  }
-  if (
-    value.id !== ACTIVE_PROVIDER_PROFILE_ID ||
-    !isProviderKind(value.providerKind) ||
-    typeof value.displayName !== "string" ||
-    typeof value.baseUrl !== "string" ||
-    typeof value.model !== "string" ||
-    !Number.isSafeInteger(value.timeoutMs) ||
-    (value.timeoutMs as number) <= 0 ||
-    !isPersistedOllamaRuntime(value.ollamaRuntime) ||
-    !isQualificationPolicy(value.qualificationPolicy) ||
-    typeof value.updatedAt !== "string" ||
-    !isCanonicalIsoTimestamp(value.updatedAt)
-  ) {
-    throw invalidStoredProfile();
-  }
-
-  const candidate: PersistedHelarcProviderProfile = {
-    id: value.id,
-    providerKind: value.providerKind,
-    displayName: value.displayName,
-    baseUrl: value.baseUrl,
-    model: value.model,
-    timeoutMs: value.timeoutMs as number,
-    ollamaRuntime: value.ollamaRuntime === null
-      ? null
-      : Object.freeze({
-          contextWindowTokens: value.ollamaRuntime.contextWindowTokens,
-          maximumOutputTokens: value.ollamaRuntime.maximumOutputTokens,
-        }),
-    qualificationPolicy: value.qualificationPolicy,
-    updatedAt: value.updatedAt,
-  };
-  const resolved = createResolvedProfile(candidate, "missing", "");
-  if (
-    !resolved.ok ||
-    resolved.profile.id !== candidate.id ||
-    resolved.profile.providerKind !== candidate.providerKind ||
-    resolved.profile.displayName !== candidate.displayName ||
-    resolved.profile.baseUrl !== candidate.baseUrl ||
-    resolved.profile.model !== candidate.model ||
-    resolved.profile.timeoutMs !== candidate.timeoutMs ||
-    !sameOllamaRuntime(resolved.profile.ollamaRuntime, candidate.ollamaRuntime) ||
-    resolved.profile.qualificationPolicy !== candidate.qualificationPolicy
-  ) {
-    throw invalidStoredProfile();
-  }
-  return candidate;
+async function resolve(p: PersistedHelarcProviderProfile, isActive: boolean, credentials: ProviderCredentialStore): Promise<ResolveHelarcStoredProviderProfileResult> {
+  const key = p.credentialRef ? await credentials.resolveApiKey(p.credentialRef) : { ok: true as const, apiKey: "", credentialStatus: "empty_allowed" as const };
+  if (!key.ok) return key;
+  if (p.credentialRef && !key.apiKey) return { ok: false, error: { code: "provider_credential_missing", message: "The configured credential no longer exists. Update Provider settings." } };
+  const result = createHelarcProviderProfile({ ...p, isActive, credentialStatus: key.credentialStatus });
+  return result.ok ? { ok: true, profile: result.profile, config: configuration(p, key.apiKey ?? "") } : result;
 }
-
-function invalidStoredProfile(): HelarcProviderProfileStoreCorruptionError {
-  return new HelarcProviderProfileStoreCorruptionError(
-    "Provider Profile Store contains an invalid profile.",
-  );
+function missing(): ResolveHelarcStoredProviderProfileResult {
+  return { ok: false, error: { code: "provider_profile_not_found", message: "Provider profile was not found." } };
 }
-
-function isStoreDocument(value: unknown): value is {
-  readonly formatVersion: 3;
-  readonly activeProfile: unknown;
-} {
-  return isRecord(value) &&
-    hasExactKeys(value, ["formatVersion", "activeProfile"]) &&
-    value.formatVersion === 3;
+function conflict(message = "Provider profile changed; reload settings."): ResolveHelarcStoredProviderProfileResult {
+  return { ok: false, error: { code: "provider_profile_conflict", message } };
 }
-
-function isPersistedOllamaRuntime(
-  value: unknown,
-): value is Readonly<HelarcOllamaRuntimeProfile> | null {
-  return value === null || (
-    isRecord(value) &&
-    hasExactKeys(value, ["contextWindowTokens", "maximumOutputTokens"]) &&
-    Number.isSafeInteger(value.contextWindowTokens) &&
-    (value.contextWindowTokens as number) > 0 &&
-    Number.isSafeInteger(value.maximumOutputTokens) &&
-    (value.maximumOutputTokens as number) > 0 &&
-    (value.maximumOutputTokens as number) < (value.contextWindowTokens as number)
-  );
-}
-
-function sameOllamaRuntime(
-  left: Readonly<HelarcOllamaRuntimeProfile> | null,
-  right: Readonly<HelarcOllamaRuntimeProfile> | null,
-): boolean {
-  return left === null || right === null
-    ? left === right
-    : left.contextWindowTokens === right.contextWindowTokens &&
-      left.maximumOutputTokens === right.maximumOutputTokens;
-}
-
-function isQualificationPolicy(
-  value: unknown,
-): value is HelarcModelUsePolicy {
-  return value === "require_qualified" || value === "allow_experimental";
-}
-
-function isProviderKind(value: unknown): value is HelarcProviderKind {
-  return value === "openai-compatible" || value === "ollama";
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  expectedKeys: readonly string[],
-): boolean {
-  const actualKeys = Object.keys(value);
-  return actualKeys.length === expectedKeys.length &&
-    expectedKeys.every((key) => Object.hasOwn(value, key));
-}
-
-function isCanonicalIsoTimestamp(value: string): boolean {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+async function write(file: AtomicFileTransaction, doc: StoreDocument): Promise<void> { await file.replaceText(`${JSON.stringify(doc, null, 2)}\n`); }

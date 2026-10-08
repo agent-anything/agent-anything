@@ -56,7 +56,7 @@ describe("OpenAICompatibleProvider", () => {
 
   it("snapshots explicit non-thinking configuration for native and structured requests", async () => {
     const bodies: Array<Record<string, unknown>> = [];
-    const settings = { ...config(), thinking: { type: "disabled" as const } };
+    const settings = { ...config(), service: "deepseek" as const, thinking: { type: "disabled" as const } };
     const provider = new OpenAICompatibleProvider(settings, async (_url, init) => {
       bodies.push(JSON.parse(init.body));
       return okResponse({ id: "reply", choices: [{ index: 0, finish_reason: "stop",
@@ -68,6 +68,7 @@ describe("OpenAICompatibleProvider", () => {
     expect(bodies.every(body => (body.thinking as { type: string }).type === "disabled")).toBe(true);
     expect(provider.descriptor.metadata.generationConfiguration).toEqual({
       maximumOutputTokens: config().maximumOutputTokens, thinking: { type: "disabled" },
+      service: "deepseek", reasoningEffort: null,
     });
     expect(Object.isFrozen(provider.descriptor.metadata.generationConfiguration)).toBe(true);
     expect(JSON.stringify(provider.descriptor)).not.toContain("secret-key");
@@ -86,7 +87,7 @@ describe("OpenAICompatibleProvider", () => {
   it.each([null, { type: "enabled" }, { type: "disabled", extra: true }, "disabled"])(
     "rejects unsupported thinking configuration %j", thinking => {
       expect(() => new OpenAICompatibleProvider({ ...config(), thinking } as unknown as
-        ConstructorParameters<typeof OpenAICompatibleProvider>[0])).toThrow("thinking configuration");
+        ConstructorParameters<typeof OpenAICompatibleProvider>[0])).toThrow();
     },
   );
 

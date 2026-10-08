@@ -14,6 +14,14 @@ import {
 } from "./ModelInteractionProjection.js";
 
 describe("ModelInteractionProjection", () => {
+  it("preserves reasoning across transcript projection without moving native call ordinals", () => {
+    const call = modelCall("read", 0);
+    const turn = modelTurn([call]);
+    const reasoning = { text: "Private protocol reasoning", replay: { format: "ollama.thinking.v1", binding: "scope" } };
+    const result = projectModelInteraction({ runId: "run-1", runRevision: 2,
+      items: [runItem(1, controllerTurn({ ...turn, assistant: { ...turn.assistant, reasoning } })), runItem(2, settlement(call, "succeeded"))] });
+    expect(result.messages[0]).toMatchObject({ role: "assistant", reasoning, content: [{ kind: "model_tool_call", call: { ordinal: 0 } }] });
+  });
   it("reconstructs ordered assistant calls and correlated settlements", () => {
     const calls = [modelCall("read", 0), modelCall("search", 1)];
     const items = [

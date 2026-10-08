@@ -75,6 +75,8 @@ export const HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE: Readonly<
 });
 
 export interface HelarcProviderProfileSnapshot {
+  revision?: string;
+  modelSettings?: import("./HelarcModelSelection.js").HelarcProviderModelSettings;
   id: string;
   providerKind: HelarcProviderKind;
   displayName: string;
@@ -100,7 +102,7 @@ export type HelarcProviderSnapshot =
   | {
       configured: false;
       nativeToolInteraction: { supported: false };
-      activeProfile: null;
+      activeProfile: HelarcProviderProfileSnapshot | null;
       profiles: HelarcProviderProfileSnapshot[];
       error: HelarcMainError;
     };
@@ -588,6 +590,7 @@ export interface HelarcMainSnapshot {
 }
 
 export interface HelarcStartRunInput {
+  modelSelection?: import("./HelarcModelSelection.js").HelarcModelSelection;
   commandId: string;
   taskText: string;
   target: HelarcProductRunStartTarget;
@@ -658,6 +661,9 @@ export interface HelarcSelectWorkspaceProfileInput {
 }
 
 export interface HelarcSaveProviderConfigInput {
+  profileId?: string | null;
+  expectedRevision?: string | null;
+  modelSettings?: import("./HelarcModelSelection.js").HelarcProviderModelSettings;
   commandId: string;
   providerKind: HelarcProviderKind;
   displayName: string;
@@ -666,7 +672,8 @@ export interface HelarcSaveProviderConfigInput {
   timeoutMs: number;
   ollamaRuntime: HelarcOllamaRuntimeProfileSnapshot | null;
   qualificationPolicy: HelarcModelUsePolicy;
-  apiKeyUpdate: "keep" | "set" | "clear";
+  apiKeyUpdate: "keep" | "set" | "clear" | "reference";
+  credential?: import("./HelarcProviderCredentials.js").HelarcCredentialSelection;
   apiKey: string;
 }
 
@@ -675,6 +682,8 @@ export interface HelarcChooseWorkspaceInput {
 }
 
 export interface HelarcProductCommandResultMap {
+  readonly "provider.select": HelarcMainSnapshot;
+  readonly "provider.delete": HelarcMainSnapshot;
   readonly "qualification.start": import("./HelarcQualification.js").HelarcQualificationCommandResult;
   readonly "qualification.cancel": import("./HelarcQualification.js").HelarcQualificationCommandResult;
   readonly "qualification.publish": import("./HelarcQualification.js").HelarcQualificationCommandResult;
@@ -972,6 +981,10 @@ export interface HelarcDesktopApi {
   saveProviderConfig(
     input: HelarcSaveProviderConfigInput,
   ): Promise<HelarcProductCommandReceipt<"provider.save">>;
+  discoverModels(query: import("./HelarcModelSelection.js").HelarcModelDiscoveryQuery): Promise<import("./HelarcModelSelection.js").HelarcModelDiscoveryResult>;
+  getProviderCredentialSettings(query: { profileId: string | null; profileRevision: string | null }): Promise<import("./HelarcProviderCredentials.js").HelarcCredentialSettings>;
+  selectProvider(input: { commandId: string; profileId: string }): Promise<HelarcProductCommandReceipt<"provider.select">>;
+  deleteProvider(input: { commandId: string; profileId: string; expectedRevision: string }): Promise<HelarcProductCommandReceipt<"provider.delete">>;
   selectWorkspaceProfile(
     input: HelarcSelectWorkspaceProfileInput,
   ): Promise<HelarcProductCommandReceipt<"workspace.select">>;

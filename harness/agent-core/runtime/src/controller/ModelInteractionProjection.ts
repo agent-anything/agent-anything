@@ -166,8 +166,14 @@ function projectControllerTurn(items: readonly ControllerModelItem[]): {
     calls.push(item.call);
   }
 
+  const reasoning = items.filter(item => item.kind === "assistant_reasoning");
+  if (reasoning.length > 1 || reasoning.some(item => item.turnId !== turnId)) {
+    throw projectionFailure("controller_model_reasoning_invalid", "Reasoning must belong to the same Model Turn.");
+  }
   return Object.freeze({
-    message: snapshotModelMessage({ role: "assistant", content }) as Extract<
+    message: snapshotModelMessage({ role: "assistant", content,
+      ...(reasoning[0] ? { reasoning: reasoning[0].reasoning } : {}),
+    }) as Extract<
       ModelMessage,
       { readonly role: "assistant" }
     >,

@@ -70,6 +70,8 @@ export function QualificationSettingsView({ snapshot, dirty, busy, onStart, onCa
   const [reviewed, setReviewed] = useState<string | null>(null);
   return <>
     <div className="qualification-heading"><strong>{snapshot.model ?? "No saved Provider"}</strong><span>{label(snapshot.disposition ?? "unavailable")}</span></div>
+    {snapshot.generationConfiguration && <details className="qualification-configuration"><summary>Effective model settings</summary>
+      <pre>{JSON.stringify(snapshot.generationConfiguration, null, 2)}</pre></details>}
     {snapshot.error && <p className="settings-error" role="alert">{snapshot.error}</p>}
     <table className="qualification-table"><thead><tr><th>Scope</th><th>Evidence</th><th>Decision</th></tr></thead>
       <tbody>{snapshot.scopes.map(scope => <tr key={scope.scope}><td>{label(scope.scope)}</td><td>{label(scope.applicability)}</td><td>{label(scope.outcome ?? "not_published")}</td></tr>)}</tbody>

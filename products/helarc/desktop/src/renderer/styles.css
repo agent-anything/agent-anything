@@ -465,7 +465,8 @@ h2 {
   text-transform: uppercase;
 }
 
-.settings-panel input {
+.settings-panel input,
+.settings-panel select {
   width: 100%;
   height: 34px;
   min-width: 0;
@@ -578,3 +579,25 @@ textarea {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+.provider-profile-picker, .provider-discovery-status {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.provider-profile-picker label { flex: 1; min-width: 0; }
+.provider-profile-picker { width: 100%; }
+.provider-configuration-form { display: grid; width: 100%; gap: 10px; justify-items: start; }
+.provider-profile-picker button, .provider-discovery-status button { min-width: 34px; height: 34px; padding: 7px; }
+.provider-discovery-status { align-items: center; }
+.provider-discovery-status small { overflow-wrap: anywhere; }
+.model-thinking-field small { font-size: 11px; font-weight: normal; }
+.composer-model-selection { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
+.composer-model-selection label { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; }
+.composer-model-selection select, .composer-model-selection input { width: 100%; min-width: 0; padding: 5px; }
+.composer-model-selection > small { grid-column: 1 / -1; }
+.wb-reasoning { margin: 8px 0; border-left: 2px solid #c7cbd0; padding: 4px 12px; color: #555c65; font-size: 13px; }
+.wb-reasoning summary { cursor: pointer; }
+@media (max-width: 640px) { .composer-model-selection { grid-template-columns: minmax(0, 1fr); } }

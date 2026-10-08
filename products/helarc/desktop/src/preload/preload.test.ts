@@ -11,6 +11,29 @@ interface ExposedHelarcApi {
 }
 
 describe("Helarc preload bridge", () => {
+  it("forwards credential references and requests metadata without requesting secret readback", async () => {
+    const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
+    let api!: HelarcDesktopApi;
+    const invoke = vi.fn(async () => ({ status: "handled" }));
+    runInNewContext(source, { require: () => ({
+      contextBridge: { exposeInMainWorld: (_key: string, value: HelarcDesktopApi) => { api = value; } },
+      ipcRenderer: { invoke, on: vi.fn(), removeListener: vi.fn() },
+    }) });
+    const query = { profileId: "provider", profileRevision: "revision", secret: "must-not-cross" };
+    await api.getProviderCredentialSettings(query);
+    expect(invoke).toHaveBeenLastCalledWith("helarc:get-provider-credential-settings", {
+      profileId: "provider", profileRevision: "revision",
+    });
+    const credential = { source: "windows-reference" as const, target: "External/Test", encoding: "utf16le" as const };
+    await api.saveProviderConfig({
+      commandId: "reference", providerKind: "openai-compatible", displayName: "Remote", baseUrl: "https://example.test",
+      model: "model", timeoutMs: 30000, ollamaRuntime: null, qualificationPolicy: "allow_experimental",
+      apiKeyUpdate: "reference", apiKey: "", credential,
+    });
+    expect(invoke).toHaveBeenLastCalledWith("helarc:save-provider-config", expect.objectContaining({
+      payload: expect.objectContaining({ apiKeyUpdate: "reference", apiKey: "", credential }),
+    }));
+  });
   it("forwards only qualification identities and review acknowledgement", async () => {
     const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");
     let api!: HelarcDesktopApi;

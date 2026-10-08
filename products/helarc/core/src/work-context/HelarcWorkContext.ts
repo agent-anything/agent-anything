@@ -1196,7 +1196,7 @@ function isDisplayOrigin(value: unknown): value is import("../run/presentation/H
   const origin = value as import("../run/presentation/HelarcRunPresentation.js").HelarcModelItemOrigin;
   return hasText(origin.runId) && hasText(origin.turnId) && hasText(origin.modelItemId) &&
     Number.isSafeInteger(origin.turnSequence) && origin.turnSequence > 0 &&
-    Number.isSafeInteger(origin.ordinal) && origin.ordinal >= 0 &&
+    (origin.ordinal === null || Number.isSafeInteger(origin.ordinal) && origin.ordinal >= 0) &&
     (origin.callId === null || hasText(origin.callId)) && !!origin.source &&
     hasText(origin.source.id) && Number.isSafeInteger(origin.source.sequence) && origin.source.sequence > 0;
 }

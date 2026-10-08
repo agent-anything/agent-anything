@@ -1,5 +1,6 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { randomUUID } from "node:crypto";
+import { readProviderReasoning, reasoningBinding, replayReasoning } from "../reasoning/ProviderReasoning.js";
 import { ProviderDeliverySession, type ProviderDeliveryOptions } from "@agent-anything/model-interaction";
 import { ProviderStreamError } from "../http/ProviderResponseStream.js";
 import { readOpenAIResponseStream } from "./OpenAIResponseStream.js";
@@ -67,7 +68,9 @@ export interface OpenAICompatibleProviderConfig {
   readonly model: string;
   readonly timeoutMs: number;
   readonly maximumOutputTokens: number;
-  readonly thinking?: { readonly type: "disabled" };
+  readonly service?: "generic" | "deepseek";
+  readonly thinking?: { readonly type: "disabled" | "enabled" };
+  readonly reasoningEffort?: string;
   readonly nativeToolInteraction: {
     readonly supported: boolean;
   };
@@ -107,7 +110,7 @@ export class OpenAICompatibleProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "openai-compatible.chat-completions.adapter.v6",
+      adapterRevision: "openai-compatible.chat-completions.adapter.v7",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -158,6 +161,8 @@ export class OpenAICompatibleProvider implements Provider {
         generationConfiguration: Object.freeze({
           maximumOutputTokens: this.config.maximumOutputTokens,
           thinking: this.config.thinking ?? null,
+          service: this.config.service ?? "generic",
+          reasoningEffort: this.config.reasoningEffort ?? null,
         }),
       }),
     });
@@ -327,6 +332,7 @@ export class OpenAICompatibleProvider implements Provider {
         body,
         request,
         this.modelContext.inputPreservation.revision,
+        this.config,
       );
     } catch (error) {
       const interruption = providerResultFromInterruption(attempt.cause);
@@ -379,6 +385,7 @@ function prepareEncodedRequest(
       request.interaction,
       streaming,
       config.thinking,
+      config,
     );
     const accounting = accountProviderTransport({
       encodedBody: body,
@@ -427,18 +434,21 @@ function encodeOpenAIRequest(
   interaction: ProviderInteraction,
   streaming: boolean,
   thinking: OpenAICompatibleProviderConfig["thinking"],
+  config: Readonly<OpenAICompatibleProviderConfig>,
 ): string {
   return JSON.stringify({
     model,
     max_tokens: maximumOutputTokens,
     ...(thinking === undefined ? {} : { thinking }),
+    ...(config.reasoningEffort === undefined ? {} : { reasoning_effort: config.reasoningEffort }),
     messages: interaction.kind === "native_tool_turn"
-      ? encodeOpenAINativeMessages(instructions, messages)
+      ? encodeOpenAINativeMessages(instructions, messages, config)
       : [
           ...(instructions.content.length > 0 ? [{ role: "system", content: renderInstructions(instructions) }] : []),
           ...messages.map((message) => ({
           role: message.role,
           content: renderGenerationText(message),
+          ...(message.role === "assistant" ? encodeReasoningHistory(message, config) : {}),
           })),
         ],
     stream: streaming,
@@ -463,6 +473,7 @@ function encodeOpenAIRequest(
 function encodeOpenAINativeMessages(
   instructions: ModelInstructions,
   messages: readonly ModelMessage[],
+  config: Readonly<OpenAICompatibleProviderConfig>,
 ): readonly unknown[] {
   const encoded: unknown[] = instructions.content.length === 0 ? [] : [{
     role: "system",
@@ -524,6 +535,7 @@ function encodeOpenAINativeMessages(
     encoded.push({
       role: "assistant",
       content: text.length === 0 ? null : text,
+      ...encodeReasoningHistory(message, config),
       ...(calls.length === 0 ? {} : { tool_calls: calls }),
     });
   }
@@ -543,20 +555,35 @@ function openAIResponseFormat(
   };
 }
 
+function encodeReasoningHistory(
+  message: Extract<ModelMessage, { readonly role: "assistant" }>,
+  config: Readonly<OpenAICompatibleProviderConfig>,
+): { readonly reasoning_content?: string } {
+  const format = "chat-completions.reasoning-content.v1";
+  const text = replayReasoning(message, format, reasoningBinding(config.baseUrl, config.model, format));
+  if (text === undefined && config.service === "deepseek" && config.thinking?.type === "enabled" &&
+      message.content.some(block => block.kind === "model_tool_call")) {
+    throw new TypeError("DeepSeek thinking Tool history requires its original reasoning content.");
+  }
+  return text === undefined ? {} : { reasoning_content: text };
+}
+
 function mapChatCompletionResponse(
   value: unknown,
   request: ProviderRequest,
   inputPreservationRevision: string,
+  config: Readonly<OpenAICompatibleProviderConfig>,
 ): ProviderCallResult {
   return request.interaction.kind === "native_tool_turn"
-    ? mapNativeChatCompletionResponse(value, request, inputPreservationRevision)
-    : mapGeneratedChatCompletionResponse(value, request, inputPreservationRevision);
+    ? mapNativeChatCompletionResponse(value, request, inputPreservationRevision, config)
+    : mapGeneratedChatCompletionResponse(value, request, inputPreservationRevision, config);
 }
 
 function mapNativeChatCompletionResponse(
   value: unknown,
   request: ProviderRequest,
   inputPreservationRevision: string,
+  config: Readonly<OpenAICompatibleProviderConfig>,
 ): ProviderCallResult {
   try {
     const choice = readSingleChoice(value);
@@ -571,6 +598,12 @@ function mapNativeChatCompletionResponse(
       "Chat Completion response id",
     );
     const content = choice.message.content;
+    const reasoning = readProviderReasoning(choice.message.reasoning_content,
+      "chat-completions.reasoning-content.v1", reasoningBinding(config.baseUrl, config.model, "chat-completions.reasoning-content.v1"));
+    if (config.service === "deepseek" && config.thinking?.type === "enabled" && reasoning === undefined &&
+        choice.finish_reason !== "length" && !choice.message.refusal) {
+      throw new TypeError("DeepSeek thinking response omitted required reasoning content.");
+    }
     if (content !== null && typeof content !== "string") {
       throw new TypeError("Chat Completion assistant content is invalid.");
     }
@@ -631,7 +664,7 @@ function mapNativeChatCompletionResponse(
       kind: "native_tool_turn",
       turn: {
         turnId,
-        assistant: { role: "assistant", content: assistantContent },
+        assistant: { role: "assistant", content: assistantContent, ...(reasoning === undefined ? {} : { reasoning }) },
         finish,
         usage: readUsage(isRecord(value) ? value.usage : null),
         responseRef: {
@@ -715,6 +748,7 @@ function mapGeneratedChatCompletionResponse(
   value: unknown,
   request: ProviderRequest,
   inputPreservationRevision: string,
+  config: Readonly<OpenAICompatibleProviderConfig>,
 ): ProviderCallResult {
   try {
     const interaction = request.interaction;
@@ -725,6 +759,11 @@ function mapGeneratedChatCompletionResponse(
     if (!isRecord(choice.message) || typeof choice.message.content !== "string") {
       throw new TypeError("Chat Completion response did not contain generated content.");
     }
+    if (choice.finish_reason === "length") {
+      return failed("response", "provider_output_limit_exceeded", "Provider exhausted the output limit before completing the response.");
+    }
+    const reasoning = readProviderReasoning(choice.message.reasoning_content,
+      "chat-completions.reasoning-content.v1", reasoningBinding(config.baseUrl, config.model, "chat-completions.reasoning-content.v1"));
     if (choice.message.content.length > MAX_RESPONSE_TEXT_LENGTH) {
       return failed(
         "response",
@@ -749,6 +788,7 @@ function mapGeneratedChatCompletionResponse(
           "Chat Completion response id",
         ),
         output: decoded.output,
+        ...(reasoning === undefined ? {} : { reasoning }),
         usage: readUsage(isRecord(value) ? value.usage : null),
         continuation: null,
         metadata: providerContextMetadata(request, inputPreservationRevision),
@@ -761,6 +801,7 @@ function mapGeneratedChatCompletionResponse(
         "Chat Completion response id",
       ),
       output: choice.message.content,
+      ...(reasoning === undefined ? {} : { reasoning }),
       usage: readUsage(isRecord(value) ? value.usage : null),
       continuation: null,
       metadata: providerContextMetadata(request, inputPreservationRevision),
@@ -795,14 +836,15 @@ function readSingleChoice(value: unknown): Record<string, unknown> {
   return choice;
 }
 
-function readUsage(value: unknown) {
+function readUsage(value: unknown): import("@agent-anything/model-interaction").ProviderUsage | null {
   if (!isRecord(value)) return null;
   return {
     inputTokens: readCount(value.prompt_tokens),
     outputTokens: readCount(value.completion_tokens),
     totalTokens: readCount(value.total_tokens),
     costUnits: null,
-    metadata: {},
+    metadata: isRecord(value.completion_tokens_details) && readCount(value.completion_tokens_details.reasoning_tokens) !== null
+      ? { reasoningTokens: readCount(value.completion_tokens_details.reasoning_tokens) } : {},
   };
 }
 
@@ -977,11 +1019,22 @@ function snapshotConfig(
   ) {
     throw new TypeError("OpenAI-compatible native Tool interaction configuration is invalid.");
   }
+  if (input.service !== undefined && input.service !== "generic" && input.service !== "deepseek") {
+    throw new TypeError("Unknown Chat Completions service dialect.");
+  }
   if (input.thinking !== undefined && (
-    !isRecord(input.thinking) || input.thinking.type !== "disabled" ||
+    !isRecord(input.thinking) || !["disabled", "enabled"].includes(input.thinking.type) ||
     Object.keys(input.thinking).length !== 1
   )) {
-    throw new TypeError("OpenAI-compatible thinking configuration only supports explicit non-thinking mode.");
+    throw new TypeError("Invalid thinking configuration.");
+  }
+  if ((input.thinking !== undefined || input.reasoningEffort !== undefined) && input.service !== "deepseek") {
+    throw new TypeError("Thinking controls require an explicit supported service dialect.");
+  }
+  if (input.reasoningEffort !== undefined && (
+    input.thinking?.type !== "enabled" || !/^[a-z][a-z0-9_-]{0,63}$/.test(input.reasoningEffort)
+  )) {
+    throw new TypeError("Reasoning effort requires enabled thinking and a supported level token.");
   }
   return Object.freeze({
     baseUrl: validatedBaseUrl(input.baseUrl),
@@ -989,7 +1042,9 @@ function snapshotConfig(
     model: requiredString(input.model, "OpenAI-compatible model"),
     timeoutMs: positiveTimeout(input.timeoutMs),
     maximumOutputTokens: positiveInteger(input.maximumOutputTokens, "OpenAI-compatible maximum output tokens"),
-    ...(input.thinking === undefined ? {} : { thinking: Object.freeze({ type: "disabled" as const }) }),
+    service: input.service ?? "generic",
+    ...(input.thinking === undefined ? {} : { thinking: Object.freeze({ ...input.thinking }) }),
+    ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
     nativeToolInteraction: Object.freeze({
       supported: input.nativeToolInteraction.supported,
     }),

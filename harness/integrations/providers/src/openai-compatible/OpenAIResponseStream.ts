@@ -12,6 +12,7 @@ export async function readOpenAIResponseStream(
   response: FetchResponseLike, signal: AbortSignal, delivery: ProviderDeliverySession,
 ): Promise<unknown> {
   let content = "";
+  let reasoning: string | undefined;
   let refusal = "";
   let responseId: string | null = null;
   let finish: string | null = null;
@@ -46,6 +47,11 @@ export async function readOpenAIResponseStream(
       if (delta.role !== undefined && delta.role !== "assistant") malformedStream();
       if (delta.function_call !== undefined && delta.function_call !== null) malformedStream();
       const previousLength = content.length;
+      if (delta.reasoning_content !== undefined && delta.reasoning_content !== null) {
+        const prior = reasoning ?? "";
+        reasoning = appendStreamText(prior, delta.reasoning_content, 131_072);
+        delivery.reasoning(reasoning.slice(prior.length));
+      }
       content = appendStreamText(content, delta.content);
       refusal = appendStreamText(refusal, delta.refusal);
       delivery.text(content.slice(previousLength));
@@ -85,6 +91,7 @@ export async function readOpenAIResponseStream(
     return { id: call.id, type: call.type, function: { name: call.name, arguments: call.arguments } };
   });
   return { id: responseId, choices: [{ index: 0, finish_reason: finish,
-    message: { role: "assistant", content, refusal: refusal || null, tool_calls: toolCalls },
+    message: { role: "assistant", content, refusal: refusal || null, tool_calls: toolCalls,
+      ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) },
   }], usage };
 }

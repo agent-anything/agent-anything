@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { snapshotModelJsonValue } from "@agent-anything/model-interaction";
 import {
   HELARC_QUALIFICATION_CASES, HELARC_QUALIFICATION_REPETITIONS, HELARC_QUALIFICATION_LIMITATIONS,
   HELARC_QUALIFICATION_SUITE_REVISION, HELARC_QUALIFICATION_REQUEST_TIMEOUT_MS,
@@ -44,6 +45,7 @@ export class HelarcQualificationService {
       available: profile !== null && config!.provider.descriptor.capabilities.nativeToolInteraction.supported && !this.closed,
       error: this.error, targetId: profile?.qualification.target.id ?? null,
       model: profile?.qualification.target.modelId ?? null,
+      generationConfiguration: snapshotModelJsonValue(config?.provider.descriptor.metadata.generationConfiguration ?? null, "generationConfiguration"),
       disposition: profile?.qualification.disposition.status ?? null,
       scopes: profile?.qualification.safeProjection.scopes ?? [], activeCampaignId: this.active?.id ?? null, protocol: PROTOCOL,
       campaigns: [...document.campaigns].reverse().map(c => ({
@@ -71,7 +73,9 @@ export class HelarcQualificationService {
       if (profile.qualification.target.id !== targetId) return failure("The saved configuration changed. Review the current configuration first.");
       if (!config.provider.descriptor.capabilities.nativeToolInteraction.supported) return failure("The Provider does not support native Tool calls.");
       const material = { callables: profile.callables, tools: profile.tools, shellRuntime: profile.shellRuntime, planLimits: profile.planLimits,
-        instructions: qualificationInstructionSections(profile) };
+        instructions: qualificationInstructionSections(profile),
+        generationConfiguration: snapshotModelJsonValue(config.provider.descriptor.metadata.generationConfiguration ?? null, "generationConfiguration"),
+        modelSelection: snapshotModelJsonValue(config.provider.descriptor.metadata.modelSelection ?? null, "modelSelection") };
       const campaign: QualificationCampaign = {
         id: `qualification-${randomUUID()}`, target: profile.qualification.target,
         suiteRevision: HELARC_QUALIFICATION_SUITE_REVISION, material, materialDigest: qualificationDigest(material),

@@ -15,9 +15,9 @@ test("parallel Child text stays with its work without reordering or stealing rea
     if (!callable) throw Error(`Missing ${name}`);
     return {function: {name: callable.function.name, arguments: args}};
   }
-  function chunk(response: ServerResponse, content: string, calls: unknown[] = [], done = false) {
+  function chunk(response: ServerResponse, content: string, calls: unknown[] = [], done = false, thinking?: string) {
     if (!response.headersSent) response.writeHead(200, {"Content-Type": "application/x-ndjson"});
-    response.write(JSON.stringify({model: "test-model", message: {role: "assistant", content, tool_calls: calls},
+    response.write(JSON.stringify({model: "test-model", message: {role: "assistant", content, tool_calls: calls, ...(thinking ? {thinking} : {})},
       done, ...(done ? {done_reason: "stop", prompt_eval_count: 20, eval_count: 10} : {})}) + "\n");
     if (done) response.end();
   }
@@ -35,8 +35,9 @@ test("parallel Child text stays with its work without reordering or stealing rea
         chunk(response, "I will compare two independent findings.", [
           call(body, "Agent", {prompt: "first-child-fixture: inspect files only", description: "Inspect the first input"}),
           call(body, "Agent", {prompt: "second-child-fixture: inspect files only", description: "Inspect the second input"}),
-        ], true);
+        ], true, "I can compare these independently.");
       } else if (owner === "root" && turn === 1) {
+        expect(body.messages.find((message: any) => message.role === "assistant").thinking).toBe("I can compare these independently.");
         chunk(response, "Both findings have returned. Now a separate follow-up.", [
           call(body, "Agent", {prompt: "later-child-fixture: report the follow-up", description: "Follow-up inspection"}),
         ], true);
@@ -65,6 +66,10 @@ test("parallel Child text stays with its work without reordering or stealing rea
     await expect(first).toBeVisible();
     await expect(second).toBeVisible();
     await expect(group.getByRole("tab")).toHaveCount(0);
+    await expect(page.locator(".wb-reasoning").first()).toContainText("Thinking");
+    await page.locator(".wb-reasoning").first().locator("summary").click();
+    await expect(page.locator(".wb-reasoning").first()).toContainText("I can compare these independently.");
+    await page.locator(".wb-reasoning").first().locator("summary").click();
     await expect(group.locator(".wb-delegated-conversation")).toHaveCount(0);
     const longText = Array.from({length: 45}, (_, i) => `Second finding ${i + 1}: This response remains attributed to the second subtask.\n\n`).join("");
     chunk(held.get("second")!.response, longText);
@@ -85,6 +90,11 @@ test("parallel Child text stays with its work without reordering or stealing rea
     await page.screenshot({path: info.outputPath("parallel-child-compact-narrow.png")});
     await page.setViewportSize({width: 1440, height: 900});
     await second.getByRole("button", {name: "Expand Subtask 2", exact: true}).click();
+    chunk(held.get("second")!.response, "", [], false, "I am considering the second input.");
+    await expect(second.locator(".wb-reasoning")).toHaveCount(1);
+    await second.locator(".wb-reasoning summary").click();
+    await expect(second.locator(".wb-reasoning")).toContainText("I am considering the second input.");
+    await second.locator(".wb-reasoning summary").click();
     await expect(second.locator(".wb-received-input")).toContainText("second-child-fixture: inspect files only");
     await expect(first.locator(".wb-received-input")).toHaveCount(0);
     const viewport = page.locator(".wb-conversation-scroll");

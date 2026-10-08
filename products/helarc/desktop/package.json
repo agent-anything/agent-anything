@@ -9,7 +9,7 @@
   "main": "./dist/main/main.js",
   "scripts": {
     "build": "node ../../../scripts/run-pnpm.mjs run build:main && node ../../../scripts/run-pnpm.mjs run build:renderer && node ../../../scripts/run-pnpm.mjs run copy:preload",
-    "build:main": "tsc -p tsconfig.main.json",
+    "build:main": "node scripts/build-credential-helper.mjs && tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "copy:preload": "node scripts/copy-preload.mjs",
     "package:check": "node scripts/check-package.mjs",

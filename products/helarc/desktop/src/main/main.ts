@@ -70,6 +70,11 @@ async function createWindow(): Promise<void> {
   );
   const storedProviderConfig = await providerProfileStore.resolveActiveProfile(providerCredentialStore);
   const providerConfig = storedProviderConfig ?? resolveHelarcProviderConfig();
+  const providerReady = providerConfig.ok && providerConfig.config.model.trim().length > 0;
+  const providerConfigError = !providerConfig.ok ? providerConfig.error : providerReady ? null : {
+    code: "provider_config_missing" as const, message: "Select a model before starting work or verification.",
+  };
+  const provider = providerReady ? createHelarcProvider(providerConfig.config, inspectionSource.providerObserver) : null;
   const workspaceProfileStore = new FileHelarcWorkspaceProfileStore(
     join(userDataPath, "workspace-profiles.json"),
   );
@@ -97,8 +102,8 @@ async function createWindow(): Promise<void> {
     commandOutputRegistry: new CommandOutputRegistry(join(userDataPath, "command-output", "locators.json")),
     inspection: inspectionSource,
     instructionSettings: await instructionSettingsStore.load(),
-    provider: providerConfig.ok ? createHelarcProvider(providerConfig.config, inspectionSource.providerObserver) : null,
-    providerConfigError: providerConfig.ok ? null : providerConfig.error,
+    provider,
+    providerConfigError,
     providerProfile: providerConfig.ok ? providerConfig.profile : null,
     workspaceProfiles: await workspaceProfileStore.listProfiles(),
     threadSummaries: await threadStore.listThreadSummaries(),
@@ -107,6 +112,10 @@ async function createWindow(): Promise<void> {
     contextManifestPersistence: contextManifestStore,
     runTranscriptPort: runTranscriptStore,
   });
+  if (storedProviderConfig) {
+    const profiles = await providerProfileStore.listProfiles(providerCredentialStore);
+    controller.configureProvider({ provider, profile: profiles.find(p => p.isActive) ?? null, profiles, error: providerConfigError });
+  }
   const shellRuntime = projectNativeShellRuntimeProfile(await selectNativeShell({
     platform: process.platform === "win32" ? "win32" : "posix", cwd: userDataPath,
     environment: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),

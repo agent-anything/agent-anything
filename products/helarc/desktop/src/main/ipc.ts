@@ -7,6 +7,7 @@ import {
 } from "./HelarcDesktopProjection.js";
 import { createHelarcProductCommandDispatcher } from "./HelarcProductCommandDispatcher.js";
 import { createHelarcProvider } from "./provider/createHelarcProvider.js";
+import { HelarcProviderSelection } from "./provider/HelarcProviderSelection.js";
 import type { ProviderCredentialStore } from "./provider/ProviderCredentialStore.js";
 import type {
   FileHelarcProviderProfileStore,
@@ -52,6 +53,10 @@ export const HELARC_IPC_CHANNELS = {
   openThread: "helarc:open-thread",
   resumeDescendant: "helarc:resume-descendant",
   saveProviderConfig: "helarc:save-provider-config",
+  discoverModels: "helarc:discover-models",
+  getProviderCredentialSettings: "helarc:get-provider-credential-settings",
+  selectProvider: "helarc:select-provider",
+  deleteProvider: "helarc:delete-provider",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
   startRun: "helarc:start-run",
@@ -72,11 +77,57 @@ export interface RegisterHelarcIpcInput {
 }
 
 export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
+  const selection = input.providerProfileStore && input.providerCredentialStore
+    ? new HelarcProviderSelection(input.providerProfileStore, input.providerCredentialStore) : null;
+  let providerRefreshSequence = 0;
+  const refreshProvider = async () => {
+    if (!selection || !input.providerProfileStore || !input.providerCredentialStore) return input.controller.getSnapshot();
+    const refreshSequence = ++providerRefreshSequence;
+    let resolved;
+    try { resolved = await selection.resolve(); }
+    catch (error) {
+      const stored = await input.providerProfileStore.resolveActiveProfile(input.providerCredentialStore);
+      const profiles = await input.providerProfileStore.listProfiles(input.providerCredentialStore);
+      if (refreshSequence !== providerRefreshSequence) return input.controller.getSnapshot();
+      return input.controller.configureProvider({ provider: null, profile: stored?.ok ? stored.profile : profiles.find(p => p.isActive) ?? null, profiles,
+        error: { code: "provider_config_invalid", message: error instanceof Error ? error.message : "Provider selection is unavailable." } });
+    }
+    const profiles = await input.providerProfileStore.listProfiles(input.providerCredentialStore);
+    if (refreshSequence !== providerRefreshSequence) return input.controller.getSnapshot();
+    const previous = input.controller.getQualificationConfiguration();
+    const provider = resolved ? createHelarcProvider(resolved.config, input.inspection?.providerObserver) : null;
+    if (previous && resolved && JSON.stringify([previous.provider.descriptor, previous.providerProfile, input.controller.getSnapshot().provider.profiles]) ===
+        JSON.stringify([provider!.descriptor, resolved.profile, profiles])) return input.controller.getSnapshot();
+    return input.controller.configureProvider(resolved
+      ? { provider, profile: resolved.profile, profiles }
+      : { provider: null, profile: null, profiles, error: { code: "provider_config_missing", message: "Add a Provider configuration." } });
+  };
   const trustedSender = (event: IpcMainInvokeEvent) => event.sender === input.window.webContents &&
     event.senderFrame === input.window.webContents.mainFrame && event.senderFrame?.url === input.window.webContents.getURL();
-  ipcMain.handle(HELARC_IPC_CHANNELS.getQualification, (event) => {
+  ipcMain.handle(HELARC_IPC_CHANNELS.getProviderCredentialSettings, async (event, query) => {
+    if (!trustedSender(event) || !input.providerCredentialStore || !input.providerProfileStore ||
+        !query || typeof query !== "object" || Object.keys(query).sort().join() !== "profileId,profileRevision" ||
+        !((query.profileId === null && query.profileRevision === null) || (readToken(query.profileId) && readToken(query.profileRevision)))) {
+      throw new Error("Invalid credential settings query.");
+    }
+    const selection = query.profileId === null ? { source: "safe-storage" as const }
+      : await input.providerProfileStore.credentialSelection(query.profileId, query.profileRevision);
+    return { windowsAvailable: await input.providerCredentialStore.windowsAvailable(), selection };
+  });
+  ipcMain.handle(HELARC_IPC_CHANNELS.getQualification, async (event) => {
     if (!trustedSender(event) || !input.qualification) throw new Error("Qualification is unavailable.");
+    if (selection) {
+      const saved = await input.providerProfileStore!.resolveActiveProfile(input.providerCredentialStore!);
+      if (saved) await refreshProvider();
+    }
     return input.qualification.snapshot();
+  });
+  ipcMain.handle(HELARC_IPC_CHANNELS.discoverModels, async (event, query) => {
+    if (!trustedSender(event) || !selection || !query || Object.keys(query).sort().join() !== "model,profileId,profileRevision,refresh" ||
+      !readToken(query.profileId) || !readToken(query.profileRevision) || typeof query.model !== "string" || query.model.length > 512 || typeof query.refresh !== "boolean") {
+      return { ok: false, error: "Invalid model discovery request." };
+    }
+    return selection.discover(query);
   });
   ipcMain.handle(HELARC_IPC_CHANNELS.readQualificationEvidence, (event, query) => {
     if (!trustedSender(event) || !input.qualification || !query || Object.keys(query).length !== 2 ||
@@ -132,9 +183,15 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   const productCommands = createHelarcProductCommandDispatcher({
     handlers: {
-      "qualification.start": ({ targetId }) => input.qualification?.start(targetId) ?? { ok: false, error: "Qualification is unavailable." },
+      "qualification.start": async ({ targetId }) => {
+        if (selection && await input.providerProfileStore!.resolveActiveProfile(input.providerCredentialStore!)) await refreshProvider();
+        return input.qualification?.start(targetId) ?? { ok: false, error: "Qualification is unavailable." };
+      },
       "qualification.cancel": ({ campaignId }) => input.qualification?.cancel(campaignId) ?? { ok: false, error: "Qualification is unavailable." },
-      "qualification.publish": ({ campaignId, targetId, reviewed }) => input.qualification?.publish(campaignId, targetId, reviewed) ?? { ok: false, error: "Qualification is unavailable." },
+      "qualification.publish": async ({ campaignId, targetId, reviewed }) => {
+        if (selection && await input.providerProfileStore!.resolveActiveProfile(input.providerCredentialStore!)) await refreshProvider();
+        return input.qualification?.publish(campaignId, targetId, reviewed) ?? { ok: false, error: "Qualification is unavailable." };
+      },
       "project.select": ({ projectId }) => projectHelarcDesktopSnapshot(input.controller.selectProject(projectId)),
       "project.chooseFolder": async () => {
         if (!input.workspaceProfileStore) throw new Error("Folder storage is unavailable.");
@@ -245,29 +302,35 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
         const saved = await input.providerProfileStore.saveActiveProfile(
           payload,
           input.providerCredentialStore,
+          config => selection!.validateSavedSelection(config),
         );
         if (!saved.ok) {
-          return projectHelarcDesktopSnapshot(
-            input.controller.configureProvider({
-              provider: null,
-              profile: null,
-              error: {
-                code: saved.error.code,
-                message: saved.error.message,
-              },
-            }),
-          );
+          return projectHelarcDesktopSnapshot(input.controller.reportProviderError(saved.error.message));
         }
-
-        return projectHelarcDesktopSnapshot(
-          input.controller.configureProvider({
-            provider: createHelarcProvider(saved.config, input.inspection?.providerObserver),
-            profile: saved.profile,
-          }),
-        );
+        const snapshot = await refreshProvider();
+        return projectHelarcDesktopSnapshot(saved.cleanupWarning ? input.controller.reportProviderError(saved.cleanupWarning) : snapshot);
+      },
+      "provider.select": async ({ profileId }) => {
+        if (!input.providerProfileStore || !input.providerCredentialStore) throw new Error("Provider storage unavailable.");
+        const selected = await input.providerProfileStore.selectActiveProfile(profileId, input.providerCredentialStore);
+        if (!selected.ok && selected.error.code === "provider_profile_not_found") return projectHelarcDesktopSnapshot(input.controller.reportProviderError(selected.error.message));
+        try { return projectHelarcDesktopSnapshot(await refreshProvider()); }
+        catch (error) { return projectHelarcDesktopSnapshot(input.controller.reportProviderError(error instanceof Error ? error.message : "Provider selection failed.")); }
+      },
+      "provider.delete": async ({ profileId, expectedRevision }) => {
+        if (!input.providerProfileStore || !input.providerCredentialStore) throw new Error("Provider storage unavailable.");
+        const warning = await input.providerProfileStore.deleteProfile(profileId, expectedRevision, input.providerCredentialStore);
+        const snapshot = await refreshProvider();
+        return projectHelarcDesktopSnapshot(warning ? input.controller.reportProviderError(warning) : snapshot);
       },
       "run.start": async (payload) => {
-        const result = await input.controller.startRun(payload);
+        let resolved;
+        try { resolved = await selection?.resolve(payload.modelSelection); }
+        catch (error) {
+          const snapshot = input.controller.reportProviderError(error instanceof Error ? error.message : "Provider selection failed.");
+          return { ok: false as const, error: { code: "provider_config_invalid", message: snapshot.error!.message }, snapshot: projectHelarcDesktopSnapshot(snapshot) };
+        }
+        const result = await input.controller.startRun(payload, resolved ? { provider: createHelarcProvider(resolved.config, input.inspection?.providerObserver), profile: resolved.profile } : undefined);
         return result.ok
           ? {
               ok: true,
@@ -304,6 +367,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     [HELARC_IPC_CHANNELS.saveProject, "project.save"],
     [HELARC_IPC_CHANNELS.selectProject, "project.select"],
     [HELARC_IPC_CHANNELS.chooseProjectFolder, "project.chooseFolder"],
+    [HELARC_IPC_CHANNELS.selectProvider, "provider.select"],
+    [HELARC_IPC_CHANNELS.deleteProvider, "provider.delete"],
   ] as const) {
     ipcMain.handle(channel, (event, command: unknown) => {
       if (!trustedSender(event)) throw new Error("Untrusted Project request.");

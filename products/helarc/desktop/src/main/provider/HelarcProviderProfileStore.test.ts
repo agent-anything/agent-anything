@@ -1,446 +1,146 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
-import { ProviderCredentialStore, type ProviderCredentialCipher, type ProviderCredentialPersistence, type PersistedProviderCredential } from "./ProviderCredentialStore.js";
-import {
-  FileHelarcProviderProfileStore,
-  HelarcProviderProfileStoreCorruptionError,
-} from "./HelarcProviderProfileStore.js";
+import { describe, expect, it, vi } from "vitest";
+import { HelarcProviderSelection } from "./HelarcProviderSelection.js";
+import { ProviderCredentialStore } from "./ProviderCredentialStore.js";
+import { SafeStorageCredentialBackend, type ProviderCredentialCipher, type ProviderCredentialPersistence, type PersistedProviderCredential } from "./SafeStorageCredentialBackend.js";
+import { FileHelarcProviderProfileStore, HelarcProviderProfileStoreCorruptionError, type SaveHelarcProviderProfileInput } from "./HelarcProviderProfileStore.js";
 
-describe("FileHelarcProviderProfileStore", () => {
-  it("persists safe provider metadata and resolves credentials through the credential store", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const credentialStore = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PlainTextCipher(),
-    );
-    const store = new FileHelarcProviderProfileStore(profilePath);
-
-    const saved = await store.saveActiveProfile({
-      providerKind: "openai-compatible",
-      displayName: "DeepSeek",
-      baseUrl: "https://api.deepseek.com/v1",
-      model: "deepseek-chat",
-      timeoutMs: 45_000,
-      ollamaRuntime: null,
-      qualificationPolicy: "allow_experimental",
-      apiKeyUpdate: "set",
-      apiKey: " secret-key ",
-    }, credentialStore);
-
-    expect(saved).toMatchObject({
-      ok: true,
-      config: {
-        providerKind: "openai-compatible",
-        baseUrl: "https://api.deepseek.com/v1",
-        apiKey: "secret-key",
-        model: "deepseek-chat",
-        timeoutMs: 45_000,
-        ollamaRuntime: null,
-      },
-      profile: {
-        providerKind: "openai-compatible",
-        displayName: "DeepSeek",
-        baseUrl: "https://api.deepseek.com/v1",
-        ollamaRuntime: null,
-        credentialStatus: "present",
-        qualificationPolicy: "allow_experimental",
-      },
-    });
-    const persisted = await readFile(profilePath, "utf8");
-    expect(persisted).not.toContain("secret-key");
-    expect(JSON.parse(persisted)).toMatchObject({
-      formatVersion: 3,
-      activeProfile: {
-        id: "desktop-provider",
-        providerKind: "openai-compatible",
-        qualificationPolicy: "allow_experimental",
-        ollamaRuntime: null,
-      },
-    });
-
-    const restored = await new FileHelarcProviderProfileStore(profilePath)
-      .resolveActiveProfile(credentialStore);
-
-    expect(restored).toMatchObject({
-      ok: true,
-      config: {
-        apiKey: "secret-key",
-      },
-      profile: {
-        credentialStatus: "present",
-        qualificationPolicy: "allow_experimental",
-      },
-    });
-  });
-
-  it("overwrites persisted base URL when provider settings are saved again", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const credentialStore = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PlainTextCipher(),
-    );
-    const store = new FileHelarcProviderProfileStore(profilePath);
-
-    await store.saveActiveProfile({
-      providerKind: "openai-compatible",
-      displayName: "Local",
-      baseUrl: "http://localhost:11434/v1",
-      model: "gemma3:4b",
-      timeoutMs: 30_000,
-      ollamaRuntime: null,
-      apiKeyUpdate: "clear",
-      apiKey: "",
-    }, credentialStore);
-
-    const saved = await store.saveActiveProfile({
-      providerKind: "openai-compatible",
-      displayName: "Local",
-      baseUrl: "http://127.0.0.1:11434/v1",
-      model: "gemma3:4b",
-      timeoutMs: 30_000,
-      ollamaRuntime: null,
-      apiKeyUpdate: "clear",
-      apiKey: "",
-    }, credentialStore);
-
-    expect(saved).toMatchObject({
-      ok: true,
-      config: {
-        providerKind: "openai-compatible",
-        baseUrl: "http://127.0.0.1:11434/v1",
-      },
-      profile: {
-        providerKind: "openai-compatible",
-        baseUrl: "http://127.0.0.1:11434/v1",
-        baseUrlOrigin: "http://127.0.0.1:11434",
-        qualificationPolicy: "allow_experimental",
-      },
-    });
-    await expect(readFile(profilePath, "utf8")).resolves.toContain("http://127.0.0.1:11434/v1");
-
-    const restored = await new FileHelarcProviderProfileStore(profilePath)
-      .resolveActiveProfile(credentialStore);
-
-    expect(restored).toMatchObject({
-      ok: true,
-      config: {
-        baseUrl: "http://127.0.0.1:11434/v1",
-      },
-      profile: {
-        baseUrl: "http://127.0.0.1:11434/v1",
-      },
-    });
-  });
-
-  it("keeps an existing API key when only base URL is changed", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const credentialStore = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PlainTextCipher(),
-    );
-    const store = new FileHelarcProviderProfileStore(profilePath);
-
-    await store.saveActiveProfile({
-      providerKind: "openai-compatible",
-      displayName: "Cloud Provider",
-      baseUrl: "https://first.provider/v1",
-      model: "model-a",
-      timeoutMs: 30_000,
-      ollamaRuntime: null,
-      apiKeyUpdate: "set",
-      apiKey: "secret-key",
-    }, credentialStore);
-
-    const saved = await store.saveActiveProfile({
-      providerKind: "openai-compatible",
-      displayName: "Cloud Provider",
-      baseUrl: "https://second.provider/v1",
-      model: "model-a",
-      timeoutMs: 30_000,
-      ollamaRuntime: null,
-      apiKeyUpdate: "keep",
-      apiKey: "",
-    }, credentialStore);
-
-    expect(saved).toMatchObject({
-      ok: true,
-      config: {
-        providerKind: "openai-compatible",
-        baseUrl: "https://second.provider/v1",
-        apiKey: "secret-key",
-      },
-      profile: {
-        providerKind: "openai-compatible",
-        baseUrl: "https://second.provider/v1",
-        credentialStatus: "present",
-      },
-    });
-    await expect(readFile(profilePath, "utf8")).resolves.toContain("https://second.provider/v1");
-    await expect(readFile(profilePath, "utf8")).resolves.not.toContain("secret-key");
-  });
-
-  it("persists Ollama native provider kind without requiring an API key", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const credentialStore = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PlainTextCipher(),
-    );
-    const store = new FileHelarcProviderProfileStore(profilePath);
-
-    const saved = await store.saveActiveProfile({
-      providerKind: "ollama",
-      displayName: "Local Gemma",
-      baseUrl: "http://localhost:11434",
-      model: "gemma3:4b",
-      timeoutMs: 30_000,
-      ollamaRuntime: {
-        contextWindowTokens: 16_384,
-        maximumOutputTokens: 2_048,
-      },
-      apiKeyUpdate: "clear",
-      apiKey: "",
-    }, credentialStore);
-
-    expect(saved).toMatchObject({
-      ok: true,
-      config: {
-        providerKind: "ollama",
-        baseUrl: "http://localhost:11434/",
-        apiKey: "",
-        ollamaRuntime: {
-          contextWindowTokens: 16_384,
-          maximumOutputTokens: 2_048,
-        },
-      },
-      profile: {
-        providerKind: "ollama",
-        baseUrl: "http://localhost:11434/",
-        ollamaRuntime: {
-          contextWindowTokens: 16_384,
-          maximumOutputTokens: 2_048,
-        },
-        credentialStatus: "empty_allowed",
-      },
-    });
-    await expect(readFile(profilePath, "utf8")).resolves.toContain("\"providerKind\": \"ollama\"");
-  });
-
-  it("serializes settings transactions across Store instances sharing one file", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const credentialStore = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PlainTextCipher(),
-    );
-    const firstStore = new FileHelarcProviderProfileStore(profilePath);
-    const secondStore = new FileHelarcProviderProfileStore(profilePath);
-
-    const [first, second] = await Promise.all([
-      firstStore.saveActiveProfile(providerInput({
-        displayName: "First",
-        baseUrl: "https://first.provider/v1",
-      }), credentialStore),
-      secondStore.saveActiveProfile(providerInput({
-        displayName: "Second",
-        baseUrl: "https://second.provider/v1",
-      }), credentialStore),
-    ]);
-
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    expect(JSON.parse(await readFile(profilePath, "utf8"))).toMatchObject({
-      formatVersion: 3,
-      activeProfile: {
-        displayName: "Second",
-        baseUrl: "https://second.provider/v1",
-      },
-    });
-  });
-
-  it("returns an explicit failure without replacing the prior profile", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const credentialStore = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PlainTextCipher(),
-    );
-    const workingStore = new FileHelarcProviderProfileStore(profilePath);
-    await workingStore.saveActiveProfile(providerInput(), credentialStore);
-    const before = await readFile(profilePath, "utf8");
-    const failingStore = new FileHelarcProviderProfileStore(profilePath, {
-      createTemporaryId: () => "injected-failure",
-      operations: {
-        async replace() {
-          throw new Error("injected replacement failure");
-        },
-      },
-    });
-
-    const result = await failingStore.saveActiveProfile(providerInput({
-      displayName: "Not persisted",
-      apiKey: "new-secret",
-    }), credentialStore);
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: "provider_profile_persistence_failed",
-        message: "Provider profile could not be persisted.",
-      },
-    });
-    expect(JSON.stringify(result)).not.toContain("new-secret");
-    expect(await readFile(profilePath, "utf8")).toBe(before);
-  });
-
-  it("does not publish or persist profile metadata when credential storage fails", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const persistence = new MemoryCredentialPersistence();
-    const credentialStore = new ProviderCredentialStore(persistence, new PlainTextCipher());
-    const store = new FileHelarcProviderProfileStore(profilePath);
-    await store.saveActiveProfile(providerInput(), credentialStore);
-    const before = await readFile(profilePath, "utf8");
+async function setup() {
+  const directory = await mkdtemp(join(tmpdir(), "helarc-provider-profiles-"));
+  const path = join(directory, "provider-profile.json");
+  const persistence = new MemoryCredentialPersistence();
+  const credentials = new ProviderCredentialStore(new SafeStorageCredentialBackend(persistence, new PlainTextCipher()));
+  return { path, persistence, credentials, store: new FileHelarcProviderProfileStore(path) };
+}
+function input(patch: Partial<SaveHelarcProviderProfileInput> = {}): SaveHelarcProviderProfileInput {
+  return { providerKind: "openai-compatible", displayName: "Provider", baseUrl: "https://provider.test/v1",
+    model: "model", timeoutMs: 30000, ollamaRuntime: null,
+    modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+    apiKeyUpdate: "set", apiKey: "secret-key", ...patch };
+}
+describe("named Provider profiles", () => {
+  it("saves a credential before model discovery and keeps it when a model is selected later", async () => {
+    const { path, store, credentials, persistence } = await setup();
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ data: [{ id: "selected-model" }] })));
+    const selector = new HelarcProviderSelection(store, credentials, fetch);
+    const saved = await store.saveActiveProfile(input({ model: "" }), credentials, config => selector.validateSavedSelection(config));
+    if (!saved.ok) throw Error("Connection save failed");
+    expect(fetch).not.toHaveBeenCalled();
+    const reopened = new FileHelarcProviderProfileStore(path);
+    expect(await reopened.resolveActiveProfile(credentials)).toMatchObject({ ok: true, profile: { model: "" }, config: { apiKey: "secret-key" } });
+    const selection = new HelarcProviderSelection(reopened, credentials, fetch);
+    await expect(selection.resolve()).rejects.toThrow("Select a model");
+    expect(await selection.discover({ profileId: saved.profile.id, profileRevision: saved.profile.revision!, model: "", refresh: false }))
+      .toMatchObject({ ok: true, catalog: { models: [{ id: "selected-model" }] } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(new Headers(fetch.mock.calls[0]![1]?.headers).get("authorization")).toBe("Bearer secret-key");
     persistence.failWrites = true;
-
-    const result = await store.saveActiveProfile(providerInput({
-      displayName: "Not published",
-      apiKey: "new-secret",
-    }), credentialStore);
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: "provider_credential_persistence_failed",
-        message: "Provider credential storage is unavailable.",
-      },
-    });
-    expect(JSON.stringify(result)).not.toContain("new-secret");
-    expect(await readFile(profilePath, "utf8")).toBe(before);
+    const updated = await reopened.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision,
+      model: "selected-model", apiKeyUpdate: "keep", apiKey: "" }), credentials, config => selection.validateSavedSelection(config));
+    expect(updated).toMatchObject({ ok: true, config: { model: "selected-model", apiKey: "secret-key" } });
+    expect(await selection.resolve()).toMatchObject({ ok: true, config: { model: "selected-model" } });
   });
-
-  it("fails closed for invalid JSON, old versions, and malformed profiles", async () => {
-    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
-    const profilePath = join(rootPath, "provider-profile.json");
-    const credentialStore = new ProviderCredentialStore(
-      new MemoryCredentialPersistence(),
-      new PlainTextCipher(),
-    );
-    const store = new FileHelarcProviderProfileStore(profilePath);
-
-    await writeFile(profilePath, "{invalid", "utf8");
-    await expect(store.resolveActiveProfile(credentialStore)).rejects
-      .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
-
-    await writeFile(profilePath, JSON.stringify({
-      id: "desktop-provider",
-      displayName: "Old shape",
-    }), "utf8");
-    await expect(store.resolveActiveProfile(credentialStore)).rejects
-      .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
-
-    await writeFile(profilePath, JSON.stringify({
-      formatVersion: 2,
-      activeProfile: {},
-    }), "utf8");
-    await expect(store.resolveActiveProfile(credentialStore)).rejects
-      .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
-
-    await writeFile(profilePath, JSON.stringify({
-      formatVersion: 3,
-      activeProfile: {
-        id: "desktop-provider",
-        providerKind: "openai-compatible",
-        displayName: "Invalid policy",
-        baseUrl: "https://provider.local/v1",
-        model: "model-a",
-        timeoutMs: 30_000,
-        ollamaRuntime: null,
-        qualificationPolicy: "permissive",
-        updatedAt: "2026-08-28T00:00:00.000Z",
-      },
-    }), "utf8");
-    await expect(store.resolveActiveProfile(credentialStore)).rejects
-      .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
-
-    await writeFile(profilePath, JSON.stringify({
-      formatVersion: 1,
-      activeProfile: {
-        id: "desktop-provider",
-        providerKind: "unknown",
-        displayName: "Malformed",
-        baseUrl: "https://provider.local/v1",
-        model: "model-a",
-        timeoutMs: 30_000,
-        updatedAt: "2026-08-04T00:00:00.000Z",
-      },
-    }), "utf8");
-    await expect(store.saveActiveProfile(providerInput(), credentialStore)).rejects
-      .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
+  it("persists independent credentials and defaults across restart and selection", async () => {
+    const { path, credentials, store } = await setup();
+    const first = await store.saveActiveProfile(input(), credentials);
+    const second = await store.saveActiveProfile(input({ displayName: "Second", baseUrl: "https://second.test", apiKey: "second-key" }), credentials);
+    if (!first.ok || !second.ok) throw Error("save failed");
+    expect(first.profile.id).not.toBe(second.profile.id);
+    expect(await readFile(path, "utf8")).not.toContain("secret-key");
+    const reopened = new FileHelarcProviderProfileStore(path);
+    expect((await reopened.listProfiles(credentials)).map(p => p.isActive)).toEqual([false, true]);
+    expect(await reopened.resolveProfile(first.profile.id, credentials)).toMatchObject({ ok: true, config: { apiKey: "secret-key" } });
+    expect(await reopened.selectActiveProfile(first.profile.id, credentials)).toMatchObject({ ok: true, profile: { id: first.profile.id } });
+    expect(await reopened.resolveActiveProfile(credentials)).toMatchObject({ ok: true, config: { apiKey: "secret-key" } });
+  });
+  it("requires the expected revision and keeps credentials on cosmetic edits", async () => {
+    const { store, credentials } = await setup();
+    const saved = await store.saveActiveProfile(input(), credentials);
+    if (!saved.ok) throw Error("save failed");
+    const update = input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision, displayName: "Renamed", apiKeyUpdate: "keep", apiKey: "" });
+    expect(await store.saveActiveProfile(update, credentials)).toMatchObject({ ok: true, config: { apiKey: "secret-key" }, profile: { displayName: "Renamed" } });
+    expect(await store.saveActiveProfile(update, credentials)).toMatchObject({ ok: false, error: { code: "provider_profile_conflict" } });
+  });
+  it("cannot transfer an old credential to a different endpoint", async () => {
+    const { store, credentials } = await setup();
+    const saved = await store.saveActiveProfile(input(), credentials);
+    if (!saved.ok) throw Error("save failed");
+    expect(await store.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision, apiKeyUpdate: "keep", baseUrl: "https://other.test" }), credentials)).toMatchObject({ ok: false });
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: true, config: { baseUrl: "https://provider.test/v1", apiKey: "secret-key" } });
+  });
+  it("keeps the old credential and profile if the atomic profile commit fails", async () => {
+    const { path, credentials, store } = await setup();
+    const saved = await store.saveActiveProfile(input(), credentials);
+    if (!saved.ok) throw Error("save failed");
+    const before = await readFile(path, "utf8");
+    const failing = new FileHelarcProviderProfileStore(path, { operations: { async replace() { throw Error("injected failure"); } } });
+    expect(await failing.saveActiveProfile(input({ profileId: saved.profile.id, expectedRevision: saved.profile.revision, apiKey: "replacement-secret" }), credentials)).toMatchObject({ ok: false, error: { code: "provider_profile_persistence_failed" } });
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: true, config: { apiKey: "secret-key" } });
+  });
+  it("does not publish a configuration after credential persistence fails", async () => {
+    const { store, credentials, persistence } = await setup();
+    persistence.failWrites = true;
+    expect(await store.saveActiveProfile(input(), credentials)).toMatchObject({ ok: false });
+    expect(await store.resolveActiveProfile(credentials)).toBeNull();
+  });
+  it("keeps the previous profile and credential when selection validation fails", async () => {
+    const { path, store, credentials } = await setup();
+    const saved = await store.saveActiveProfile(input(), credentials);
+    if (!saved.ok) throw Error("save failed");
+    const before = await readFile(path, "utf8");
+    const result = await store.saveActiveProfile(input({ profileId: saved.profile.id,
+      expectedRevision: saved.profile.revision, apiKey: "replacement-secret" }), credentials,
+      async () => { throw new Error("Unsupported thinking selection."); });
+    expect(result).toMatchObject({ ok: false, error: { message: "Unsupported thinking selection." } });
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: true, config: { apiKey: "secret-key" } });
+  });
+  it("deletes only the chosen profile and selects a remaining profile", async () => {
+    const { store, credentials } = await setup();
+    const first = await store.saveActiveProfile(input(), credentials);
+    const second = await store.saveActiveProfile(input({ displayName: "Second" }), credentials);
+    if (!first.ok || !second.ok) throw Error("save failed");
+    await store.deleteProfile(second.profile.id, second.profile.revision!, credentials);
+    expect(await store.resolveActiveProfile(credentials)).toMatchObject({ ok: true, profile: { id: first.profile.id } });
+    await expect(store.deleteProfile(first.profile.id, "stale", credentials)).rejects.toThrow();
+    await store.deleteProfile(first.profile.id, first.profile.revision!, credentials);
+    expect(await store.resolveActiveProfile(credentials)).toBeNull();
+  });
+  it("serializes concurrent additions without losing either profile", async () => {
+    const { path, store, credentials } = await setup();
+    await Promise.all([store.saveActiveProfile(input(), credentials),
+      new FileHelarcProviderProfileStore(path).saveActiveProfile(input({ displayName: "Second" }), credentials)]);
+    expect(await store.listProfiles(credentials)).toHaveLength(2);
+  });
+  it.each(['{"formatVersion":3,"activeProfile":{}}', "{bad", '{"formatVersion":4,"activeProfileId":"missing","profiles":[]}'])("rejects incompatible or malformed stores", async document => {
+    const { path, store, credentials } = await setup();
+    await writeFile(path, document);
+    await expect(store.resolveActiveProfile(credentials)).rejects.toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
+    await expect(store.saveActiveProfile(input(), credentials)).rejects.toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
+    expect(await readFile(path, "utf8")).toBe(document);
+  });
+  it("rejects invalid URLs, runtime limits and service/transport combinations before saving credentials", async () => {
+    const { store, credentials } = await setup();
+    for (const patch of [{ baseUrl: "https://user:secret@provider.test" }, { baseUrl: "http://remote.test" },
+      { providerKind: "ollama" as const, ollamaRuntime: null }, { modelSettings: { service: "ollama" as const, thinking: { mode: "default" as const }, maximumOutputTokens: 10 } }]) {
+      expect(await store.saveActiveProfile(input(patch), credentials)).toMatchObject({ ok: false });
+    }
+    expect(await store.listProfiles(credentials)).toEqual([]);
   });
 });
 
 class MemoryCredentialPersistence implements ProviderCredentialPersistence {
   private readonly records = new Map<string, PersistedProviderCredential>();
   failWrites = false;
-
-  async read(profileId: string): Promise<PersistedProviderCredential | null> {
-    return this.records.get(profileId) ?? null;
-  }
-
-  async write(record: PersistedProviderCredential): Promise<void> {
-    if (this.failWrites) {
-      throw new Error("injected credential write failure");
-    }
-    this.records.set(record.profileId, record);
-  }
-
-  async delete(profileId: string): Promise<void> {
-    this.records.delete(profileId);
-  }
+  async read(id: string) { return this.records.get(id) ?? null; }
+  async write(record: PersistedProviderCredential) { if (this.failWrites) throw Error("injected failure"); this.records.set(record.profileId, record); }
+  async delete(id: string) { this.records.delete(id); }
 }
-
-function providerInput(overrides: Partial<{
-  providerKind: "openai-compatible" | "ollama";
-  displayName: string;
-  baseUrl: string;
-  model: string;
-  timeoutMs: number;
-  ollamaRuntime: {
-    contextWindowTokens: number;
-    maximumOutputTokens: number;
-  } | null;
-  apiKeyUpdate: "keep" | "set" | "clear";
-  apiKey: string;
-}> = {}) {
-  return {
-    providerKind: "openai-compatible" as const,
-    displayName: "Provider",
-    baseUrl: "https://provider.local/v1",
-    model: "model-a",
-    timeoutMs: 30_000,
-    ollamaRuntime: null,
-    apiKeyUpdate: "set" as const,
-    apiKey: "secret-key",
-    ...overrides,
-  };
-}
-
 class PlainTextCipher implements ProviderCredentialCipher {
-  isEncryptionAvailable(): boolean {
-    return true;
-  }
-
-  encryptString(value: string): string {
-    return value;
-  }
-
-  decryptString(value: string): string {
-    return value;
-  }
+  isEncryptionAvailable() { return true; }
+  encryptString(value: string) { return value; }
+  decryptString(value: string) { return value; }
 }

@@ -1,3 +1,5 @@
+import { snapshotModelThinkingSelection, type ModelThinkingSelection } from "@agent-anything/model-interaction";
+
 export type HelarcProviderCredentialStatus =
   | "present"
   | "empty_allowed"
@@ -17,6 +19,8 @@ export interface HelarcOllamaRuntimeProfile {
 }
 
 export interface CreateHelarcProviderProfileInput {
+  modelSettings?: HelarcProviderModelSettings;
+  revision?: string;
   id: string;
   providerKind?: HelarcProviderKind;
   displayName: string;
@@ -30,6 +34,8 @@ export interface CreateHelarcProviderProfileInput {
 }
 
 export interface HelarcProviderProfile {
+  modelSettings?: HelarcProviderModelSettings;
+  revision?: string;
   id: string;
   providerKind: HelarcProviderKind;
   displayName: string;
@@ -100,9 +106,6 @@ export function createHelarcProviderProfile(
   }
 
   const model = input.model.trim();
-  if (model.length === 0) {
-    return reject("provider_profile_model_required", "Provider profile model is required.");
-  }
 
   if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
     return reject(
@@ -134,10 +137,19 @@ export function createHelarcProviderProfile(
     );
   }
 
+  let modelSettings: HelarcProviderModelSettings;
+  try { modelSettings = snapshotHelarcProviderModelSettings(input.modelSettings, providerKind); }
+  catch { return reject("provider_profile_kind_invalid", "Provider model settings are invalid."); }
+  if (!model && modelSettings.thinking.mode !== "default") {
+    return reject("provider_profile_model_required", "Select a model before configuring thinking.");
+  }
+
   return {
     ok: true,
     profile: {
       id,
+      modelSettings,
+      ...(input.revision === undefined ? {} : { revision: input.revision }),
       providerKind,
       displayName,
       endpointLabel: urlResult.url.host,
@@ -238,6 +250,7 @@ function normalizeBaseUrl(
 
   try {
     const url = new URL(normalized);
+    if (url.username || url.password || url.search || url.hash) return reject("provider_profile_base_url_invalid", "Provider URL cannot contain credentials, a query, or a fragment.");
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       return reject(
         "provider_profile_base_url_invalid",
@@ -286,4 +299,26 @@ function reject(
   message: string,
 ): { ok: false; error: HelarcProviderProfileError } {
   return { ok: false, error: { code, message } };
+}
+export type HelarcProviderService = "generic" | "deepseek" | "ollama";
+
+export interface HelarcProviderModelSettings {
+  readonly service: HelarcProviderService;
+  readonly thinking: ModelThinkingSelection;
+  readonly maximumOutputTokens: number;
+}
+
+export function snapshotHelarcProviderModelSettings(
+  value: HelarcProviderModelSettings | undefined, kind: HelarcProviderKind,
+): HelarcProviderModelSettings {
+  const settings = value ?? { service: kind === "ollama" ? "ollama" : "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 };
+  if (!["generic", "deepseek", "ollama"].includes(settings.service) ||
+      (settings.service === "ollama") !== (kind === "ollama") ||
+      !Number.isSafeInteger(settings.maximumOutputTokens) || settings.maximumOutputTokens <= 0 ||
+      Object.keys(settings).some(key => !["service", "thinking", "maximumOutputTokens"].includes(key))) {
+    throw new TypeError("Provider model settings are invalid.");
+  }
+  const thinking = snapshotModelThinkingSelection(settings.thinking);
+  if (settings.service === "generic" && thinking.mode !== "default") throw new TypeError("This service has no implemented thinking controls.");
+  return Object.freeze({ ...settings, thinking });
 }

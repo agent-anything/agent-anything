@@ -21,6 +21,7 @@ describe("resolveHelarcProviderConfig", () => {
         model: "model-a",
         timeoutMs: 1500,
         ollamaRuntime: null,
+        modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
       },
       profile: {
         id: "env-provider",
@@ -33,6 +34,7 @@ describe("resolveHelarcProviderConfig", () => {
         timeoutMs: 1500,
         ollamaRuntime: null,
         credentialStatus: "present",
+        modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
         qualificationPolicy: "require_qualified",
         isActive: true,
       },

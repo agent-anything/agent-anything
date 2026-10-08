@@ -31,6 +31,25 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  it("returns only credential source metadata to the trusted frame and checks exact profile revision", async () => {
+    const frame = { url: "file:///helarc/index.html" };
+    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };
+    const credentialSelection = vi.fn(async (id, revision) => {
+      if (id !== "profile" || revision !== "revision") throw new Error("Profile changed");
+      return { source: "windows-reference", target: "Example/DeepSeek", encoding: "utf16le" };
+    });
+    const resolveApiKey = vi.fn();
+    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller: controllerDouble(mainSnapshot()),
+      providerProfileStore: { credentialSelection } as unknown as import("./provider/HelarcProviderProfileStore.js").FileHelarcProviderProfileStore,
+      providerCredentialStore: { windowsAvailable: async () => true, resolveApiKey } as unknown as import("./provider/ProviderCredentialStore.js").ProviderCredentialStore });
+    const handler = requiredHandler(HELARC_IPC_CHANNELS.getProviderCredentialSettings), event = { sender: contents, senderFrame: frame };
+    const query = { profileId: "profile", profileRevision: "revision" };
+    await expect(handler({ ...event, senderFrame: {} }, query)).rejects.toThrow("Invalid");
+    await expect(handler(event, { ...query, target: "OtherSecret" })).rejects.toThrow("Invalid");
+    await expect(handler(event, { ...query, profileRevision: "stale" })).rejects.toThrow("changed");
+    expect(await handler(event, query)).toEqual({ windowsAvailable: true, selection: { source: "windows-reference", target: "Example/DeepSeek", encoding: "utf16le" } });
+    expect(resolveApiKey).not.toHaveBeenCalled();
+  });
   it("authorizes qualification commands and evidence reads without accepting supplied outcomes", async () => {
     const frame = { url: "file:///helarc/index.html" };
     const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };
@@ -46,7 +65,7 @@ describe("Helarc IPC", () => {
     expect(await start(event, command)).toMatchObject({ status: "handled" });
     await start(event, command);
     expect(qualification.start).toHaveBeenCalledOnce();
-    expect(() => requiredHandler(HELARC_IPC_CHANNELS.getQualification)({ ...event, sender: {} })).toThrow("unavailable");
+    await expect(requiredHandler(HELARC_IPC_CHANNELS.getQualification)({ ...event, sender: {} })).rejects.toThrow("unavailable");
     expect(await requiredHandler(HELARC_IPC_CHANNELS.getQualification)(event)).toEqual({ available: true });
     const read = requiredHandler(HELARC_IPC_CHANNELS.readQualificationEvidence);
     const query = { campaignId: "campaign", trialId: null };
@@ -211,7 +230,7 @@ describe("Helarc IPC", () => {
     const first = handler({}, command) as Promise<unknown>;
     const duplicate = handler({}, command) as Promise<unknown>;
     await Promise.resolve();
-    expect(startRun).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(startRun).toHaveBeenCalledOnce());
     startGate.resolve();
     const firstReceipt = await first;
     const duplicateReceipt = await duplicate;

@@ -71,7 +71,7 @@ it("preserves explicit non-thinking mode in streamed OpenAI-compatible requests"
   const fetch = vi.fn(async () => response(body(frames("openai").join(""))));
   const provider = new OpenAICompatibleProvider({
     baseUrl: "https://provider.local/v1", apiKey: "", model: "test-model", timeoutMs: 1000,
-    maximumOutputTokens: 2048, thinking: { type: "disabled" },
+    maximumOutputTokens: 2048, service: "deepseek", thinking: { type: "disabled" },
     nativeToolInteraction: { supported: true }, requestBodyTransportLimit: limit,
   }, fetch);
   const result = await provider.send(createNativeProviderRequest(provider), context(), { mode: "streaming", invocationId: "non-thinking" });
@@ -96,7 +96,7 @@ describe.each(["ollama", "openai"] as const)("%s streaming", (format) => {
     expect(JSON.parse(fetch.mock.calls[0]![1].body)).toMatchObject({ stream: true });
     expect(JSON.parse(fetch.mock.calls[0]![1].body).messages.some((entry: { role: string }) => entry.role === "system")).toBe(false);
     expect(progress.filter((entry) => entry.kind === "text_delta").map((entry) => entry.text).join("")).toBe(text);
-    expect(JSON.stringify(progress)).not.toContain("private analysis");
+    expect(progress.filter(event => event.kind === "reasoning_delta").map(event => event.text).join("")).toBe(format === "ollama" ? "private analysis" : "");
     expect(progress.map((entry) => entry.sequence)).toEqual(progress.map((_, index) => index + 1));
     expect(progress.every((entry) => entry.invocationId === "attempt-1" && Object.isFrozen(entry))).toBe(true);
     expect(progress.at(-1)).toMatchObject({ kind: "settled", disposition: "completed", parts: [
@@ -132,7 +132,7 @@ describe.each(["ollama", "openai"] as const)("%s streaming", (format) => {
       } }] });
     const contentFrames = [content.slice(0, 9), content.slice(9)].map(fragment => format === "ollama"
       ? ndjson({ done: false, message: { content: fragment, thinking: "private analysis" } })
-      : sse({ content: fragment }));
+      : sse({ content: fragment, reasoning_content: "private analysis" }));
     const terminal = format === "ollama" ? ndjson({ done: true, done_reason: "stop" })
       : sse({}, "tool_calls") + "data: [DONE]\n\n";
     const progress: ProviderDeliveryProgress[] = [];
@@ -158,7 +158,9 @@ describe.each(["ollama", "openai"] as const)("%s streaming", (format) => {
       ...(content ? [{ partId: "text:0", contentBlockOrdinal: 0 }] : []),
       { partId: "call:0", contentBlockOrdinal: content ? 1 : 0 },
     ] });
-    expect(JSON.stringify({ result, progress })).not.toContain("private analysis");
+    if (result.kind !== "succeeded" || result.response.kind !== "native_tool_turn") throw Error("Expected Turn");
+    expect(JSON.stringify(result.response.turn.assistant.content)).not.toContain("private analysis");
+    expect(result.response.turn.assistant.reasoning?.text).toBe("private analysisprivate analysis");
   });
 
   it.each(["throw", "reject", "pending"])("isolates a %s observer without delaying the response", async (behavior) => {
