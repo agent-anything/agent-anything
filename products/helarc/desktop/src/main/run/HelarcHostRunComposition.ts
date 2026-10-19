@@ -203,6 +203,31 @@ export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
 export async function prepareHelarcHostRun(
   input: PrepareHelarcHostRunInput,
 ): Promise<PreparedHelarcHostRun> {
+  try { return await prepareHostRun(input); }
+  catch (error) {
+    if (input.recoveryAdmission) {
+      const diagnostic = error && typeof error === "object" ? error as {code?: string; component?: string} : {};
+      input.inspection?.recordRecoveryBindingCheck({runId: input.recoveryAdmission.rootRunId, outcome: "rejected",
+        code: diagnostic.code ?? "recovery_binding_preparation_failed", component: diagnostic.component ?? "composition", changedVariableNames: []});
+    }
+    throw error;
+  }
+}
+
+class HelarcRecoveryBindingError extends Error {
+  readonly code = "recovery_binding_mismatch";
+  constructor(readonly component: string) {
+    super(`Original execution binding is unavailable: ${component}; recovery cannot use changed configuration.`);
+    this.name = "HelarcRecoveryBindingError";
+  }
+}
+
+async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<PreparedHelarcHostRun> {
+  if (input.recoveryAdmission && (!input.executionStore || input.recoveryAdmission.version !== 2 ||
+      input.recoveryAdmission.productRunId !== input.productRunId || input.recoveryAdmission.sessionId !== input.sessionId))
+    throw new HelarcRecoveryBindingError("admission");
+  const recoveryEnvironment = input.recoveryAdmission
+    ? input.executionStore!.restoreCommandEnvironment(input.recoveryAdmission.commandEnvironment) : undefined;
   const rootRunId = input.recoveryAdmission?.rootRunId ?? `run_${randomUUID()}`;
   const instructionSettings = snapshotHelarcInstructionSettings(input.instructionSettings ?? createDefaultHelarcInstructionSettings());
   const runContext = await resolveHostRunContext({
@@ -268,6 +293,7 @@ export async function prepareHelarcHostRun(
   });
   let reportCommand:(fact:import("@agent-anything/helarc-local-environment/command").ProcessExecutionFact)=>void=()=>{};
   const commandActions = await createHelarcLocalCommandActionCapability({
+    recoveryEnvironment,
     processManagerId: `process-manager:${rootRunId}`,
     processRecords: input.executionStore,
     shellSessionRecords: input.executionStore,
@@ -333,9 +359,7 @@ export async function prepareHelarcHostRun(
       cwd:s.initialCwd,startedAt:s.startedAt,completedAt:s.finishedAt,exitCode:s.rootExit?.code ?? null,
       invocationId:s.origin?.invocationId ?? null,attemptId:s.origin?.attemptId ?? null});
   };
-  const configurationFingerprint = await createCanonicalSha256Digest(
-    "agent-anything.helarc.local-environment.v1",
-    {
+  const executionBindings = {
       platform,
       enforcement,
       commandEnvironment: commandActions.environment,
@@ -351,8 +375,8 @@ export async function prepareHelarcHostRun(
       workspaceRootFingerprints: canonicalRoots.map(
         (root) => root.resolutionFingerprint,
       ),
-    },
-  );
+    };
+  const configurationFingerprint = await createCanonicalSha256Digest("agent-anything.helarc.local-environment.v1", executionBindings);
   const securityContext = Object.freeze({
     workspace: createCanonicalWorkspaceIdentity({
       workspaceId: workspace.id,
@@ -545,20 +569,25 @@ export async function prepareHelarcHostRun(
   } as const;
   if (input.recoveryAdmission) {
     const retained = input.recoveryAdmission;
-    if (!input.executionStore || retained.productRunId !== input.productRunId || retained.sessionId !== input.sessionId ||
-        retained.environmentFingerprint !== configurationFingerprint || !sameBinding(retained.providerBinding,
-          retainHelarcProviderBinding(input.provider))) {
-      throw new Error("Original execution bindings are unavailable; recovery cannot use changed configuration.");
+    if (!sameBinding(retained.providerBinding, retainHelarcProviderBinding(input.provider))) throw new HelarcRecoveryBindingError("provider");
+    if (retained.environmentFingerprint !== configurationFingerprint || !sameBinding(retained.executionBindings, executionBindings)) {
+      const original = retained.executionBindings as Record<string, unknown>;
+      const changed = Object.entries(executionBindings).filter(([key, value]) => !sameBinding(original?.[key], value)).map(([key]) => key);
+      throw new HelarcRecoveryBindingError(changed.join(", ") || "environmentFingerprint");
     }
+    input.inspection?.recordRecoveryBindingCheck({runId: rootRunId, outcome: "accepted", code: null, component: "composition",
+      changedVariableNames: Object.keys({...recoveryEnvironment!.environment, ...process.env})
+        .filter(key => recoveryEnvironment!.environment[key] !== process.env[key]).sort()});
   } else if (input.executionStore) {
-    await input.executionStore.admitProductRun({version: 1, rootRunId, productRunId: input.productRunId,
+    await input.executionStore.admitProductRun({version: 2, rootRunId, productRunId: input.productRunId,
       sessionId: input.sessionId, createdAt: now(), task: input.task, inputItems: input.inputItems,
       workspace: runWorkspace, identity: runContext.identity, providerProfile: input.providerProfile,
       providerBinding: retainHelarcProviderBinding(input.provider),
       instructionSettings, qualificationCatalog: input.qualificationCatalog ?? null, permissionPreset: input.permissionPreset,
       qualification: product.qualification.safeProjection,
       enforcement, commandLimits: input.commandLimits ?? null, runLimits, runTreeLimits,
-      responseDelivery: input.responseDelivery ?? "buffered", environmentFingerprint: configurationFingerprint});
+      responseDelivery: input.responseDelivery ?? "buffered", environmentFingerprint: configurationFingerprint,
+      executionBindings, commandEnvironment: input.executionStore.retainCommandEnvironment(commandActions.recoveryEnvironment)});
   }
   let started = false;
   let releaseExecution: (() => void) | undefined;
@@ -677,6 +706,9 @@ function createInvocationLocalActionRecordPort(): ActionRecordPort {
     return `helarc-action-${phase}-${sequence}`;
   };
   return Object.freeze({
+    async recordPreparedAction() {
+      return Object.freeze({recordId: next("pre")});
+    },
     async recordPreEffect() {
       return Object.freeze({ recordId: next("pre") });
     },

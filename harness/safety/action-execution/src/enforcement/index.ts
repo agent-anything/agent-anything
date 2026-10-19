@@ -16,6 +16,7 @@ export {
   ActionRecoveryError,
   type ActionAttemptReconciliationPort,
   type ActionPreparationRecord,
+  type PreparedActionRecord,
   type ActionDispatchIntent,
   type ActionAttemptResultRecord,
   type ActionRetryRecord,

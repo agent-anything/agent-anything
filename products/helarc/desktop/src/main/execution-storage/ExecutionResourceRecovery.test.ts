@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { RunProcessManager, type ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
 import type { AgentHookInvocationCheckpoint } from "@agent-anything/agent-hooks/execution";
 import { HelarcExecutionStore } from "./HelarcExecutionStore.js";
+import {openExecutionStoreFixture} from "./fixtures/ExecutionEnvironmentFixture.js";
 import { reconcileInterruptedHooks } from "./reconcileInterruptedHooks.js";
 
 const directories: string[] = [];
@@ -16,7 +17,7 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) await rm(directory, {recursive: true, force: true});
 });
 async function open(path: string) {
-  const store = await HelarcExecutionStore.open(path, worker);
+  const store = await openExecutionStoreFixture(path, worker);
   stores.push(store);
   return store;
 }
@@ -114,9 +115,14 @@ describe("execution resource recovery", () => {
       await manager.flushRun(runId);
       const notifications = manager.readInputNotifications(runId, 0);
       expect(await store.listRetentionPins()).toEqual([]);
+      const retainedCheckpoint = (await store.readProcesses(runId))[0]!;
       await store.close();
       closed = true;
       const reopened = await open(storePath);
+      // A fresh cipher produces a new ciphertext, but the same checkpoint is a replay.
+      await reopened.commitProcess(retainedCheckpoint);
+      await expect(reopened.commitProcess({...retainedCheckpoint, input: {...retainedCheckpoint.input,
+        environment: {...retainedCheckpoint.input.environment, CHANGED: "not-the-original-environment"}}})).rejects.toThrow("execution_process_record_conflict");
       const restored = make(reopened);
       await restored.restoreRun(runId);
       expect(await restored.observe(observation)).toEqual(initial);

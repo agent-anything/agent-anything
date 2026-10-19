@@ -9,10 +9,11 @@ import type { CodeAgentCommandLimits } from "@agent-anything/helarc-local-enviro
 import type { Provider } from "@agent-anything/model-interaction";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { SandboxEnforcement } from "@agent-anything/action-execution/sandbox";
+import type {RetainedCommandEnvironment} from "./ExecutionEnvironmentProtection.js";
 
-/** Original Product composition data, never credentials or executable services. */
+/** Original Product composition, with command environment sealed by the Host. Never executable services. */
 export interface HelarcExecutionAdmission {
-  readonly version: 1;
+  readonly version: 2;
   readonly rootRunId: string;
   readonly productRunId: string;
   readonly sessionId: string;
@@ -33,6 +34,8 @@ export interface HelarcExecutionAdmission {
   readonly runTreeLimits: RunTreeLimits;
   readonly responseDelivery: "buffered" | "streaming";
   readonly environmentFingerprint: string;
+  readonly commandEnvironment: RetainedCommandEnvironment;
+  readonly executionBindings: import("@agent-anything/canonical-action/subject").SerializableValue;
 }
 
 export interface HelarcProviderRecoveryBinding {

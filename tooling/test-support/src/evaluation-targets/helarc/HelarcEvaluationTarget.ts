@@ -1017,6 +1017,9 @@ function createEvaluationActionRecordPort(prefix: string): ActionRecordPort {
     recordId: `${prefix}.action-${kind}-${++sequence}`,
   });
   return Object.freeze({
+    async recordPreparedAction() {
+      return next("prepared");
+    },
     async recordPreEffect() {
       return next("pre-effect");
     },

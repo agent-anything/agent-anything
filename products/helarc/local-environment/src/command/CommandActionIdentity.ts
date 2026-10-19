@@ -120,10 +120,13 @@ export function projectNativeShellRuntimeProfile(
 export async function createCommandEnvironmentPolicy(input: {
   readonly id: string;
   readonly overrides?: Readonly<Record<string, string>>;
+  readonly retained?: Readonly<Record<string, string>>;
 }): Promise<CommandEnvironmentPolicySnapshot> {
   if (!isToken(input.id)) throw new TypeError("Command environment policy id is invalid.");
+  if (input.retained && input.overrides) throw new TypeError("Restored environment cannot use overrides.");
   const environment: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) {
+  for (const [name, value] of Object.entries(input.retained ?? process.env)) {
+    if (!name || (value !== undefined && typeof value !== "string")) throw new TypeError("Command environment is invalid.");
     if (value !== undefined) environment[name] = value;
   }
   for (const [name, value] of Object.entries(input.overrides ?? {})) {

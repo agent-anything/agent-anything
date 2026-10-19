@@ -186,6 +186,8 @@ export class RunTreeApprovalAccount {
     });
   }
 
+  isActive(requestId: string): boolean { return this.active.has(requestId); }
+
   settle(requestId: string, kind: RunTreeApprovalSettlementKind): RunTreeApprovalSnapshot {
     assertToken(requestId, "requestId");
     assertSettlementKind(kind);

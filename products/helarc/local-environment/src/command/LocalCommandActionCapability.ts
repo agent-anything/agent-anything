@@ -54,6 +54,7 @@ import {
   type NativeShellRuntimeProfile,
 } from "./CommandActionIdentity.js";
 import { RunProcessManager, ProcessManagerError } from "./RunProcessManager.js";
+import {captureCommandEnvironmentRecovery, restoreCommandEnvironmentRecovery, type CommandEnvironmentRecoverySnapshot} from "./CommandEnvironmentRecovery.js";
 import type { ProcessRecordPort } from "./ProcessCheckpoint.js";
 import { OperationCommitError } from "@agent-anything/operation-catalog/result";
 import { ProcessOutputRepository } from "./ProcessOutputRepository.js";
@@ -102,6 +103,7 @@ export interface CreateHelarcLocalCommandActionCapabilityInput {
   readonly limits?: Partial<CodeAgentCommandLimits>;
   readonly environment?: Readonly<Record<string, string>>;
   readonly environmentPolicyId?: string;
+  readonly recoveryEnvironment?: CommandEnvironmentRecoverySnapshot;
   readonly now?: () => string;
   readonly processObserver?: ProcessExecutionObserver;
   readonly constraintObserver?: CommandConstraintObserver;
@@ -117,6 +119,7 @@ export interface HelarcLocalCommandActionCapability {
   readonly shellActionAdapterId: string;
   readonly taskStopActionAdapterId: string;
   readonly environment: { readonly id: string; readonly revision: string };
+  readonly recoveryEnvironment: CommandEnvironmentRecoverySnapshot;
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
@@ -174,7 +177,13 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
   const limits = resolveCommandLimits(input.limits);
   const inputContract = createCommandInputContract(limits);
   const now = input.now ?? (() => new Date().toISOString());
-  const environment = await createCommandEnvironmentPolicy({ id: input.environmentPolicyId ?? "helarc.local.shell.environment.default", overrides: input.environment });
+  if (input.recoveryEnvironment && input.environment) throw new TypeError("Restored command capability cannot override its environment.");
+  const policyId = input.environmentPolicyId ?? "helarc.local.shell.environment.default";
+  const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
+  const environment = input.recoveryEnvironment
+    ? await restoreCommandEnvironmentRecovery({snapshot: input.recoveryEnvironment, policyId,
+      cwd: shellSession.snapshot().canonicalPath, platform: input.platform})
+    : await createCommandEnvironmentPolicy({id: policyId, overrides: input.environment});
   const backend = input.platform === "win32"
     ? new WindowsJobProcessBackend(await resolveWindowsProcessHelper()) : new PosixProcessBackend();
   const processTasks = new RunProcessManager({backend, maximumActive:limits.maxActiveTasks,
@@ -184,7 +193,6 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     constraints: {ref: inputContract.ref, observer: input.constraintObserver}});
   const outputs = new ProcessOutputRepository(input.commandOutputDirectory);
   const commandSemantics = new Map<string, {shell:"Bash"|"PowerShell";command:string}>();
-  const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
   const sessions = new Map<string,ShellExecutionSession>();
   const sessionFor = (runId:string) => {
     let session = sessions.get(runId);
@@ -195,11 +203,13 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     }
     return session;
   };
-  const shell = await selectNativeShell({
+  const shell = input.recoveryEnvironment?.shell.selection ?? await selectNativeShell({
     platform: input.platform,
     cwd: shellSession.snapshot().canonicalPath,
     environment: environment.environment,
   });
+  const recoveryEnvironment = input.recoveryEnvironment ?? await captureCommandEnvironmentRecovery({environment, shell,
+    cwd: shellSession.snapshot().canonicalPath, platform: input.platform});
   const registrations = createActionRegistrationSnapshot([
     registration("helarc.local.shell.registration.v4", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process"]),
     registration("helarc.local.task-stop.registration.v1", input.taskStopOperation, input.taskStopBinding, STOP_ADAPTER, STOP_EXECUTOR, ["process"]),
@@ -213,6 +223,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     shellActionAdapterId: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID,
     taskStopActionAdapterId: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID,
     environment: Object.freeze({ id: environment.id, revision: environment.digest }),
+    recoveryEnvironment,
     registrations,
     adapters: Object.freeze([
       Object.freeze({ adapter: createShellAdapter(input.workspace, sessionFor, shell, limits, environment, inputContract, processTasks.scopeId, input.constraintObserver) }),

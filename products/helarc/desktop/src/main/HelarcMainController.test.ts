@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HelarcExecutionStore } from "./execution-storage/HelarcExecutionStore.js";
+import {openExecutionStoreFixture} from "./execution-storage/fixtures/ExecutionEnvironmentFixture.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
 import { FileHelarcThreadStore, InMemoryHelarcThreadStore } from "./thread/index.js";
@@ -41,7 +42,7 @@ describe("HelarcMainController", () => {
   it.each([false, true])("records a rejected preparation commit without changing cleanup when diagnostics throws=%s", async sinkThrows => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-commit-diagnostics-"));
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
-    const execution = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    const execution = await openExecutionStoreFixture(join(directory, "execution"), worker);
     try {
       const commit = execution.commitRunTree.bind(execution);
       const original = new TypeError("preparation-diagnostic-sentinel");
@@ -77,7 +78,7 @@ describe("HelarcMainController", () => {
     const workspace = join(directory, "workspace"); await mkdir(workspace);
     const executionPath = join(directory, "execution");
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
-    let execution = await HelarcExecutionStore.open(executionPath, worker);
+    let execution = await openExecutionStoreFixture(executionPath, worker);
     try {
       const threads = new InMemoryHelarcThreadStore();
       const terminal = vi.spyOn(threads, "commitRunTerminal").mockRejectedValueOnce(new Error("Interrupted destination write"));
@@ -92,7 +93,7 @@ describe("HelarcMainController", () => {
       const completedAt = (await execution.readLatestRun(entry.admission.rootRunId))!.state.settlement!.completedAt;
       await execution.close();
       await rm(workspace, {recursive: true});
-      execution = await HelarcExecutionStore.open(executionPath, worker);
+      execution = await openExecutionStoreFixture(executionPath, worker);
       const reopened = new HelarcMainController({commandOutputDirectory: join(directory, "output"), threadStore: threads,
         executionStore: execution});
       expect(await reopened.recoverWork({id: entry.admission.rootRunId, revision: entry.revision, intent: "continue"})).toEqual({ok: true});

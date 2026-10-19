@@ -27,4 +27,5 @@ export type { ProcessOutputPaths } from "./ProcessOutputStore.js";
 export { ProcessOutputRepository } from "./ProcessOutputRepository.js";
 export { selectNativeShell, projectNativeShellRuntimeProfile } from "./CommandActionIdentity.js";
 export * from "./ProcessCheckpoint.js";
+export type { CommandEnvironmentRecoverySnapshot, CommandPathDependency } from "./CommandEnvironmentRecovery.js";
 export { validateShellSessionCommit, type ShellSessionCommit, type ShellSessionRecordPort } from "./ShellExecutionSession.js";

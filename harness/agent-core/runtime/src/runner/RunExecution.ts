@@ -242,6 +242,7 @@ import {
   applyCommittedSessionAuthority,
   applyImmediateApprovalAuthority,
   consumeActionApprovalCoverage,
+  classifyApprovalSettlement,
 } from "./RunApprovalAuthority.js";
 import {
   deriveApprovalReviewDeadline,
@@ -5761,6 +5762,13 @@ export class RunExecution<TOutput> {
     let count = 0;
     while (this.interactionSettlements.length > 0) {
       const queued = this.interactionSettlements[0]!;
+      if (queued.pending.request.protocol.owner === "permission" && queued.pending.request.protocol.kind === "approval") {
+        const requestId = queued.pending.request.id;
+        if (this.runTree.isApprovalActive(requestId)) await this.changeTree(tree => {
+          if (tree.isApprovalActive(requestId)) tree.settleApproval(requestId,
+            classifyApprovalSettlement(queued.settlement, this.config.permissions.reviewer?.kind === "auto_review"));
+        });
+      }
       (await this.settlePendingInteraction(queued.pending, queued.terminal, queued.settlement));
       const alreadyObserved = queued.action !== null && this.writer.getSnapshot().items.some(item =>
         item.payload.kind === "observation" && item.payload.observation.runAction.id === queued.action!.ref.id &&
@@ -5938,15 +5946,25 @@ export class RunExecution<TOutput> {
         if (input.parentRunAction === null) {
           return Object.freeze({ status: "failed" as const, code: "approval_parent_action_missing" });
         }
-        const requestId = this.id("interaction_request", this.nextInteractionRequest++);
         const actionFingerprint = input.assessment.requirement.subject.actionFingerprint;
+        const retainedRequests = this.interactions.checkpoint().records.filter(record =>
+          record.request.ref.protocol.owner === "permission" && record.request.ref.protocol.kind === "approval" &&
+          record.request.ref.subject.id === input.action.id &&
+          record.request.parentRunAction?.id === input.parentRunAction!.id &&
+          !this.writer.getSnapshot().permission.actionCoverage.some(coverage =>
+            coverage.sourceRequestId === record.request.ref.id && coverage.status === "consumed"));
+        if (retainedRequests.length > 1 || retainedRequests.some(record => record.request.ref.subject.revision !== actionFingerprint)) {
+          throw new RunRecoveryError(this.runId, "approval_preparation_mismatch", input.action.id);
+        }
+        const retained = retainedRequests[0];
+        const requestId = retained?.request.ref.id ?? this.id("interaction_request", this.nextInteractionRequest++);
         const operationFingerprint = await approvalOperationFingerprint({
           requirement: input.assessment.requirement,
           workspace: this.config.workspace,
           permissions: this.config.permissions,
         });
         const authorityBasis = this.runTree.captureAuthorityBasis(this.runId);
-        const admission = await this.changeTree(tree => tree.admitApproval({
+        const admission = retained ? {status: "accepted" as const} : await this.changeTree(tree => tree.admitApproval({
           requestId,
           runId: this.runId,
           actionId: input.action.id,
@@ -5978,12 +5996,16 @@ export class RunExecution<TOutput> {
         ): Promise<void> => {
           if (settled) return;
           settled = true;
-          await this.changeTree(tree => tree.settleApproval(requestId, kind));
+          if (this.runTree.isApprovalActive(requestId)) await this.changeTree(tree => {
+            if (tree.isApprovalActive(requestId)) tree.settleApproval(requestId, kind);
+          });
         };
         try {
         const pendingVersion = 1;
         const createdAt = this.now();
-        const opened = await this.interactions.open({
+        const opened = retained ? {status: "opened" as const, pending: retained.execution.pending,
+          envelope: {presentation: retained.request.presentation},
+          completion: this.interactions.completion(retained.request.ref)!} : await this.interactions.open({
           requestId,
           protocol: APPROVAL_INTERACTION_PROTOCOL,
           executionFlow: input.parentRunAction === null ? undefined : this.actionFlows.get(input.parentRunAction.id)?.callContext,
@@ -6016,7 +6038,7 @@ export class RunExecution<TOutput> {
         }
 
         let reviewerFailed = false;
-        if (reviewer.kind === "auto_review") {
+        if (reviewer.kind === "auto_review" && (!retained || retained.submission === null && retained.settlement === null)) {
           const review: ApprovalReviewInput = Object.freeze({
             request: opened.envelope.presentation as ApprovalReviewInput["request"],
             pendingVersion,

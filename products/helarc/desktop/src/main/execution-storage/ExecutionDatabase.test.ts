@@ -597,6 +597,7 @@ describe("execution owner persistence", {timeout: 20_000}, () => {
     expect(reopened.generation).toBe(database.generation + 1);
     expect(reopened.readReceipt(settled.recordId)).toEqual(settled);
     expect(reopened.readAction("run-1", "action-1")).toEqual({
+      preparedAction: null,
       preparations: [{ recordId: prepared.recordId, value: records.preparation }],
       attempts: [{ recordId: intent.recordId, intent: records.intent, result: records.result, retry: null }],
       settlement: records.settlement,

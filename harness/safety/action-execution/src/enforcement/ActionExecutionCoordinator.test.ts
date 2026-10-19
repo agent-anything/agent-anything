@@ -33,6 +33,28 @@ import { ActionRecordCommitError, ActionRecoveryError, type ActionRecordPort, ty
   type ActionSettlementRecord, type ActionRetryRecord } from "./ActionRecordPort.js";
 
 describe("ActionExecutionCoordinator", () => {
+  it("restores preparation committed before assessment without preparing another subject", async () => {
+    const fixture = createFixture();
+    const retained = recoveryRecords();
+    const first = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port,
+      policy: {async evaluate() {throw new Error("owner exited before assessment");}}});
+    await expect(first.execute(fixture.request)).rejects.toThrow("owner exited");
+    const saved = await retained.reader.readAction();
+    expect(saved.preparedAction).not.toBeNull();
+    expect(saved.preparations).toEqual([]);
+    expect(saved.attempts).toEqual([]);
+    fixture.order.length = 0;
+    const recovered = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    await expect(recovered.recover(fixture.request, {records: retained.reader, attempts: null})).resolves.toMatchObject({
+      status: "settled", settlement: {status: "succeeded", subject: saved.preparedAction!.prepared.subject.ref},
+    });
+    expect(fixture.order).not.toContain("adapter.prepare");
+    expect(fixture.order).toContain("policy.evaluate");
+    expect(fixture.order).toContain("permission.assess");
+    expect(fixture.order).toContain("adapter.revalidate");
+    expect(fixture.order.filter(value => value === "executor.execute")).toHaveLength(1);
+  });
+
   it("continues an acknowledged retry with remaining delay and original Attempt identities", async () => {
     const fixture = createFixture({retryOnce: true});
     const retained = recoveryRecords();
@@ -232,6 +254,7 @@ describe("ActionExecutionCoordinator", () => {
     const intentGate = new Promise<void>(resolve => { releaseIntent = resolve; });
     const resultGate = new Promise<void>(resolve => { releaseResult = resolve; });
     const coordinator = new ActionExecutionCoordinator({ ...fixture.dependencies, records: {
+      async recordPreparedAction() {return {recordId: "prepared-action"};},
       async recordPreEffect(value) { recorded.preparation = value; return { recordId: "prepared" }; },
       async recordDispatchIntent(value) {
         recorded.intent = value; enteredIntent(); await intentGate; return { recordId: "intent" };
@@ -258,7 +281,7 @@ describe("ActionExecutionCoordinator", () => {
     await expect(result).resolves.toMatchObject({ status: "settled", settlement: { status: "succeeded" } });
   });
 
-  it.each(["recordPreEffect", "recordDispatchIntent", "recordAttemptResult", "recordPostEffect"] as const)(
+  it.each(["recordPreparedAction", "recordPreEffect", "recordDispatchIntent", "recordAttemptResult", "recordPostEffect"] as const)(
     "propagates %s failure without inventing an execution settlement or retry", async method => {
       const fixture = createFixture({ retryOnce: true });
       const failure = new Error("storage unavailable");
@@ -847,6 +870,7 @@ function createFixture(options: FixtureOptions = {}) {
         }),
     sandbox,
     records: {
+      async recordPreparedAction() {return {recordId: "prepared-action"};},
       async recordPreEffect() {
         order.push("records.pre-effect");
         return { recordId: "pre-effect-1" };
@@ -944,19 +968,21 @@ function createSequentialId() {
 }
 
 function recoveryRecords() {
+  let preparedAction: ActionRecoveryRecords["preparedAction"] = null;
   const preparations: {recordId: string; value: ActionPreparationRecord}[] = [];
   const intents: {recordId: string; intent: ActionDispatchIntent}[] = [];
   let results: ActionAttemptResultRecord[] = [];
   let settlement: ActionSettlementRecord | null = null;
   const retries: ActionRetryRecord[] = [];
   const port: ActionRecordPort = {
+    async recordPreparedAction(value) {preparedAction = structuredClone(value); return {recordId: "prepared-action"};},
     async recordPreEffect(value) {const recordId = `preparation-${preparations.length}`; preparations.push({recordId, value: structuredClone(value)}); return {recordId};},
     async recordDispatchIntent(intent) {const recordId = `intent-${intents.length}`; intents.push({recordId, intent: structuredClone(intent)}); return {recordId};},
     async recordAttemptResult(value) {results.push(structuredClone(value)); return {recordId: `result-${results.length}`};},
     async recordRetry(value) {retries.push(structuredClone(value)); return {recordId: `retry-${retries.length}`};},
     async recordPostEffect(value) {settlement = structuredClone(value); return {recordId: "settlement"};},
   };
-  const reader = {async readAction(): Promise<ActionRecoveryRecords> {return structuredClone({preparations,
+  const reader = {async readAction(): Promise<ActionRecoveryRecords> {return structuredClone({preparedAction, preparations,
     attempts: intents.map(intent => ({...intent, result: results.find(result => result.intentRecordId === intent.recordId) ?? null,
       retry: retries.find(retry => retry.intentRecordId === intent.recordId) ?? null})), settlement});}};
   return {port, reader, setResults: (value: ActionAttemptResultRecord[]) => {results = value;},

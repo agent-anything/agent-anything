@@ -2,7 +2,7 @@ import type { ProcessSnapshot, ProcessObservation, ProcessInputNotification } fr
 import type { ProcessOutputCheckpoint, ProcessOutputPaths } from "./ProcessOutputStore.js";
 import { OperationCommitError } from "@agent-anything/operation-catalog/result";
 
-export interface ProcessCheckpoint {
+export interface ProcessCheckpoint<Environment = Readonly<Record<string, string>>> {
   readonly version: 1;
   readonly revision: number;
   readonly input: {
@@ -14,7 +14,7 @@ export interface ProcessCheckpoint {
     readonly executable: string;
     readonly args: readonly string[];
     readonly cwd: string;
-    readonly environment: Readonly<Record<string, string>>;
+    readonly environment: Environment;
     readonly timeoutMs: number;
     readonly deadlineAt: string;
     readonly paths: ProcessOutputPaths;
@@ -46,7 +46,7 @@ export class ProcessRecordError extends OperationCommitError {
   }
 }
 
-export function validateProcessCheckpoint(next: ProcessCheckpoint, previous: ProcessCheckpoint | null): void {
+export function validateProcessCheckpoint<Environment>(next: ProcessCheckpoint<Environment>, previous: ProcessCheckpoint<Environment> | null): void {
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   if (next.version !== 1 || !Number.isSafeInteger(next.revision) || next.revision < 0 ||
       next.snapshot.ref.runId !== next.input.runId || next.snapshot.ref.executionId !== next.input.executionId ||

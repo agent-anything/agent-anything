@@ -244,18 +244,21 @@ export class ActionExecutionCoordinator {
       const records = structuredClone(await recovery.records.readAction({runId: request.runId, action: request.action}));
       const captured = this.adapters.find(request.binding.actionAdapterId);
       const unpreparedFailure = records.settlement?.prepared === null &&
-        records.preparations.length === 0 && records.attempts.length === 0;
+        records.preparedAction === null && records.preparations.length === 0 && records.attempts.length === 0;
       if ((!captured || !bindingMatches(captured.registration, request.binding)) &&
           !unpreparedFailure) reject("action_recovery_binding_unavailable");
       const adapter = captured!;
       const preparations = new Map(records.preparations.map(entry => [entry.recordId, entry.value]));
       if (preparations.size !== records.preparations.length) reject("action_recovery_records_invalid");
-      for (const preparation of preparations.values()) {
+      for (const preparation of [...preparations.values(), ...(records.preparedAction ? [records.preparedAction] : [])]) {
         if (preparation.runId !== request.runId ||
             preparation.limits.maxAttempts !== request.maxAttempts || preparation.limits.deadlineAt !== request.deadlineAt ||
             !sameRetainedValue(preparation.binding, request.binding) ||
             !sameRetainedValue(preparation.registration, adapter.registration)) reject("action_recovery_binding_changed");
         assertPreparedCoherence(request, adapter.registration, preparation.prepared);
+        if (records.preparedAction && !sameRetainedValue(preparation.prepared, records.preparedAction.prepared)) {
+          reject("action_recovery_preparation_changed");
+        }
       }
       const attemptIds = new Set<string>();
       for (const [index, attempt] of records.attempts.entries()) {
@@ -300,6 +303,17 @@ export class ActionExecutionCoordinator {
       }
       const last = records.attempts.at(-1);
       if (!last) {
+        const prepared = records.preparedAction?.prepared ?? records.preparations.at(-1)?.value.prepared;
+        if (prepared) {
+          step.check("reconciliation", "passed", {reason: "prepared_subject_retained"});
+          const ledger = new CanonicalActionLedger(request.action, request.parentRunAction);
+          await ledger.transition({expectedRevision: 0, kind: "begin_preparation"});
+          await ledger.transition({expectedRevision: ledger.getSnapshot().revision, kind: "record_subject", subject: prepared.subject});
+          const result = await this.executeWithFlow<TRequest, TOutput>(request, flow, {ledger, prepared});
+          if (result.status === "settled") flow.advance("settlement", {status: result.settlement.status});
+          flow.close(result.status === "pending_interaction" ? "yielded" : "returned");
+          return result;
+        }
         step.check("reconciliation", "not_applicable", {reason: "no_dispatch_record"});
         flow.close("yielded");
         // The caller still needs a complete mandatory dispatch path before authorizing execution.
@@ -442,6 +456,11 @@ export class ActionExecutionCoordinator {
       assertions: prepared.assertions, approval: prepared.approval, safeSummary: prepared.safeSummary}, "execution");
     preparationStep.output(preparedRef);
     assertPreparedCoherence(request, captured.registration, prepared);
+    if (!resumed) await this.record("prepared_action", request.action.id, null, () => this.dependencies.records.recordPreparedAction({
+      runId: request.runId, binding: request.binding, registration: captured.registration, prepared,
+      limits: {maxAttempts: request.maxAttempts, deadlineAt: request.deadlineAt}, recordedAt: this.now(),
+    }));
+    preparationStep.check("retention", "passed", {reused: resumed !== undefined});
     preparationStep.check("prepared_subject", "passed", {actionId:prepared.subject.ref.action.id, revision:prepared.subject.ref.revision});
     const fingerprint = await actionFingerprint(prepared.subject);
     const requirement = prepared.approval === null
@@ -1103,6 +1122,7 @@ function assertPreparedCoherence(
 ): void {
   if (
     prepared.subject.ref.action.id !== request.action.id ||
+    !sameRetainedValue(prepared.subject.parentRunAction, request.parentRunAction) ||
     prepared.subject.operationInvocation.id !== request.binding.invocation.id ||
     prepared.subject.binding.revision !== request.binding.binding.revision ||
     prepared.subject.actor.identityId !== request.securityContext.actor.identityId ||

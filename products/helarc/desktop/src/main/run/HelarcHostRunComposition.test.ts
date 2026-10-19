@@ -37,6 +37,7 @@ import { workbenchInteractionText } from "../workbench/WorkbenchInteractionPrese
 import { isWorkbenchOperation } from "../workbench/WorkbenchOperationPresentation.js";
 import { CommandOutputRegistry } from "../workbench/CommandOutputRegistry.js";
 import { HelarcExecutionStore } from "../execution-storage/HelarcExecutionStore.js";
+import {openExecutionStoreFixture} from "../execution-storage/fixtures/ExecutionEnvironmentFixture.js";
 import { pathToFileURL } from "node:url";
 import {
   prepareHelarcHostRun,
@@ -146,11 +147,43 @@ function executeReadOnlyTestHostRun(
 }
 
 describe("Helarc Host Run composition", () => {
+  it("reconstructs admission before the first command without adopting the new Host environment", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-admission-recovery-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    const store = await openExecutionStoreFixture(join(directory, "execution"), worker);
+    const original = process.env.HELARC_TEST_NEW_HOST_VARIABLE;
+    try {
+      const provider = new ScriptedProvider([]);
+      const common = {...createTask(workspaceRoot), provider, executionStore: store};
+      const first = await prepareTestHostRun(common);
+      const saved = (await store.readProductRun(first.rootRunId))!;
+      expect(await store.readProcesses(first.rootRunId)).toEqual([]);
+      process.env.HELARC_TEST_NEW_HOST_VARIABLE = "different-after-restart";
+      const restored = await prepareTestHostRun({...common, recoveryAdmission: saved,
+        instructionSettings: saved.instructionSettings, providerProfile: saved.providerProfile});
+      expect(restored.rootRunId).toBe(first.rootRunId);
+      expect(provider.requests).toEqual([]);
+      expect(store.restoreCommandEnvironment(saved.commandEnvironment).environment.HELARC_TEST_NEW_HOST_VARIABLE).toBe(original);
+      const otherRoot = join(directory, "other"); await mkdir(otherRoot);
+      await expect(prepareTestHostRun({...common, ...createTask(otherRoot), recoveryAdmission: saved,
+        instructionSettings: saved.instructionSettings, providerProfile: saved.providerProfile})).rejects.toThrow("command_shell_dependency_changed");
+      await expect(prepareTestHostRun({...common, recoveryAdmission: {...saved, providerBinding: {...saved.providerBinding,
+        descriptor: {...saved.providerBinding.descriptor, id: "different-provider"}}}})).rejects.toThrow("provider");
+      expect(provider.requests).toEqual([]);
+    } finally {
+      if (original === undefined) delete process.env.HELARC_TEST_NEW_HOST_VARIABLE;
+      else process.env.HELARC_TEST_NEW_HOST_VARIABLE = original;
+      await store.close();
+      if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith("helarc-admission-recovery-")) throw new Error("Unexpected test path");
+      await rm(directory, {recursive: true, force: true});
+    }
+  }, 20_000);
   it("recovers a committed compensation association after lost acknowledgement before dispatch", async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-compensation-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
-    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    let store = await openExecutionStoreFixture(join(directory, "execution"), worker);
     try {
       const commit = store.commitCompensationAssociation.bind(store);
       let retained: import("@agent-anything/operation-catalog/evidence").CompensationAssociation | null = null;
@@ -175,7 +208,7 @@ describe("Helarc Host Run composition", () => {
       await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("before");
       const saved = (await store.readProductRun(prepared.rootRunId))!;
       await store.close();
-      store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       const nextProvider = new ScriptedProvider([{kind: "completion", summary: "The retained call settled."}]);
       const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: nextProvider,
         providerProfile: saved.providerProfile, instructionSettings: saved.instructionSettings,
@@ -199,7 +232,7 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
     const observed: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceObservation[] = [];
-    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker, {observe(value) {observed.push(value);}});
+    let store = await openExecutionStoreFixture(join(directory, "execution"), worker, {observe(value) {observed.push(value);}});
     try {
       let original: import("@agent-anything/model-interaction").ModelJsonValue = null;
       const provider = new ScriptedProvider([
@@ -245,7 +278,7 @@ describe("Helarc Host Run composition", () => {
       expect(savedBindings.some(binding => binding.compensation?.id === association?.id)).toBe(true);
       expect(savedBindings.every(binding => !Object.hasOwn(binding.request as object, "compensation_of"))).toBe(true);
       await store.close();
-      store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       expect(await store.readCompensationAssociation(invocation.id)).toEqual(association);
     } finally {
       await store.close();
@@ -259,7 +292,7 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     if (!created) await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
-    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    let store = await openExecutionStoreFixture(join(directory, "execution"), worker);
     try {
       let change: ModelJsonValue = null;
       let material: ModelJsonValue = null;
@@ -302,7 +335,7 @@ describe("Helarc Host Run composition", () => {
         await store.commitProductDelivery(prepared.rootRunId);
         expect(await store.readFileMaterialRecord(material as never)).toMatchObject({state: "available", pins: []});
       }
-      await store.close(); store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      await store.close(); store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       expect(await store.readExecutionEvidence(material as never)).not.toBeNull();
       const released = await store.readFileMaterialRecord(material as never);
       expect(released).toMatchObject({state: "available", pins: []});
@@ -322,7 +355,7 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
-    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    let store = await openExecutionStoreFixture(join(directory, "execution"), worker);
     try {
       let childExecution: ModelJsonValue = null;
       const provider = new ScriptedProvider([
@@ -349,7 +382,7 @@ describe("Helarc Host Run composition", () => {
       await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("original bytes");
       const transfers = await store.readExecutionReferenceTransfers(prepared.rootRunId);
       expect(transfers).toEqual([expect.objectContaining({scope: {kind: "public_run"}, basis: expect.objectContaining({kind: "delegation_result"})})]);
-      await store.close(); store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      await store.close(); store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       expect(await store.readExecutionReferenceTransfers(prepared.rootRunId)).toEqual(transfers);
       expect(await store.readExecutionEvidence(childExecution as never)).not.toBeNull();
     } finally {
@@ -364,7 +397,7 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
-    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    let store = await openExecutionStoreFixture(join(directory, "execution"), worker);
     try {
       let restoreAction: string | null = null;
       const preparation = store.recordPreEffect.bind(store), attempt = store.recordAttemptResult.bind(store);
@@ -390,7 +423,7 @@ describe("Helarc Host Run composition", () => {
       expect(lost).toBe(true);
       expect(await readFile(join(workspaceRoot, "target.txt"), "utf8")).toBe("original bytes");
       const saved = (await store.readProductRun(prepared.rootRunId))!;
-      await store.close(); store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      await store.close(); store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       const next = new ScriptedProvider([{kind: "completion", summary: "Restored."}]);
       const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: next, executionStore: store,
         providerProfile: saved.providerProfile, instructionSettings: saved.instructionSettings, recoveryAdmission: saved, permissionPreset: "full_access"});
@@ -413,7 +446,7 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     await writeFile(join(workspaceRoot, "input.txt"), "retained input", "utf8");
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
-    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    let store = await openExecutionStoreFixture(join(directory, "execution"), worker);
     try {
       const provider = new ScriptedProvider([{kind: "tool_call", toolName: "Read", input: {file_path: "input.txt"}}]);
       const prepare = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store});
@@ -434,7 +467,7 @@ describe("Helarc Host Run composition", () => {
       const before = await store.readRunTree(prepare.rootRunId);
       expect(before?.members[0]?.head.control.decision?.status).toBe("active");
       await store.close();
-      store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       const nextProvider = new ScriptedProvider([{kind: "completion", summary: "Read complete."}]);
       const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: nextProvider,
         providerProfile: saved.providerProfile, instructionSettings: saved.instructionSettings, executionStore: store, recoveryAdmission: saved});

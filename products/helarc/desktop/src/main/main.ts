@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
 import { HelarcExecutionStore } from "./execution-storage/HelarcExecutionStore.js";
+import { ElectronSafeStorageCredentialCipher } from "./provider/ElectronSafeStorageCredentialCipher.js";
 import { reconcileInterruptedHooks } from "./execution-storage/reconcileInterruptedHooks.js";
 import { HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
 import { HelarcExecutionDiagnostics } from "./diagnostics/HelarcExecutionDiagnostics.js";
@@ -75,7 +76,7 @@ async function createWindow(): Promise<void> {
   executionDiagnostics ??= new HelarcExecutionDiagnostics(join(userDataPath, "execution-diagnostics.json"));
   inspection ??= HelarcInspection.create(join(userDataPath, "inspection-settings.json"));
   const inspectionSource = await inspection;
-  executionStore ??= HelarcExecutionStore.open(join(userDataPath, "execution"), undefined, inspectionSource.evidenceObserver, inspectionSource.fileMaterialObserver, executionDiagnostics).then(async store => {
+  executionStore ??= HelarcExecutionStore.open(join(userDataPath, "execution"), undefined, inspectionSource.evidenceObserver, inspectionSource.fileMaterialObserver, executionDiagnostics, new ElectronSafeStorageCredentialCipher()).then(async store => {
     try { await reconcileInterruptedHooks(store, record => inspectionSource.definitions?.recoveredHook(record)); return store; }
     catch (error) { await store.close(); throw error; }
   });

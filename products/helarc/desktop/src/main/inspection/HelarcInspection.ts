@@ -85,6 +85,17 @@ export class HelarcInspection {
     await this.recorder?.flush();
     return this.snapshot();
   }
+  recordRecoveryBindingCheck(input: {runId: string; outcome: "accepted" | "rejected"; code: string | null; component: string; changedVariableNames: readonly string[]}): void {
+    const r = this.recorder;
+    if (!r) return;
+    try {
+      const subject = r.ref("helarc", "contribution", `${input.runId}:recovery-binding:${randomUUID()}`, input.runId);
+      r.offer({subject, occurredAt: new Date().toISOString(),
+        payload: {kind: "event", name: "execution.recovery.binding_checked", sequence: null, code: input.code},
+        links: [inspectionLink("includes", r.ref("runtime", "run", input.runId, input.runId), subject)],
+        contents: [{name: "Recovery binding check", class: "execution", stage: "checked", mediaType: "application/json", value: input}]});
+    } catch { /* Observation is not recovery authority. */ }
+  }
   async close(): Promise<void> {
     const result = await this.recorder?.flush(true);
     if (result && (result.native !== "settled" || result.projection !== "settled"))

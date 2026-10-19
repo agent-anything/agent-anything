@@ -1,11 +1,12 @@
 import type {
-  ActionPreparationRecord, ActionDispatchIntent, ActionAttemptResultRecord,
+  ActionPreparationRecord, PreparedActionRecord, ActionDispatchIntent, ActionAttemptResultRecord,
   ActionSettlementRecord, ActionRetryRecord, ActionRecoveryRecords,
 } from "@agent-anything/action-execution/enforcement";
 import type { RunCommit, RunCommitReceipt, RunTreeCommit, RunTreeCommitReceipt, RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/runner";
 import type { CompositeCommit } from "@agent-anything/operation-composition/execution";
 import type { AgentHookInvocationCheckpoint } from "@agent-anything/agent-hooks/execution";
-import type { ProcessCheckpoint, ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
+import type { ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
+import type {StoredProcessCheckpoint as ProcessCheckpoint} from "./ExecutionEnvironmentProtection.js";
 import type { HelarcExecutionAdmission, HelarcExecutionDiscovery } from "./HelarcExecutionAdmission.js";
 import type { ExecutionEvidenceRecord, ExecutionEvidenceRef, CompensationAssociation } from "@agent-anything/operation-catalog/evidence";
 import type {ExecutionReferenceTransfer, ExecutionReferencePage} from "@agent-anything/operation-catalog/evidence";
@@ -18,6 +19,7 @@ export type ExecutionOwnerCommit =
   | {readonly kind: "composite"; readonly value: CompositeCommit};
 
 export type ActionOwnerRecord =
+  | { readonly kind: "prepared_action"; readonly value: PreparedActionRecord }
   | { readonly kind: "preparation"; readonly value: ActionPreparationRecord }
   | { readonly kind: "dispatch_intent"; readonly value: ActionDispatchIntent }
   | { readonly kind: "attempt_result"; readonly value: ActionAttemptResultRecord }

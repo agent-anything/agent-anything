@@ -563,6 +563,8 @@ export class RunTreeExecution {
     return admission;
   }
 
+  isApprovalActive(requestId: string): boolean { return this.approvals.isActive(requestId); }
+
   settleApproval(
     requestId: string,
     kind: RunTreeApprovalSettlementKind,

@@ -6,6 +6,25 @@ import {
 } from "@agent-anything/permission";
 import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import type { RunPermissionState } from "../run/index.js";
+import type {ApprovalInteractionResolution} from "@agent-anything/permission/approval";
+import type {RuntimeInteractionSettlement} from "./RunInteractionCoordinator.js";
+import type {RunTreeApprovalSettlementKind} from "./RunTreeApprovalAccount.js";
+
+export function classifyApprovalSettlement(settlement: RuntimeInteractionSettlement, autoReview: boolean): RunTreeApprovalSettlementKind {
+  if (settlement.status !== "resolved") {
+    return settlement.status === "failed" ? autoReview ? "reviewer_failure" : "request_failure" : settlement.status;
+  }
+  const resolution = settlement.resolutionValue as ApprovalInteractionResolution;
+  if (resolution.decision.kind === "decline") return "declined";
+  if (resolution.decision.kind === "cancel") return "cancelled";
+  const application = settlement.applicationValue as ApprovalApplicationOutcome;
+  switch (application.kind) {
+    case "applied": return "approved";
+    case "interrupted": return "interrupted";
+    case "outcome_unknown": return "outcome_unknown";
+    default: return "request_failure";
+  }
+}
 
 export type ApplyImmediateApprovalAuthorityResult =
   | {

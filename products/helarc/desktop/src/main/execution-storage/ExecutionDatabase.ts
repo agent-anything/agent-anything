@@ -13,7 +13,8 @@ import { snapshotExecutionEvidence, snapshotCompensationAssociation, snapshotExe
   type ExecutionEvidenceRecord, type ExecutionEvidenceRef, type CompensationAssociation } from "@agent-anything/operation-catalog/evidence";
 import type { ActionRecoveryRecords } from "@agent-anything/action-execution/enforcement";
 import { validateAgentHookCheckpoint, type AgentHookInvocationCheckpoint } from "@agent-anything/agent-hooks/execution";
-import { validateProcessCheckpoint, validateShellSessionCommit, type ShellSessionCommit, type ProcessCheckpoint } from "@agent-anything/helarc-local-environment/command";
+import { validateProcessCheckpoint, validateShellSessionCommit, type ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
+import {validateProtectedEnvironment, type StoredProcessCheckpoint as ProcessCheckpoint} from "./ExecutionEnvironmentProtection.js";
 import { CanonicalActionLedger } from "@agent-anything/action-execution/coordination";
 import { validateRunTreeCommit, type RunTreeCommit, type RunTreeCommitReceipt, type RunTreeRecoveryRecords, type RetainedRunTreeMember } from "@agent-anything/agent-runtime/runner";
 import {
@@ -23,7 +24,7 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 15;
+const FORMAT = 16;
 const SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -288,10 +289,14 @@ export class ExecutionDatabase {
 
   admitProductRun(generation: number, admission: HelarcExecutionAdmission): void {
     this.assertOwner(generation);
-    const encoded = encode(admission);
-    if (admission.version !== 1 || !Number.isFinite(Date.parse(admission.createdAt))) throw new ExecutionStoreError("execution_admission_invalid");
+    if (admission.version !== 2 || !Number.isFinite(Date.parse(admission.createdAt)) || !admission.commandEnvironment) throw new ExecutionStoreError("execution_admission_invalid");
+    validateProtectedEnvironment(admission.commandEnvironment.environment);
     token(admission.rootRunId); token(admission.productRunId); token(admission.sessionId);
     this.data.transaction(() => {
+      const retained = this.readProductRun(admission.rootRunId);
+      if (retained?.commandEnvironment.environment.digest === admission.commandEnvironment.environment.digest)
+        admission = {...admission, commandEnvironment: {...admission.commandEnvironment, environment: retained.commandEnvironment.environment}};
+      const encoded = encode(admission);
       const previous = this.data.prepare("SELECT digest FROM product_admissions WHERE root_run_id=?").get(admission.rootRunId) as {digest: string} | undefined;
       if (previous) {
         if (previous.digest !== encoded.digest) throw new ExecutionStoreError("execution_admission_conflict");
@@ -306,9 +311,10 @@ export class ExecutionDatabase {
     const row = this.data.prepare("SELECT digest,value FROM product_admissions WHERE root_run_id=?").get(rootRunId) as {digest: string; value: string} | undefined;
     if (!row) return null;
     const admission = JSON.parse(row.value) as HelarcExecutionAdmission;
-    if (encode(admission).digest !== row.digest || admission.rootRunId !== rootRunId || admission.version !== 1) {
+    if (encode(admission).digest !== row.digest || admission.rootRunId !== rootRunId || admission.version !== 2) {
       throw new ExecutionStoreError("execution_admission_corrupt");
     }
+    validateProtectedEnvironment(admission.commandEnvironment.environment);
     return admission;
   }
 
@@ -429,11 +435,16 @@ export class ExecutionDatabase {
 
   commitProcess(generation: number, checkpoint: ProcessCheckpoint): void {
     this.assertOwner(generation);
-    const encoded = encode(checkpoint);
+    validateProtectedEnvironment(checkpoint.input.environment);
     this.data.transaction(() => {
       const rows = this.data.prepare("SELECT * FROM process_records WHERE execution_id=? ORDER BY revision")
         .all(checkpoint.input.executionId) as ProcessRow[];
       const previous = this.decodeProcessRecords(rows);
+      // Safe-storage encryption is randomized. Keep one immutable sealed value
+      // for the same environment identity, including acknowledgement replay.
+      if (previous?.input.environment.digest === checkpoint.input.environment.digest)
+        checkpoint = {...checkpoint, input: {...checkpoint.input, environment: previous.input.environment}};
+      const encoded = encode(checkpoint);
       const replay = rows.find(row => row.revision === checkpoint.revision);
       if (replay) {
         if (replay.digest !== encoded.digest) throw new ExecutionStoreError("execution_process_record_conflict");
@@ -493,6 +504,7 @@ export class ExecutionDatabase {
     let previous: ProcessCheckpoint | null = null;
     for (const row of rows) {
       const value = JSON.parse(row.value) as ProcessCheckpoint;
+      validateProtectedEnvironment(value.input.environment);
       if (encode(value).digest !== row.digest || value.input.runId !== row.run_id ||
           value.input.executionId !== row.execution_id || value.revision !== row.revision) throw new ExecutionStoreError("execution_process_records_corrupt");
       validateProcessCheckpoint(value, previous);
@@ -516,9 +528,14 @@ export class ExecutionDatabase {
     const preparations: ActionRecoveryRecords["preparations"][number][] = [];
     const attempts: { recordId: string; intent: Extract<ActionOwnerRecord, { kind: "dispatch_intent" }>["value"]; result: Extract<ActionOwnerRecord, { kind: "attempt_result" }>["value"] | null; retry: Extract<ActionOwnerRecord, {kind: "retry"}>["value"] | null }[] = [];
     let settlement: ActionRecoveryRecords["settlement"] = null;
+    let preparedAction: ActionRecoveryRecords["preparedAction"] = null;
     for (const row of rows) {
       const record = this.decode(row);
       switch (record.kind) {
+        case "prepared_action":
+          if (preparedAction) throw new ExecutionStoreError("execution_records_corrupt");
+          preparedAction = record.value;
+          break;
         case "preparation": preparations.push({ recordId: row.record_id, value: record.value }); break;
         case "dispatch_intent": attempts.push({ recordId: row.record_id, intent: record.value, result: null, retry: null }); break;
         case "attempt_result": {
@@ -538,7 +555,7 @@ export class ExecutionDatabase {
           settlement = record.value;
       }
     }
-    return { preparations, attempts, settlement };
+    return { preparedAction, preparations, attempts, settlement };
   }
 
   close(): void {
@@ -708,6 +725,7 @@ export class ExecutionDatabase {
     const settled = this.row(recordKey("settlement", runId, actionId, actionId));
     if (settled) throw new ExecutionStoreError("execution_action_already_settled");
     switch (record.kind) {
+      case "prepared_action":
       case "preparation": {
         const value = record.value;
         if (!Number.isSafeInteger(value.limits.maxAttempts) || value.limits.maxAttempts < 1 ||
@@ -717,6 +735,12 @@ export class ExecutionDatabase {
           const prior = this.decode(first) as Extract<ActionOwnerRecord, {kind: "preparation"}>;
           if (!equal(value.limits, prior.value.limits) || !equal(value.binding, prior.value.binding) ||
               !equal(value.prepared, prior.value.prepared)) invalidReference();
+        }
+        const initial = this.row(recordKey("prepared_action", runId, actionId, actionId));
+        if (initial) {
+          const prior = this.decode(initial) as Extract<ActionOwnerRecord, {kind: "prepared_action"}>;
+          if (!equal(value.limits, prior.value.limits) || !equal(value.binding, prior.value.binding) ||
+              !equal(value.registration, prior.value.registration) || !equal(value.prepared, prior.value.prepared)) invalidReference();
         }
         if (value.prepared.subject.parentRunAction?.run.id !== undefined && value.prepared.subject.parentRunAction.run.id !== runId) invalidReference();
         if (!equal(value.binding.invocation, value.prepared.subject.operationInvocation) ||
@@ -920,6 +944,7 @@ function treeReceipt(commit: RunTreeCommit): RunTreeCommitReceipt {
 export function actionRecordIdentity(record: ActionOwnerRecord): { recordId: string; runId: string; actionId: string } {
   let runId: string, actionId: string, identity: string;
   switch (record.kind) {
+    case "prepared_action": runId = record.value.runId; actionId = record.value.prepared.subject.ref.action.id; identity = actionId; break;
     case "preparation": runId = record.value.runId; actionId = record.value.prepared.subject.ref.action.id; identity = record.value.dispatchPlanFingerprint; break;
     case "dispatch_intent": runId = record.value.request.attempt.runId; actionId = record.value.request.attempt.action.id; identity = record.value.request.attempt.id; break;
     case "attempt_result": runId = record.value.result.attempt.runId; actionId = record.value.result.attempt.action.id; identity = record.value.result.attempt.id; break;

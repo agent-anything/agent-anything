@@ -6236,6 +6236,7 @@ function createDirectActionExecutionFixture(
       }],
     }),
     records: {
+      async recordPreparedAction() {return {recordId: "verification-prepared-action"};},
       async recordPreEffect() {
         return { recordId: "verification-pre-effect-1" };
       },

@@ -7,6 +7,8 @@ import { snapshotExecutionEvidence, snapshotCompensationAssociation, type Execut
   type ExecutionEvidenceRef, type CompensationAssociation, type ExecutionEvidenceObserver, type ExecutionEvidenceObservation } from "@agent-anything/operation-catalog/evidence";
 import {snapshotExecutionReferenceTransfer, type ExecutionReferenceTransfer, type ExecutionReferencePage} from "@agent-anything/operation-catalog/evidence";
 import type { HelarcExecutionAdmission, HelarcExecutionDiscovery } from "./HelarcExecutionAdmission.js";
+import {ExecutionEnvironmentProtection, type ExecutionEnvironmentCipher, type RetainedCommandEnvironment, type StoredProcessCheckpoint} from "./ExecutionEnvironmentProtection.js";
+import type {CommandEnvironmentRecoverySnapshot} from "@agent-anything/helarc-local-environment/command";
 import type { ProcessCheckpoint, ProcessRecordPort, ShellSessionRecordPort, ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
 import {packExecutionContent, unpackExecutionContent, executionContentReferences, EXECUTION_CONTENT_LIMITS,
   type ExecutionContentBlock, type ExecutionContentRoot} from "./ExecutionContent.js";
@@ -56,9 +58,11 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   private readonly activeRoots = new Set<string>();
   private readonly stagedContent = new Set<string>();
   private readonly exited: Promise<void>;
+  private readonly environments: ExecutionEnvironmentProtection;
 
   private constructor(private readonly worker: Worker, readonly generation: number, private readonly evidenceObserver?: ExecutionEvidenceObserver,
-    private readonly fileMaterialObserver?: FileMaterialObserver, private readonly diagnostics?: ExecutionDiagnosticSink) {
+    private readonly fileMaterialObserver?: FileMaterialObserver, private readonly diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher) {
+    this.environments = new ExecutionEnvironmentProtection(environmentCipher);
     this.exited = new Promise(resolve => worker.once("exit", code => {
       if (!this.closed) this.fail("execution_storage_acknowledgement_unknown", new Error(`Execution storage Worker exited with code ${code}.`), "storage_worker_exit");
       resolve();
@@ -123,7 +127,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   }
 
   static async open(directory: string, workerUrl = new URL("./ExecutionStoreWorker.js", import.meta.url), evidenceObserver?: ExecutionEvidenceObserver,
-    fileMaterialObserver?: FileMaterialObserver, diagnostics?: ExecutionDiagnosticSink): Promise<HelarcExecutionStore> {
+    fileMaterialObserver?: FileMaterialObserver, diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher): Promise<HelarcExecutionStore> {
     const worker = new Worker(workerUrl, { workerData: { directory } });
     const store = await new Promise<HelarcExecutionStore>((resolve, reject) => {
       const timer = setTimeout(() => failed(new ExecutionStoreError("execution_storage_start_timeout")), EXECUTION_STORE_LIMITS.acknowledgementMs);
@@ -137,7 +141,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       const message = (reply: ExecutionStoreReply) => {
         if (reply.kind === "startup_failed") { failed(new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)})); return; }
         if (reply.kind !== "ready") { failed(new ExecutionStoreError("execution_storage_protocol_invalid")); return; }
-        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics);
+        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher);
         cleanup();
         resolve(store);
       };
@@ -157,6 +161,9 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     }
   }
 
+  recordPreparedAction(value: Parameters<ActionRecordPort["recordPreparedAction"]>[0]): Promise<ExecutionRecordReceipt> {
+    return this.record({kind: "prepared_action", value});
+  }
   recordPreEffect(value: Parameters<ActionRecordPort["recordPreEffect"]>[0]): Promise<ExecutionRecordReceipt> {
     return this.record({ kind: "preparation", value });
   }
@@ -245,6 +252,12 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       this.activeRoots.delete(rootRunId);
     };
   }
+  retainCommandEnvironment(snapshot: CommandEnvironmentRecoverySnapshot): RetainedCommandEnvironment {
+    return this.environments.retainSnapshot(snapshot);
+  }
+  restoreCommandEnvironment(snapshot: RetainedCommandEnvironment): CommandEnvironmentRecoverySnapshot {
+    return this.environments.restoreSnapshot(snapshot);
+  }
   async admitProductRun(admission: HelarcExecutionAdmission): Promise<void> {
     await this.request({kind: "admit_product_run", admission});
   }
@@ -271,7 +284,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     } while (after !== null);
   }
   async commitProcess(checkpoint: ProcessCheckpoint): Promise<void> {
-    await this.request({kind: "commit_process", checkpoint});
+    await this.request({kind: "commit_process", checkpoint: {...checkpoint,
+      input: {...checkpoint.input, environment: this.environments.protect(checkpoint.input.environment)}}});
   }
   async commitShellSession(commit: ShellSessionCommit): Promise<void> {
     await this.request({kind: "commit_shell_session", commit});
@@ -280,7 +294,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     return await this.request({kind: "read_shell_session", runId}) as ShellSessionCommit | null;
   }
   async readProcesses(runId: string): Promise<readonly ProcessCheckpoint[]> {
-    return await this.request({kind: "read_processes", runId}) as readonly ProcessCheckpoint[];
+    const records = await this.request({kind: "read_processes", runId}) as readonly StoredProcessCheckpoint[];
+    return records.map(record => ({...record, input: {...record.input, environment: this.environments.restore(record.input.environment)}}));
   }
   async readHookInvocation(id: string): Promise<AgentHookInvocationCheckpoint | null> {
     return await this.request({kind: "read_hook", id}) as AgentHookInvocationCheckpoint | null;

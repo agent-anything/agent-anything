@@ -19,6 +19,10 @@ export interface ActionPreparationRecord {
   readonly limits: {readonly maxAttempts: number; readonly deadlineAt: string};
 }
 
+/** Exact preparation retained before approval; it conveys no dispatch authority. */
+export type PreparedActionRecord = Pick<ActionPreparationRecord,
+  "runId" | "prepared" | "binding" | "registration" | "recordedAt" | "limits">;
+
 /** Intent means dispatch may happen, not that the external resource received it. */
 export interface ActionDispatchIntent {
   readonly preparationRecordId: string;
@@ -64,6 +68,7 @@ export interface ActionRecordReceipt { readonly recordId: string }
 
 /** Acknowledgement is an owner commit barrier, never an observer notification. */
 export interface ActionRecordPort {
+  recordPreparedAction(input: PreparedActionRecord): Promise<ActionRecordReceipt>;
   recordPreEffect(input: ActionPreparationRecord): Promise<ActionRecordReceipt>;
   recordDispatchIntent(input: ActionDispatchIntent): Promise<ActionRecordReceipt>;
   recordAttemptResult(input: ActionAttemptResultRecord): Promise<ActionRecordReceipt>;
@@ -72,6 +77,7 @@ export interface ActionRecordPort {
 }
 
 export interface ActionRecoveryRecords {
+  readonly preparedAction: PreparedActionRecord | null;
   readonly preparations: readonly { readonly recordId: string; readonly value: ActionPreparationRecord }[];
   readonly attempts: readonly {
     readonly recordId: string;
@@ -107,7 +113,7 @@ export class ActionRecoveryError extends Error {
 
 export class ActionRecordCommitError extends Error {
   constructor(
-    readonly stage: "preparation" | "dispatch_intent" | "attempt_result" | "retry" | "settlement",
+    readonly stage: "prepared_action" | "preparation" | "dispatch_intent" | "attempt_result" | "retry" | "settlement",
     readonly actionId: string,
     readonly attemptId: string | null,
     cause: unknown,

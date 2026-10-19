@@ -44,6 +44,17 @@ it("persists independent capture settings and opens a new recording on source re
     expect(record.links.some(link => link.from.id === basis.checkpointId && link.from.revision === "42")).toBe(true);
     const recoveredContent = (await queries.query({kind: "get_content", ...recoveredScope, contentId: record.contents[0]!.id})).content!;
     expect(JSON.parse(recoveredContent.text!)).toEqual(basis);
+    const bindingCheck = {runId: basis.runId, outcome: "accepted" as const, code: null,
+      component: "composition", changedVariableNames: ["FNM_MULTISHELL_PATH", "Path"]};
+    source.recordRecoveryBindingCheck(bindingCheck);
+    await recorder.flush();
+    const bindingScope = (await queries.query({kind: "get_snapshot", sourceId: recovered.sourceId, datasetId: recovered.datasetId})).selection!;
+    const bindingRecords = (await queries.query({kind: "list_records", ...bindingScope, runId: basis.runId, recordKind: "event", limit: 100})).records;
+    const binding = bindingRecords.find(record => record.payload.kind === "event" && record.payload.name === "execution.recovery.binding_checked")!;
+    expect(binding).toBeDefined();
+    expect(binding.links.some(link => link.from.id === basis.runId)).toBe(true);
+    const bindingContent = (await queries.query({kind: "get_content", ...bindingScope, contentId: binding.contents[0]!.id})).content!;
+    expect(JSON.parse(bindingContent.text!)).toEqual(bindingCheck);
     const subject = recorder.ref("runtime", "run", "default-capture", "default-capture");
     recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "capture", sequence: null, code: null }, contents: (["definition", "agent", "provider", "execution"] as const).map((kind) => ({ name: kind, class: kind, stage: "received", mediaType: "application/json", value: { content: kind, apiKey: "not-for-inspection" } })) });
     await recorder.flush();
