@@ -1,5 +1,10 @@
 import type { RunInputItem } from "@agent-anything/agent-core/input";
-import { snapshotHelarcInstructionSettings, type HelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import { createDefaultHelarcInstructionSettings, snapshotHelarcInstructionSettings, type HelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import { randomUUID } from "node:crypto";
+import { canonicalEncode } from "@agent-anything/canonical-action/subject";
+import { createRunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
+import type { HelarcExecutionStore } from "../execution-storage/HelarcExecutionStore.js";
+import { retainHelarcProviderBinding, type HelarcExecutionAdmission } from "../execution-storage/HelarcExecutionAdmission.js";
 import type { IdentityRef } from "@agent-anything/agent-core/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type {
@@ -15,6 +20,8 @@ import {
   Runner,
   type RunLimits,
   type RunTreeLimits,
+  type RunConfig,
+  type RetainedRunConfig,
 } from "@agent-anything/agent-runtime/runner";
 import type { RunTranscriptPort } from "@agent-anything/agent-runtime/transcript";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
@@ -124,6 +131,8 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly executionStore?: HelarcExecutionStore;
+  readonly recoveryAdmission?: HelarcExecutionAdmission;
   readonly commandOutputDirectory: string;
   readonly responseDelivery?: "buffered" | "streaming";
   readonly retainCommandOutput?: (runId: string, executionId: string, paths: import("@agent-anything/helarc-local-environment/command").ProcessOutputPaths) => Promise<void>;
@@ -173,11 +182,13 @@ export interface HelarcHostRunComposition {
 }
 
 export interface PreparedHelarcHostRun {
+  readonly rootRunId: string;
   readonly sessionId: string;
   readonly productRunId: string;
   readonly workspace: WorkspaceSelection;
   readonly identity: IdentityRef;
   start(): HelarcHostRunComposition;
+  recover(intent?: "continue" | "cancel"): Promise<HelarcHostRunComposition>;
 }
 
 export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
@@ -192,8 +203,8 @@ export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
 export async function prepareHelarcHostRun(
   input: PrepareHelarcHostRunInput,
 ): Promise<PreparedHelarcHostRun> {
-  const instructionSettings = input.instructionSettings === undefined
-    ? undefined : snapshotHelarcInstructionSettings(input.instructionSettings);
+  const rootRunId = input.recoveryAdmission?.rootRunId ?? `run_${randomUUID()}`;
+  const instructionSettings = snapshotHelarcInstructionSettings(input.instructionSettings ?? createDefaultHelarcInstructionSettings());
   const runContext = await resolveHostRunContext({
     sessionId: input.sessionId,
     runId: input.productRunId,
@@ -243,12 +254,23 @@ export async function prepareHelarcHostRun(
     persistentPolicyAmendments: input.persistentPolicyAmendments ??
       createInMemoryHostPolicyAmendmentStore({ maxRecords: 64 }),
   });
+  const fileSupport = input.executionStore ? createHelarcFileSupport(input.executionStore, rootRunId) : undefined;
+  const executionHandoff = input.executionStore ? createHelarcExecutionHandoff(input.executionStore) : undefined;
+  const executionAccess: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort = executionHandoff?.access ?? {async canInspect({runId, record}) {
+    return record.source.correlation.kind === "run_action" && record.source.correlation.run.id === runId;
+  }};
   const fileActions = createHelarcLocalFileActionCapability({
     workspace: runWorkspace,
+    fileSupport: fileSupport?.support,
+    executionEvidence: input.executionStore,
+    executionAccess,
     now,
   });
   let reportCommand:(fact:import("@agent-anything/helarc-local-environment/command").ProcessExecutionFact)=>void=()=>{};
   const commandActions = await createHelarcLocalCommandActionCapability({
+    processManagerId: `process-manager:${rootRunId}`,
+    processRecords: input.executionStore,
+    shellSessionRecords: input.executionStore,
     commandOutputDirectory: input.commandOutputDirectory,
     retainCommandOutput: input.retainCommandOutput,
     workspace: runWorkspace,
@@ -260,6 +282,7 @@ export async function prepareHelarcHostRun(
     taskStopOperation: HELARC_TASK_STOP_OPERATION,
     taskStopBinding: HELARC_TASK_STOP_BINDING,
     limits: input.commandLimits,
+    constraintObserver: input.inspection?.commandConstraintObserver,
     processObserver:fact=>{
       try { input.inspection?.processObserver?.(fact); } catch { /* Independent diagnostic consumer. */ }
       reportCommand(fact);
@@ -267,6 +290,12 @@ export async function prepareHelarcHostRun(
     now,
   });
   const product = await createHelarcProductComposition({
+    executionEvidence: input.executionStore,
+    executionEvidenceAccess: executionAccess,
+    executionMaterials: fileSupport?.materials,
+    executionHandoff: executionHandoff?.handoff,
+    executionCollections: executionHandoff?.collections,
+    hookInvocationRecords: input.executionStore,
     responseDelivery: input.responseDelivery,
     runId: input.productRunId,
     task: input.task,
@@ -288,7 +317,7 @@ export async function prepareHelarcHostRun(
     try {
       inspectionDefinitions.agent(product.agent);
       inspectionDefinitions.agent(product.delegatedAgent);
-      inspectionDefinitions.tools(product.actions.toolSelection);
+      inspectionDefinitions.tools(product.actions.toolSelection, product.actions.toolInputSemanticValidators);
       inspectionDefinitions.provider(input.provider.descriptor, input.provider.modelContext.target.revision);
       inspectionDefinitions.hooks(product.hookRegistrations);
       product.agentHooks.subscribe((projection) => inspectionDefinitions.hookInvocations(projection));
@@ -309,6 +338,8 @@ export async function prepareHelarcHostRun(
     {
       platform,
       enforcement,
+      commandEnvironment: commandActions.environment,
+      shellRuntime: commandActions.shellRuntime,
       registrationFingerprints: product.actions.registrations.registrations.map(
         (registration) => registration.registrationFingerprint,
       ),
@@ -359,7 +390,24 @@ export async function prepareHelarcHostRun(
         ...baseContextProjection,
         manifestPersistence: input.contextManifestPersistence,
       });
+  let rootIdentityAllocated = false;
+  const cleanupProcesses = async (context: RunFinalizationContext) => {
+    const cleanup = await commandActions.processes.finalizeRun(context);
+    return cleanup.completed ? null : createRunFailureCause("runtime", Object.freeze({
+      code: cleanup.executions.some(execution => execution.limitations.includes("process_output_retention_failed"))
+        ? "runtime_process_output_retention_failed" : "runtime_process_cleanup_failed",
+      message: "Run-owned command cleanup or retained output could not be confirmed.",
+      retryable: false, metadata: Object.freeze({runId: context.runId, cleanup}),
+    }));
+  };
   const runner = new Runner({
+    createRunId: () => {
+      if (!rootIdentityAllocated) {rootIdentityAllocated = true; return rootRunId;}
+      return `run_${randomUUID()}`;
+    },
+    runTreeCommits: input.executionStore,
+    compositeCommits: input.executionStore,
+    compositeRecovery: input.executionStore,
     runObserver: {
       observe(observation) {
         try { product.recordRunLineage(observation.snapshot.runId, observation.lineage); } catch { /* Display is non-authoritative. */ }
@@ -387,9 +435,12 @@ export async function prepareHelarcHostRun(
     inputNotifications: {read: (runId, afterSequence) => commandActions.processes.readInputNotifications(runId, afterSequence)},
     contextProjection,
     operations: {
+      ...(input.executionStore ? {actionRecovery: {records: input.executionStore, attempts: null}} : {}),
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
-      toolInputSemanticValidators: Object.freeze([]),
+      toolInputSemanticValidators: product.actions.toolInputSemanticValidators,
+      resultContracts: product.actions.resultContracts,
+      resultPresenters: product.actions.resultPresenters,
       internalHandlers: product.actions.internalHandlers,
       composite: product.actions.composite,
       availability: product.actions.operationAvailability,
@@ -402,7 +453,7 @@ export async function prepareHelarcHostRun(
           now,
         }),
         sandbox,
-        records: createInvocationLocalActionRecordPort(),
+        records: input.executionStore ?? createInvocationLocalActionRecordPort(),
         retry: createStopActionRetryPort(),
         now,
       },
@@ -412,23 +463,9 @@ export async function prepareHelarcHostRun(
     runtimeEventPublisher: productRuntimeEventPublisher,
     runTranscriptPort: input.runTranscriptPort,
     resourceFinalizers: Object.freeze([Object.freeze({
-      async finalize(context: RunFinalizationContext) {
-        const cleanup = await commandActions.processes.finalizeRun(context);
-        if (cleanup.executions.some(execution => execution.limitations.includes("process_output_retention_failed"))) {
-          return createRunFailureCause("runtime", Object.freeze({
-            code: "runtime_process_output_retention_failed",
-            message: "Command output could not be retained for historical reading.",
-            retryable: false,
-            metadata: Object.freeze({ runId: context.runId, cleanup }),
-          }));
-        }
-        return cleanup.completed ? null : createRunFailureCause("runtime", Object.freeze({
-          code: "runtime_process_cleanup_failed",
-          message: "Run-owned command cleanup could not be confirmed.",
-          retryable: false,
-          metadata: Object.freeze({ runId: context.runId, cleanup }),
-        }));
-      },
+      binding: {id: "helarc.command-cleanup", revision: "1"},
+      finalize: cleanupProcesses,
+      reconcile: cleanupProcesses,
     })]),
     now,
   });
@@ -506,9 +543,38 @@ export async function prepareHelarcHostRun(
       metadata: runMetadata,
     },
   } as const;
+  if (input.recoveryAdmission) {
+    const retained = input.recoveryAdmission;
+    if (!input.executionStore || retained.productRunId !== input.productRunId || retained.sessionId !== input.sessionId ||
+        retained.environmentFingerprint !== configurationFingerprint || !sameBinding(retained.providerBinding,
+          retainHelarcProviderBinding(input.provider))) {
+      throw new Error("Original execution bindings are unavailable; recovery cannot use changed configuration.");
+    }
+  } else if (input.executionStore) {
+    await input.executionStore.admitProductRun({version: 1, rootRunId, productRunId: input.productRunId,
+      sessionId: input.sessionId, createdAt: now(), task: input.task, inputItems: input.inputItems,
+      workspace: runWorkspace, identity: runContext.identity, providerProfile: input.providerProfile,
+      providerBinding: retainHelarcProviderBinding(input.provider),
+      instructionSettings, qualificationCatalog: input.qualificationCatalog ?? null, permissionPreset: input.permissionPreset,
+      qualification: product.qualification.safeProjection,
+      enforcement, commandLimits: input.commandLimits ?? null, runLimits, runTreeLimits,
+      responseDelivery: input.responseDelivery ?? "buffered", environmentFingerprint: configurationFingerprint});
+  }
   let started = false;
+  let releaseExecution: (() => void) | undefined;
+
+  const wrap = (hostActiveRun: HostActiveRun<HelarcAgentOutput>): HelarcHostRunComposition => {
+    const activeRun = createHelarcHostActiveRun(hostActiveRun, product.getProductProjection,
+      product.subscribeProductProjection, product.getResponsePreviews, product.subscribeResponsePreviews, commandActions.processes);
+    return Object.freeze({activeRun, result: activeRun.wait().then((outcome): HelarcHostRunResult => ({
+      kind: "run_result", productRunId: input.productRunId, harnessRunId: outcome.runId, runResult: outcome.runResult,
+      terminal: outcome.terminal, product: product.projectResult(outcome.runResult, enforcement),
+      activity: product.getProductProjection().activity,
+    })).finally(() => releaseExecution?.())});
+  };
 
   return Object.freeze({
+    rootRunId,
     sessionId: input.sessionId,
     productRunId: input.productRunId,
     workspace: runWorkspace,
@@ -518,36 +584,57 @@ export async function prepareHelarcHostRun(
         throw new Error("Prepared Helarc Host Run can be started only once.");
       }
       started = true;
-      const hostActiveRun = manager.start(hostRunStartInput);
-      const activeRun = createHelarcHostActiveRun(
-        hostActiveRun,
-        product.getProductProjection,
-        product.subscribeProductProjection,
-        product.getResponsePreviews,
-        product.subscribeResponsePreviews,
-        commandActions.processes,
-      );
-
-      return Object.freeze({
-        activeRun,
-        result: activeRun.wait().then((outcome): HelarcHostRunResult => {
-          const productResult = product.projectResult(
-            outcome.runResult,
-            enforcement,
-          );
-          return Object.freeze({
-            kind: "run_result",
-            productRunId: input.productRunId,
-            harnessRunId: outcome.runId,
-            runResult: outcome.runResult,
-            terminal: outcome.terminal,
-            product: productResult,
-            activity: product.getProductProjection().activity,
-          });
-        }),
-      });
+      if (input.recoveryAdmission) throw new Error("A retained execution must use recover, not start.");
+      releaseExecution = input.executionStore?.acquireRun(rootRunId);
+      try { return wrap(manager.start(hostRunStartInput)); }
+      catch (error) {releaseExecution?.(); throw error;}
+    },
+    async recover(intent: "continue" | "cancel" = "continue"): Promise<HelarcHostRunComposition> {
+      if (started || !input.recoveryAdmission || !input.executionStore) throw new Error("Recovery admission is unavailable or already activated.");
+      started = true;
+      rootIdentityAllocated = true;
+      releaseExecution = input.executionStore.acquireRun(rootRunId);
+      try {
+      const saved = await input.executionStore.readRunTree(rootRunId);
+      if (!saved) throw new Error("Original Run Tree admission is unavailable.");
+      for (const member of saved.members) {
+        const runId = member.head.state.run.id;
+        await commandActions.restoreRun(runId);
+        product.recordRunLineage(runId, member.admission.lineage);
+        product.recordRunInput(runId, member.admission.input, member.head.state.startedAt);
+        for (const item of member.head.state.items) product.recordTranscript(createRunTranscriptRecord(item));
+      }
+      const host = await manager.recover({sessionId: input.sessionId, runId: rootRunId, taskId: input.task.id,
+        startedAt: saved.commit.checkpoint.input.startedAt, enforcement,
+        ...(intent === "cancel" ? {cancellation: {origin: "user" as const, reasonCode: "user_requested" as const}} : {}),
+        bindings: {async resolve(member) {
+          const definition = member.head.control.agentDefinition;
+          const agent = [product.agent, product.delegatedAgent].find(candidate => candidate.id === definition.id && candidate.revision === definition.revision);
+          if (!agent) throw new Error("Original Agent definition is unavailable.");
+          return {agent, config: rebindConfiguration(member.admission.config, hostRunStartInput.runConfig)};
+        }}});
+      return wrap(host as HostActiveRun<HelarcAgentOutput>);
+      } catch (error) {releaseExecution(); throw error;}
     },
   });
+}
+
+function sameBinding(a: unknown, b: unknown): boolean {
+  const left = canonicalEncode("helarc.execution-binding.v1", a);
+  const right = canonicalEncode("helarc.execution-binding.v1", b);
+  return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+
+function rebindConfiguration(saved: RetainedRunConfig, trusted: RunConfig): RunConfig {
+  const reviewer = trusted.permissions.reviewer;
+  if (saved.permissions.reviewer?.kind !== reviewer?.kind ||
+      saved.permissions.reviewer?.kind === "auto_review" && (reviewer?.kind !== "auto_review" || saved.permissions.reviewer.bindingId !== reviewer.bindingId)) {
+    throw new Error("Original approval reviewer is unavailable.");
+  }
+  return {...structuredClone(saved), permissions: {...structuredClone(saved.permissions), reviewer,
+    sessionAuthority: saved.permissions.sessionAuthority === null ? null : {
+      ...structuredClone(saved.permissions.sessionAuthority), port: trusted.permissions.sessionAuthority!.port},
+    persistentPolicyAmendments: saved.permissions.persistentPolicyAmendments ? trusted.permissions.persistentPolicyAmendments : null}};
 }
 
 function createHelarcHostActiveRun(
@@ -585,13 +672,22 @@ function createHelarcHostActiveRun(
 
 function createInvocationLocalActionRecordPort(): ActionRecordPort {
   let sequence = 0;
-  const next = (phase: "pre" | "post"): string => {
+  const next = (phase: "pre" | "intent" | "attempt" | "retry" | "post"): string => {
     sequence += 1;
     return `helarc-action-${phase}-${sequence}`;
   };
   return Object.freeze({
     async recordPreEffect() {
       return Object.freeze({ recordId: next("pre") });
+    },
+    async recordDispatchIntent() {
+      return Object.freeze({ recordId: next("intent") });
+    },
+    async recordAttemptResult() {
+      return Object.freeze({ recordId: next("attempt") });
+    },
+    async recordRetry() {
+      return Object.freeze({recordId: next("retry")});
     },
     async recordPostEffect() {
       return Object.freeze({ recordId: next("post") });
@@ -745,3 +841,5 @@ function resolveHelarcRunTreeResources(
     }),
   });
 }
+import { createHelarcFileSupport } from "../execution-storage/HelarcFileSupport.js";
+import { createHelarcExecutionHandoff } from "../execution-storage/HelarcExecutionHandoff.js";

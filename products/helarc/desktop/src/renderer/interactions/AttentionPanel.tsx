@@ -26,7 +26,7 @@ export function AttentionPanel({
     [collapsed, setCollapsed] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const requests =
-    run && !run.display.terminal ? run.host.pendingInteractions : [];
+    snapshot.execution === "active" && run && !run.display.terminal ? run.host.pendingInteractions : [];
   const identity = (r: HelarcPendingInteractionSnapshot) =>
     JSON.stringify([
       r.runId,

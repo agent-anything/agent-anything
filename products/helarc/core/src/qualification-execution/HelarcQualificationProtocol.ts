@@ -6,7 +6,9 @@ import { validatePlanUpdate } from "@agent-anything/agent-runtime/plan";
 import type { HelarcQualificationProfile } from "./HelarcQualificationProfile.js";
 import type { HelarcModelQualificationScope, HelarcModelQualificationOutcome } from "../model-qualification/HelarcModelQualification.js";
 
-export const HELARC_QUALIFICATION_SUITE_REVISION = "helarc.native-call-baseline.v2";
+import { selectHelarcFinalReplyText } from "../controller/HelarcFinalReply.js";
+
+export const HELARC_QUALIFICATION_SUITE_REVISION = "helarc.native-call-baseline.v3";
 export const HELARC_QUALIFICATION_REPETITIONS = 3;
 export const HELARC_QUALIFICATION_REQUEST_TIMEOUT_MS = 120_000;
 export const HELARC_QUALIFICATION_MAX_REQUESTS_PER_TRIAL = 3;
@@ -114,20 +116,20 @@ export function createHelarcQualificationCase(
     ? `This is a bounded native-call qualification Case. Return exactly ${JSON.stringify(marker)} using final_result. No other calls are allowed. ${noPlan}`
     : `This is a controlled qualification fixture, not a real workspace. Calls are intercepted and have no external effects. ${operation} ` +
       `Use only the requested operation, then final_result. ${noPlan} The result will contain a fresh receipt which is not known yet. ` +
-      (tool === "AskUserQuestion" ? "On success, final_result.response must be the selected answer label followed by ':' and the receipt. "
-        : "If the result succeeds, final_result.response must equal the receipt exactly. ") +
-      "If denied, do not retry: final_result.response must be 'not_written:' followed by the receipt. Do not invent a receipt or claim an unobserved outcome.";
+      (tool === "AskUserQuestion" ? "On success, the resolved final reply must be the selected answer label followed by ':' and the receipt. "
+        : "If the result succeeds, the resolved final reply must equal the receipt exactly. ") +
+      "If denied, do not retry: the resolved final reply must be 'not_written:' followed by the receipt. Do not invent a receipt or claim an unobserved outcome.";
   return { marker, id, scope: entry.scope, title: entry.title, callableName, expectedInput, expectedResponse, prompt, fixture, denied };
 }
 
-type QualificationGradingProfile = Pick<HelarcQualificationProfile, "callables" | "tools" | "planLimits">;
+type QualificationGradingProfile = Pick<HelarcQualificationProfile, "callables" | "tools" | "planLimits" | "semanticValidators">;
 
 function checkCallableInput(profile: QualificationGradingProfile, call: ModelToolCall): HelarcQualificationFailure | null {
   const binding = profile.callables.bindings.find(b => b.callableName === call.name);
   if (!binding) return { category: "protocol", reason: "unexpected_callable" };
   if (binding.kind === "tool") {
     const descriptor = profile.tools.find(t => t.name === binding.toolName);
-    return !descriptor || validateToolInput({ descriptor, value: call.input }).status !== "valid"
+    return !descriptor || validateToolInput({ descriptor, value: call.input, semanticValidators: profile.semanticValidators }).status !== "valid"
       ? { category: "protocol", reason: "invalid_tool_input" } : null;
   }
   if (binding.control === "final_result") return finalResultInputError(call.input, false, profile.planLimits)
@@ -153,12 +155,18 @@ export function checkQualificationCall(profile: QualificationGradingProfile, sce
   return null;
 }
 
-export function checkQualificationFinal(profile: QualificationGradingProfile, call: ModelToolCall, expected: string): HelarcQualificationFailure | null {
+export function checkQualificationFinal(profile: QualificationGradingProfile, call: ModelToolCall, expected: string,
+  text: {current: readonly import("@agent-anything/model-interaction").ModelAssistantContentBlock[];
+    previous: readonly import("@agent-anything/model-interaction").ModelAssistantContentBlock[]} = {current: [], previous: []},
+): HelarcQualificationFailure | null {
   const invalid = checkCallableInput(profile, call);
   if (invalid) return invalid;
   if (call.name !== "final_result") return { category: "case_requirement", reason: "expected_final_result" };
   if (Array.isArray(call.input.plan) && call.input.plan.length > 0) return { category: "case_requirement", reason: "unexpected_plan" };
-  return (call.input.response as string).trim() === expected ? null : { category: "case_requirement", reason: "incorrect_final_response" };
+  const blocks = (content: typeof text.current) => content.flatMap((block, ordinal) => block.kind === "text"
+    ? [{modelItemId: `qualification-text:${ordinal}`, ordinal, text: block.text}] : []);
+  const resolvedReply = selectHelarcFinalReplyText({input: call.input, current: blocks(text.current), previous: blocks(text.previous)}).summary;
+  return resolvedReply.trim() === expected ? null : { category: "case_requirement", reason: "incorrect_final_response" };
 }
 
 export function summarizeQualificationScopes(trials: readonly HelarcQualificationTrial[]) {

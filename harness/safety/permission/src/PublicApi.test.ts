@@ -42,6 +42,7 @@ describe("Permission public API", () => {
       "validateGrantedPermissions",
     ]);
     expect(Object.keys(authority).sort()).toEqual([
+      "allowsRetainedFileRead",
       "createActionApprovalCoverage",
       "createActionPermissionAssessmentPort",
       "isActionApprovalCoverageApplicable",

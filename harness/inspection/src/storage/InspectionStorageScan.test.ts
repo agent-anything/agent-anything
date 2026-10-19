@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -74,17 +75,13 @@ it("scans off-thread, disallows overlap, supports cancellation, and observes oth
   } finally { maintenance.close(); }
 });
 
-it("accounts duplicates, rollback orphans, staged aborts and actual database/checkpoint sizes", () => {
+it("accounts atomic bodies, duplicates, rollback and actual database/checkpoint sizes", () => {
   const { root, source } = setup();
   const usage = new InspectionStorageUsage(scanInspectionSource(root, source.sourceId));
   const directory = datasetDirectory(root, source.sourceId, "active");
   const manifest = { formatVersion: INSPECTION_FORMAT_VERSION, sourceId: source.sourceId, datasetId: "active", producerInstanceId: "test", createdAt: new Date().toISOString(), status: "open" as const };
-  let abortStaging = false;
-  const db = new InspectionDatabase(directory, manifest, (path, bytes) => {
-    usage.physicalFileChanged(path, bytes);
-    if (abortStaging && path.startsWith("staging") && bytes) throw new Error("staged write aborted");
-  });
-  const descriptor = { id: "body", name: "body", class: "agent" as const, stage: "test", mediaType: "text/plain" as const, availability: "present" as const, retainedBytes: 5, originalBytes: 5, digest: null, redacted: false, truncated: false };
+  const db = new InspectionDatabase(directory, manifest);
+  const descriptor = { id: "body", name: "body", class: "agent" as const, stage: "test", mediaType: "text/plain" as const, availability: "present" as const, retainedBytes: 5, originalBytes: 5, digest: createHash("sha256").update("hello").digest("hex"), redacted: false, truncated: false };
   const record: InspectionRecord = { id: "r1", subject: { sourceId: source.sourceId, datasetId: "active", owner: "runtime", kind: "run", id: "run", runId: "run", revision: null }, payload: { kind: "event", name: "test", sequence: null, code: null }, occurredAt: null, capturedAt: manifest.createdAt, ownerSequence: null, captureSequence: 1, commitSequence: 0, policyRevision: "test", contents: [descriptor], links: [] };
   try {
     atomicInspectionJson(join(directory, "manifest.json"), manifest);
@@ -100,11 +97,11 @@ it("accounts duplicates, rollback orphans, staged aborts and actual database/che
       throw new Error("rollback");
     })).toThrow("rollback");
     expect(db.record("r2", db.snapshot().watermark)).toBeNull();
-    expect(readFileSync(join(directory, "content", "orphan"), "utf8")).toBe("hello");
-    abortStaging = true;
-    const staged = { ...descriptor, id: "staged" };
-    expect(() => db.write({ ...record, id: "r3", contents: [staged] }, [{ descriptor: staged, text: "hello" }])).toThrow("staged write aborted");
-    expect(readFileSync(join(directory, "staging", "staged"), "utf8")).toBe("hello");
+    expect(db.content("orphan", db.snapshot().watermark)).toBeNull();
+    const invalid = { ...descriptor, id: "invalid" };
+    expect(() => db.write({ ...record, id: "r3", contents: [invalid] }, [{ descriptor: invalid, text: "wrong" }])).toThrow("inspection_content_integrity_failed");
+    expect(db.record("r3", db.snapshot().watermark)).toBeNull();
+    expect(db.readContent("body", db.snapshot().watermark, 0, 256)?.text).toBe("hello");
     db.checkpoint(); usage.refreshDatabase(directory);
     expect(usage.sourceBytes).toBe(scanInspectionSource(root, source.sourceId).bytes);
     db.close(); usage.refreshDatabase(directory);

@@ -144,6 +144,25 @@ for (const adapter of ADAPTERS) {
       },
     );
 
+    it("encodes unavailable presentation without relabeling successful execution as failed", async () => {
+      const bodies: unknown[] = [];
+      const provider = adapter.create(adapter.response({text: null, calls: [{id: "call-1", name: "Read", input: {file_path: "file.txt"}}], finish: "normal"}),
+        true, body => {bodies.push(body);});
+      const turn = successfulTurn(await provider.send(createNativeProviderRequest(provider), context()));
+      const block = turn.assistant.content.find(item => item.kind === "model_tool_call");
+      if (block?.kind !== "model_tool_call") throw new TypeError("Expected Tool Call.");
+      const message = createSettledToolResultMessage(block.call);
+      await provider.send(createNativeProviderRequest(provider, {requestId: "native-request-2",
+        messages: [...defaultMessages(), turn.assistant, {...message, content: message.content.map(item => ({...item, result: {
+          ...item.result, presentation: {presenter: {id: "private-presenter", revision: "3"}, disposition: "unavailable" as const, failureCode: "capture_missing"},
+        }}))}],
+      }), context());
+      const body = bodies[1] as {messages: {content: string}[]};
+      expect(JSON.parse(body.messages.at(-1)!.content)).toMatchObject({settlement: "succeeded",
+        presentation: {disposition: "unavailable", failureCode: "capture_missing"}});
+      expect(body.messages.at(-1)!.content).not.toContain("private-presenter");
+    });
+
     it("encodes a large admitted text block without truncation or new messages", async () => {
       const bodies: unknown[] = [];
       const provider = adapter.create(adapter.response({ text: "done", calls: [], finish: "normal" }),

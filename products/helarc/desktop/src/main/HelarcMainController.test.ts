@@ -23,17 +23,108 @@ import { access, mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promise
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { HelarcExecutionStore } from "./execution-storage/HelarcExecutionStore.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
 import { FileHelarcThreadStore, InMemoryHelarcThreadStore } from "./thread/index.js";
 import { HelarcWorkbenchQueries } from "./workbench/HelarcWorkbenchQueries.js";
 import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
+import {captureExecutionError} from "./diagnostics/ExecutionErrorDetails.js";
+import type {ExecutionDiagnosticSink} from "./diagnostics/HelarcExecutionDiagnostics.js";
 
 type InteractionRequestRef = NonNullable<HelarcMainSnapshot["run"]>["host"]["pendingInteractions"][number]["request"];
 const commandOutputDirectory = mkdtempSync(join(tmpdir(), "helarc-controller-output-"));
 afterAll(() => rm(commandOutputDirectory, { recursive: true, force: true }));
 
 describe("HelarcMainController", () => {
+  it.each([false, true])("records a rejected preparation commit without changing cleanup when diagnostics throws=%s", async sinkThrows => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-commit-diagnostics-"));
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    const execution = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    try {
+      const commit = execution.commitRunTree.bind(execution);
+      const original = new TypeError("preparation-diagnostic-sentinel");
+      const failedCommit = vi.spyOn(execution, "commitRunTree").mockImplementation(async value => {
+        if (value.runs.some(run => run.control.controllerInvocation?.status === "pending")) throw original;
+        return commit(value);
+      });
+      const record = vi.fn<ExecutionDiagnosticSink["record"]>(() => {if (sinkThrows) throw new Error("diagnostic sink unavailable");});
+      const controller = new HelarcMainController({commandOutputDirectory: join(directory, "output"),
+        provider: new CompleteProvider(), threadStore: new InMemoryHelarcThreadStore(), executionStore: execution,
+        executionDiagnostics: {record}});
+      controller.selectWorkspacePath(directory);
+      const started = await controller.startRun({taskText: "Inspect", target: {kind: "new_thread"}});
+      if (!started.ok) throw new Error(started.error.message);
+      await vi.waitFor(() => expect(controller.getSnapshot().error?.code).toBe("run_execution_failed"), {timeout: 15_000});
+      expect(record).toHaveBeenCalledWith("active_run_rejected", expect.objectContaining({threadId: started.threadId,
+        productRunId: started.productRunId, runId: expect.any(String)}), expect.any(Error));
+      const error = record.mock.calls[0]?.[2];
+      expect(JSON.stringify(captureExecutionError(error))).toContain("preparation-diagnostic-sentinel");
+      expect(controller.getSnapshot().error).toEqual({code: "run_execution_failed", message: "Helarc could not settle the active Run."});
+      expect(controller.getSnapshot()).toMatchObject({execution: "idle", status: "failed", run: {display: {terminal: false}}});
+      expect(await controller.listRecoverableWork()).toEqual([expect.objectContaining({state: "interrupted"})]);
+      expect(controller.selectWorkspacePath(directory).error?.code).not.toBe("run_already_active");
+      failedCommit.mockRestore();
+      const next = await controller.startRun({taskText: "Another task", target: {kind: "new_thread"}});
+      expect(next.ok).toBe(true);
+      await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({execution: "idle", status: "completed"}), {timeout: 15_000});
+    } finally {await execution.close(); await rm(directory, {recursive: true, force: true});}
+  }, 20_000);
+
+  it("delivers a retained terminal result without reconnecting Provider or initializing the removed workspace", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-terminal-recovery-"));
+    const workspace = join(directory, "workspace"); await mkdir(workspace);
+    const executionPath = join(directory, "execution");
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    let execution = await HelarcExecutionStore.open(executionPath, worker);
+    try {
+      const threads = new InMemoryHelarcThreadStore();
+      const terminal = vi.spyOn(threads, "commitRunTerminal").mockRejectedValueOnce(new Error("Interrupted destination write"));
+      const controller = new HelarcMainController({commandOutputDirectory: join(directory, "output"),
+        provider: new CompleteProvider(), threadStore: threads, executionStore: execution});
+      controller.selectWorkspacePath(workspace);
+      const started = await controller.startRun({taskText: "Inspect", target: {kind: "new_thread"}});
+      if (!started.ok) throw new Error(started.error.message);
+      await vi.waitFor(() => expect(controller.getSnapshot().error?.code).toBe("run_persistence_failed"), {timeout: 30_000});
+      const entry = (await execution.listProductRuns())[0]!;
+      expect(entry).toMatchObject({terminal: true, delivered: false});
+      const completedAt = (await execution.readLatestRun(entry.admission.rootRunId))!.state.settlement!.completedAt;
+      await execution.close();
+      await rm(workspace, {recursive: true});
+      execution = await HelarcExecutionStore.open(executionPath, worker);
+      const reopened = new HelarcMainController({commandOutputDirectory: join(directory, "output"), threadStore: threads,
+        executionStore: execution});
+      expect(await reopened.recoverWork({id: entry.admission.rootRunId, revision: entry.revision, intent: "continue"})).toEqual({ok: true});
+      const record = (await threads.loadThread(started.threadId))!;
+      expect(record.runs[0]?.terminal?.host.completedAt).toBe(completedAt);
+      expect(record.messages.filter(message => message.role === "assistant")).toHaveLength(1);
+      expect(await reopened.listRecoverableWork()).toEqual([]);
+      expect(terminal).toHaveBeenCalledTimes(2);
+    } finally {await execution.close(); await rm(directory, {recursive: true, force: true});}
+  }, 45_000);
+  it("persists normal completion without inventing a message or artifact for an empty final reply", async () => {
+    const store = new InMemoryHelarcThreadStore();
+    const baseline = new CompleteProvider();
+    const provider: Provider = {
+      ...baseline,
+      send: async request => createDesktopNativeResult(request, { kind: "completion", summary: "" }, baseline.descriptor.id, 1),
+    };
+    const controller = new HelarcMainController({ commandOutputDirectory, provider, threadStore: store });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+    const completed = waitForProductResult(controller, "completed");
+    const started = await controller.startRun({ taskText: "No reply needed", target: { kind: "new_thread" } });
+    if (!started.ok) throw new Error(started.error.message);
+    await completed;
+    await vi.waitFor(async () => expect((await store.loadThread(started.threadId))?.runs[0]?.terminal?.host.status).toBe("completed"));
+    const stored = (await store.loadThread(started.threadId))!;
+    expect(stored.messages.map(message => message.role)).toEqual(["user"]);
+    expect(stored.artifacts).toEqual([]);
+    const reopened = new HelarcMainController({ commandOutputDirectory, threadStore: store });
+    const conversation = await reopened.workbench.readConversation({ threadId: started.threadId, position: { kind: "latest" } });
+    expect(conversation.status).toBe("page");
+    if (conversation.status === "page") expect(conversation.entries.filter(entry => entry.role === "assistant")).toEqual([]);
+  });
   it("binds Project folders per Run and applies edits only to subsequent work", async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-project-binding-"));
     const firstPath = join(directory, "first");
@@ -49,6 +140,7 @@ describe("HelarcMainController", () => {
     const first = await controller.startRun({ taskText: "Inspect", target: { kind: "new_thread" } });
     if (!first.ok) throw new Error(first.error.message);
     await vi.waitFor(() => expect(provider.callCount).toBe(1));
+    expect(controller.getSnapshot().execution).toBe("active");
     const changed = { ...project, revision: 2, name: "Changed", primaryProfileId: "second", additionalProfileIds: [] };
     controller.setProjects([changed]);
     expect(controller.getSnapshot().workspace?.path).toBe(firstPath);
@@ -951,12 +1043,12 @@ describe("HelarcMainController", () => {
 
     const firstApprovalSnapshot = await firstApprovalPromise;
     const firstRequestId = pendingApproval(firstApprovalSnapshot).request.id;
-    expect(dispatchApprovalCommand(
+    expect((await dispatchApprovalCommand(
       controller,
       approvalSubmission(firstApprovalSnapshot, "accept", {
         submissionId: "desktop-recovered-command-1",
       }),
-    )).toMatchObject({ status: "handled" });
+    ))).toMatchObject({ status: "handled" });
 
     const secondApprovalSnapshot = await waitForSnapshot(
       controller,
@@ -965,12 +1057,12 @@ describe("HelarcMainController", () => {
           candidate.request.id !== firstRequestId,
       ) === true,
     );
-    expect(dispatchApprovalCommand(
+    expect((await dispatchApprovalCommand(
       controller,
       approvalSubmission(secondApprovalSnapshot, "accept", {
         submissionId: "desktop-recovered-command-2",
       }),
-    )).toMatchObject({ status: "handled" });
+    ))).toMatchObject({ status: "handled" });
 
     const completed = await completedPromise;
     expect(completed.run?.product.result).toMatchObject({
@@ -1049,13 +1141,13 @@ describe("HelarcMainController", () => {
     const decline = approvalSubmission(waitingSnapshot, "decline", {
       submissionId: "desktop-decline-1",
     });
-    expect(dispatchApprovalCommand(controller, {
+    expect((await dispatchApprovalCommand(controller, {
       ...decline,
       interactionRequest: {
         ...decline.interactionRequest,
         id: "stale-request",
       },
-    }, "host-stale-request")).toMatchObject({
+    }, "host-stale-request"))).toMatchObject({
       status: "handled",
       kind: "interaction.submit",
       result: {
@@ -1063,14 +1155,14 @@ describe("HelarcMainController", () => {
         code: "interaction_not_pending",
       },
     });
-    expect(dispatchApprovalCommand(controller, {
+    expect((await dispatchApprovalCommand(controller, {
       ...decline,
       submissionId: "desktop-stale-version-1",
       interactionRequest: {
         ...decline.interactionRequest,
         requestVersion: decline.interactionRequest.requestVersion + 1,
       },
-    })).toMatchObject({
+    }))).toMatchObject({
       status: "handled",
       result: {
         status: "rejected",
@@ -1078,7 +1170,7 @@ describe("HelarcMainController", () => {
       },
     });
 
-    const receipt = dispatchApprovalCommand(controller, decline);
+    const receipt = (await dispatchApprovalCommand(controller, decline));
     expect(receipt).toMatchObject({
       status: "handled",
       kind: "interaction.submit",
@@ -1093,11 +1185,11 @@ describe("HelarcMainController", () => {
         },
       },
     });
-    expect(dispatchApprovalCommand(controller, decline)).toBe(receipt);
-    expect(dispatchApprovalCommand(controller, {
+    expect((await dispatchApprovalCommand(controller, decline))).toBe(receipt);
+    expect((await dispatchApprovalCommand(controller, {
       ...decline,
       optionId: approvalSubmission(waitingSnapshot, "accept").optionId,
-    })).toMatchObject({
+    }))).toMatchObject({
       status: "rejected",
       commandId: "host-approval-desktop-decline-1",
       code: "host_command_id_conflict",
@@ -1120,10 +1212,10 @@ describe("HelarcMainController", () => {
     });
     expect(JSON.stringify(stoppedSnapshot.activeThread)).not.toContain("pendingApproval");
     expect(stoppedSnapshot.activeThread?.artifacts.some((artifact) => artifact.kind === "error-report")).toBe(false);
-    expect(dispatchApprovalCommand(controller, {
+    expect((await dispatchApprovalCommand(controller, {
       ...decline,
       submissionId: "desktop-late-1",
-    })).toMatchObject({
+    }))).toMatchObject({
       status: "handled",
       kind: "interaction.submit",
       result: {
@@ -1162,10 +1254,10 @@ describe("HelarcMainController", () => {
         (candidate) => candidate.phase === "submitted_for_resolution",
       ) === true,
     );
-    expect(dispatchApprovalCommand(
+    expect((await dispatchApprovalCommand(
       controller,
       approvalSubmission(waitingSnapshot, "accept"),
-    )).toMatchObject({
+    ))).toMatchObject({
       status: "handled",
       result: {
         status: "accepted_for_resolution",
@@ -1224,10 +1316,10 @@ describe("HelarcMainController", () => {
       submissionId: "desktop-after-cancel-1",
     });
 
-    expect(dispatchCancellationCommand(
+    expect((await dispatchCancellationCommand(
       controller,
       pendingApproval(waitingSnapshot).request.runId,
-    )).toMatchObject({
+    ))).toMatchObject({
       status: "handled",
       kind: "run.cancel",
       result: { status: "accepted" },
@@ -1251,7 +1343,7 @@ describe("HelarcMainController", () => {
       error: { code: "run_already_active" },
       snapshot: { status: "cancelling" },
     });
-    expect(dispatchApprovalCommand(controller, lateSubmission)).toMatchObject({
+    expect((await dispatchApprovalCommand(controller, lateSubmission))).toMatchObject({
       status: "handled",
       result: {
         status: "rejected",
@@ -1307,11 +1399,11 @@ describe("HelarcMainController", () => {
       "decline",
     ]);
 
-    expect(dispatchCancellationCommand(
+    expect((await dispatchCancellationCommand(
       controller,
       pendingApproval(waitingSnapshot).request.runId,
       "desktop-approval-cancel-1",
-    )).toMatchObject({
+    ))).toMatchObject({
       status: "handled",
       result: {
         status: "accepted",
@@ -1336,10 +1428,10 @@ describe("HelarcMainController", () => {
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("rejects approval submissions and cancellation without an active Run", () => {
+  it("rejects approval submissions and cancellation without an active Run", async () => {
     const controller = new HelarcMainController({ commandOutputDirectory, provider: new CompleteProvider() });
 
-    expect(dispatchApprovalCommand(controller, {
+    expect((await dispatchApprovalCommand(controller, {
       submissionId: "desktop-unknown-1",
       runId: "run-unknown",
       requestId: "unknown",
@@ -1358,12 +1450,12 @@ describe("HelarcMainController", () => {
           revision: "fingerprint-unknown",
         },
       },
-    })).toMatchObject({
+    }))).toMatchObject({
       status: "rejected",
       code: "host_command_run_not_active",
     });
 
-    expect(dispatchCancellationCommand(controller, "run-unknown")).toMatchObject({
+    expect((await dispatchCancellationCommand(controller, "run-unknown"))).toMatchObject({
       status: "rejected",
       code: "host_command_run_not_active",
     });
@@ -1405,11 +1497,11 @@ describe("HelarcMainController", () => {
     const secondHarnessRunId = secondSnapshot.run?.harnessRunId;
     if (secondHarnessRunId === undefined) throw new Error("Expected active Harness Run id.");
 
-    expect(dispatchCancellationCommand(
+    expect((await dispatchCancellationCommand(
       controller,
       "harness-run-stale",
       "host-stale-cancel-run-1",
-    )).toMatchObject({
+    ))).toMatchObject({
       status: "rejected",
       runId: "harness-run-stale",
       code: "host_command_run_not_active",
@@ -1424,11 +1516,11 @@ describe("HelarcMainController", () => {
     });
 
     const secondCancelled = waitForActiveRunTerminal(controller, "cancelled");
-    expect(dispatchCancellationCommand(
+    expect((await dispatchCancellationCommand(
       controller,
       secondHarnessRunId,
       "host-cancel-run-2",
-    )).toMatchObject({
+    ))).toMatchObject({
       status: "handled",
       result: { status: "accepted" },
     });
@@ -2187,14 +2279,14 @@ function approvalSubmission(
   };
 }
 
-function dispatchApprovalCommand(
+async function dispatchApprovalCommand(
   controller: HelarcMainController,
   submission: ApprovalInteractionSubmission,
   commandId = `host-approval-${submission.submissionId}`,
 ) {
   const { interactionRequest, ...payload } = submission;
   const { runId } = submission;
-  return controller.dispatchHostCommand({
+  return (await controller.dispatchHostCommand({
     version: HOST_COMMAND_VERSION,
     commandId,
     runId,
@@ -2204,15 +2296,15 @@ function dispatchApprovalCommand(
       submissionId: submission.submissionId,
       payload,
     },
-  }, "interaction.submit");
+  }, "interaction.submit"));
 }
 
-function dispatchCancellationCommand(
+async function dispatchCancellationCommand(
   controller: HelarcMainController,
   runId: string,
   commandId = `host-cancel-${runId}`,
 ) {
-  return controller.dispatchHostCommand({
+  return (await controller.dispatchHostCommand({
     version: HOST_COMMAND_VERSION,
     commandId,
     runId,
@@ -2220,7 +2312,7 @@ function dispatchCancellationCommand(
     payload: {
       reason: "Cancelled from Helarc desktop test.",
     },
-  }, "run.cancel");
+  }, "run.cancel"));
 }
 
 function waitForPendingApproval(

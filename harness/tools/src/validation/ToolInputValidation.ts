@@ -49,7 +49,22 @@ export interface ToolInputSemanticValidator<TInput = unknown> {
     readonly revision: string;
   };
   readonly tool: ToolRevisionRef;
+  readonly scope?: {readonly owner: string; readonly kind: string; readonly id: string; readonly revision: string};
+  readonly configuration?: {
+    readonly ref: { readonly owner: string; readonly kind: string; readonly id: string; readonly revision: string };
+    readonly value: import("../catalog/index.js").ToolJsonObject;
+  };
+  issueHint?(input: TInput, issue: ToolInputIssue): string | null;
   validate(input: TInput): ToolInputSemanticValidation;
+}
+
+export interface ToolInputValidationCheck {
+  readonly stage: "schema" | "semantic" | "issue_hint";
+  readonly status: "valid" | "invalid" | "error";
+  readonly toolFingerprint: string;
+  readonly configuration: ToolInputSemanticValidator["configuration"] | null;
+  readonly scope: ToolInputSemanticValidator["scope"] | null;
+  readonly issues: readonly ToolInputIssue[];
 }
 
 export type ToolInputValidation =
@@ -86,18 +101,36 @@ export function validateToolInput(input: {
   readonly descriptor: ToolDescriptor;
   readonly value: unknown;
   readonly semanticValidators?: readonly ToolInputSemanticValidator[];
+  readonly observe?: (check: ToolInputValidationCheck) => void;
 }): ToolInputValidation {
   const validate = validatorFor(input.descriptor);
-  if (!(validate(input.value) as boolean)) {
-    return invalidValidation(normalizeAjvIssues(validate.errors ?? [], input.value));
-  }
   const semantic = input.semanticValidators?.find((candidate) =>
     toolRevisionKey(candidate.tool) === toolRevisionKey(input.descriptor.ref)
   );
+  const observe = (stage: ToolInputValidationCheck["stage"], status: ToolInputValidationCheck["status"], issues: readonly ToolInputIssue[]) => {
+    try { input.observe?.(Object.freeze({stage, status, toolFingerprint: input.descriptor.fingerprint,
+      configuration: semantic?.configuration ?? null, scope: semantic?.scope ?? null, issues: Object.freeze(issues.slice(0, MAX_ISSUES))})); }
+    catch { /* Diagnostic observers never change input admission. */ }
+  };
+  const reject = (issues: readonly ToolInputIssue[], stage: "schema" | "semantic") => {
+    observe(stage, "invalid", issues);
+    return invalidValidation(issues.map((issue, index) => {
+      if (!semantic?.issueHint || index >= MAX_ISSUES) return issue;
+      try {
+        const hint = semantic.issueHint(input.value, issue);
+        return hint === null ? issue : snapshotIssue({...issue, hint});
+      } catch {
+        observe("issue_hint", "error", [issue]);
+        return issue;
+      }
+    }));
+  };
+  if (!(validate(input.value) as boolean)) return reject(normalizeAjvIssues(validate.errors ?? [], input.value), "schema");
+  observe("schema", "valid", []);
   if (semantic === undefined) return Object.freeze({ status: "valid" as const });
   const result = semantic.validate(input.value);
-  if (result.status === "valid") return Object.freeze({ status: "valid" as const });
-  return invalidValidation(normalizeSemanticIssues(result.issues));
+  if (result.status === "valid") { observe("semantic", "valid", []); return Object.freeze({ status: "valid" as const }); }
+  return reject(normalizeSemanticIssues(result.issues), "semantic");
 }
 
 export function formatToolInputValidationFailure(

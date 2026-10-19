@@ -67,9 +67,6 @@ void app
             contextWindowTokens: Number(
               process.env.HELARC_SMOKE_CONTEXT_WINDOW ?? 163840,
             ),
-            maximumOutputTokens: Number(
-              process.env.HELARC_SMOKE_OUTPUT_TOKENS ?? 2048,
-            ),
           }
         : null;
     const controller = new HelarcMainController(

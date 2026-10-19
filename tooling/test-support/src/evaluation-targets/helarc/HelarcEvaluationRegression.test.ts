@@ -258,7 +258,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(latency?.pairs.every((pair) => pair.difference < 0)).toBe(true);
   });
 
-  it("preserves the accepted Delegation Transfer v1 while producing active v8 evidence", async () => {
+  it("preserves the accepted Delegation Transfer v1 while producing active v9 evidence", async () => {
     const predecessorBefore = JSON.stringify(
       HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
     );
@@ -268,7 +268,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     const candidate = await runDelegationTransferDeterministicEvaluation();
     const accepted = HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE.delegationTransfer;
     expect(candidate).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v8",
+      revision: "delegation-transfer-deterministic-evaluation-v9",
       metrics: {
         objectiveFidelityRate: 1,
         unnecessaryDelegationCount: 0,
@@ -279,7 +279,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
         toolCallCount: 5,
         humanInteractionEvents: 0,
         modelTurnCount: 5,
-        latencyMs: 266,
+        latencyMs: 373,
         terminalOutcome: "completed",
       },
       invariants: {
@@ -297,7 +297,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toBe("delegation-transfer-deterministic-evaluation-v1");
     expect(accepted.metrics.latencyMs).toBe(283);
     expect(accepted.metrics.modelTurnCount).toBe(5);
-    expect(candidate.metrics.latencyMs).toBe(266);
+    expect(candidate.metrics.latencyMs).toBe(373);
     expect(candidate.digest).not.toBe(accepted.reportDigest);
     expect(HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef);

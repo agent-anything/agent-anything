@@ -102,7 +102,7 @@ describe("ActiveRunHandle", () => {
     expect(onSettled).toHaveBeenCalledWith(emergencyResult);
   });
 
-  it("delegates descendant steering and resume only through their bound Runner routes", () => {
+  it("delegates descendant steering and resume only through their bound Runner routes", async () => {
     const result = succeededResult();
     const handle = new ActiveRunHandle(
       "run-1",
@@ -123,11 +123,11 @@ describe("ActiveRunHandle", () => {
         submittedAt: NOW,
       },
     };
-    expect(handle.steerDescendant(route)).toMatchObject({
+    expect(await handle.steerDescendant(route)).toMatchObject({
       status: "rejected",
       code: "delegation_route_invalid",
     });
-    const routeImpl = vi.fn(() => Object.freeze({
+    const routeImpl = vi.fn(async () => Object.freeze({
       status: "rejected" as const,
       code: "delegation_child_settled" as const,
       relation: route.relation,
@@ -135,7 +135,7 @@ describe("ActiveRunHandle", () => {
     }));
     handle.bindDescendantSteering(routeImpl);
 
-    expect(handle.steerDescendant(route)).toMatchObject({
+    expect(await handle.steerDescendant(route)).toMatchObject({
       status: "rejected",
       code: "delegation_child_settled",
     });
@@ -157,7 +157,7 @@ describe("ActiveRunHandle", () => {
         reason: "Continue the suspended Child.",
       },
     };
-    expect(handle.resumeDescendant(resumeRoute)).toMatchObject({
+    expect((await handle.resumeDescendant(resumeRoute))).toMatchObject({
       status: "rejected",
       code: "delegation_route_invalid",
     });
@@ -169,7 +169,7 @@ describe("ActiveRunHandle", () => {
     }));
     handle.bindDescendantResume(resumeImpl);
 
-    expect(handle.resumeDescendant(resumeRoute)).toMatchObject({
+    expect((await handle.resumeDescendant(resumeRoute))).toMatchObject({
       status: "rejected",
       code: "delegation_child_settled",
     });

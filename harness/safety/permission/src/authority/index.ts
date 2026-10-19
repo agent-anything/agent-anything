@@ -24,6 +24,7 @@ export {
 } from "./validateAuthority.js";
 export {
   createActionPermissionAssessmentPort,
+  allowsRetainedFileRead,
   type ActionPermissionAssessment,
   type ActionPermissionAssessmentInput,
   type ActionPermissionAssessmentPort,

@@ -361,21 +361,17 @@ function snapshotOllamaRuntime(
   assertRecord(candidate, "Ollama runtime settings");
   assertExactKeys(
     candidate,
-    ["contextWindowTokens", "maximumOutputTokens"],
+    ["contextWindowTokens"],
     "Ollama runtime settings",
   );
   if (
     !Number.isSafeInteger(candidate.contextWindowTokens) ||
-    (candidate.contextWindowTokens as number) <= 0 ||
-    !Number.isSafeInteger(candidate.maximumOutputTokens) ||
-    (candidate.maximumOutputTokens as number) <= 0 ||
-    (candidate.maximumOutputTokens as number) >= (candidate.contextWindowTokens as number)
+    (candidate.contextWindowTokens as number) <= 0
   ) {
     invalid("Ollama runtime limits are invalid.");
   }
   return Object.freeze({
     contextWindowTokens: candidate.contextWindowTokens as number,
-    maximumOutputTokens: candidate.maximumOutputTokens as number,
   });
 }
 

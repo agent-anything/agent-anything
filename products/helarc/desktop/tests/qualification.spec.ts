@@ -10,7 +10,7 @@ test("Settings verification, cancel, retained evidence and explicit publication"
       provider: { configured: true, nativeToolInteraction: { supported: true }, profiles: [], error: null,
         activeProfile: { id: "provider", providerKind: "ollama", displayName: "Local Ollama", baseUrl: "http://localhost:11435",
           model: "test-model", timeoutMs: 300000000, credentialStatus: "empty_allowed", qualificationPolicy: "require_qualified",
-          ollamaRuntime: { contextWindowTokens: 163840, maximumOutputTokens: 2048 } } },
+          ollamaRuntime: { contextWindowTokens: 163840 } } },
     };
     const scopeNames = ["agent_loop", "workspace_observation", "workspace_mutation", "process_execution", "user_interaction", "delegation"];
     const qualification: any = { available: true, error: null, targetId: "target", model: "test-model", disposition: "blocked",
@@ -33,6 +33,8 @@ test("Settings verification, cancel, retained evidence and explicit publication"
       },
     };
     (window as any).helarc = {
+      listRecoverableWork: async () => [],
+      recoverWork: async () => ({ok: true}),
       getSnapshot: async () => snapshot, subscribeSnapshot: () => () => {},
       getProviderCredentialSettings: async () => ({ windowsAvailable: false, selection: { source: "safe-storage" } }),
       getQualification: async () => structuredClone(qualification),

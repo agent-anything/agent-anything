@@ -1,5 +1,8 @@
 import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { RegisteredTool } from "@agent-anything/tools/registration";
+import { HELARC_COMPENSATION_GUIDANCE, HELARC_COMPENSATION_FIELD_GUIDANCE } from "../HelarcCompensationInput.js";
+import { EXECUTION_DETAILS_DESCRIPTION } from "../HelarcExecutionDetails.js";
+import { FILE_RESTORE_DESCRIPTION } from "../HelarcFileRestoration.js";
 import {
   HELARC_BASELINE_TOOL_CONTRACTS,
   type HelarcBaselineToolName,
@@ -44,6 +47,7 @@ export function createHelarcBaselineToolGuidance(
       contract.name,
       selectedByName.get(contract.name)?.descriptor.ref ?? alternateShellRef(contract.name),
       contract.name === shellRuntime.toolName ? shellRuntime : null,
+      selectedByName.get(contract.name)?.descriptor.inputSchema,
     )
   ));
   const release = createHelarcToolGuidanceRelease({
@@ -63,16 +67,29 @@ export function createHelarcBaselineToolGuidanceSource(
   name: HelarcBaselineToolName,
   tool: ToolRevisionRef,
   shellRuntime: HelarcShellRuntimeProfile | null,
+  inputSchema?: import("@agent-anything/tools/catalog").ToolJsonObject,
 ): HelarcToolGuidanceSource {
   if (shellRuntime !== null && name !== shellRuntime.toolName) {
     throw new TypeError("Helarc Shell runtime cannot describe a different Tool.");
   }
   const definition = shellRuntime === null ? DEFINITIONS[name] : shellRuntimeGuidance(shellRuntime);
+  const fields: Record<string, string> = {...definition.fields};
+  const compensation = inputSchema?.properties && typeof inputSchema.properties === "object" &&
+    !Array.isArray(inputSchema.properties) && Object.hasOwn(inputSchema.properties, "compensation_of");
+  if (compensation) Object.assign(fields, HELARC_COMPENSATION_FIELD_GUIDANCE);
+  if (shellRuntime && inputSchema?.properties && typeof inputSchema.properties === "object" && !Array.isArray(inputSchema.properties)) {
+    for (const [field, schema] of Object.entries(inputSchema.properties)) {
+      if (schema && typeof schema === "object" && !Array.isArray(schema) && "description" in schema && typeof schema.description === "string") {
+        const pointer = `/properties/${field}`;
+        fields[pointer] = `${fields[pointer] ?? ""} ${schema.description}`.trim();
+      }
+    }
+  }
   return createHelarcToolGuidanceSource({
     id: `helarc.tool-guidance.${sourceName(name)}`,
     tool,
-    modelDescription: definition.description,
-    inputFieldDescriptions: definition.fields,
+    modelDescription: compensation ? `${definition.description} ${HELARC_COMPENSATION_GUIDANCE}` : definition.description,
+    inputFieldDescriptions: fields,
     provenance: Object.freeze({
       reference: "authored:helarc-product-tool-guidance-v2",
       license: null,
@@ -128,6 +145,24 @@ function sourceName(name: HelarcBaselineToolName): string {
 }
 
 const DEFINITIONS = Object.freeze({
+  RestoreFile: {description: FILE_RESTORE_DESCRIPTION, fields: {
+    "/properties/change_ref": "Exact file effect reference to address. It selects the recorded target and prior state, not a replacement path.",
+    "/properties/change_ref/properties/owner": "Copy the effect owner exactly.",
+    "/properties/change_ref/properties/kind": "Must be effect.",
+    "/properties/change_ref/properties/id": "Copy the exact disclosed file effect ID.",
+    "/properties/change_ref/properties/revision": "Copy the immutable effect revision exactly.",
+  }},
+  ExecutionDetails: {description: EXECUTION_DETAILS_DESCRIPTION, fields: {
+    "/properties/reference": "Exact owner-issued reference delivered to this Run. It is not authority to read retained content.",
+    "/properties/reference/properties/owner": "Copy the source owner exactly.",
+    "/properties/reference/properties/kind": "Copy execution, effect, support or material exactly.",
+    "/properties/reference/properties/id": "Copy the disclosed immutable identity; do not guess paths or IDs.",
+    "/properties/reference/properties/revision": "Copy the immutable revision exactly.",
+    "/properties/view": "summary by default; content requires a material reference and current source-owner read authority; executions pages an explicitly disclosed settled Run collection.",
+    "/properties/after": "Opaque executions-page cursor copied exactly from next; omit on the first page. Not used for summary or content.",
+    "/properties/offset": "Zero-based entry offset for summary or byte offset for content; default zero.",
+    "/properties/limit": "Summary returns 1-16 entries (default 4); content returns 1-16384 bytes (default 4096). Use the returned next offset.",
+  }},
   Read: Object.freeze({
     description: "Read bounded UTF-8 text from one exact file in the active Workspace. Use it to inspect code, configuration, documentation, or other textual state, and read an existing file before proposing a mutation. Use offset and limit for focused follow-up reads. Prefer Glob for path discovery and Grep for searching content across files. Do not treat omitted or truncated content as observed, do not use this Tool for binary media, and do not claim a file state that the returned baseline does not establish. A missing, inaccessible, oversized, or non-text target is a failed observation and should lead to a corrected path, narrower request, or another applicable Tool.",
     fields: Object.freeze({
@@ -202,6 +237,11 @@ const DEFINITIONS = Object.freeze({
     description: "Delegate one bounded, self-contained objective to a new descendant Agent when isolation or independent analysis improves progress. Work directly when the task is small, tightly sequential, or depends on rapidly changing local context. The prompt must include the objective, relevant constraints, expected contribution, and only the context the descendant needs; do not assume it can infer omitted conversation state. One Agent call requests one Child. Several independent Agent calls emitted together in the same response request concurrent sibling dispatch; dependent work must wait for those results and be emitted in a later response. Treat each returned summary, artifact, verification fact, effect, limitation, and failure status as bounded descendant material, not as proof beyond its recorded evidence. When agent_id is present, use SendMessage to continue that exact retained context; otherwise start fresh with Agent.",
     fields: Object.freeze({
       "/properties/description": "Optional concise label for the delegated work, used for human-readable progress and diagnostics.",
+      "/properties/execution_refs": "Optional bounded explicit handoff of references already accessible to this Run. Does not grant read or mutation authority.",
+      "/properties/execution_refs/items/properties/owner": "Copy the exact disclosed source owner.",
+      "/properties/execution_refs/items/properties/kind": "Copy the exact execution, effect, support or material kind.",
+      "/properties/execution_refs/items/properties/id": "Copy the exact disclosed identity; do not invent IDs.",
+      "/properties/execution_refs/items/properties/revision": "Copy the exact immutable revision.",
       "/properties/prompt": "Self-contained delegated objective with necessary context, constraints, and expected output.",
     }),
   }),

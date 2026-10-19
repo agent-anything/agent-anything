@@ -16,9 +16,10 @@ export interface RunRetryWaitScopeInput {
   readonly now: () => string;
   readonly snapshot: () => { readonly status: RunStatus; readonly revision: number };
   readonly isCurrent: () => boolean;
-  readonly open: (pending: PendingRetry) => void;
-  readonly close: (pending: PendingRetry, outcome: RetryWaitOutcome["kind"] | "arming_failed") => void;
-  readonly ready: (pending: PendingRetry) => void;
+  readonly retained?: {readonly generation: number; readonly pending: PendingRetry | null};
+  readonly open: (pending: PendingRetry) => void | Promise<void>;
+  readonly close: (pending: PendingRetry, outcome: RetryWaitOutcome["kind"] | "arming_failed") => void | Promise<void>;
+  readonly ready: (pending: PendingRetry) => void | Promise<unknown>;
 }
 
 /** One live invocation, one exact registration per delay; never a second Retry loop. */
@@ -28,7 +29,10 @@ export class RunRetryWaitScope implements RetryWaitControl {
   private wake: (() => void) | null = null;
   private active: PendingRetry | null = null;
 
-  constructor(private readonly input: RunRetryWaitScopeInput) {}
+  constructor(private readonly input: RunRetryWaitScopeInput) {
+    this.generation = input.retained?.generation ?? 0;
+  }
+  private restoredWaitUsed = false;
 
   notifyStateChanged(): void { this.wake?.(); }
   dispose(): void { this.disposed = true; this.wake?.(); }
@@ -44,8 +48,15 @@ export class RunRetryWaitScope implements RetryWaitControl {
     }
     const interrupted = this.interrupted();
     if (interrupted !== null) return interrupted;
-    const generation = ++this.generation;
-    const pending: PendingRetry = Object.freeze({
+    const retained = this.restoredWaitUsed ? null : this.input.retained?.pending ?? null;
+    this.restoredWaitUsed = true;
+    if (retained && (retained.invocationId !== this.input.invocationId || retained.operationId !== request.operation.operationId ||
+        retained.precedingAttemptId !== request.precedingAttempt.attemptId || retained.nextAttemptAt !== request.delay.nextAttemptAt ||
+        retained.deadlineAt !== this.input.deadlineAt)) {
+      throw new TypeError("Restored Retry wait does not match the original attempt and wake condition.");
+    }
+    const generation = retained?.generation ?? ++this.generation;
+    const pending: PendingRetry = retained ?? Object.freeze({
       kind: "retry_wait", required: true, branchId: this.input.branchId,
       openedInRunRevision: this.input.snapshot().revision,
       waitId: `${this.input.invocationId}:retry-wait:${generation}`, generation,
@@ -78,13 +89,13 @@ export class RunRetryWaitScope implements RetryWaitControl {
       armDeadline();
       this.input.cancellation.signal.addEventListener("abort", onAbort, { once: true });
       // Receiver and identity exist before the pending commit and before arming.
-      this.input.open(pending);
+      if (!retained) await this.input.open(pending);
       const timerStep = flow.advance("timer", {status: this.input.snapshot().status, runRevision: this.input.snapshot().revision});
-      void Promise.resolve().then(() => arm(disposal.signal)).then(result => {
+      void Promise.resolve().then(() => arm(disposal.signal)).then(async result => {
         if (this.active !== pending || this.disposed) return;
-        timerResult = result;
         timerStep.check("timer_delivery", result.kind === "elapsed" ? "passed" : "not_satisfied", {outcome: result.kind, waitId: pending.waitId, generation});
-        if (result.kind === "elapsed") this.input.ready(pending);
+        if (result.kind === "elapsed") await this.input.ready(pending);
+        timerResult = result;
         this.wake?.();
       }).catch(error => {
         if (this.active !== pending) return;
@@ -117,7 +128,7 @@ export class RunRetryWaitScope implements RetryWaitControl {
       this.input.cancellation.signal.removeEventListener("abort", onAbort);
       this.active = null;
       this.wake = null;
-      this.input.close(pending, outcome);
+      await this.input.close(pending, outcome);
       flow.advance("settle", {outcome, status: this.input.snapshot().status, revision: this.input.snapshot().revision});
       flow.close(outcome === "elapsed" ? "returned" : outcome === "cancelled" ? "cancelled" : outcome === "arming_failed" ? "failed" : "interrupted");
     }

@@ -104,17 +104,20 @@ export class HelarcWorkbenchQueries {
       const resolved = await this.resolve(query);
       if (!resolved) return rejected("not_found");
       if (query.itemId.startsWith("message:")) {
-        if (query.section !== undefined) return rejected("invalid_query");
         const thread = await this.sources.loadThread(query.threadId);
         const message = thread?.messages.find(m => `message:${m.id}` === query.itemId &&
           m.correlation.runId === query.productRunId);
         if (!message || query.runId !== resolved.projection.harnessRunId) return rejected("not_found");
+        const source = message.metadata.outputSource as import("../../shared/HelarcWorkbench.js").HelarcOutputSource | undefined;
+        const content = query.section === undefined ? message.content : source?.kind === "model_text"
+          ? source.adopted?.blocks.find(block => block.modelItemId === query.section)?.text : undefined;
+        if (content === undefined) return rejected("not_found");
         const offset = query.offset ?? 0;
-        if (!validOffset(message.content,offset)) return rejected("invalid_query");
-        const page = textPage(message.content,offset,16*1024,
+        if (!validOffset(content,offset)) return rejected("invalid_query");
+        const page = textPage(content,offset,16*1024,
           64*1024-Buffer.byteLength(JSON.stringify(query.itemId))-256);
         return {status:"page",itemId:query.itemId,title:message.role === "user" ? "Request" : "Response",text:page.text,
-          nextOffset:page.end < message.content.length ? page.end : null,omittedBytes:0};
+          nextOffset:page.end < content.length ? page.end : null,omittedBytes:0};
       }
       const presentation = resolved.projection.product.presentation;
       const record = [...presentation.records, ...presentation.activeCalls].find(

@@ -132,15 +132,9 @@ function readOllamaRuntime(
     "HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS",
     HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.contextWindowTokens,
   );
-  const maximumOutputTokens = readPositiveInteger(
-    env,
-    "HELARC_OLLAMA_MAXIMUM_OUTPUT_TOKENS",
-    HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.maximumOutputTokens,
-  );
-  return contextWindowTokens === null || maximumOutputTokens === null ||
-      maximumOutputTokens >= contextWindowTokens
+  return contextWindowTokens === null
     ? null
-    : Object.freeze({ contextWindowTokens, maximumOutputTokens });
+    : Object.freeze({ contextWindowTokens });
 }
 
 function readPositiveInteger(

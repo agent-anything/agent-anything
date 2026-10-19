@@ -6,7 +6,21 @@ export {
   type ActionExecutionCoordinatorDependencies,
   type ActionExecutionRequest,
   type ActionExecutionResult,
+  type ActionRecoveryResult,
   type ActionExecutionNotification,
   type ActionExecutionObserver,
   type ActionRecordPort,
 } from "./ActionExecutionCoordinator.js";
+export {
+  ActionRecordCommitError,
+  ActionRecoveryError,
+  type ActionAttemptReconciliationPort,
+  type ActionPreparationRecord,
+  type ActionDispatchIntent,
+  type ActionAttemptResultRecord,
+  type ActionRetryRecord,
+  type ActionSettlementRecord,
+  type ActionRecordReceipt,
+  type ActionRecoveryRecords,
+  type ActionRecoveryRecordPort,
+} from "./ActionRecordPort.js";

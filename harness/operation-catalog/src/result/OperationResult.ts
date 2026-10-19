@@ -1,4 +1,5 @@
 import type { OperationBindingRevisionRef, OperationInvocationRef } from "../identity/index.js";
+import { operationRevisionKey, snapshotOperationBindingRevisionRef, snapshotOperationInvocationRef } from "../identity/index.js";
 import type { OperationLimitFailureDetail } from "./OperationLimitFailureDetail.js";
 
 export interface OperationResultRef {
@@ -52,7 +53,7 @@ export type OperationResult<TOutput = unknown> =
         | "timed_out"
         | "invalid"
         | "unknown_effect";
-      readonly output: null;
+      readonly output: TOutput | null;
       readonly failure: OperationFailure;
     });
 
@@ -60,20 +61,40 @@ export function createOperationResult<TOutput>(
   input: OperationResult<TOutput>,
 ): OperationResult<TOutput> {
   requireToken(input.ref.id, "OperationResult.ref.id");
+  const invocation = snapshotOperationInvocationRef(input.ref.invocation);
+  const binding = snapshotOperationBindingRevisionRef(input.binding);
+  if (operationRevisionKey(invocation.operation) !== operationRevisionKey(binding.operation)) {
+    throw new TypeError("OperationResult binding must match its invocation.");
+  }
   requireToken(input.semanticOwner, "OperationResult.semanticOwner");
   requireDateTime(input.startedAt, "OperationResult.startedAt");
   requireDateTime(input.finishedAt, "OperationResult.finishedAt");
   if (Date.parse(input.finishedAt) < Date.parse(input.startedAt)) {
     throw new TypeError("OperationResult cannot finish before it starts.");
   }
-  if (input.status !== "succeeded" && input.failure === null) {
+  if (!["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"].includes(input.status)) {
+    throw new TypeError("OperationResult status is unsupported.");
+  }
+  if (input.status === "succeeded" && input.failure !== null) {
+    throw new TypeError("A succeeded OperationResult cannot carry a Failure.");
+  }
+  if (input.status !== "succeeded" && (input.failure === null || typeof input.failure !== "object")) {
     throw new TypeError("A non-succeeded OperationResult requires its owner Failure.");
+  }
+  if (input.failure !== null) {
+    requireToken(input.failure.owner, "OperationResult.failure.owner");
+    requireToken(input.failure.code, "OperationResult.failure.code");
+    if (typeof input.failure.message !== "string" || typeof input.failure.retryable !== "boolean") {
+      throw new TypeError("OperationResult Failure requires a message and retryability.");
+    }
   }
   if (input.status === "partial" && input.output === null) {
     throw new TypeError("A partial OperationResult requires validated usable output.");
   }
   return deepFreeze({
     ...input,
+    ref: { id: input.ref.id, invocation },
+    binding,
     lowerRefs: [...input.lowerRefs],
     metadata: { ...input.metadata },
   }) as OperationResult<TOutput>;

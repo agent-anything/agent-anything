@@ -37,11 +37,13 @@ import type {
   HelarcModelQualificationResolution,
 } from "../model-qualification/index.js";
 
+import { resolveHelarcFinalReply, HELARC_ENDING_SIGNAL_FEEDBACK, type HelarcFinalReplyResolution } from "./HelarcFinalReply.js";
+
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
-  "helarc.provider-native-tool-interaction.v3";
+  "helarc.provider-native-tool-interaction.v4";
 export const HELARC_MODEL_CONTEXT_HEADROOM_TOKENS = 1_024;
-export type HelarcAgentOutput = { kind: "complete"; summary: string; source: import("../run/presentation/HelarcRunPresentation.js").HelarcOutputSource };
+export type HelarcAgentOutput = { kind: "complete"; summary: string; source: import("../run/presentation/HelarcRunPresentation.js").HelarcOutputSource; finalReply?: HelarcFinalReplyResolution };
 
 class HelarcInstructionModelMismatchError extends TypeError {
   readonly code = "agent_instruction_model_mismatch";
@@ -227,6 +229,14 @@ export function parseHelarcProviderResponse(
     const decision = interpretResponse(response, input, protocol, qualification);
     const decisionRef = flow.material("Interpreted Controller decision", "interpreted", decision);
     interpretation.output(decisionRef);
+    if (decision.kind === "propose_completion" && decision.output.finalReply) {
+      const reply = decision.output.finalReply;
+      const source = decision.output.source;
+      flow.advance("reply_resolution", {disposition: reply.disposition, textJoin: reply.textJoin, interactionRevision: reply.interactionRevision}, [
+        {owner: "runtime", kind: "call", id: reply.ending.call.id, revision: null},
+        ...(source.kind === "model_text" ? source.modelItemIds.map(id => ({owner: "runtime", kind: "contribution", id, revision: null})) : []),
+      ]).output(decisionRef, {owner: "helarc", kind: "contribution", id: `${reply.ending.call.id}:final-reply`, revision: reply.protocolRevision});
+    }
     flow.advance("decision", {kind:decision.kind, candidates:"candidates" in decision ? decision.candidates.length : 0}, [decisionRef]).output(decisionRef);
     flow.close("returned");
     return decision;
@@ -280,9 +290,9 @@ function interpretResponse(
   if (calls.length === 0) {
     return Object.freeze({
       kind: "continue_with_feedback",
-      feedback: {source: {owner: "helarc", kind: "controller_protocol", id: HELARC_NATIVE_TOOL_PROTOCOL_REVISION, revision: "3"},
+      feedback: {source: {owner: "helarc", kind: "controller_protocol", id: HELARC_NATIVE_TOOL_PROTOCOL_REVISION, revision: "4"},
         code: "helarc_ending_signal_missing",
-        message: "This turn contained no function call. To end this Run, call final_result with your complete response. To continue working, call the functions supplied in this request. Ordinary text does not end the Run."},
+        message: HELARC_ENDING_SIGNAL_FEEDBACK},
       modelItems,
     });
   }
@@ -320,14 +330,13 @@ function interpretResponse(
     return [bindModelCall(call, catalog, input)];
   });
   if (final !== null) {
-    const item = modelItems.find(item => item.kind === "model_tool_call" && item.call.modelCallRef.id === final.modelCallRef.id)!;
+    const reply = resolveHelarcFinalReply({runId: input.runId, interactionRevision: input.interaction.revision,
+      call: final, modelItems, previous: input.interaction.latestTurn});
     return Object.freeze({
       kind: "propose_completion",
       candidates: Object.freeze(candidates),
       completionSource: {kind: "model_call" as const, modelCallRef: final.modelCallRef},
-      output: {kind: "complete" as const, summary: (final.input as {response: string}).response,
-        source: {kind: "model_control" as const, turnId: response.turn.turnId, modelItemId: item.id,
-          modelCallRef: final.modelCallRef, control: "final_result" as const, argumentPath: "/response" as const}},
+      output: Object.freeze({kind: "complete" as const, ...reply}),
       modelItems,
     });
   }

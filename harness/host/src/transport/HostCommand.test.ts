@@ -47,11 +47,11 @@ describe("Host command transport", () => {
     })).toThrow("unsupported fields");
   });
 
-  it("routes one exact descendant resume request through the active Parent Run", () => {
+  it("routes one exact descendant resume request through the active Parent Run", async () => {
     const active = fakeActiveRun();
     const command = descendantResumeCommand();
 
-    const receipt = createDispatcher(active).dispatch(command, "descendant.resume");
+    const receipt = (await createDispatcher(active).dispatch(command, "descendant.resume"));
 
     expect(receipt).toMatchObject({
       status: "handled",
@@ -72,11 +72,11 @@ describe("Host command transport", () => {
     });
   });
 
-  it("routes steering as an acknowledged Run command without claiming application", () => {
+  it("routes steering as an acknowledged Run command without claiming application", async () => {
     const active = fakeActiveRun();
     const dispatcher = createDispatcher(active);
 
-    const receipt = dispatcher.dispatch(steeringCommand(), "run.steer");
+    const receipt = (await dispatcher.dispatch(steeringCommand(), "run.steer"));
 
     expect(receipt).toMatchObject({
       status: "handled",
@@ -91,16 +91,16 @@ describe("Host command transport", () => {
     });
   });
 
-  it("replays one identical command and rejects conflicting command identity", () => {
+  it("replays one identical command and rejects conflicting command identity", async () => {
     const active = fakeActiveRun();
     const dispatcher = createDispatcher(active);
     const command = cancellationCommand({ payload: { reason: "Stop this Run." } });
 
-    const first = dispatcher.dispatch(command, "run.cancel");
-    const replay = dispatcher.dispatch(command, "run.cancel");
-    const conflict = dispatcher.dispatch(cancellationCommand({
+    const first = (await dispatcher.dispatch(command, "run.cancel"));
+    const replay = (await dispatcher.dispatch(command, "run.cancel"));
+    const conflict = (await dispatcher.dispatch(cancellationCommand({
       payload: { reason: "Different intent." },
-    }), "run.cancel");
+    }), "run.cancel"));
 
     expect(first).toMatchObject({ status: "handled", kind: "run.cancel" });
     expect(replay).toBe(first);
@@ -111,17 +111,17 @@ describe("Host command transport", () => {
     expect(active.cancel).toHaveBeenCalledOnce();
   });
 
-  it("routes one exact generic Interaction submission and rejects a wrong route", () => {
+  it("routes one exact generic Interaction submission and rejects a wrong route", async () => {
     const active = fakeActiveRun();
     const command = interactionCommand();
-    const wrongRoute = createDispatcher(active).dispatch(command, "run.cancel");
+    const wrongRoute = (await createDispatcher(active).dispatch(command, "run.cancel"));
     expect(wrongRoute).toMatchObject({
       status: "rejected",
       code: "host_command_kind_mismatch",
     });
     expect(active.submitInteraction).not.toHaveBeenCalled();
 
-    const handled = createDispatcher(active).dispatch(command, "interaction.submit");
+    const handled = (await createDispatcher(active).dispatch(command, "interaction.submit"));
     expect(handled).toMatchObject({
       status: "handled",
       kind: "interaction.submit",
@@ -134,7 +134,7 @@ describe("Host command transport", () => {
     });
   });
 
-  it("rejects a stale Run identity without touching another active handle", () => {
+  it("rejects a stale Run identity without touching another active handle", async () => {
     const active = fakeActiveRun("run-new");
     const dispatcher = createHostCommandDispatcher({
       resolveActiveRun: (runId) => runId === active.runId ? active : null,
@@ -142,7 +142,7 @@ describe("Host command transport", () => {
       steeringAttribution: { origin: "user", actorId: "user-1" },
     });
 
-    const receipt = dispatcher.dispatch(cancellationCommand({ runId: "run-old" }), "run.cancel");
+    const receipt = (await dispatcher.dispatch(cancellationCommand({ runId: "run-old" }), "run.cancel"));
 
     expect(receipt).toMatchObject({
       status: "rejected",
@@ -152,7 +152,7 @@ describe("Host command transport", () => {
     expect(active.cancel).not.toHaveBeenCalled();
   });
 
-  it("fails closed at receipt capacity while retaining admitted replay", () => {
+  it("fails closed at receipt capacity while retaining admitted replay", async () => {
     const active = fakeActiveRun();
     const dispatcher = createHostCommandDispatcher({
       resolveActiveRun: () => active,
@@ -161,17 +161,17 @@ describe("Host command transport", () => {
       maxReceipts: 1,
     });
     const firstCommand = cancellationCommand();
-    const first = dispatcher.dispatch(firstCommand, "run.cancel");
+    const first = (await dispatcher.dispatch(firstCommand, "run.cancel"));
 
-    const full = dispatcher.dispatch(interactionCommand({
+    const full = (await dispatcher.dispatch(interactionCommand({
       commandId: "command-interaction-2",
-    }), "interaction.submit");
+    }), "interaction.submit"));
 
     expect(full).toMatchObject({
       status: "rejected",
       code: "host_command_ledger_full",
     });
-    expect(dispatcher.dispatch(firstCommand, "run.cancel")).toBe(first);
+    expect((await dispatcher.dispatch(firstCommand, "run.cancel"))).toBe(first);
     expect(active.cancel).toHaveBeenCalledOnce();
     expect(active.submitInteraction).not.toHaveBeenCalled();
   });

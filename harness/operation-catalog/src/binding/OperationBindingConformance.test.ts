@@ -1,5 +1,6 @@
 import {
   createOperationBindingResolverSnapshot,
+  invalidOperationBinding,
   snapshotResolvedOperationBinding,
   type OperationBindingKind,
   type OperationBindingResolutionInput,
@@ -25,6 +26,33 @@ const KINDS: readonly OperationBindingKind[] = [
 ];
 
 describe("Operation binding conformance", () => {
+  it("retains compensation intent separately from domain input and binds it to this caller", () => {
+    const entry = registration("direct"), prior = invocationContext(entry.operation.ref);
+    const correlation = {kind: "run_action" as const, run: {id: "run-1"}, runAction: {id: "action-1", run: {id: "run-1"}, sequence: 1},
+      provenance: {kind: "controller" as const, turn: {id: "turn-1", run: {id: "run-1"}, sequence: 1}, candidateIndex: 0}, materializationRevision: 3};
+    const context = {...prior, correlation};
+    const original = resolved("direct", {registration: entry, context, request: {path: "file.txt"}, basis: {}});
+    const target = {owner: "files", kind: "execution" as const, id: "earlier-execution", revision: "1"};
+    const compensation = {id: "intent-1", invocation: context.invocation, correlation, call: {id: "call-1", turnId: "turn-1"},
+      targets: [{requested: target, execution: target, result: {id: "result-0", invocation: {...context.invocation, id: "invocation-0"}},
+        resultRevision: "1", sourceCorrelation: prior.correlation}], explanation: "The objective changed.", acceptedAt: NOW};
+    const saved = snapshotResolvedOperationBinding({...original, compensation}, structuredClone);
+    expect(saved.compensation).toEqual(compensation);
+    expect(saved.request).toEqual({path: "file.txt"});
+    expect(snapshotResolvedOperationBinding(JSON.parse(JSON.stringify(saved)), structuredClone)).toEqual(saved);
+    expect(() => snapshotResolvedOperationBinding({...original, compensation: {...compensation, invocation: {...compensation.invocation, id: "other"}}}, structuredClone)).toThrow("this invocation");
+    expect(() => snapshotResolvedOperationBinding({...original, compensation: {...compensation, correlation: {...correlation, materializationRevision: 4}}}, structuredClone)).toThrow("this invocation");
+    expect(snapshotResolvedOperationBinding(original, structuredClone)).not.toHaveProperty("compensation");
+  });
+
+  it("distinguishes correctable input rejection from missing infrastructure", async () => {
+    const entry = registration("direct");
+    const rejection = invalidOperationBinding("files", "execution_reference_unavailable", "Use a reference disclosed to this Run.");
+    const resolvers = createOperationBindingResolverSnapshot("test", [{resolver: {id: entry.binding.resolverId,
+      revision: entry.binding.resolverRevision, async resolve() {return rejection;}}}]);
+    expect(await resolvers.resolve({operation: entry, context: invocationContext(entry.operation.ref), request: {}, basis: {}})).toEqual(rejection);
+  });
+
   it("resolves every binding form with exact identity, revision, and fingerprint", async () => {
     const entries = KINDS.map(registration);
     const catalog = createOperationCatalogSnapshot({

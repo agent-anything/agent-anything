@@ -8,6 +8,7 @@ import {
   type ModelToolResult,
 } from "@agent-anything/model-interaction";
 import type { RunItem } from "../run/RunItem.js";
+import { inputNotificationMessage, snapshotInputDeliveryReceipt } from "./ControllerInputDelivery.js";
 import type {
   ControllerModelItem,
   ModelInteractionProjection,
@@ -31,6 +32,8 @@ export function projectModelInteraction(input: {
   const settled = new Set<string>();
   const callOrder = new Map<string, number>();
   let nextCallOrder = 0;
+  let latestTurn: ModelInteractionProjection["latestTurn"] = null;
+  const notificationHistory: NonNullable<ModelInteractionProjection["notificationHistory"]>[number][] = [];
   let pendingResults: Array<{
     readonly order: number;
     readonly result: ModelToolResult;
@@ -49,7 +52,24 @@ export function projectModelInteraction(input: {
     pendingResults = [];
   };
 
-  for (const item of input.items) {
+  for (const [index, item] of input.items.entries()) {
+    if (item.payload.kind === "input_delivery") {
+      flushResults();
+      const {batch, receipt, turn} = item.payload;
+      const next = input.items[index + 1];
+      if (unsettled.size > 0 || batch.runId !== input.runId || next?.payload.kind !== "controller_turn" ||
+          next.payload.status !== "decided" || next.payload.turn.id !== turn.id ||
+          next.committedInRevision !== item.committedInRevision) {
+        throw projectionFailure("input_delivery_history_invalid", "Input delivery must immediately precede its atomically committed Controller Turn, after all Call results.");
+      }
+      snapshotInputDeliveryReceipt(receipt, batch);
+      if (receipt.via.kind === "provider") for (const entry of batch.entries) {
+        notificationHistory.push(Object.freeze({messageIndex: messages.length, batchId: batch.id,
+          batchRevision: batch.revision, sequence: entry.sequence}));
+        messages.push(inputNotificationMessage(entry));
+      }
+      continue;
+    }
     if (item.payload.kind === "controller_turn") {
       flushResults();
       if (unsettled.size > 0) {
@@ -62,6 +82,14 @@ export function projectModelInteraction(input: {
         continue;
       }
       const projected = projectControllerTurn(item.payload.modelItems);
+      latestTurn = Object.freeze({
+        runId: input.runId,
+        runItemId: item.ref.id,
+        runItemSequence: item.ref.sequence,
+        turnId: item.payload.modelItems.find(model => model.kind === "model_turn_finish")!.turnId,
+        textBlocks: Object.freeze(item.payload.modelItems.flatMap(model => model.kind === "assistant_text"
+          ? [Object.freeze({ modelItemId: model.id, ordinal: model.contentBlockOrdinal, text: model.text })] : [])),
+      });
       messages.push(projected.message);
       for (const call of projected.calls) {
         const key = modelCallRefKey(call.modelCallRef);
@@ -110,6 +138,8 @@ export function projectModelInteraction(input: {
     messages: Object.freeze(messages),
     unsettledCalls: Object.freeze([...unsettled.values()]),
     settledCallCount: settled.size,
+    latestTurn,
+    notificationHistory: Object.freeze(notificationHistory),
   });
 }
 

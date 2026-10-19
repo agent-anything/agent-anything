@@ -1,6 +1,9 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { ControllerCheckpointError, type ControllerCheckpointPort } from "@agent-anything/agent-runtime/controller";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { AGENT_HOOK_HANDLER_FLOW } from "./AgentHookExecutionFlow.js";
+import { hookInvocationId, interruptedAgentHook, type AgentHookInvocationCheckpoint,
+  type AgentHookInvocationOutcome, type AgentHookRecordPort } from "./AgentHookRecordPort.js";
 import {
   matchingAgentHooks,
   type AgentHookBinding,
@@ -61,8 +64,11 @@ export class AgentHookExecutionStore {
   private invocationCount = 0;
   private dispositions: readonly AgentStopDispositionRecord[] = Object.freeze([]);
   private readonly listeners = new Set<AgentHookProjectionListener>();
+  private readonly recordedIds = new Set<string>();
 
   append(record: AgentHookInvocationRecord): void {
+    if (this.recordedIds.has(record.id)) return;
+    this.recordedIds.add(record.id);
     this.revision += 1;
     this.invocationCount += 1;
     this.records = Object.freeze([...this.records.slice(-63), record]);
@@ -106,6 +112,8 @@ export interface AgentStopDispatchResult {
 }
 
 export async function dispatchAgentStopHooks(input: {
+  readonly invocationRecords?: AgentHookRecordPort;
+  readonly checkpoints?: ControllerCheckpointPort;
   readonly executionFlow?: ExecutionFlowContext;
   readonly composition: AgentHookComposition;
   readonly event: AgentStopEvent;
@@ -117,11 +125,12 @@ export async function dispatchAgentStopHooks(input: {
   const matches = matchingAgentHooks(input.composition, "Stop", input.event.runKind);
   const blocking = matches.filter((match) => match.registration.mode === "blocking");
   const background = matches.filter((match) => match.registration.mode === "background");
+  if (input.checkpoints && !input.invocationRecords && background.length > 0) throw new ControllerCheckpointError("background_hook_recovery_port_unavailable");
   for (const match of background) {
-    void invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow);
+    await startBackgroundObserver(match, input);
   }
   const outcomes = await Promise.all(blocking.map((match) =>
-    invokeStopHandler(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow)));
+    invokeStopHandler(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow, input.checkpoints, input.invocationRecords)));
   const continuations = outcomes.flatMap((outcome) =>
     outcome?.disposition === "continue" ? [outcome] : []);
   const unique = continuations.filter((outcome, index) =>
@@ -147,6 +156,8 @@ export async function dispatchAgentStopHooks(input: {
 }
 
 export async function dispatchAgentStopFailureHooks(input: {
+  readonly invocationRecords?: AgentHookRecordPort;
+  readonly checkpoints?: ControllerCheckpointPort;
   readonly executionFlow?: ExecutionFlowContext;
   readonly composition: AgentHookComposition;
   readonly event: AgentStopFailureEvent;
@@ -158,11 +169,12 @@ export async function dispatchAgentStopFailureHooks(input: {
   const matches = matchingAgentHooks(input.composition, "StopFailure", input.event.runKind);
   const blocking = matches.filter((match) => match.registration.mode === "blocking");
   const background = matches.filter((match) => match.registration.mode === "background");
+  if (input.checkpoints && !input.invocationRecords && background.length > 0) throw new ControllerCheckpointError("background_hook_recovery_port_unavailable");
   for (const match of background) {
-    void invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow);
+    await startBackgroundObserver(match, input);
   }
   await Promise.all(blocking.map((match) =>
-    invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow)));
+    invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now, input.executionFlow, input.checkpoints, input.invocationRecords)));
 }
 
 async function invokeStopHandler(
@@ -173,11 +185,19 @@ async function invokeStopHandler(
   store: AgentHookExecutionStore,
   now: () => string,
   executionFlow?: ExecutionFlowContext,
+  checkpoints?: ControllerCheckpointPort,
+  records?: AgentHookRecordPort,
 ): Promise<AgentStopHandlerResult | null> {
   const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, executionFlow ?? {}, event.run.id, []);
   flow.advance("invoke", {hookId:match.registration.ref.id, timeoutMs:match.registration.timeoutMs, mode:match.registration.mode}, [flow.material("Hook event and registration", "received", {event, registration: match.registration})]);
-  const result = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) =>
-    (match.binding.handler as AgentStopHandler).handle(event, context, flow.callContext));
+  const result = await checkpointInvocation(match, event, checkpoints, now, async () => {
+    const returned = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) =>
+      (match.binding.handler as AgentStopHandler).handle(event, context, flow.callContext));
+    if (returned.status !== "completed") return returned;
+    const validated = validateStopResult(returned.value, match.registration.maximumResultBytes);
+    return validated.decision ? {...returned, value: validated.decision}
+      : {status: "output_invalid", message: validated.message!, startedAt: returned.startedAt, completedAt: returned.completedAt};
+  }, records);
   let decision: AgentStopHandlerResult | null = null;
   let status: AgentHookInvocationStatus;
   let code: string | null = null;
@@ -210,16 +230,20 @@ async function invokeObserver(
   store: AgentHookExecutionStore,
   now: () => string,
   executionFlow?: ExecutionFlowContext,
+  checkpoints?: ControllerCheckpointPort,
+  records?: AgentHookRecordPort,
+  prepared?: AgentHookInvocationCheckpoint,
 ): Promise<void> {
   const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, {...executionFlow, relationship:match.registration.mode === "background" ? "spawn" : "call"}, event.run.id, []);
   flow.advance("invoke", {hookId:match.registration.ref.id, mode:match.registration.mode, timeoutMs:match.registration.timeoutMs}, [flow.material("Hook event and registration", "received", {event, registration: match.registration})]);
-  const result = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) => {
+  const result = await checkpointInvocation(match, event, checkpoints, now, () => invokeBounded(match, event, interruption, deadlineAt, now, async (context) => {
     if (event.point === "Stop") {
       await (match.binding.handler as AgentStopObserver).observe(event, context, flow.callContext);
     } else {
       await (match.binding.handler as AgentStopFailureObserver).observe(event, context, flow.callContext);
     }
-  });
+    return null;
+  }), records, prepared);
   const resultRef = flow.material("Hook observer result", "returned", result);
   flow.current?.output(resultRef);
   flow.advance("settle", {status:result.status}, [resultRef]).check("result_contract", "not_applicable", {reason: "observer_has_no_decision_result"});
@@ -236,9 +260,78 @@ async function invokeObserver(
   ));
 }
 
-type InvocationResult =
-  | { readonly status: "completed"; readonly value: unknown; readonly startedAt: string; readonly completedAt: string }
-  | { readonly status: "failed" | "timed_out" | "cancelled"; readonly message: string; readonly startedAt: string; readonly completedAt: string };
+type InvocationResult = AgentHookInvocationOutcome;
+
+async function checkpointInvocation(
+  match: ReturnType<typeof matchingAgentHooks>[number], event: AgentStopEvent | AgentStopFailureEvent,
+  port: ControllerCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
+  records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint,
+): Promise<InvocationResult> {
+  try {
+    return await invokeRecorded(match, event, port, now, invoke, records, prepared);
+  } catch (error) {
+    if (error instanceof ControllerCheckpointError) throw error;
+    throw new ControllerCheckpointError(hookInvocationId(event, match.registration), {cause: error});
+  }
+}
+
+async function invokeRecorded(
+  match: ReturnType<typeof matchingAgentHooks>[number], event: AgentStopEvent | AgentStopFailureEvent,
+  port: ControllerCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
+  records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint,
+): Promise<InvocationResult> {
+  if (!port && !records) return invoke();
+  const key = JSON.stringify(["hook", event.ref.id, match.registration.ref]);
+  const saved = prepared ? null : records ? await records.readHookInvocation(hookInvocationId(event, match.registration))
+    : port!.read(key) as AgentHookInvocationCheckpoint | null;
+  if (saved && (JSON.stringify(saved.event) !== JSON.stringify(event) || JSON.stringify(saved.registration) !== JSON.stringify(match.registration))) {
+    throw new ControllerCheckpointError(key);
+  }
+  if (saved?.outcome) return saved.outcome;
+  const intent: AgentHookInvocationCheckpoint = saved ?? prepared ?? {id: hookInvocationId(event, match.registration), version: 1,
+    event, registration: match.registration, startedAt: now(), outcome: null};
+  const commit = (value: AgentHookInvocationCheckpoint) => records ? records.commitHookInvocation(value) : port!.commit(key, value);
+  if (!saved && !prepared) await commit(intent);
+  // Arbitrary handler code is not replay-safe. Existing handler-failure policy
+  // receives an explicit interrupted outcome instead of an invented allow.
+  const result: InvocationResult = saved
+    ? interruptedAgentHook(intent, now()).outcome!
+    : await invoke();
+  const outcome = {...result, startedAt: intent.startedAt};
+  await commit({...intent, outcome});
+  return outcome;
+}
+
+async function startBackgroundObserver(match: ReturnType<typeof matchingAgentHooks>[number], input: {
+  readonly invocationRecords?: AgentHookRecordPort; readonly event: AgentStopEvent | AgentStopFailureEvent;
+  readonly interruption: InvocationInterruptionContext; readonly deadlineAt: string; readonly store: AgentHookExecutionStore;
+  readonly now: () => string; readonly executionFlow?: ExecutionFlowContext;
+}): Promise<void> {
+  let prepared: AgentHookInvocationCheckpoint | undefined;
+  if (input.invocationRecords) {
+    const id = hookInvocationId(input.event, match.registration);
+    let saved: AgentHookInvocationCheckpoint | null;
+    try { saved = await input.invocationRecords.readHookInvocation(id); }
+    catch (error) { throw new ControllerCheckpointError(id, {cause: error}); }
+    if (!saved) {
+      prepared = {id, version: 1, event: input.event, registration: match.registration, startedAt: input.now(), outcome: null};
+      try { await input.invocationRecords.commitHookInvocation(prepared); }
+      catch (error) { throw new ControllerCheckpointError(id, {cause: error}); }
+    } else {
+      await invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now,
+        input.executionFlow, undefined, input.invocationRecords);
+      return;
+    }
+  }
+  // Admission is durable before returning; late settlement belongs to the Hook
+  // owner. A failed acknowledgement leaves intent unresolved, never rerun.
+  void invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now,
+    input.executionFlow, undefined, input.invocationRecords, prepared).catch(() => {
+      input.store.append(record(match.registration.ref, input.event, match.registration.mode, "failed",
+        "hook_settlement_unconfirmed", "Hook settlement could not be durably confirmed; recovery must reconcile its intent.",
+        {startedAt: prepared?.startedAt ?? input.now(), completedAt: input.now()}, input.now));
+    });
+}
 
 async function invokeBounded(
   match: ReturnType<typeof matchingAgentHooks>[number],

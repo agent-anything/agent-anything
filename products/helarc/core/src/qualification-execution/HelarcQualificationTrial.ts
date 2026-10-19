@@ -92,6 +92,7 @@ export async function runHelarcQualificationTrial(input: {
   const requests: { id: string; durationMs: number; usage: unknown }[] = [];
   let fixtureReady = scenario.callableName === null;
   let fixtureResultRequestId: string | null = null;
+  let previousContent: readonly import("@agent-anything/model-interaction").ModelAssistantContentBlock[] = [];
   const finish = (outcome: HelarcQualificationTrialOutcome, reason: string,
     category: HelarcQualificationFailureCategory = "case_requirement"): HelarcQualificationTrial => {
     const result = { id, caseId: input.caseId, repetition: input.repetition, startedAt,
@@ -142,14 +143,16 @@ export async function runHelarcQualificationTrial(input: {
       if (calls.length !== 1) return finish("failed", "expected_one_requested_call");
       const call = calls[0]!;
       if (fixtureReady) {
-        const error = checkQualificationFinal(input.profile, call, scenario.expectedResponse);
+        const error = checkQualificationFinal(input.profile, call, scenario.expectedResponse, {current: assistant.content, previous: previousContent});
         return finish(error ? "failed" : "passed", error?.reason ?? "observed_expected_behavior", error?.category);
       }
       const error = checkQualificationCall(input.profile, scenario, call);
       if (error) return finish("failed", error.reason, error.category);
+      previousContent = assistant.content;
       messages.push({ role: "tool", content: [{ kind: "model_tool_result", result: {
         modelCallRef: call.modelCallRef, providerCallRef: call.providerCallRef, name: call.name,
         settlement: scenario.denied ? "denied" : "succeeded", content: scenario.fixture,
+        presentation: {presenter: {id: "helarc.qualification-fixture", revision: HELARC_QUALIFICATION_SUITE_REVISION}, disposition: "complete", failureCode: null},
         sourceRefs: [{ owner: "helarc", kind: "qualification_fixture", id, revision: HELARC_QUALIFICATION_SUITE_REVISION }],
       } }] });
       fixtureReady = true;

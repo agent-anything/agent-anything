@@ -351,6 +351,7 @@ function createEvent(iteration = 1): AgentStopEvent<{ readonly summary: string }
       messages: Object.freeze([]),
       unsettledCalls: Object.freeze([]),
       settledCallCount: 0,
+      latestTurn: null,
     }),
     plan: null,
     pending: Object.freeze([]),

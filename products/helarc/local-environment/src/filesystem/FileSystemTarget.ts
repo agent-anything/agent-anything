@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, realpath, stat } from "node:fs/promises";
+import { inspectFileContent, sameFileIdentity } from "./FileContentDigest.js";
 import { basename, dirname, join, resolve } from "node:path";
 import type {
   CanonicalPathIdentity,
@@ -295,9 +295,9 @@ async function createBaseline(
   platform: FileSystemPlatform,
 ): Promise<FileBaseline> {
   const entryKind = stats.isFile() ? "file" : stats.isDirectory() ? "directory" : "other";
-  const contentDigest = stats.isFile()
-    ? `sha256:${createHash("sha256").update(await readFile(target)).digest("hex")}`
-    : null;
+  const content = stats.isFile() ? await inspectFileContent(target) : null;
+  if (content && !sameFileIdentity(stats, content.stats)) throw new TypeError("File identity changed while its baseline was prepared.");
+  const contentDigest = content?.digest ?? null;
   return Object.freeze({
     kind: "present" as const,
     entryKind,

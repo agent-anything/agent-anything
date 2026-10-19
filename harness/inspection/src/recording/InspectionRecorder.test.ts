@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
 import { mkdtempSync, mkdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, relative } from "node:path";
@@ -11,7 +12,7 @@ import { datasetDirectory } from "../sources/index.js";
 import { acquireInspectionReadLease } from "../storage/InspectionDatasetAccess.js";
 import { RunExecutionInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectionAdapter } from "../../dist/adapters/index.js";
 
-const cleanup: (() => Promise<void>)[] = [];
+const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
 async function setup(rich = false) {
   const directory = mkdtempSync(join(tmpdir(), "agent-inspection-test-"));
@@ -23,6 +24,74 @@ async function setup(rich = false) {
   return { directory, recorder, query, subject, selection: { sourceId: subject.sourceId, datasetId: subject.datasetId } };
 }
 describe("Inspection recording", () => {
+  it("keeps notification preparation and accepted history separate from request inclusion", async () => {
+    const {recorder, query, selection} = await setup(true);
+    const execution = new RunExecutionInspectionAdapter(recorder);
+    const transcript = new RunTranscriptInspectionAdapter(recorder);
+    const now = "2026-10-13T00:00:00.000Z";
+    const notification = {runId: "run-1", sequence: 1, occurredAt: now,
+      source: {owner: "process", kind: "scope_closed", id: "process-1", revision: "7"}, data: {exitCode: 0}};
+    const batch = {id: "batch-1", revision: "1", runId: "run-1", entries: [notification]};
+    execution.observe({kind: "input_delivery_prepared", runId: "run-1", occurredAt: now, turnId: "turn-1", batch});
+    transcript.observe({runId: "run-1", sequence: 1, item: {ref: {id: "delivery-1", sequence: 1}, createdAt: now,
+      payload: {kind: "input_delivery", batch, turn: {id: "turn-1"}, receipt: {via: {kind: "provider", requestId: "request-1"}}}}} as never);
+    transcript.observe({runId: "run-1", sequence: 2, item: {ref: {id: "closure-1", sequence: 2}, createdAt: now,
+      payload: {kind: "input_delivery_closed", reason: "cancelled", entries: [{...notification, sequence: 2}]}}} as never);
+    await recorder.flush();
+    const snapshot = (await query.query({kind: "get_snapshot", ...selection})).selection!;
+    const recorded = await query.query({kind: "list_records", ...snapshot, limit: 100});
+    expect(recorded.records.map(record => record.payload)).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: "input_delivery.prepared"}), expect.objectContaining({name: "input_delivery.accepted"}),
+    ]));
+    const flow = (await query.query({kind: "get_data_flow", ...snapshot})).graph!;
+    expect(flow.links).toEqual(expect.arrayContaining([
+      expect.objectContaining({kind: "includes", from: expect.objectContaining({id: "process-1", revision: "7"}), to: expect.objectContaining({id: "batch-1"})}),
+      expect.objectContaining({kind: "delivers", from: expect.objectContaining({id: "batch-1"}), to: expect.objectContaining({id: "turn-1"})}),
+      expect.objectContaining({kind: "includes", from: expect.objectContaining({id: "batch-1"}), to: expect.objectContaining({id: "request-1"})}),
+    ]));
+    expect(recorder.health().rejected).toBe(0);
+  });
+
+  it("links Plan commits and no-change outcomes to exact versions and Context sources", async () => {
+    const { recorder, query, selection } = await setup(true);
+    const transcript = new RunTranscriptInspectionAdapter(recorder);
+    const execution = new RunExecutionInspectionAdapter(recorder);
+    const now = "2026-10-13T00:00:00.000Z";
+    const plan = { id: "plan-1", version: 2, status: "active", steps: [
+      { step: "A", status: "in_progress" }, { step: "B", status: "in_progress" },
+    ] };
+    transcript.observe({ runId: "run-1", sequence: 1, item: { ref: { id: "commit", sequence: 1 }, createdAt: now,
+      payload: { kind: "state_transition", transition: "plan", previousRevision: 1, plan } } } as never);
+    for (const [index, status] of ["applied", "no_change", "rejected"].entries()) {
+      transcript.observe({ runId: "run-1", sequence: index + 2, item: { ref: { id: `item-${status}`, sequence: index + 2 }, createdAt: now,
+        payload: { kind: "observation", observation: { id: `outcome-${status}`, runId: "run-1", owner: "runtime", createdAt: now,
+          runAction: { id: `action-${status}` }, lowerRefs: [], payload: { kind: "plan_update", result: status === "rejected"
+            ? { status, code: "plan_invalid", message: "Invalid step" }
+            : { status, planId: "plan-1", version: 2 } } } } } } as never);
+    }
+    execution.observe({ kind: "context_source", runId: "run-1", occurredAt: now,
+      source: { owner: "agent-runtime", kind: "run_plan", id: "run-1", revision: "9", observedAt: now },
+      value: plan, inputs: [{ owner: "runtime", kind: "plan", id: "plan-1", revision: "2" }] });
+    await recorder.flush();
+    const snapshot = (await query.query({ kind: "get_snapshot", ...selection })).selection!;
+    const flow = (await query.query({ kind: "get_data_flow", ...snapshot })).graph!;
+    expect(flow.links).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "produces", from: expect.objectContaining({ id: "outcome-applied" }), to: expect.objectContaining({ id: "plan-1", revision: "2" }) }),
+      expect.objectContaining({ kind: "includes", from: expect.objectContaining({ id: "plan-1", revision: "2" }), to: expect.objectContaining({ id: "run_plan:run-1", revision: "9" }) }),
+    ]));
+    expect(flow.links.some(link => link.from.id === "outcome-rejected" && link.to.id === "plan-1")).toBe(false);
+    const unchanged = await query.query({ kind: "get_subject", ...snapshot, subject: recorder.ref("runtime", "contribution", "outcome-no_change", "run-1", "1") });
+    expect(unchanged.records.flatMap(record => record.links)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "binding", from: expect.objectContaining({ id: "outcome-no_change" }), to: expect.objectContaining({ id: "plan-1", revision: "2" }) }),
+    ]));
+    const recorded = await query.query({ kind: "get_subject", ...snapshot, subject: recorder.ref("runtime", "contribution", "plan-1", "run-1", "2") });
+    const commit = recorded.records.find(record => record.payload.kind === "event" && record.payload.name === "plan.committed")!;
+    expect(commit).toBeDefined();
+    const body = await query.query({ kind: "get_content", ...snapshot, contentId: commit.contents[0]!.id });
+    expect(JSON.parse(body.content!.text!).steps).toEqual(plan.steps);
+    expect(recorder.health().rejected).toBe(0);
+  });
+
   it("reports unsupported Source format without migrating or replacing retained metadata", async () => {
     const { directory, recorder, selection } = await setup();
     await recorder.flush(true);
@@ -57,7 +126,7 @@ describe("Inspection recording", () => {
     const call = {id: "call-id", turnId: "model-turn", providerRequestId: "provider-request", controllerRequestId: "controller-request", contentBlockOrdinal: 0};
     execution.observe({kind: "tool_exposure", runId: "run-1", occurredAt: now, turnId: "controller-turn", selected: [], exposure: {exposedTools: [], omissions: []}, proof: {controllerRequestId: call.controllerRequestId}} as never);
     const exchange = {attemptId: "http-attempt", requestId: call.providerRequestId, runId: "run-1", controllerRequestId: call.controllerRequestId, providerId: "test", model: "test", occurredAt: now, endpoint: "http://localhost/api/chat", httpStatus: 200, encodedBytes: 100, code: null, status: "succeeded", result: null, body: null, contentUnavailable: false};
-    const section = {id: "task-section", role: "user", source: {owner: "agent-core", id: "task", revision: "1"}, content: {kind: "text", text: "Inspect the workspace."}};
+    const section = {id: "task-section", kind: "task", role: "user", source: {owner: "agent-core", id: "task", revision: "1"}, content: {kind: "text", text: "Inspect the workspace."}};
     provider.observe({...exchange, stage: "request", request: {requestId: call.providerRequestId, purpose: "controller", instructions: {content: []}, messages: [{role: "user", content: [{kind: "text", text: section.content.text}]}], composition: {id: "composition", sections: [section], lineage: {}}, interaction: {kind: "native_tool_turn", callables: []}}} as never);
     provider.observe({...exchange, stage: "settled", result: {kind: "succeeded", response: {kind: "native_tool_turn", turn: {turnId: "model-turn", usage: null, finish: {kind: "normal"}, assistant: {content: callCount ? [{kind: "model_tool_call", call: {modelCallRef: call}}] : [{kind: "text", text: "Done"}]}}}}} as never);
     if (callCount) execution.observe({kind: "scheduling", runId: "run-1", occurredAt: now, call, position: 0, disposition: "queued", rule: "decision_source_order", groupId: null, reason: null} as never);
@@ -97,20 +166,18 @@ describe("Inspection recording", () => {
     }
     expect(recorder.health().rejected).toBe(0);
   });
-  it("links owner input notifications through Run admission and Context batch assembly", async () => {
+  it("links owner input notifications through Run admission and prepared delivery", async () => {
     const {recorder, query, selection} = await setup(true);
     const adapter = new RunExecutionInspectionAdapter(recorder);
     const transcript = new RunTranscriptInspectionAdapter(recorder);
     const now = "2026-10-03T00:00:00Z";
     const source = {owner: "command", kind: "command_completed", id: "process-1", revision: "4", observedAt: now};
-    const batch = {owner: "agent-runtime", kind: "input_notifications", id: "run-1:input-notifications", revision: "1-1", observedAt: now};
     const notification = {runId: "run-1", sequence: 1, source, occurredAt: now, data: {exitCode: 1}};
+    const batch = {id: "turn-1:input-delivery", revision: "1-1", runId: "run-1", entries: [notification]};
     adapter.observe({kind: "context_source", runId: "run-1", occurredAt: now, source, value: notification});
     transcript.observe({runId: "run-1", sequence: 1, item: {ref: {id: "notification-item", sequence: 1}, createdAt: now,
       payload: {kind: "input_notification", notification}}} as never);
-    adapter.observe({kind: "context_source", runId: "run-1", occurredAt: now, source: batch, inputs: [source], value: {notifications: [notification]}});
-    adapter.observe({kind: "context_committed", runId: "run-1", occurredAt: now, context: {ref: {id: "context", version: 2},
-      items: [{lifecycle: {kind: "active"}, contribution: {ref: {id: batch.id, revision: batch.revision}, source: batch}}]}} as never);
+    adapter.observe({kind: "input_delivery_prepared", runId: "run-1", occurredAt: now, turnId: "turn-1", batch});
     await recorder.flush();
     const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
     const graph = (await query.query({...scope, kind: "get_data_flow", subject: recorder.ref(source.owner, "contribution", source.id, "run-1", source.revision)})).graph!;
@@ -118,6 +185,32 @@ describe("Inspection recording", () => {
       expect.objectContaining({kind: "delivers", from: expect.objectContaining({id: source.id, revision: "4"}), to: expect.objectContaining({id: "notification-item"})}),
       expect.objectContaining({kind: "includes", from: expect.objectContaining({id: source.id, revision: "4"}), to: expect.objectContaining({id: batch.id, revision: "1-1"})}),
     ]));
+    expect(recorder.health().rejected).toBe(0);
+  });
+
+  it("links a replayed result to its actual request location without relabeling its source Run", async () => {
+    const {recorder, query, selection} = await setup(true);
+    const provider = new ProviderInspectionAdapter(recorder);
+    const result = {modelCallRef: {id: "call-1", turnId: "source-turn", providerRequestId: "source-request",
+      controllerRequestId: "source-controller", contentBlockOrdinal: 0, branchId: "opaque-branch"}, providerCallRef: null,
+      name: "Read", settlement: "succeeded", presentation: {presenter: {id: "fixture", revision: "1"},
+        disposition: "complete", failureCode: null}, sourceRefs: [
+      {owner: "agent-runtime", kind: "model_call", id: "call-1", revision: null, runId: "source-run"}],
+      content: {text: "retained"}};
+    const message = {role: "tool", content: [{kind: "model_tool_result", result}]};
+    provider.observe({stage: "request", runId: "consumer-run", requestId: "request-replay", attemptId: "attempt-replay",
+      occurredAt: "2026-10-13T00:00:00Z", providerId: "fixture", model: "fixture", controllerRequestId: null,
+      request: {requestId: "request-replay", purpose: "controller", composition: {id: "composition", sections: [
+        {id: "history", kind: "interaction_history", role: "tool", source: {owner: "fixture", id: "history", revision: "1"},
+          content: {kind: "model_message", message}}], lineage: {}},
+        messages: [message], interaction: {kind: "structured_output"}}} as never);
+    await recorder.flush();
+    const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
+    const graph = (await query.query({...scope, kind: "get_data_flow"})).graph!;
+    expect(graph.links).toContainEqual(expect.objectContaining({kind: "includes", operation: "model_result_history",
+      from: expect.objectContaining({id: "call-1:presentation", runId: "source-run"}),
+      to: expect.objectContaining({id: "request-replay", runId: "consumer-run"}),
+      targetLocation: expect.objectContaining({jsonPointer: "/messages/0/content/0/result"})}));
     expect(recorder.health().rejected).toBe(0);
   });
 
@@ -138,21 +231,22 @@ describe("Inspection recording", () => {
     finally { await query.close(); }
   });
 
-  it("isolates a real content publication I/O failure and leaves earlier native facts readable", async () => {
+  it("isolates a native body transaction failure and leaves earlier native facts readable", async () => {
     const { directory, recorder, query, subject, selection } = await setup(true);
-    recorder.offer({ id: "before-fault", subject, occurredAt: null, payload: { kind: "event", name: "committed", sequence: null, code: null } });
+    recorder.offer({ id: "before-fault", subject, occurredAt: null, payload: { kind: "event", name: "committed", sequence: null, code: null },
+      contents: [{name: "body", stage: "received", class: "agent", mediaType: "text/plain", value: "persisted"}] });
     await recorder.flush();
     const snapshot = (await query.query({ kind: "get_snapshot", ...selection })).selection!;
-    const content = join(datasetDirectory(directory, selection.sourceId, selection.datasetId), "content");
-    rmdirSync(content);
-    writeFileSync(content, "not a directory");
-    expect(recorder.offer({ id: "failed-publication", subject, occurredAt: null, payload: { kind: "event", name: "fault", sequence: null, code: null }, contents: [{ name: "body", stage: "received", class: "agent", mediaType: "text/plain", value: "not committed" }] })).toBe(true);
+    const database = new Database(join(datasetDirectory(directory, selection.sourceId, selection.datasetId), "inspection.sqlite"));
+    database.exec("CREATE UNIQUE INDEX injected_body_failure ON bodies(byte_length)"); database.close();
+    expect(recorder.offer({ id: "failed-publication", subject, occurredAt: null, payload: { kind: "event", name: "fault", sequence: null, code: null }, contents: [{ name: "body", stage: "received", class: "agent", mediaType: "text/plain", value: "different" }] })).toBe(true);
     await recorder.flush();
     expect(recorder.health()).toMatchObject({ available: false, code: "inspection_storage_unavailable", queued: 0 });
-    expect(recorder.health().dropped).toBeGreaterThan(0);
+    expect(recorder.health().dropped).toBe(0);
+    expect(recorder.health().unconfirmed + recorder.health().unpersisted).toBeGreaterThan(0);
     expect(recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "after fault", sequence: null, code: null } })).toBe(false);
     expect((await query.query({ kind: "list_records", ...snapshot })).records.map((record) => record.id)).toEqual(["before-fault"]);
-    await expect(recorder.flush(true)).resolves.toBeUndefined();
+    await expect(recorder.flush(true)).resolves.toMatchObject({native: "failed", unpersisted: 1, unconfirmed: 0});
     expect(JSON.parse(readFileSync(join(datasetDirectory(directory, selection.sourceId, selection.datasetId), "manifest.json"), "utf8"))).toMatchObject({
       status: "closed", captureFailure: "inspection_storage_unavailable",
     });
@@ -341,7 +435,8 @@ describe("Inspection recording", () => {
     await recorder.flush();
     const snapshot = (await query.query({ kind: "get_snapshot", ...selection })).selection!;
     const id = (await query.query({ kind: "list_records", ...snapshot })).records[0]!.contents[0]!.id;
-    writeFileSync(join(datasetDirectory(directory, subject.sourceId, subject.datasetId), "content", id), "damaged");
+    const database = new Database(join(datasetDirectory(directory, subject.sourceId, subject.datasetId), "inspection.sqlite"));
+    database.prepare("UPDATE bodies SET bytes=? WHERE id=(SELECT body_id FROM contents WHERE id=?)").run(Buffer.from("damaged"), id); database.close();
     expect((await query.query({ kind: "get_content", ...snapshot, contentId: id })).content?.descriptor.availability).toBe("unavailable");
     const options = { before: "2099-01-01T00:00:00Z", apply: true };
     expect(retireInspectionDatasets(directory, subject.sourceId, options)[0]?.status).toBe("active");

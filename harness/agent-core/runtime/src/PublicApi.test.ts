@@ -23,11 +23,14 @@ describe("Agent Core Runtime public API", () => {
     expectTypeOf<RunTreeLimits>().toBeObject();
     expectTypeOf<RunnerDependencies>().toBeObject();
     expect(Object.keys(controllerApi).sort()).toEqual([
+      "ControllerCheckpointError",
       "ControllerError",
       "ModelInteractionProjectionError",
       "ProviderBackedController",
       "StructuredOutputError",
+      "createControllerInputDeliveryReceipt",
       "createControllerModelItems",
+      "createInputDeliverySections",
       "createModelOutputRecoverySection",
       "projectModelInteraction",
       "snapshotControllerFeedback",
@@ -81,6 +84,7 @@ describe("Agent Core Runtime public API", () => {
       "createRunTranscriptRecord",
     ]);
     expect(Object.keys(retryApi).sort()).toEqual([
+      "RetryCheckpointError",
       "RetryExecutor",
       "RetryInvocationInvalidatedError",
       "createSystemRetryExecutor",
@@ -119,7 +123,7 @@ describe("Agent Core Runtime public API", () => {
       "snapshotRunSuspendRequestInput",
       "toRunCancellationSummary",
     ]);
-    expect(Object.keys(runnerApi)).toEqual(["Runner", "RUN_LIFECYCLE_DESCRIPTION"]);
+    expect(Object.keys(runnerApi)).toEqual(["Runner", "RunRecoveryError", "retainedRunResult", "RunCommitError", "validateRunTreeCommit", "RunTreeCommitWriter", "RUN_LIFECYCLE_DESCRIPTION", "retainRunConfiguration", "restoreRunConfiguration"]);
     expect(runnerApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runnerApi).not.toHaveProperty("RunState");
     expect(runnerApi).not.toHaveProperty("RuntimeEventEmitter");

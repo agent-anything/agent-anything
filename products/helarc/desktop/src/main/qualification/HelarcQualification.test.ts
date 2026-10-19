@@ -14,7 +14,7 @@ import {
 import { createHelarcModelQualificationCatalog, type HelarcModelQualificationCatalog } from "@agent-anything/helarc/model-qualification";
 import { admitHelarcModelUse } from "@agent-anything/helarc/composition";
 import { HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS } from "@agent-anything/helarc-local-environment/filesystem";
-import { HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID } from "@agent-anything/helarc-local-environment/command";
+import { HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID, createCommandInputContract } from "@agent-anything/helarc-local-environment/command";
 import { HelarcQualificationService } from "./HelarcQualificationService.js";
 import { HelarcQualificationStore } from "./HelarcQualificationStore.js";
 import { createHelarcProvider } from "../provider/createHelarcProvider.js";
@@ -28,12 +28,12 @@ describe("Settings qualification closure", { timeout: 30_000 }, () => {
     const input = f.configuration();
     const profile = createHelarcProviderProfile({ ...input.providerProfile, providerKind: "openai-compatible",
       baseUrl: "https://provider.test", ollamaRuntime: null,
-      modelSettings: { service: "deepseek", thinking: { mode: "default" }, maximumOutputTokens: 4096 } });
+      modelSettings: { service: "deepseek", thinking: { mode: "default" } } });
     if (!profile.ok) throw Error("Invalid profile");
     const target = (effort: string, name: string, key: string) => {
       const provider = createHelarcProvider({ providerKind: "openai-compatible", baseUrl: "https://provider.test",
         model: profile.profile.model, timeoutMs: profile.profile.timeoutMs, apiKey: key, ollamaRuntime: null,
-        modelSettings: { service: "deepseek", thinking: { mode: "enabled", effort }, maximumOutputTokens: 4096 } });
+        modelSettings: { service: "deepseek", thinking: { mode: "enabled", effort } } });
       return createHelarcQualificationProfile({ ...input, provider, providerProfile: { ...profile.profile, displayName: name } }).qualification.target.id;
     };
     expect(target("high", "First", "secret-1")).toBe(target("high", "Renamed", "secret-2"));
@@ -59,6 +59,20 @@ describe("Settings qualification closure", { timeout: 30_000 }, () => {
     expect(changed.disposition.status).toBe("blocked");
     expect((await f.service.publish(completed.id, changed.target.id, true)).ok).toBe(false);
     expect((await f.service.snapshot()).campaigns[0]!.currentTarget).toBe(false);
+  });
+
+  it.each(["adopt_text", "empty_reply"] as const)("grades resolved reply content and rechecks persisted evidence: %s", async mode => {
+    const f = await fixture(mode);
+    const initial = await f.service.snapshot();
+    expect(await f.service.start(initial.targetId!)).toEqual({ok: true});
+    await f.service.drain();
+    const completed = (await f.service.snapshot()).campaigns[0]!;
+    expect(completed.results.map(result => result.outcome)).toEqual(Array(6).fill(mode === "adopt_text" ? "qualified" : "not_qualified"));
+    const saved = await new HelarcQualificationStore(f.path).read();
+    expect(saved.campaigns[0]!.trials).toHaveLength(21);
+    expect(saved.campaigns[0]!.trials.flatMap(trial => trial.messages.filter(message => message.role === "assistant")
+      .flatMap(message => message.content.filter(block => block.kind === "model_tool_call" && block.call.name === "final_result")))
+      .every(block => block.kind === "model_tool_call" && !Object.hasOwn(block.call.input, "response"))).toBe(true);
   });
 
   it.each(["ollama", "openai-compatible"] as const)("uses the real %s encoder/decoder, retains all Trials, publishes and reuses exact-target decisions after restart", async kind => {
@@ -219,8 +233,8 @@ describe("Settings qualification closure", { timeout: 30_000 }, () => {
     });
     expect((await f.service.publish(completed.id, target, true)).ok).toBe(false);
     const document = JSON.parse(await readFile(f.path, "utf8"));
-    expect(document.version).toBe(3);
-    expect(document.campaigns[0].suiteRevision).toBe("helarc.native-call-baseline.v2");
+    expect(document.version).toBe(4);
+    expect(document.campaigns[0].suiteRevision).toBe("helarc.native-call-baseline.v3");
     expect(document.campaigns[0].target.qualificationProtocolRevision).toBe("helarc.model-qualification.v3");
     document.campaigns[0].trials[0].stage = "operation_request";
     const { digest: _digest, ...trial } = document.campaigns[0].trials[0];
@@ -322,7 +336,7 @@ describe("Settings qualification closure", { timeout: 30_000 }, () => {
 
 type Body = { messages: { role: string; content: string }[]; tools: { function: { name: string } }[]; thinking?: { type: string } };
 type Mode = "pass" | "transport_failure" | "wrong_response" | "partial_failure" | "wait" | "wrong_name" | "wrong_arguments" | "truncated"
-  | "literal_newline" | "retry_denied" | "extra_plan" | "invalid_plan" | "wrong_known_tool" | "result_transport_failure";
+  | "literal_newline" | "retry_denied" | "extra_plan" | "invalid_plan" | "wrong_known_tool" | "result_transport_failure" | "adopt_text" | "empty_reply";
 async function fixture(mode: Mode = "pass", kind: "ollama" | "openai-compatible" = "ollama", thinking?: { type: "disabled" }) {
   const directory = await mkdtemp(join(tmpdir(), "helarc-qualification-test-")); directories.push(directory);
   const path = join(directory, "qualification.json");
@@ -371,10 +385,12 @@ async function fixture(mode: Mode = "pass", kind: "ollama" | "openai-compatible"
     if (name === "final_result" && (mode === "extra_plan" || mode === "invalid_plan")) {
       args.plan = [{ step: "Extra Plan", status: mode === "extra_plan" ? "completed" : "not-a-status" }];
     }
-    return { ok: true, status: 200, json: async () => kind === "ollama" ? ({ message: { role: "assistant", content: "",
+    const content = mode === "adopt_text" && name === "final_result" ? String(args.response) : "";
+    if (name === "final_result" && (mode === "adopt_text" || mode === "empty_reply")) delete args.response;
+    return { ok: true, status: 200, json: async () => kind === "ollama" ? ({ message: { role: "assistant", content,
       tool_calls: [{ function: { name, arguments: args } }] }, done: true,
       done_reason: mode === "truncated" ? "length" : "stop", prompt_eval_count: 10, eval_count: 5 })
-      : ({ id: `response-${calls.length}`, choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null,
+      : ({ id: `response-${calls.length}`, choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: content || null,
         tool_calls: [{ id: `call-${calls.length}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }],
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }) };
   };
@@ -387,12 +403,13 @@ async function fixture(mode: Mode = "pass", kind: "ollama" | "openai-compatible"
   let provider = makeProvider(thinking);
   const p = createHelarcProviderProfile({ id: "test", displayName: "Test", providerKind: kind, baseUrl: "https://qualification.invalid",
     model: "test-model", timeoutMs: 10_000, credentialStatus: "empty_allowed", isActive: true, qualificationPolicy: "require_qualified",
-    ollamaRuntime: kind === "ollama" ? { contextWindowTokens: 163840, maximumOutputTokens: 2048 } : null });
+    ollamaRuntime: kind === "ollama" ? { contextWindowTokens: 163840 } : null });
   if (!p.ok) throw new Error(p.error.code);
   let settings = createDefaultHelarcInstructionSettings();
   let catalog: HelarcModelQualificationCatalog = createHelarcModelQualificationCatalog({ decisions: [] });
   const configuration = (): HelarcQualificationProfileInput => ({
     provider, providerProfile: p.profile, instructionSettings: settings,
+    inputContract: createCommandInputContract(),
     fileActionAdapterIds: HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS,
     shellActionAdapterId: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, taskStopActionAdapterId: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID,
     shellRuntime: { toolName: "PowerShell", executable: "pwsh", dialect: "powershell-7" },

@@ -40,4 +40,21 @@ describe("Plan content", () => {
     expect(renderToStaticMarkup(<View value={null} />)).toBe("");
     expect(renderToStaticMarkup(<View value={{ steps: [] }} />)).toBe("");
   });
+
+  it.each(["active", "abandoned"])("summarizes multiple reported steps for a %s Plan", status => {
+    const value = { status, steps: [
+      { step: "Investigate A", status: "in_progress" },
+      { step: "Investigate B", status: "in_progress" },
+    ] };
+    const html = renderToStaticMarkup(<ConversationPlan value={value} />);
+    const summary = html.slice(html.indexOf('class="wb-plan-summary"'), html.indexOf('class="wb-plan-steps"'));
+    expect(summary).toContain(status === "active" ? "2 in progress" : "Ended");
+    expect(summary).not.toContain("Investigate A");
+    expect(html).toContain("Investigate A");
+    expect(html).toContain("Investigate B");
+    if (status === "abandoned") {
+      expect(summary).not.toContain("in progress");
+      expect(html).toContain("Last reported: in progress");
+    }
+  });
 });

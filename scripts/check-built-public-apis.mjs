@@ -20,7 +20,7 @@ const packageExportKeys = {
     "./run-tree",
     "./task",
   ],
-  "harness/operation-catalog": ["./binding", "./catalog", "./identity", "./result"],
+  "harness/operation-catalog": ["./binding", "./catalog", "./evidence", "./identity", "./result"],
   "harness/interaction": ["./coordination", "./protocol", "./records"],
   "harness/safety/canonical-action": [
     "./assessment",
@@ -339,6 +339,7 @@ const expectedLowerValueExports = {
     "BUILT_IN_PERMISSION_PROFILE_IDS",
     "PermissionProfileResolutionError",
     "allowsActionApproval",
+    "allowsRetainedFileRead",
     "canonicalizeAdditionalPermissions",
     "canonicalizePermissionAbsolutePath",
     "canonicalizePermissionDomain",
@@ -407,6 +408,7 @@ const expectedLowerValueExports = {
     "validateGrantedPermissions",
   ],
   "@agent-anything/permission/authority": [
+    "allowsRetainedFileRead",
     "createActionApprovalCoverage",
     "createActionPermissionAssessmentPort",
     "isActionApprovalCoverageApplicable",
@@ -477,10 +479,12 @@ const expectedLowerValueExports = {
     "snapshotModelMessages",
     "snapshotModelOutputFormat",
     "snapshotModelReasoning",
+    "snapshotModelResultPresentation",
     "snapshotModelThinkingCapability",
     "snapshotModelThinkingSelection",
     "snapshotModelToolCall",
     "snapshotModelToolResult",
+    "snapshotModelToolResultContent",
     "snapshotModelTurn",
     "snapshotModelTurnFinish",
     "snapshotProviderCallRef",
@@ -683,10 +687,29 @@ const expectedOperationCatalogValueExports = {
   ],
   "@agent-anything/operation-catalog/binding": [
     "createOperationBindingResolverSnapshot",
+    "invalidOperationBinding",
     "snapshotResolvedOperationBinding",
     "unavailableOperationBindingResolver",
   ],
-  "@agent-anything/operation-catalog/result": ["createOperationResult", "readOperationLimitFailureDetail"],
+  "@agent-anything/operation-catalog/result": [
+    "OperationCommitError",
+    "createOperationResult",
+    "createOperationResultContracts",
+    "readOperationLimitFailureDetail",
+    "rejectOperationResultOutput",
+  ],
+  "@agent-anything/operation-catalog/evidence": [
+    "ExecutionEvidenceUnavailableError",
+    "evidenceMemberRefs",
+    "executionEvidenceKey",
+    "resolveCompensationAssociation",
+    "resolveExecutionEvidence",
+    "snapshotCompensationAssociation",
+    "snapshotExecutionEvidence",
+    "snapshotExecutionEvidenceRef",
+    "snapshotExecutionReferenceTransfer",
+    "validateExecutionEffectSchemas",
+  ],
 };
 
 const expectedInteractionValueExports = {
@@ -716,7 +739,7 @@ const expectedOperationCompositionValueExports = {
   "@agent-anything/operation-composition/definition": [
     "snapshotCompositeDefinition",
   ],
-  "@agent-anything/operation-composition/execution": ["CompositeExecution"],
+  "@agent-anything/operation-composition/execution": ["CompositeCommitError", "CompositeExecution", "CompositeRecoveryError"],
   "@agent-anything/operation-composition/result": ["createCompositeResultSummary", "readCompositeResultSummary"],
 };
 
@@ -727,11 +750,14 @@ const expectedValueExports = {
     "snapshotRuntimeEventPayload",
   ],
   "@agent-anything/agent-runtime/controller": [
+    "ControllerCheckpointError",
     "ControllerError",
     "ModelInteractionProjectionError",
     "ProviderBackedController",
     "StructuredOutputError",
+    "createControllerInputDeliveryReceipt",
     "createControllerModelItems",
+    "createInputDeliverySections",
     "createModelOutputRecoverySection",
     "projectModelInteraction",
     "snapshotControllerFeedback",
@@ -782,13 +808,16 @@ const expectedValueExports = {
     "createEmptyAgentHookComposition",
     "dispatchAgentStopFailureHooks",
     "dispatchAgentStopHooks",
+    "interruptedAgentHook",
     "matchingAgentHooks",
+    "validateAgentHookCheckpoint",
   ],
   "@agent-anything/agent-runtime/transcript": [
     "RunTranscriptRecorder",
     "createRunTranscriptRecord",
   ],
   "@agent-anything/agent-runtime/retry": [
+    "RetryCheckpointError",
     "RetryExecutor",
     "RetryInvocationInvalidatedError",
     "createSystemRetryExecutor",
@@ -829,7 +858,14 @@ const expectedValueExports = {
   ],
   "@agent-anything/agent-runtime/runner": [
     "RUN_LIFECYCLE_DESCRIPTION",
+    "RunCommitError",
+    "RunRecoveryError",
+    "RunTreeCommitWriter",
     "Runner",
+    "restoreRunConfiguration",
+    "retainRunConfiguration",
+    "retainedRunResult",
+    "validateRunTreeCommit",
   ],
   "@agent-anything/canonical-action/subject": [
     "ActionContractValidationError",
@@ -887,6 +923,8 @@ const expectedValueExports = {
   ],
   "@agent-anything/action-execution/enforcement": [
     "ActionExecutionCoordinator",
+    "ActionRecordCommitError",
+    "ActionRecoveryError",
   ],
   "@agent-anything/action-execution/sandbox": [
     "createSandboxExecutionGateway",
@@ -938,9 +976,15 @@ const expectedValueExports = {
     "CODE_AGENT_GREP_TOOL",
     "CODE_AGENT_READ_TOOL",
     "CODE_AGENT_WRITE_TOOL",
+    "CODE_FILE_CONTENT_CHANGE_SCHEMA",
+    "CODE_FILE_RESTORE_BINDING",
+    "CODE_FILE_RESTORE_OPERATION",
     "bindingRefForCodeFileTool",
+    "codeFileCompensationSupport",
+    "codeFileExecutionEffects",
     "codeFileOperationForRef",
     "createCodeFileOperationContribution",
+    "isFileFailureSupport",
     "operationRefForCodeFileTool",
   ],
   "@agent-anything/helarc": [
@@ -986,6 +1030,7 @@ const expectedValueExports = {
     "buildHelarcPromptAssembly",
   ],
   "@agent-anything/helarc/tools": [
+    "ExecutionMaterialAccessError",
     "HELARC_BASELINE_TOOL_CONTRACTS",
     "HELARC_BASELINE_TOOL_CONTRACT_REVISION",
     "HELARC_BASELINE_TOOL_GUIDANCE_PROFILE_REVISION",
@@ -1119,23 +1164,33 @@ const expectedValueExports = {
     "HELARC_SHELL_COMMAND_OUTCOME_REVISION",
     "ProcessManagerError",
     "ProcessOutputRepository",
+    "ProcessRecordError",
     "RetainedProcessOutputError",
     "RunProcessManager",
+    "createCommandInputContract",
     "createHelarcLocalCommandActionCapability",
     "defaultCodeAgentCommandLimits",
     "projectNativeShellRuntimeProfile",
     "readRetainedProcessOutput",
     "registerRetainedProcessOutput",
     "selectNativeShell",
+    "validateProcessCheckpoint",
+    "validateShellSessionCommit",
   ],
   "@agent-anything/helarc-local-environment/filesystem": [
+    "FILE_MATERIAL_POLICY",
     "HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS",
+    "captureFilePreimage",
     "createCodeAgentCanonicalWorkspaceRoots",
     "createHelarcLocalFileActionCapability",
     "createLocalCodeSourcePort",
     "defaultCodeAgentFileLimits",
+    "fileAncestryIdentity",
     "inspectPreparedFileSystemTarget",
     "prepareFileSystemTarget",
+    "restoreBoundFileContent",
+    "snapshotFileMaterialPreparation",
+    "validFileDigest",
   ],
   "@agent-anything/helarc-local-environment/sandbox": [
     "createHelarcLocalSandboxGateway",
@@ -1569,15 +1624,15 @@ checkBuiltSurfaces(
 );
 
 checkBuiltSurfaces({
-  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey"],
-  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "inspectionSubjectKey"],
+  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "inspectionSubjectKey"],
+  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "inspectionSubjectKey"],
   "@agent-anything/inspection/content": ["DEFAULT_INSPECTION_CAPTURE_POLICY", "captureClassEnabled", "redactInspectionContent", "validateInspectionCapturePolicy"],
-  "@agent-anything/inspection/sources": ["atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "registerInspectionSource", "validateOpaqueId"],
+  "@agent-anything/inspection/sources": ["atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "inspectionSourceId", "registerInspectionSource", "validateOpaqueId"],
   "@agent-anything/inspection/recording": ["InspectionRecorder", "InspectionRecorderError"],
-  "@agent-anything/inspection/storage": ["InspectionDatabase", "inspectionSourceBytes", "retireInspectionDatasets", "wasInspectionDatasetRetired"],
+  "@agent-anything/inspection/storage": ["INSPECTION_STORAGE_POLICY", "InspectionDatabase", "InspectionStorageMaintenance", "inspectionSourceBytes", "maintainInspectionStorage", "readInspectionStorageInventory", "retireInspectionDatasets", "wasInspectionDatasetRetired"],
   "@agent-anything/inspection/telemetry": ["InspectionTelemetry"],
   "@agent-anything/inspection/query": ["InspectionQueryService", "executeInspectionQuery", "readInspectionJson", "validateInspectionQuery"],
-  "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ExecutionFlowInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink"],
+  "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ExecutionEvidenceInspectionAdapter", "ExecutionFlowInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink"],
 }, ["@agent-anything/inspection/recording/InspectionRecorderWorker", "@agent-anything/inspection/storage/InspectionDatasetAccess"], join(repoRoot, "harness/inspection"));
 
 console.log("Built public API check passed.");

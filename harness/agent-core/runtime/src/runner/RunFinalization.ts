@@ -11,6 +11,7 @@ export function createRunFinalizationContext(input: {
   readonly cancellation: RunCancellationSummary | null;
   readonly timeoutMs: number;
   readonly startedAt: string;
+  readonly currentAt?: string;
 }): RunFinalizationScope {
   const startedAtMs = Date.parse(input.startedAt);
   if (!Number.isFinite(startedAtMs)) {
@@ -34,9 +35,12 @@ export function createRunFinalizationContext(input: {
     deadlineAt,
     signal: controller.signal,
   });
+  const remainingMs = input.currentAt === undefined ? input.timeoutMs : Date.parse(deadlineAt) - Date.parse(input.currentAt);
+  if (!Number.isFinite(remainingMs)) throw new TypeError("Finalization currentAt must be a valid date-time string.");
+  if (remainingMs <= 0) controller.abort(new Error("Run finalization exceeded its original deadline."));
   const timer = setTimeout(() => {
     controller.abort(new Error("Run finalization exceeded its deadline."));
-  }, input.timeoutMs);
+  }, Math.max(0, remainingMs));
   let disposed = false;
 
   return Object.freeze({

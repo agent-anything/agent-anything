@@ -138,6 +138,7 @@ function stopEvent(): AgentStopEvent<{ readonly summary: string }> {
       messages: [],
       unsettledCalls: [],
       settledCallCount: 0,
+      latestTurn: null,
     },
     plan: null,
     pending: [],

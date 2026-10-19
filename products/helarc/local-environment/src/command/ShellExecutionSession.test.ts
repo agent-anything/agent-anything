@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
-import { ShellExecutionSession } from "./ShellExecutionSession.js";
+import { ShellExecutionSession, type ShellSessionCommit } from "./ShellExecutionSession.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -14,6 +14,30 @@ afterEach(async () => {
 });
 
 describe("ShellExecutionSession", () => {
+  it("publishes only acknowledged cwd transitions and restores their exact revision", async () => {
+    const fixture = await createFixture();
+    const initial = await ShellExecutionSession.create(fixture.workspace, hostPlatform());
+    let retained: ShellSessionCommit | null = null;
+    let acknowledge!: () => void;
+    const gate = new Promise<void>(resolve => {acknowledge = resolve;});
+    const session = initial.forkInitial(async value => {retained = {runId: "run-1", ...value}; await gate;});
+    const pending = session.commitFinalWorkingDirectory({expectedRevision: 0, path: fixture.child, executionId: "execution-1"});
+    await expect.poll(() => retained !== null).toBe(true);
+    expect(session.snapshot().revision).toBe(0);
+    acknowledge(); await pending;
+    const restored = initial.forkInitial();
+    await restored.restore(retained!);
+    expect(restored.snapshot()).toEqual(session.snapshot());
+    await expect(initial.forkInitial().restore({...retained!, after: {...retained!.after, canonicalPath: fixture.outside}})).rejects.toThrow("path changed");
+  });
+  it("keeps an unconfirmed cwd commit from publishing or allowing later transitions", async () => {
+    const fixture = await createFixture();
+    const session = (await ShellExecutionSession.create(fixture.workspace, hostPlatform())).forkInitial(async () => {throw new Error("lost receipt");});
+    const input = {expectedRevision: 0, path: fixture.child, executionId: "execution-1"};
+    await expect(session.commitFinalWorkingDirectory(input)).rejects.toMatchObject({name: "OperationCommitError"});
+    expect(session.snapshot().revision).toBe(0);
+    await expect(session.commitFinalWorkingDirectory({...input, executionId: "execution-2"})).rejects.toMatchObject({name: "OperationCommitError"});
+  });
   it("continues from a committed child directory and can enter an additional root", async () => {
     const fixture = await createFixture();
     const session = await ShellExecutionSession.create(fixture.workspace, hostPlatform());

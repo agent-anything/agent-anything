@@ -72,7 +72,7 @@ export class HelarcQualificationService {
       const profile = createHelarcQualificationProfile(config);
       if (profile.qualification.target.id !== targetId) return failure("The saved configuration changed. Review the current configuration first.");
       if (!config.provider.descriptor.capabilities.nativeToolInteraction.supported) return failure("The Provider does not support native Tool calls.");
-      const material = { callables: profile.callables, tools: profile.tools, shellRuntime: profile.shellRuntime, planLimits: profile.planLimits,
+      const material = { callables: profile.callables, tools: profile.tools, shellRuntime: profile.shellRuntime, commandInputConstraints: profile.commandInputConstraints, planLimits: profile.planLimits,
         instructions: qualificationInstructionSections(profile),
         generationConfiguration: snapshotModelJsonValue(config.provider.descriptor.metadata.generationConfiguration ?? null, "generationConfiguration"),
         modelSelection: snapshotModelJsonValue(config.provider.descriptor.metadata.modelSelection ?? null, "modelSelection") };

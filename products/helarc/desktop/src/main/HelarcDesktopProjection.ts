@@ -12,6 +12,7 @@ import { HELARC_CLARIFICATION_PROTOCOL } from "@agent-anything/helarc/interactio
 
 export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSnapshot {
   return {
+    execution: snapshot.execution,
     projects: snapshot.projects.map((project) => ({
       id: project.id, revision: project.revision, name: project.name,
       primaryProfileId: project.primaryProfileId, additionalProfileIds: [...project.additionalProfileIds],
@@ -343,7 +344,6 @@ function projectProviderProfile(
       ? null
       : {
           contextWindowTokens: profile.ollamaRuntime.contextWindowTokens,
-          maximumOutputTokens: profile.ollamaRuntime.maximumOutputTokens,
         },
     credentialStatus: profile.credentialStatus,
     qualificationPolicy: profile.qualificationPolicy,

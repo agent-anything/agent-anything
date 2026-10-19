@@ -61,6 +61,7 @@
     }
   },
   "dependencies": {
+    "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/agent-hooks": "workspace:*",

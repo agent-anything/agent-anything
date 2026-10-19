@@ -16,6 +16,7 @@ import {
 import {
   AgentHookController,
   type AgentHookExecutionStore,
+  type AgentHookRecordPort,
 } from "@agent-anything/agent-hooks/execution";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
@@ -100,6 +101,12 @@ type HelarcProductProjectionUpdatePayload =
     : never;
 
 export interface CreateHelarcProductCompositionInput {
+  readonly executionEvidenceAccess?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort;
+  readonly executionHandoff?: import("../tools/HelarcExecutionHandoff.js").HelarcExecutionHandoff;
+  readonly executionMaterials?: import("../tools/HelarcExecutionDetails.js").HelarcExecutionMaterialReader;
+  readonly executionCollections?: import("../tools/HelarcExecutionDetails.js").HelarcExecutionCollectionReader;
+  readonly executionEvidence?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceRecordPort;
+  readonly hookInvocationRecords?: AgentHookRecordPort;
   readonly responseDelivery?: "buffered" | "streaming";
   readonly executionFlow?: ExecutionFlowContext;
   readonly runId: string;
@@ -168,13 +175,25 @@ export async function createHelarcProductComposition(
   });
   const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId, instructionSettings });
   const clarification = createHelarcClarificationContribution(admittedAt);
-  const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt);
+  const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt, input.executionHandoff);
   const taskFulfillment = createHelarcTaskFulfillmentHookComposition(
     input.provider,
     (instructionSettings ?? createDefaultHelarcInstructionSettings()).stop,
     now,
   );
+  const executionCallables = new Map<string, import("../controller/HelarcModelCallableCatalog.js").HelarcModelCallableCatalog>();
   const actions = createHelarcActionComposition({
+    executionEvidence: input.executionEvidence,
+    executionEvidenceAccess: input.executionEvidenceAccess,
+    executionMaterials: input.executionMaterials,
+    executionCollections: input.executionCollections,
+    executionCallable(runId, binding) {
+      const matches = executionCallables.get(runId)?.bindings.filter(entry => entry.kind === "tool" && entry.binding.kind === "operation" &&
+        entry.binding.revision === binding.revision && entry.binding.operation.revision === binding.operation.revision &&
+        entry.binding.operation.operation.namespace === binding.operation.operation.namespace &&
+        entry.binding.operation.operation.name === binding.operation.operation.name) ?? [];
+      return matches.length === 1 ? matches[0]!.callableName : null;
+    },
     admittedAt,
     file: input.fileActions,
     command: input.commandActions,
@@ -255,6 +274,8 @@ export async function createHelarcProductComposition(
       provider: input.provider,
       delivery: {mode:input.responseDelivery ?? "buffered", observer:{observe:event => previews.observe(event)}},
       buildRequest: (controllerInput, context) => {
+        executionCallables.set(controllerInput.runId, controllerProtocol.createCallableCatalog(
+          controllerInput.toolExposure, controllerInput.planLimits, controllerInput.plan !== null));
         const request = buildHelarcProviderRequest(
           controllerInput,
           context,
@@ -282,6 +303,7 @@ export async function createHelarcProductComposition(
     controllerTraceByOperationId,
   );
   const providerController = new AgentHookController<HelarcAgentOutput>({
+    invocationRecords: input.hookInvocationRecords,
     controller: tracedController,
     composition: taskFulfillment.composition,
     rootRunId: input.runId,

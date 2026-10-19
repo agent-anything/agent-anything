@@ -25,7 +25,7 @@ describe("Operation result conformance", () => {
     })]);
   });
 
-  it("requires usable output for partial and no output for non-usable terminal states", () => {
+  it("requires usable output for partial and allows diagnostic output on other terminal states", () => {
     const partial = createOperationResult({
       ...base("partial"),
       status: "partial",
@@ -54,6 +54,9 @@ describe("Operation result conformance", () => {
       });
       expect(result.output).toBeNull();
       expect(result.failure.owner).toBe("operation.semantic-owner");
+      expect(createOperationResult({...result, output: {diagnostic: "known partial effects"}})).toMatchObject({
+        status, output: {diagnostic: "known partial effects"},
+      });
     }
   });
 

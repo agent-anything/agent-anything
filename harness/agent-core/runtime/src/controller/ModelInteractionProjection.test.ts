@@ -8,12 +8,53 @@ import {
 } from "@agent-anything/model-interaction";
 import type { RunItem } from "../run/RunItem.js";
 import { createControllerModelItems } from "./ControllerModelItems.js";
+import { createControllerInputDeliveryReceipt, createInputDeliverySections } from "./ControllerInputDelivery.js";
 import {
   ModelInteractionProjectionError,
   projectModelInteraction,
 } from "./ModelInteractionProjection.js";
 
 describe("ModelInteractionProjection", () => {
+  it("replays accepted notifications after the complete result group and before their consuming Turn", () => {
+    const call = modelCall("read", 0);
+    const batch = {id: "batch-1", revision: "1", runId: "run-1", entries: [{runId: "run-1", sequence: 1,
+      source: {owner: "execution", kind: "process", id: "process-1", revision: "2"},
+      occurredAt: "2026-10-13T00:00:00.000Z", data: {exitCode: 0}}]};
+    const controllerReceipt = createControllerInputDeliveryReceipt(batch, "request-2");
+    const receipt = {...controllerReceipt, via: {kind: "provider" as const, requestId: "request-2", compositionId: "request-2",
+      sectionIds: createInputDeliverySections(batch).map(section => section.id)}};
+    const next = controllerTurn(modelTurn([], "turn-2", "request-2"));
+    if (next.kind !== "controller_turn") throw new Error("Invalid fixture");
+    const delivery = runItem(3, {kind: "input_delivery", batch, receipt, turn: next.turn});
+    const nextItem = {...runItem(4, next), committedInRevision: 3};
+    const history = [runItem(1, controllerTurn(modelTurn([call]))), runItem(2, settlement(call, "succeeded")), delivery, nextItem];
+    const projection = projectModelInteraction({runId: "run-1", runRevision: 3, items: history});
+    expect(projection.messages.map(message => message.role)).toEqual(["assistant", "tool", "user", "assistant"]);
+    expect(projection.notificationHistory).toEqual([{messageIndex: 2, batchId: "batch-1", batchRevision: "1", sequence: 1}]);
+    expect(JSON.stringify(projection.messages).match(/host_notification/g)).toHaveLength(1);
+    expect(() => projectModelInteraction({runId: "run-1", runRevision: 3, items: [history[0]!, delivery, nextItem]}))
+      .toThrowError(expect.objectContaining({code: "input_delivery_history_invalid"}));
+    expect(() => projectModelInteraction({runId: "run-1", runRevision: 4, items: [...history.slice(0, 3), runItem(4, next)]}))
+      .toThrowError(expect.objectContaining({code: "input_delivery_history_invalid"}));
+    const deterministic = {...delivery, payload: {...delivery.payload, receipt: controllerReceipt}} as RunItem;
+    expect(projectModelInteraction({runId: "run-1", runRevision: 3, items: [history[0]!, history[1]!, deterministic, nextItem]})
+      .messages.map(message => message.role)).toEqual(["assistant", "tool", "assistant"]);
+  });
+  it("projects exact admitted local text provenance, not seed messages or an older text-bearing Turn", () => {
+    const seedMessages = [{role: "assistant" as const, content: [{kind: "text" as const, text: "Seed report"}]}];
+    expect(projectModelInteraction({runId: "run-1", runRevision: 0, items: [], seedMessages}).latestTurn).toBeNull();
+    const turn = modelTurn([]);
+    const textTurn: ModelTurn = {...turn, assistant: {role: "assistant", content: [
+      {kind: "text", text: " First "}, {kind: "text", text: "Second"},
+    ]}};
+    const first = runItem(1, controllerTurn(textTurn));
+    expect(projectModelInteraction({runId: "run-1", runRevision: 1, items: [first], seedMessages}).latestTurn)
+      .toMatchObject({runId: "run-1", runItemId: first.ref.id, runItemSequence: 1, turnId: turn.turnId,
+        textBlocks: [{ordinal: 0, text: " First "}, {ordinal: 1, text: "Second"}]});
+    const later = modelTurn([], "turn-2", "request-2");
+    expect(projectModelInteraction({runId: "run-1", runRevision: 2, items: [first, runItem(2, controllerTurn(later))]}).latestTurn)
+      .toMatchObject({turnId: "turn-2", textBlocks: []});
+  });
   it("preserves reasoning across transcript projection without moving native call ordinals", () => {
     const call = modelCall("read", 0);
     const turn = modelTurn([call]);
@@ -215,6 +256,7 @@ function settlement(
       providerCallRef: call.providerCallRef,
       name: call.name,
       settlement: kind,
+      presentation: {presenter: {id: "test", revision: "1"}, disposition: "complete", failureCode: null},
       content: { status: kind },
       sourceRefs: [{ owner: "agent-runtime", kind: "run_action", id: "action-1", revision: "1" }],
     }),

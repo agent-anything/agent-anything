@@ -57,6 +57,7 @@ export type {
   ModelCallSettlementSourceRef,
   ModelToolCall,
   ModelToolResult,
+  ModelResultPresentation,
   ProviderCallRef,
 } from "./ModelCall.js";
 export {
@@ -65,6 +66,8 @@ export {
   snapshotModelCallRef,
   snapshotModelToolCall,
   snapshotModelToolResult,
+  snapshotModelToolResultContent,
+  snapshotModelResultPresentation,
   snapshotProviderCallRef,
 } from "./ModelCall.js";
 export type {

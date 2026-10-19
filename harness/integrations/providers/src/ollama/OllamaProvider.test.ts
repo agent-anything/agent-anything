@@ -20,6 +20,26 @@ import {
 import { OllamaProvider } from "./OllamaProvider.js";
 
 describe("OllamaProvider", () => {
+  it("omits num_predict but keeps num_ctx and truncate=false for chat and generate", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const provider = new OllamaProvider({ ...config(), runtime: { contextWindowTokens: 16384 } }, async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      const content = '{"action":"complete","summary":"done"}';
+      return okResponse(url.endsWith("/chat")
+        ? { message: { role: "assistant", content }, done: true, done_reason: "stop" }
+        : { response: content, done: true, done_reason: "stop" });
+    });
+    expect((await provider.send(createNativeProviderRequest(provider), context())).kind).toBe("succeeded");
+    expect((await provider.send(request(provider), context())).kind).toBe("succeeded");
+    for (const body of bodies) expect(body).toMatchObject({ truncate: false, options: { num_ctx: 16384 } });
+    for (const body of bodies) expect(body.options).not.toHaveProperty("num_predict");
+    expect(provider.modelContext.requestedOutput).toMatchObject({ maximum: null, source: "unspecified" });
+  });
+
+  it.each([null, 0, -1, 1.5, Infinity])("rejects invalid explicit output limit %s", maximumOutputTokens => {
+    expect(() => new OllamaProvider({ ...config(), runtime: { contextWindowTokens: 16384, maximumOutputTokens } } as never)).toThrow();
+  });
+
   it("observes the existing exchange without extra reads, requests or changed results", async () => {
     const sent: string[] = [];
     const parsed = vi.fn(async () => ({ response: '{"action":"complete","summary":"done"}' }));
@@ -937,6 +957,7 @@ function createFailedToolResultMessage(
         providerCallRef: call.providerCallRef,
         name: call.name,
         settlement: "failed",
+        presentation: {presenter: {id: "test", revision: "1"}, disposition: "complete", failureCode: null},
         content: {
           code: "tool_failed",
           message: "private Tool failure content",

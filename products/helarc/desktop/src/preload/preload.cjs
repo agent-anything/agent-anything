@@ -119,7 +119,6 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
         ? input?.ollamaRuntime
         : {
             contextWindowTokens: input.ollamaRuntime.contextWindowTokens,
-            maximumOutputTokens: input.ollamaRuntime.maximumOutputTokens,
           },
       qualificationPolicy: input?.qualificationPolicy,
       apiKeyUpdate: input?.apiKeyUpdate,
@@ -157,6 +156,8 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
           },
     }),
   ),
+  listRecoverableWork: () => ipcRenderer.invoke("helarc:list-recoverable-work"),
+  recoverWork: (input) => ipcRenderer.invoke("helarc:recover-work", {id: input.id, revision: input.revision, intent: input.intent}),
   cancelRun: (input) => ipcRenderer.invoke(channels.cancelRun, {
     version: COMMAND_VERSION,
     commandId: input?.commandId,

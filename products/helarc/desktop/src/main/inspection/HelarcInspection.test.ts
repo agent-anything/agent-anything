@@ -24,7 +24,7 @@ it("preserves bounded recording failure causes without failing Desktop startup",
   }
 });
 
-it("persists independent capture settings and opens a new recording on source restart", async () => {
+it("persists independent capture settings and opens a new recording on source restart", {timeout: 20_000}, async () => {
   const root = await mkdtemp(join(tmpdir(), "helarc-inspection-"));
   const path = join(root, "settings.json");
   const source = await HelarcInspection.create(path, join(root, "inspection"));
@@ -33,6 +33,17 @@ it("persists independent capture settings and opens a new recording on source re
     expect(source.snapshot().settings).toEqual({ enabled: true, definition: true, agent: true, provider: true, execution: true });
     expect(source.snapshot().health.available).toBe(true);
     const recorder = source.recorder!;
+    const basis = {runId: "retained-run", threadId: "original-thread", productRunId: "original-work",
+      checkpointId: "retained-run:tree_commit:42", checkpointRevision: 42, completedAt: "2026-10-14T01:00:00.000Z"};
+    source.recordRecoveredDelivery(basis);
+    await recorder.flush();
+    const recovered = recorder.ref("helarc", "contribution", "original-work:recovered-delivery", "retained-run");
+    const recoveredScope = (await queries.query({kind: "get_snapshot", sourceId: recovered.sourceId, datasetId: recovered.datasetId})).selection!;
+    const record = (await queries.query({kind: "get_subject", ...recoveredScope, subject: recovered})).records[0]!;
+    expect(record.payload).toMatchObject({name: "execution.result_delivery.recovered"});
+    expect(record.links.some(link => link.from.id === basis.checkpointId && link.from.revision === "42")).toBe(true);
+    const recoveredContent = (await queries.query({kind: "get_content", ...recoveredScope, contentId: record.contents[0]!.id})).content!;
+    expect(JSON.parse(recoveredContent.text!)).toEqual(basis);
     const subject = recorder.ref("runtime", "run", "default-capture", "default-capture");
     recorder.offer({ subject, occurredAt: null, payload: { kind: "event", name: "capture", sequence: null, code: null }, contents: (["definition", "agent", "provider", "execution"] as const).map((kind) => ({ name: kind, class: kind, stage: "received", mediaType: "application/json", value: { content: kind, apiKey: "not-for-inspection" } })) });
     await recorder.flush();

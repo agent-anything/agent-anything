@@ -2,6 +2,7 @@ import * as React from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import type { HelarcMainSnapshot } from "../../shared/HelarcDesktopApi.js";
+import { compareConversationPosition } from "../../shared/HelarcWorkbench.js";
 import type {
   ConversationEntry,
   ConversationPage,
@@ -61,6 +62,7 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
   const [syncedCommitKey, setSyncedCommitKey] = useState("");
   const [latestRequest, setLatestRequest] = useState(0);
   const live =
+    snapshot.execution === "active" &&
     !!snapshot.run &&
     !snapshot.run.display.terminal &&
     snapshot.run.productRunId === scope?.productRunId;
@@ -207,8 +209,7 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
         setNewContent(
           !!last &&
             !!latest &&
-            (last[0] < latest[0] ||
-              (last[0] === latest[0] && last[1] < latest[1])),
+            compareConversationPosition(last, latest) < 0,
         );
       } catch (e) {
         if (!disposed)

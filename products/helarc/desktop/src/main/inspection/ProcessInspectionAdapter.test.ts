@@ -29,6 +29,8 @@ it("records independent process lifetimes and immutable observations before Run 
     await start("a");await start("b");
     const observed=await manager.observe({runId:"run",executionId:"a",invocationId:"initial",waitMs:0,signal:controller.signal,initial:true});
     expect(observed.snapshot.phase).toBe("running");
+    manager.commitInitialDelivery({runId:"run",runActionId:"a-run-action",settlementId:"initial-call",
+      observationId:observed.id,cursor:observed.nextCursor});
     const r=inspection.recorder!;
     await r.flush();
     expect(r.health().available,JSON.stringify(r.health())).toBe(true);

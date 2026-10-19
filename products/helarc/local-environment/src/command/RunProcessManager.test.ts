@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { RunProcessManager, type ManagedProcessStart, type RunProcessManagerOptions } from "./RunProcessManager.js";
 import type { ProcessBackend, ProcessBackendEvent, ProcessBackendHandle } from "./ProcessBackend.js";
 import { ProcessOutputStore, type ProcessOutputPaths } from "./ProcessOutputStore.js";
+import {validateProcessCheckpoint, type ProcessCheckpoint, type ProcessRecordPort} from "./ProcessCheckpoint.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
-async function setup(options: { instant?: boolean; observerThrows?: boolean; retainOutput?: RunProcessManagerOptions["retainOutput"] } = {}) {
+async function setup(options: { records?: ProcessRecordPort; instant?: boolean; observerThrows?: boolean; retainOutput?: RunProcessManagerOptions["retainOutput"]; constraints?: RunProcessManagerOptions["constraints"]; maximumActive?: number } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "helarc-process-test-")); directories.push(directory);
   const paths: ProcessOutputPaths = { stdout: join(directory, "stdout.raw"), stderr: join(directory, "stderr.raw"),
     stdoutText: join(directory, "stdout.txt"), stderrText: join(directory, "stderr.txt"), manifest: join(directory, "manifest.json") };
@@ -24,21 +25,158 @@ async function setup(options: { instant?: boolean; observerThrows?: boolean; ret
     launch: vi.fn(async (_request, listener) => { publish = listener; if (options.instant) finish(); return handle; }) };
   const controller = new AbortController();
   const input: ManagedProcessStart = { runId: "run-1", executionId: "process-1", actionId: "action-1", environmentId: "test",
+    origin: {invocationId: "start", runActionId: "run-action-1", attemptId: "attempt-1"},
     executable: "test", args: [], cwd: directory, environment: {}, timeoutMs: 60_000,
     deadlineAt: new Date(Date.now() + 120_000).toISOString(), runSignal: controller.signal, paths,
     maximumOutputBytes: 100_000, background: false };
-  const manager = new RunProcessManager({ backend, maximumActive: 2, maximumSettled: 2,
+  const manager = new RunProcessManager({ backend, maximumActive: options.maximumActive ?? 2, maximumSettled: 2, constraints: options.constraints,
+    records: options.records,
     retainOutput: options.retainOutput,
     terminationTimeoutMs: 100, observer: options.observerThrows ? () => { throw new Error("observer"); } : undefined });
+  let observationSequence = 0;
   const observe = (extra: Partial<Parameters<RunProcessManager["observe"]>[0]> = {}) => manager.observe({
-    runId: input.runId, executionId: input.executionId, invocationId: "observation-1", waitMs: 0,
+    runId: input.runId, executionId: input.executionId, invocationId: `observation-${++observationSequence}`, waitMs: 0,
     signal: new AbortController().signal, ...extra });
   const cleanup = () => manager.finalizeRun({ runId: input.runId, deadlineAt: new Date(Date.now() + 1000).toISOString(), signal: new AbortController().signal });
-  return { directory, paths, manager, input, observe, cleanup, handle, backend, finish, controller,
+  const commit = (observation: Awaited<ReturnType<typeof observe>> | null, target = manager) => target.commitInitialDelivery({
+    runId: input.runId, runActionId: input.origin!.runActionId, settlementId: "call-1",
+    observationId: observation?.id ?? null, cursor: observation?.nextCursor ?? null});
+  return { directory, paths, manager, input, observe, commit, cleanup, handle, backend, finish, controller,
     emit: (event: ProcessBackendEvent) => publish(event) };
 }
 
 describe("RunProcessManager", () => {
+  it("restores exact settled observations, cursors and notifications without another launch", async () => {
+    let latest: ProcessCheckpoint | null = null;
+    const records: ProcessRecordPort = {
+      async commitProcess(value) { validateProcessCheckpoint(value, latest); latest = structuredClone(value); },
+      async readProcesses() { return latest ? [structuredClone(latest)] : []; },
+    };
+    const t = await setup({records});
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("first")});
+      const initial = await t.observe({initial: true}); t.commit(initial);
+      await t.manager.flushRun(t.input.runId);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("second")});
+      t.finish();
+      await t.cleanup();
+      const facts = t.manager.readInputNotifications(t.input.runId, 0);
+      const restored = new RunProcessManager({backend: t.backend, maximumActive: 2, maximumSettled: 2, records});
+      await restored.restoreRun(t.input.runId);
+      expect(restored.get(t.input.runId, t.input.executionId)).toEqual(t.manager.get(t.input.runId, t.input.executionId));
+      expect(await restored.observe({runId: t.input.runId, executionId: t.input.executionId,
+        invocationId: initial.invocationId, initial: true, waitMs: 0, signal: new AbortController().signal})).toEqual(initial);
+      expect(restored.readOutput(t.input.runId, t.input.executionId, initial.nextCursor).stdout.text).toBe("second");
+      expect(restored.readInputNotifications(t.input.runId, 0)).toEqual(facts);
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    } finally { await t.cleanup(); }
+  });
+
+  it("keeps interrupted process effects and containment unknown without controlling a retained PID", async () => {
+    let latest: ProcessCheckpoint | null = null;
+    const records: ProcessRecordPort = {async commitProcess(value) {validateProcessCheckpoint(value, latest); latest = structuredClone(value);},
+      async readProcesses() {return latest ? [structuredClone(latest)] : [];}};
+    const t = await setup({records});
+    try {
+      const started = await t.manager.start(t.input);
+      const initial = await t.observe({initial: true}); t.commit(initial); await t.manager.flushRun(t.input.runId);
+      const interrupted = structuredClone(latest!);
+      await t.cleanup();
+      latest = interrupted;
+      const restored = new RunProcessManager({backend: t.backend, maximumActive: 2, maximumSettled: 2, records});
+      await restored.restoreRun(t.input.runId);
+      expect(restored.get(t.input.runId, t.input.executionId)).toMatchObject({phase: "unresolved", outcome: "unknown",
+        containment: {disposition: "unknown"}, output: {capture: "incomplete", omittedBytes: null}});
+      expect(restored.isExactActive(started.process!)).toBe(false);
+      await expect(restored.stop(started.process!)).rejects.toMatchObject({code: "process_control_unavailable_after_recovery"});
+      const cleanup = await restored.finalizeRun({runId: t.input.runId, deadlineAt: new Date().toISOString(), signal: new AbortController().signal});
+      expect(cleanup.completed).toBe(false);
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+      expect(t.handle.terminate).toHaveBeenCalledTimes(1);
+      expect(restored.readInputNotifications(t.input.runId, 0).some(item => item.source.kind === "process_reconciled")).toBe(true);
+    } finally { /* The original process owner was finalized before restoring its checkpoint. */ }
+  });
+
+  it("does not launch when the process intent cannot be committed", async () => {
+    const records: ProcessRecordPort = {async commitProcess() {throw new Error("disk unavailable");}, async readProcesses() {return [];}};
+    const t = await setup({records});
+    await expect(t.manager.start(t.input)).rejects.toMatchObject({name: "ProcessRecordError"});
+    expect(t.backend.launch).not.toHaveBeenCalled();
+    expect(() => t.manager.readInputNotifications(t.input.runId, 0)).toThrow("Operation owner progress");
+  });
+
+  it("reconciles completion between the initial snapshot and result commit without repeating output", async () => {
+    const t = await setup();
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("initial")});
+      const initial = await t.observe({initial: true});
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("later")});
+      t.finish();
+      await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+      expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([]);
+      t.commit(initial);
+      const notifications = t.manager.readInputNotifications(t.input.runId, 0);
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]).toMatchObject({data: {outcome: "succeeded", phase: "settled",
+        capture: {previousCursor: initial.nextCursor, stdout: {text: "later"}}}});
+      t.commit(initial);
+      await t.observe(); t.manager.readOutput(t.input.runId, t.input.executionId);
+      expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual(notifications);
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    } finally { await t.cleanup(); }
+  });
+
+  it("does not claim omitted initial output was delivered after a presentation failure", async () => {
+    const t = await setup();
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("retained")});
+      await t.observe({initial: true});
+      t.commit(null);
+      expect(t.manager.readInputNotifications(t.input.runId, 0)[0]).toMatchObject({data: {
+        task_id: t.input.executionId, capture: {previousCursor: null, stdout: {text: "retained"}}}});
+      await expect(t.manager.commitInitialDelivery({runId: t.input.runId, runActionId: t.input.origin!.runActionId,
+        settlementId: "different", observationId: null, cursor: null})).rejects.toThrow("process_initial_delivery_conflict");
+    } finally { await t.cleanup(); }
+  });
+
+  it("keeps automatically selected output bounded after JSON escaping and query reads non-destructive", async () => {
+    const t = await setup();
+    try {
+      Object.assign(t.backend.descriptor, {limitations: Array.from({length: 40}, () => "\u0001".repeat(1000))});
+      await t.manager.start({...t.input, displayCommand: {shell: "test", command: "\u0001".repeat(5000)}});
+      const initial = await t.observe({initial: true}); t.commit(initial);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.alloc(30_000, 1)});
+      t.emit({kind: "root_exit", code: 1, signal: null});
+      const fact = t.manager.readInputNotifications(t.input.runId, 0)[0]!;
+      expect(Buffer.byteLength(JSON.stringify(fact))).toBeLessThan(131_072);
+      expect(fact.data).toMatchObject({command_truncated: true, limitations_truncated: true});
+      expect(fact).toMatchObject({data: {capture: {hasMore: true}}});
+      const capture = fact.data.capture as {stdout: {text: string; byteEnd: number}, nextCursor: string};
+      expect(capture.stdout.text.length).toBeGreaterThan(0);
+      const next = await t.observe({cursor: capture.nextCursor});
+      expect(next.stdout.byteStart).toBe(capture.stdout.byteEnd);
+      expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([fact]);
+    } finally { await t.cleanup(); }
+  });
+
+  it("records actual shared capacity and applied deadline without launching a rejected command", async () => {
+    const facts: import("./CommandConstraintObservation.js").CommandConstraintFact[] = [];
+    const t = await setup({maximumActive: 1, constraints: {ref: {owner: "test", kind: "contribution", id: "limits", revision: "1"}, observer: fact => facts.push(fact)}});
+    try {
+      await t.manager.start({...t.input, deadlineAt: new Date(Date.now() + 30000).toISOString()});
+      await expect(t.manager.start({...t.input, runId: "child-run", executionId: "second"})).rejects.toMatchObject({code: "process_capacity_exceeded", admission: {activeCount: 1, maximumActive: 1, managerId: t.manager.scopeId}});
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+      expect(facts).toEqual(expect.arrayContaining([
+        expect.objectContaining({stage: "capacity", status: "passed", basis: expect.objectContaining({activeCount: 0})}),
+        expect.objectContaining({stage: "execution_deadline", status: "passed", basis: expect.objectContaining({timeoutMs: 60000, limitingBasis: "run_deadline", dispatched: true})}),
+        expect.objectContaining({stage: "capacity", runId: "child-run", status: "not_satisfied", basis: expect.objectContaining({activeCount: 1})}),
+      ]));
+    } finally { await t.cleanup(); }
+  });
+
   it("awaits historical registration before settlement", async () => {
     let release!: () => void;
     let entered!: () => void;
@@ -88,6 +226,7 @@ describe("RunProcessManager", () => {
       observer:fact=>{facts.push(fact.kind);}});
     await manager.start(t.input);
     await expect.poll(() => manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+    t.commit(null, manager);
     const paths=Object.fromEntries(Object.entries(t.paths).map(([key,path])=>[key,path+".second"])) as unknown as ProcessOutputPaths;
     await manager.start({...t.input,executionId:"process-2",paths});
     await expect.poll(() => manager.get(t.input.runId, "process-2").phase).toBe("settled");
@@ -161,11 +300,11 @@ describe("RunProcessManager", () => {
     const t = await setup();
     await t.manager.start({...t.input, timeoutMs: 20, deadlineAt: new Date(Date.now() + 150).toISOString()});
     t.emit({kind: "root_exit", code: 0, signal: null});
-    await t.observe({initial: true});
+    t.commit(await t.observe({initial: true}));
     await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
     expect((await t.observe()).snapshot).toMatchObject({outcome: "succeeded", rootExit: {code: 0}, termination: {reason: "run_deadline"}});
     expect(t.manager.readInputNotifications(t.input.runId, 0).map(fact => fact.source.kind))
-      .toEqual(["process_scope_termination", "process_output_completed"]);
+      .toEqual(["process_scope_termination", "process_output_completed", "process_settled"]);
     await t.cleanup();
   });
 
@@ -203,19 +342,20 @@ describe("RunProcessManager", () => {
 
   it("delivers one terminal fact for a continuing command independently of observers and readers", async () => {
     const t = await setup({observerThrows: true}); await t.manager.start(t.input);
-    await t.observe({initial: true});
+    t.commit(await t.observe({initial: true}));
     t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("result")});
     expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([]);
     t.finish(2);
     await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
     const facts = t.manager.readInputNotifications(t.input.runId, 0);
-    expect(facts).toHaveLength(2);
+    expect(facts).toHaveLength(3);
     expect(facts[0]).toMatchObject({source: {kind: "command_completed"}, data: {outcome: "failed", rootExit: {code: 2}, capture: {stdout: {text: "result"}}}});
     expect(facts[1]).toMatchObject({source: {kind: "process_output_completed"}, data: {output: {capture: "closed", persistence: "complete"}}});
     expect(Object.isFrozen(facts[0]?.data)).toBe(true);
     await t.observe();
     expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual(facts);
-    expect(t.manager.readInputNotifications(t.input.runId, facts[1]!.sequence)).toEqual([]);
+    expect(t.manager.readInputNotifications(t.input.runId, facts.at(-1)!.sequence)).toEqual([]);
+    expect(facts.slice(1).map(fact => (fact.data.capture as {stdout: {text: string}}).stdout.text)).toEqual(["", ""]);
     expect(t.manager.readInputNotifications("other-run", 0)).toEqual([]);
     await t.cleanup();
   });
@@ -223,7 +363,7 @@ describe("RunProcessManager", () => {
   it("does not replace a known command result when cleanup cannot be confirmed", async () => {
     const t = await setup();
     vi.mocked(t.handle.terminate).mockResolvedValue("forced");
-    await t.manager.start(t.input); await t.observe({initial: true});
+    await t.manager.start(t.input); t.commit(await t.observe({initial: true}));
     t.emit({kind: "root_exit", code: 0, signal: null});
     t.emit({kind: "failure", code: "lost_helper", message: "Helper unavailable."});
     await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).limitations).toContain("process_cleanup_unconfirmed");
@@ -237,8 +377,9 @@ describe("RunProcessManager", () => {
     const t = await setup();
     const manager = new RunProcessManager({backend: t.backend, maximumActive: 2, maximumSettled: 1});
     await manager.start(t.input);
-    await manager.observe({runId: t.input.runId, executionId: t.input.executionId, invocationId: "initial", initial: true,
+    const initial = await manager.observe({runId: t.input.runId, executionId: t.input.executionId, invocationId: "initial", initial: true,
       waitMs: 0, signal: new AbortController().signal});
+    t.commit(initial, manager);
     t.finish();
     await expect.poll(() => manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
     const notifications = manager.readInputNotifications(t.input.runId, 0);

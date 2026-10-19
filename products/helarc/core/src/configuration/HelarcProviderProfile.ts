@@ -15,7 +15,6 @@ export type HelarcModelUsePolicy =
 
 export interface HelarcOllamaRuntimeProfile {
   contextWindowTokens: number;
-  maximumOutputTokens: number;
 }
 
 export interface CreateHelarcProviderProfileInput {
@@ -184,20 +183,17 @@ function normalizeOllamaRuntime(
     value === null ||
     !Number.isSafeInteger(value.contextWindowTokens) ||
     value.contextWindowTokens <= 0 ||
-    !Number.isSafeInteger(value.maximumOutputTokens) ||
-    value.maximumOutputTokens <= 0 ||
-    value.maximumOutputTokens >= value.contextWindowTokens
+    Object.keys(value).some(key => key !== "contextWindowTokens")
   ) {
     return reject(
       "provider_profile_ollama_runtime_invalid",
-      "Ollama runtime settings must contain a positive context window and a smaller positive output limit.",
+      "Ollama runtime settings must contain only a positive context window.",
     );
   }
   return {
     ok: true,
     runtime: Object.freeze({
       contextWindowTokens: value.contextWindowTokens,
-      maximumOutputTokens: value.maximumOutputTokens,
     }),
   };
 }
@@ -305,17 +301,15 @@ export type HelarcProviderService = "generic" | "deepseek" | "ollama";
 export interface HelarcProviderModelSettings {
   readonly service: HelarcProviderService;
   readonly thinking: ModelThinkingSelection;
-  readonly maximumOutputTokens: number;
 }
 
 export function snapshotHelarcProviderModelSettings(
   value: HelarcProviderModelSettings | undefined, kind: HelarcProviderKind,
 ): HelarcProviderModelSettings {
-  const settings = value ?? { service: kind === "ollama" ? "ollama" : "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 };
+  const settings = value ?? { service: kind === "ollama" ? "ollama" : "generic", thinking: { mode: "default" } };
   if (!["generic", "deepseek", "ollama"].includes(settings.service) ||
       (settings.service === "ollama") !== (kind === "ollama") ||
-      !Number.isSafeInteger(settings.maximumOutputTokens) || settings.maximumOutputTokens <= 0 ||
-      Object.keys(settings).some(key => !["service", "thinking", "maximumOutputTokens"].includes(key))) {
+      Object.keys(settings).some(key => !["service", "thinking"].includes(key))) {
     throw new TypeError("Provider model settings are invalid.");
   }
   const thinking = snapshotModelThinkingSelection(settings.thinking);

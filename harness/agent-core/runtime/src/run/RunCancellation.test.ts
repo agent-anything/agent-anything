@@ -5,6 +5,17 @@ import {
 } from "./RunCancellation.js";
 
 describe("RunCancellationController", () => {
+  it("restores the accepted cancellation identity and time without submitting another request", () => {
+    const original = createRunCancellationController({runId: "child", now: () => "2026-10-15T00:00:00Z"});
+    const first = original.requestCancellation({origin: "parent_run", reasonCode: "parent_run_cancelled", parentRunId: "root"});
+    const recovered = createRunCancellationController({runId: "child", retainedRequest: first.request,
+      now: () => {throw new Error("must not regenerate time");}, createRequestId: () => {throw new Error("must not regenerate identity");}});
+    expect(recovered.context.request).toEqual(first.request);
+    expect(recovered.context.signal.aborted).toBe(true);
+    expect(recovered.context.signal.reason).toEqual(first.request);
+    expect(recovered.requestCancellation({origin: "user", reasonCode: "user_requested"})).toMatchObject({status: "already_requested", request: first.request});
+    expect(() => createRunCancellationController({runId: "other", retainedRequest: first.request})).toThrow(/another Run/);
+  });
   it("accepts the first valid request and exposes it through the live context", () => {
     const controller = createRunCancellationController({
       runId: "run-1",

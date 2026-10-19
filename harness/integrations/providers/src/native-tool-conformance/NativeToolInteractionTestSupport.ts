@@ -152,6 +152,7 @@ export function createSettledToolResultMessage(
         providerCallRef: call.providerCallRef,
         name: call.name,
         settlement: "succeeded",
+        presentation: {presenter: {id: "test", revision: "1"}, disposition: "complete", failureCode: null},
         content: { text: "file contents" },
         sourceRefs: [{
           owner: "native-tool-conformance",

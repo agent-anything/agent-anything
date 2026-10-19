@@ -11,7 +11,13 @@ export type HelarcOutputSource =
       readonly kind: "model_text";
       readonly turnId: string;
       readonly modelItemIds: readonly string[];
+      readonly adopted?: {
+        readonly runId: string;
+        readonly runItem: { readonly id: string; readonly sequence: number } | null;
+        readonly blocks: readonly { readonly modelItemId: string; readonly ordinal: number; readonly text: string }[];
+      };
     }
+  | { readonly kind: "no_text" }
   | { readonly kind: "model_finish"; readonly turnId: string }
   | { readonly kind: "product_status" };
 
@@ -131,11 +137,17 @@ export interface ConversationQuery {
     | { readonly kind: "before"; readonly cursor: string }
     | { readonly kind: "window"; readonly first: string; readonly last: string; readonly cursor?: string };
 }
+export type ConversationPosition = readonly [messageSequence: number, runItemSequence: number, localSequence?: number];
+
+export function compareConversationPosition(a: ConversationPosition, b: ConversationPosition): number {
+  return a[0] - b[0] || a[1] - b[1] || (a[2] ?? 0) - (b[2] ?? 0);
+}
+
 interface ConversationEntryBase {
   readonly id: string;
   readonly title: string | null;
   readonly revision: number;
-  readonly position: readonly [number, number];
+  readonly position: ConversationPosition;
   readonly role: "user" | "assistant" | "system" | "product";
   readonly content: string;
   readonly omittedBytes: number;
@@ -194,7 +206,7 @@ export interface ConversationPage {
   readonly threadId: string;
   readonly revision: number;
   readonly entries: readonly ConversationEntry[];
-  readonly latestPosition: readonly [number, number] | null;
+  readonly latestPosition: ConversationPosition | null;
   readonly previousCursor: string | null;
   readonly omittedRecords: number;
   readonly nextWindowCursor: string | null;

@@ -27,13 +27,13 @@ export interface CreateRunInterruptionCoordinatorInput {
   readonly cancellation: CancellationContext;
   readonly operationSettlementTimeoutMs: number;
   readonly now: () => string;
-  readonly onCancellationObserved: (request: RunCancellationRequest) => void;
+  readonly onCancellationObserved: (request: RunCancellationRequest) => void | Promise<void>;
 }
 
 interface ActiveOperation {
   readonly kind: ActiveRunOperationKind;
   readonly startedAt: string;
-  readonly rejectSettlement: (error: OperationSettlementTimeoutError) => void;
+  readonly rejectSettlement: (error: unknown) => void;
   interruptionTimer: ReturnType<typeof setTimeout> | null;
   settlementTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -41,6 +41,22 @@ interface ActiveOperation {
 export class RunInterruptionCoordinator {
   private readonly activeOperations = new Set<ActiveOperation>();
   private cancellationListener: (() => void) | null = null;
+  private cancellationCommit: Promise<void> | null = null;
+  private failed = false;
+  private failure: unknown;
+
+  async flush(): Promise<void> {
+    if (this.failed) throw this.failure;
+    await this.cancellationCommit;
+    if (this.failed) throw this.failure;
+  }
+
+  fail(error: unknown): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.failure = error;
+    for (const operation of this.activeOperations) operation.rejectSettlement(error);
+  }
 
   constructor(
     private readonly input: CreateRunInterruptionCoordinatorInput,
@@ -66,6 +82,7 @@ export class RunInterruptionCoordinator {
     interruptionDeadlineAt: string | null = null,
     allowInterruptedStart = false,
   ): Promise<TValue> {
+    if (this.failed) throw this.failure;
     if ([...this.activeOperations].some((active) => kind !== "tool" || active.kind !== "tool")) {
       throw new Error(`Cannot start ${kind} while an exclusive operation is still active.`);
     }
@@ -74,7 +91,7 @@ export class RunInterruptionCoordinator {
       throw this.input.cancellation.signal.reason;
     }
 
-    let rejectSettlement!: (error: OperationSettlementTimeoutError) => void;
+    let rejectSettlement!: (error: unknown) => void;
     const settlementTimeout = new Promise<never>((_resolve, reject) => {
       rejectSettlement = reject;
     });
@@ -101,6 +118,7 @@ export class RunInterruptionCoordinator {
     }
 
     const operation = Promise.resolve().then(() => {
+      if (this.failed) throw this.failure;
       if (!allowInterruptedStart && this.cancellationRequest() !== null) {
         this.observeCancellation();
         throw this.input.cancellation.signal.reason;
@@ -139,7 +157,10 @@ export class RunInterruptionCoordinator {
     if (request === null) {
       return;
     }
-    this.input.onCancellationObserved(request);
+    if (this.cancellationCommit === null) {
+      this.cancellationCommit = Promise.resolve().then(() => this.input.onCancellationObserved(request));
+      void this.cancellationCommit.catch(() => {});
+    }
     for (const operation of this.activeOperations) this.startSettlementTimer(operation, "run_cancellation");
   }
 

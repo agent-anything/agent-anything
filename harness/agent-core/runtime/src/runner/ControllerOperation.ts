@@ -57,6 +57,7 @@ export class ContextProjectionPreparationError extends ContextContractError {
 }
 
 export interface PrepareControllerOperationInput<TOutput> {
+  readonly inputDelivery?: import("../controller/index.js").ControllerInputDeliveryBatch | null;
   readonly projectionRequestId?: string;
   readonly agent: Agent<TOutput>;
   readonly instructionBinding: AgentInstructionBinding;
@@ -92,6 +93,7 @@ export function prepareControllerOperation<TOutput>(
       candidate.interaction.request.protocol.kind === "approval",
   ).length;
   const baseInput = Object.freeze({
+    inputDelivery: input.inputDelivery ?? null,
     runId: input.state.run.id,
     iteration: input.iteration,
     agent: input.agent,
@@ -156,10 +158,18 @@ export function executeControllerOperation<TOutput>(input: {
   readonly retryEvents: RetryEventSink;
   readonly retryWaitControl: import("../retry/RetryWaitControl.js").RetryWaitControl;
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
+  readonly checkpoints?: import("../controller/ControllerCheckpoint.js").ControllerCheckpointPort;
+  readonly runCheckpoints?: import("../controller/ControllerCheckpoint.js").ControllerCheckpointPort;
+  readonly recovering?: boolean;
 }): Promise<ControllerDecision<TOutput>> {
-  return input.dependencies.controller.next(
+  const controller = input.dependencies.controller;
+  const invoke = input.recovering ? controller.recover : controller.next;
+  if (!invoke) throw new TypeError("Controller does not support interrupted invocation recovery.");
+  return invoke.call(controller,
     input.prepared.input,
     Object.freeze({
+      checkpoints: input.checkpoints,
+      runCheckpoints: input.runCheckpoints,
       executionFlow: input.executionFlow,
       cancellation: input.config.cancellation.context,
       retry: Object.freeze({

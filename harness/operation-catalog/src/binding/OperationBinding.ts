@@ -13,6 +13,7 @@ import {
   snapshotOperationInvocationRef,
 } from "../identity/index.js";
 import { fail, strictRecord, token } from "../contract/OperationContractValidation.js";
+import { snapshotCompensationAssociation, type CompensationAssociation } from "../evidence/CompensationAssociation.js";
 
 export type OperationBindingKind =
   | "internal"
@@ -27,6 +28,7 @@ interface ResolvedOperationBindingBase<TRequest> {
   readonly parentInvocation: OperationInvocationRef | null;
   readonly binding: OperationBindingRevisionRef;
   readonly request: TRequest;
+  readonly compensation?: CompensationAssociation;
   readonly resolverRevision: string;
   readonly resolutionFingerprint: string;
 }
@@ -78,6 +80,7 @@ export interface OperationBindingResolutionInput<TRequest, TBasis> {
 
 export type OperationBindingResolution<TRequest = unknown> =
   | { readonly status: "resolved"; readonly binding: ResolvedOperationBinding<TRequest> }
+  | { readonly status: "invalid"; readonly owner: string; readonly code: string; readonly message: string }
   | {
       readonly status: "unavailable";
       readonly code: "resolver_unavailable";
@@ -103,6 +106,7 @@ export function snapshotResolvedOperationBinding<TRequest>(
     "parentInvocation",
     "binding",
     "request",
+    "compensation",
     "resolverRevision",
     "resolutionFingerprint",
     "handlerId",
@@ -216,12 +220,18 @@ export function unavailableOperationBindingResolver(
   });
 }
 
+export function invalidOperationBinding(owner: string, code: string, message: string): OperationBindingResolution<never> {
+  if (typeof message !== "string" || !message || message.length > 8192) throw new TypeError("Invalid binding rejection message.");
+  return Object.freeze({status: "invalid", owner: token(owner, "binding.owner"), code: token(code, "binding.code"), message});
+}
+
 const resolvedBindingBaseFields = [
   "invocation",
   "correlation",
   "parentInvocation",
   "binding",
   "request",
+  "compensation",
   "resolverRevision",
   "resolutionFingerprint",
 ] as const;
@@ -232,6 +242,12 @@ function snapshotResolvedBindingBase<TRequest>(
 ): ResolvedOperationBindingBase<TRequest> {
   const invocation = snapshotOperationInvocationRef(input.invocation);
   const binding = snapshotOperationBindingRevisionRef(input.binding);
+  const correlation = snapshotOperationCorrelation(input.correlation);
+  const compensation = input.compensation === undefined ? undefined : snapshotCompensationAssociation(input.compensation);
+  if (compensation && (JSON.stringify(compensation.invocation) !== JSON.stringify(invocation) ||
+      JSON.stringify(compensation.correlation) !== JSON.stringify(correlation))) {
+    fail("operation_binding_invalid", "Compensation association must belong to this invocation and caller.", "ResolvedOperationBinding.compensation");
+  }
   if (
     operationRevisionKey(invocation.operation) !==
     operationRevisionKey(binding.operation)
@@ -244,7 +260,8 @@ function snapshotResolvedBindingBase<TRequest>(
   }
   return Object.freeze({
     invocation,
-    correlation: snapshotOperationCorrelation(input.correlation),
+    correlation,
+    ...(compensation === undefined ? {} : {compensation}),
     parentInvocation:
       input.parentInvocation === null
         ? null

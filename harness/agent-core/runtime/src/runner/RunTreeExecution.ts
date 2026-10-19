@@ -20,6 +20,8 @@ import { runSettlementCauseCode } from "../run/index.js";
 import type { RunTreeLimits } from "./RunConfig.js";
 import {
   RunTreeResourceAccount,
+  runTreeResourceDimensions,
+  type RunTreeResourceCheckpoint,
   type RunTreeNodeResourceSnapshot,
   type RunTreeResourceAmounts,
   type RunTreeResourceEnvelope,
@@ -30,6 +32,7 @@ import {
 } from "./RunTreeResourceAccount.js";
 import {
   RunTreeApprovalAccount,
+  type RunTreeApprovalCheckpoint,
   type RunTreeApprovalAdmission,
   type RunTreeApprovalAdmissionInput,
   type RunTreeApprovalLimits,
@@ -223,6 +226,16 @@ interface CancellationRegistration {
   readonly onAbort: () => void;
 }
 
+export interface RunTreeCheckpoint {
+  readonly input: Omit<CreateRunTreeExecutionInput, "now">;
+  readonly revision: number;
+  readonly nodes: readonly (Readonly<MutableRunTreeNode> & {readonly runId: string})[];
+  readonly resources: RunTreeResourceCheckpoint;
+  readonly approvals: RunTreeApprovalCheckpoint;
+  readonly cancellationRequestCount: number;
+  readonly latestCancellation: RunTreeCancellationProjection | null;
+}
+
 export interface CreateRunTreeExecutionInput {
   readonly rootRunId: string;
   readonly startedAt: string;
@@ -239,8 +252,8 @@ export class RunTreeExecution {
 
   private readonly input: CreateRunTreeExecutionInput;
   private readonly nodes = new Map<string, MutableRunTreeNode>();
-  private readonly resources: RunTreeResourceAccount;
-  private readonly approvals: RunTreeApprovalAccount;
+  private resources: RunTreeResourceAccount;
+  private approvals: RunTreeApprovalAccount;
   private readonly cancellation = new Map<string, CancellationRegistration>();
   private readonly listeners = new Set<RunTreeExecutionListener>();
   private revision = 0;
@@ -282,6 +295,135 @@ export class RunTreeExecution {
       resultTransfer: "not_required",
     });
     this.snapshot = this.createSnapshot();
+  }
+
+  checkpoint(): RunTreeCheckpoint {
+    // Resource and authority changes can precede a lifecycle change. A checkpoint
+    // still needs a projection revision identifying those changed owner facts.
+    if (this.projectionDirty) this.commitProjectionChange(false);
+    const {now: _now, ...input} = this.input;
+    return structuredClone({input, revision: this.revision, nodes: [...this.nodes].map(([runId, node]) => ({...node, runId})),
+      resources: this.resources.checkpoint(), approvals: this.approvals.checkpoint(),
+      cancellationRequestCount: this.cancellationRequestCount, latestCancellation: this.latestCancellation});
+  }
+
+  static restore(checkpoint: RunTreeCheckpoint, now: () => string): RunTreeExecution {
+    const saved = structuredClone(checkpoint);
+    const tree = new RunTreeExecution({...saved.input, now});
+    tree.resources = RunTreeResourceAccount.restore(saved.resources);
+    tree.approvals = RunTreeApprovalAccount.restore(saved.approvals);
+    tree.restoreNodes(saved);
+    tree.snapshot = tree.createSnapshot();
+    return tree;
+  }
+
+  private restoreNodes(saved: RunTreeCheckpoint): void {
+    if (!Number.isSafeInteger(saved.revision) || saved.revision < 0 ||
+        !Number.isSafeInteger(saved.cancellationRequestCount) || saved.cancellationRequestCount < 0 ||
+        saved.resources.rootRunId !== this.input.rootRunId) throw new TypeError("Invalid Run Tree checkpoint.");
+    const resources = this.resources.checkpoint();
+    for (const dimension of runTreeResourceDimensions) {
+      const configured = this.input.resources[dimension];
+      const retained = resources.envelope[dimension];
+      if (configured.enforcement !== retained.enforcement ||
+          (configured.enforcement === "hard" && retained.enforcement === "hard" &&
+            (configured.maximum !== retained.maximum || configured.minimumChildGrant !== retained.minimumChildGrant)) ||
+          (configured.enforcement === "observational" && retained.enforcement === "observational" && configured.threshold !== retained.threshold)) {
+        throw new TypeError("Run Tree resource envelope changed.");
+      }
+    }
+    for (const key of Object.keys(this.input.approvals) as (keyof RunTreeApprovalLimits)[]) {
+      if (this.input.approvals[key] !== saved.approvals.limits[key]) throw new TypeError("Run Tree Approval limits changed.");
+    }
+    this.nodes.clear();
+    const order = new Set<number>();
+    const relations = new Set<string>();
+    for (const node of saved.nodes) {
+      const lineage = node.lineage;
+      const id = node.runId;
+      assertToken(id, "node.runId");
+      if (this.nodes.has(id) || lineage.root.id !== this.input.rootRunId ||
+          !Number.isSafeInteger(node.acceptedOrder) || node.acceptedOrder < 0 || order.has(node.acceptedOrder) ||
+          !Number.isSafeInteger(node.authorityRevisionSequence) || node.authorityRevisionSequence < 0 ||
+          !["initializing", "running", "waiting", "suspended", "cancelling", "completed", "failed", "cancelled"].includes(node.status) ||
+          !["pending", "settled", "failed", "unknown", "not_required"].includes(node.resultTransfer)) {
+        throw new TypeError("Invalid retained Run Tree node.");
+      }
+      order.add(node.acceptedOrder);
+      assertToken(node.admittedAuthorityRevision, "admittedAuthorityRevision");
+      if (node.startedAt !== null) assertDateTime(node.startedAt, "node.startedAt");
+      if (node.completedAt !== null) assertDateTime(node.completedAt, "node.completedAt");
+      if (lineage.kind === "root") {
+        if (id !== this.input.rootRunId || !sameLineage(lineage, this.rootLineage) || node.acceptedOrder !== 0 || node.relationKind !== null ||
+            node.dispatch !== null || node.resultTransfer !== "not_required") throw new TypeError("Invalid retained root Run.");
+      } else {
+        if (node.relationKind === null || node.dispatch === null || node.acceptedOrder === 0 || relations.has(lineage.relation.id)) {
+          throw new TypeError("Invalid retained descendant relation.");
+        }
+        const relation = createDescendantRunRelation({relationId: lineage.relation.id, kind: node.relationKind,
+          root: lineage.root, parent: lineage.parent, child: {id}, parentRunAction: lineage.parentRunAction, depth: lineage.depth});
+        if (!sameLineage(lineage, createDescendantRunLineage(relation))) throw new TypeError("Invalid descendant lineage.");
+        relations.add(lineage.relation.id);
+        snapshotDescendantDispatchProvenance(node.dispatch);
+      }
+      if (isTerminal(node.status) !== (node.terminal !== null && node.completedAt !== null) ||
+          (!isTerminal(node.status) && (node.terminal !== null || node.completedAt !== null)) ||
+          (lineage.kind === "descendant" && node.resultTransfer !== "pending" && !isTerminal(node.status))) {
+        throw new TypeError("Run Tree lifecycle and delivery disagree.");
+      }
+      if (node.terminal !== null) {
+        snapshotRunTreeTerminalProjection(node.terminal);
+        const cause = node.status === "completed" ? "completion" : node.status === "failed" ? "failure" : "cancellation";
+        if (node.terminal.causeKind !== cause || this.resources.getSettlement(id) === null) {
+          throw new TypeError("Run Tree terminal evidence is inconsistent.");
+        }
+      }
+      if (node.cancellation !== null) {
+        assertToken(node.cancellation.requestId, "cancellation.requestId");
+        assertDateTime(node.cancellation.requestedAt, "cancellation.requestedAt");
+        if (node.cancellation.initiatingRunId !== id ||
+            node.cancellation.scope !== (lineage.kind === "root" ? "tree" : "subtree")) {
+          throw new TypeError("Invalid retained cancellation scope.");
+        }
+      }
+      const allocation = this.resources.getNodeSnapshot(id);
+      if (allocation.parentRunId !== (lineage.kind === "root" ? null : lineage.parent.id)) {
+        throw new TypeError("Run Tree and resource lineage disagree.");
+      }
+      this.nodes.set(id, {...node,
+        terminal: node.terminal === null ? null : snapshotRunTreeTerminalProjection(node.terminal),
+        dispatch: node.dispatch === null ? null : snapshotDescendantDispatchProvenance(node.dispatch),
+        cancellation: node.cancellation === null ? null : Object.freeze({...node.cancellation}),
+      });
+    }
+    if (this.nodes.size !== resources.nodes.length || !this.nodes.has(this.input.rootRunId) ||
+        ![...Array(this.nodes.size).keys()].every(index => order.has(index))) throw new TypeError("Run Tree membership is inconsistent.");
+    for (const [runId, node] of this.nodes) {
+      if (node.lineage.kind === "descendant") {
+        const parent = this.requireNode(node.lineage.parent.id);
+        if (parent.lineage.depth + 1 !== node.lineage.depth || parent.acceptedOrder >= node.acceptedOrder) {
+          throw new TypeError("Run Tree ancestry is inconsistent.");
+        }
+      }
+      if (isTerminal(node.status) && this.hasUnsettledDescendantObligations(runId)) {
+        throw new TypeError("Terminal Run retains unsettled descendant obligations.");
+      }
+    }
+    for (const request of saved.approvals.active) {
+      if (isTerminal(this.requireNode(request.runId).status)) throw new TypeError("Terminal Run retains active Approval.");
+    }
+    const cancelled = saved.nodes.filter(node => node.cancellation !== null);
+    if (cancelled.length !== saved.cancellationRequestCount ||
+        (cancelled.length === 0 ? saved.latestCancellation !== null :
+          !cancelled.some(node => node.cancellation?.requestId === saved.latestCancellation?.requestId))) {
+      throw new TypeError("Run Tree cancellation accounting is inconsistent.");
+    }
+    this.revision = saved.revision;
+    this.totalDescendantRuns = this.nodes.size - 1;
+    this.activeDescendantRuns = saved.nodes.filter(node => node.lineage.kind === "descendant" && !isTerminal(node.status)).length;
+    this.unsettledDescendantRuns = saved.nodes.filter(node => node.lineage.kind === "descendant" && node.resultTransfer === "pending").length;
+    this.cancellationRequestCount = saved.cancellationRequestCount;
+    this.latestCancellation = saved.latestCancellation;
   }
 
   reserveDescendant(
@@ -476,12 +618,32 @@ export class RunTreeExecution {
     if (this.cancellation.has(runId)) {
       throw new TypeError("Run cancellation control is already registered.");
     }
+    if (node.cancellation !== null && (controller.context.request?.id !== node.cancellation.requestId ||
+        controller.context.request?.requestedAt !== node.cancellation.requestedAt)) {
+      throw new TypeError("Run cancellation control must restore the retained cancellation request.");
+    }
     const onAbort = () => this.propagateCancellation(runId);
     this.cancellation.set(runId, { controller, onAbort });
     controller.context.signal.addEventListener("abort", onAbort, { once: true });
     if (controller.context.request !== null) {
       this.propagateCancellation(runId);
     }
+  }
+
+  recordCancellation(runId: string, request: RunCancellationRequest): void {
+    const node = this.requireNode(runId);
+    if (node.cancellation !== null) {
+      if (node.cancellation.requestId !== request.id || node.cancellation.requestedAt !== request.requestedAt) {
+        throw new TypeError("A retained cancellation request cannot be replaced.");
+      }
+      return;
+    }
+    node.cancellation = Object.freeze({requestId: request.id, initiatingRunId: runId,
+      scope: runId === this.input.rootRunId ? "tree" : "subtree", origin: request.origin,
+      reasonCode: request.reasonCode, requestedAt: request.requestedAt});
+    this.latestCancellation = node.cancellation;
+    this.cancellationRequestCount += 1;
+    this.commitProjectionChange();
   }
 
   markStarted(runId: string, startedAt: string): void {

@@ -24,6 +24,7 @@ import type {
 } from "../shared/HelarcWorkbench.js";
 import { SettingsPage } from "./SettingsPage.js";
 import { Conversation } from "./conversation/Conversation.js";
+import { ExecutionRecovery } from "./conversation/ExecutionRecovery.js";
 import { RequestElapsed } from "./conversation/RequestElapsed.js";
 import { ConversationPlan } from "./plan/PlanView.js";
 import { AttentionPanel } from "./interactions/AttentionPanel.js";
@@ -33,6 +34,7 @@ import { ProjectNavigation } from "./projects/ProjectNavigation.js";
 import { ProjectEditor } from "./projects/ProjectEditor.js";
 
 const initialSnapshot: HelarcMainSnapshot = {
+  execution: "idle",
   projects: [],
   selectedProjectId: null,
   status: "idle",
@@ -101,8 +103,8 @@ export function App() {
   const navigationPanel = useRef<PanelImperativeHandle | null>(null);
   const workbenchPanel = useRef<PanelImperativeHandle | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
-  const runActive = !!snapshot.run && !snapshot.run.display.terminal;
-  const workInFlight = runActive || snapshot.status === "starting";
+  const runActive = snapshot.execution === "active" && !!snapshot.run && !snapshot.run.display.terminal;
+  const workInFlight = snapshot.execution !== "idle";
   const activeProject = snapshot.projects.find((project) => project.id === snapshot.selectedProjectId) ?? null;
   const attentionCount = runActive
     ? snapshot.run!.host.pendingInteractions.length
@@ -338,6 +340,8 @@ export function App() {
           value={current?.plan ?? null}
         />
       )}
+      <ExecutionRecovery threadId={snapshot.activeThread?.id ?? null} status={snapshot.status}
+        onRecovered={() => {setNewThread(false); void window.helarc.getSnapshot().then(setSnapshot);}} />
       <AttentionPanel
         key={snapshot.activeThread?.id ?? "none"}
         snapshot={snapshot}

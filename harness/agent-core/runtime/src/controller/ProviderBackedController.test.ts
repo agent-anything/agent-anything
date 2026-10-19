@@ -31,6 +31,8 @@ import {
   validateControllerDecision,
 } from "./ProviderBackedController.js";
 import { createControllerModelItems } from "./ControllerModelItems.js";
+import { createInputDeliverySections } from "./ControllerInputDelivery.js";
+import { RunInputNotifications } from "../runner/RunInputNotifications.js";
 import { createModelOutputRecoverySection } from "./ModelOutputRecovery.js";
 import {
   StructuredOutputError,
@@ -61,6 +63,21 @@ const TEST_OUTPUT_FORMAT = Object.freeze({
 
 describe("ProviderBackedController", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("acknowledges notification membership in the actual Provider composition without consuming the Runtime queue", async () => {
+    const input = createControllerInput();
+    const queue = new RunInputNotifications();
+    queue.collect(input.runId, {read: () => [{runId: input.runId, sequence: 1, occurredAt: "2026-10-13T00:00:00.000Z",
+      source: {owner: "process", kind: "scope_closed", id: "process-1", revision: "4"}, data: {exitCode: 0}}]}, 8192);
+    const inputDelivery = queue.prepare(input.runId, input.toolExposure.controllerRequestId)!;
+    const provider = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const result = await createController(provider).next({...input, inputDelivery}, callContext());
+    const actual = provider.requests()[0]!;
+    expect(result.inputDeliveryReceipt).toMatchObject({batch: {id: inputDelivery.id},
+      via: {kind: "provider", requestId: actual.requestId, compositionId: actual.composition.id}});
+    expect(JSON.stringify(actual.messages)).toContain("host_notification");
+    expect(queue.undelivered).toBe(1);
+  });
 
   it("builds a request and returns Agent-validated final output with model provenance", async () => {
     const provider = new FakeProvider({
@@ -1341,6 +1358,29 @@ describe("ProviderBackedController native streaming", () => {
     } } };
   }
 
+  it.each(["intent", "response", "settled"] as const)("recovers a native request after lost %s acknowledgement without resetting its allowance", async point => {
+    const records = new Map<string, unknown>();
+    let lost = false;
+    let sent = 0;
+    const checkpoints = {read: (key: string) => records.get(key) ?? null,
+      async commit(key: string, value: unknown) {
+        records.set(key, structuredClone(value));
+        const retry = (value as {value?: {attempt?: unknown; attemptResult?: unknown; outcome?: unknown}}).value;
+        const hit = key.includes(":retry:") && (point === "intent" ? retry?.attempt && !retry.attemptResult
+          : point === "response" ? retry?.attemptResult : retry?.outcome);
+        if (hit && !lost) {lost = true; throw new Error("lost acknowledgement");}
+      }};
+    const controller = setup({events: [], async send(request) {sent++; return complete(request);}});
+    const context = {...callContext(undefined, {maxRetries: 1, retryableCategories: ["transport"]}), checkpoints};
+    await expect(controller.next(createControllerInput(), context)).rejects.toMatchObject({name: "RetryCheckpointError"});
+    expect(lost).toBe(true);
+    expect((await controller.recover(createControllerInput(), context)).kind).toBe("propose_completion");
+    expect(sent).toBe(1);
+    const retry = [...records.values()].map(value => (value as {value: Record<string, unknown>}).value)
+      .find(value => value.attempt && value.outcome) as {attempt: {attemptNumber: number}};
+    expect(retry.attempt.attemptNumber).toBe(point === "intent" ? 2 : 1);
+  });
+
   it("does not interpret partial output and maps accepted text to validated model items", async () => {
     const events: ControllerResponseObservation[] = [];
     const release = Promise.withResolvers<void>();
@@ -1683,6 +1723,7 @@ function createControllerInput(): ControllerInput<TestOutput> {
       messages: Object.freeze([]),
       unsettledCalls: Object.freeze([]),
       settledCallCount: 0,
+      latestTurn: null,
     }),
     plan: null,
     planLimits: Object.freeze({
@@ -1873,7 +1914,8 @@ function accountTestRequest(
     content: Object.freeze({ kind: "model_message" as const, message }),
   }));
   const recoverySection = createModelOutputRecoverySection(context.outputRecovery);
-  const sections = Object.freeze([...instructionSections, ...requestSections, ...(recoverySection ? [recoverySection] : [])]);
+  const sections = Object.freeze([...instructionSections, ...requestSections, ...createInputDeliverySections(input.inputDelivery),
+    ...(recoverySection ? [recoverySection] : [])]);
   const composition = composeModelInput({
     id: `${input.runId}:test-model-input:${context.attemptNumber}`,
     providerId: context.target.providerId,
@@ -2191,14 +2233,7 @@ async function waitForRetryEvent(
   events: readonly Record<string, unknown>[],
   type: string,
 ): Promise<void> {
-  for (let check = 0; check < 20; check += 1) {
-    if (events.some((event) => event.type === type)) {
-      return;
-    }
-    await Promise.resolve();
-  }
-
-  throw new Error(`Timed out waiting for ${type}.`);
+  await vi.waitFor(() => expect(events.some(event => event.type === type)).toBe(true));
 }
 
 function throwingProvider(): Provider {

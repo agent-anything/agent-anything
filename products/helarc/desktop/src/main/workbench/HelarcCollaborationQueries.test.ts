@@ -164,7 +164,8 @@ describe("collaboration reads", () => {
       content: {kind: "steering", commandId: `steer-${sequence}`, instruction: `${origin} update`, origin, disposition, omittedBytes: 0}});
     Object.assign(p.product.presentation, {records: [inputRecord, textRecord(2, "child", "First reply"),
       steering(3, "model", "applied"), steering(4, "host", "applied"), steering(5, "user", "superseded"), textRecord(6, "child", "Next reply"),
-      {...inputRecord, id: "delivery", sequence: 7, content: {...inputRecord.content, inputKind: "agent_result", text: "Delivered finding", senderRunId: "nested", disposition: "partial"}},
+      {...inputRecord, id: "delivery", sequence: 7, source: {owner: "runtime", kind: "run_item", id: "child:delivery", sequence: 7},
+        content: {...inputRecord.content, inputKind: "agent_result", text: "Delivered finding", senderRunId: "nested", disposition: "partial"}},
     ], labels: [...p.product.presentation.labels,
       {runId: "child", parentRunId: "root", siblingOrdinal: 1, label: "Child", objective: "short label"},
       {runId: "nested", parentRunId: "child", siblingOrdinal: 1, label: "Nested"},
@@ -952,6 +953,38 @@ describe("conversation-local activity reads", () => {
     Object.assign(p.product.presentation,{records:[text,call],omittedRecords:1});
     expect((await blocks(api)).blocks[2]).toMatchObject({text:"Official reply"});
   });
+  it("adopts several original blocks once, including after display eviction and reload", async () => {
+    const {p, thread, api, retain} = fixture();
+    const first = textRecord(1, "root", "First section");
+    const second = textRecord(2, "root", "Second section");
+    Object.assign(first.origin, {turnId: "report"});
+    Object.assign(second.origin, {turnId: "report", ordinal: 2, source: first.origin.source});
+    const call = callRecord("read", "root", "Read", {file_path: "file.txt"});
+    Object.assign(call.origin, {turnId: "report", ordinal: 1});
+    const final = {...textRecord(3), origin: {...call.origin, turnId: "ending", modelItemId: "final", ordinal: 0},
+      content: {kind: "final_response", modelItemId: "final", turnId: "ending", callId: "final-call", text: "", omittedBytes: 0, disposition: "completed"}};
+    Object.assign(p.product.presentation, {records: [first, call, second, final]});
+    const source = {kind: "model_text", turnId: "report", modelItemIds: ["model-1", "model-2"], adopted: {
+      runId: "root", runItem: {id: "item-1", sequence: 1}, blocks: [
+        {modelItemId: "model-1", ordinal: 0, text: "First section"}, {modelItemId: "model-2", ordinal: 2, text: "Second section"},
+      ],
+    }};
+    thread.messages.push({...thread.messages[0]!, id: "adopted", sequence: 2, role: "assistant", content: "First section\n\nSecond section",
+      source: {kind: "agent_run", owner: "helarc", refId: "work"}, metadata: {outputSource: source}});
+    const check = async () => {
+      expect((await blocks(api, "root", "report")).blocks).toMatchObject([{text: "First section"}, {kind: "activity"}, {text: "Second section"}]);
+      const page = await api.readConversation(latest);
+      expect(page.status === "page" && page.entries.filter(entry => entry.kind === "turn").map(entry => entry.sourceId)).toEqual(["report"]);
+      expect(page.status === "page" && page.entries.filter(entry => entry.kind === "message")).toHaveLength(1);
+      expect(await api.readWorkbenchItem({...scope, itemId: "message:adopted", section: "model-2"})).toMatchObject({status: "page", text: "Second section"});
+    };
+    await check();
+    Object.assign(p.product.presentation, {records: [call, final], omittedRecords: 2});
+    await check();
+    retain();
+    await check();
+  });
+
   it("keeps before cursors across status changes, pages large Turns and refreshes loaded windows", async () => {
     const {p, api} = fixture();
     const records = Array.from({length:230},(_,i)=>textRecord(i+1));

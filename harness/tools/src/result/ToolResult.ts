@@ -24,15 +24,16 @@ export interface ToolResultError {
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
-export type FailedToolResult = ToolResultBase & {
+export type FailedToolResult<TOutput = unknown> = ToolResultBase & {
   readonly status: "failed" | "timeout";
+  readonly output?: TOutput | null;
   readonly error: ToolResultError;
 };
 
 export type ToolResult<TOutput = unknown> =
   | (ToolResultBase & { readonly status: "succeeded"; readonly output: NonNullable<TOutput> })
   | (ToolResultBase & { readonly status: "partial"; readonly output: NonNullable<TOutput>; readonly outputUsability: "validated"; readonly error: ToolResultError })
-  | FailedToolResult;
+  | FailedToolResult<TOutput>;
 
 export interface ToolSemanticResult<TOutput = unknown> {
   readonly operationInvocation: OperationInvocationRef;
@@ -81,5 +82,5 @@ export function adaptToolSemanticResult<TOutput>(
     return Object.freeze({ ...base, status: "partial" as const, output: result.output as NonNullable<TOutput>, outputUsability: "validated" as const, error: result.error });
   }
   if (result.error === null) throw new TypeError("Failed or timed-out Tool semantic result requires an error.");
-  return Object.freeze({ ...base, status: result.status, error: result.error });
+  return Object.freeze({ ...base, status: result.status, output: result.output, error: result.error });
 }

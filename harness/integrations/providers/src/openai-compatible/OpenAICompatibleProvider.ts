@@ -67,7 +67,7 @@ export interface OpenAICompatibleProviderConfig {
   readonly apiKey: string;
   readonly model: string;
   readonly timeoutMs: number;
-  readonly maximumOutputTokens: number;
+  readonly maximumOutputTokens?: number;
   readonly service?: "generic" | "deepseek";
   readonly thinking?: { readonly type: "disabled" | "enabled" };
   readonly reasoningEffort?: string;
@@ -101,7 +101,12 @@ export class OpenAICompatibleProvider implements Provider {
       revision: `openai-compatible.chat-completions.target.v1:${this.config.model}`,
     });
     const capacity = Object.freeze({ supported: false as const });
-    const requestedOutput = Object.freeze({
+    const requestedOutput = this.config.maximumOutputTokens === undefined ? Object.freeze({
+      unit: "tokens" as const,
+      maximum: null,
+      source: "unspecified" as const,
+      revision: "openai-compatible.max-tokens.unspecified.v1",
+    }) : Object.freeze({
       unit: "tokens" as const,
       maximum: this.config.maximumOutputTokens,
       source: "host_configured" as const,
@@ -110,7 +115,7 @@ export class OpenAICompatibleProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "openai-compatible.chat-completions.adapter.v7",
+      adapterRevision: "openai-compatible.chat-completions.adapter.v8",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -159,7 +164,7 @@ export class OpenAICompatibleProvider implements Provider {
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({
         generationConfiguration: Object.freeze({
-          maximumOutputTokens: this.config.maximumOutputTokens,
+          maximumOutputTokens: this.config.maximumOutputTokens ?? null,
           thinking: this.config.thinking ?? null,
           service: this.config.service ?? "generic",
           reasoningEffort: this.config.reasoningEffort ?? null,
@@ -428,7 +433,7 @@ function transportBinding(endpoint: string) {
 
 function encodeOpenAIRequest(
   model: string,
-  maximumOutputTokens: number,
+  maximumOutputTokens: number | undefined,
   instructions: ModelInstructions,
   messages: readonly ModelMessage[],
   interaction: ProviderInteraction,
@@ -438,7 +443,7 @@ function encodeOpenAIRequest(
 ): string {
   return JSON.stringify({
     model,
-    max_tokens: maximumOutputTokens,
+    ...(maximumOutputTokens === undefined ? {} : { max_tokens: maximumOutputTokens }),
     ...(thinking === undefined ? {} : { thinking }),
     ...(config.reasoningEffort === undefined ? {} : { reasoning_effort: config.reasoningEffort }),
     messages: interaction.kind === "native_tool_turn"
@@ -871,7 +876,10 @@ function renderInstructions(instructions: ModelInstructions): string {
 }
 
 function renderToolResultContent(result: ModelToolResult): string {
-  return JSON.stringify({ settlement: result.settlement, content: result.content });
+  return JSON.stringify({ settlement: result.settlement, content: result.content,
+    ...(result.presentation.disposition === "complete" ? {} : {presentation: {
+      disposition: result.presentation.disposition, failureCode: result.presentation.failureCode,
+    }}) });
 }
 
 async function readOpenAICompatibleHttpErrorDiagnostic(
@@ -1041,7 +1049,9 @@ function snapshotConfig(
     apiKey: requiredString(input.apiKey, "OpenAI-compatible API key", true),
     model: requiredString(input.model, "OpenAI-compatible model"),
     timeoutMs: positiveTimeout(input.timeoutMs),
-    maximumOutputTokens: positiveInteger(input.maximumOutputTokens, "OpenAI-compatible maximum output tokens"),
+    ...(input.maximumOutputTokens === undefined ? {} : {
+      maximumOutputTokens: positiveInteger(input.maximumOutputTokens, "OpenAI-compatible maximum output tokens"),
+    }),
     service: input.service ?? "generic",
     ...(input.thinking === undefined ? {} : { thinking: Object.freeze({ ...input.thinking }) }),
     ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),

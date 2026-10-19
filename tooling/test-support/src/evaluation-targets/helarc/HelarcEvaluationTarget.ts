@@ -624,6 +624,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
       toolInputSemanticValidators: Object.freeze([]),
+      resultContracts: product.actions.resultContracts,
+      resultPresenters: product.actions.resultPresenters,
       delegation: product.delegation,
       internalHandlers: product.actions.internalHandlers,
       composite: product.actions.composite,
@@ -792,12 +794,17 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       metadata: runMetadata,
     },
   });
+  const controlSubmissions: Promise<void>[] = [];
+  let controlFailure: unknown;
+  const trackControl = (submission: Promise<unknown>) => {
+    controlSubmissions.push(submission.then(() => undefined, error => {controlFailure ??= error;}));
+  };
   const onAbort = () => {
-    active.cancel({
+    trackControl(active.cancel({
       origin: "host",
       reasonCode: "host_requested",
       reason: "Evaluation Trial cancelled the active Helarc Run.",
-    });
+    }));
   };
   signal.addEventListener("abort", onAbort, { once: true });
   if (signal.aborted) onAbort();
@@ -815,12 +822,13 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       );
       if (payload === null) continue;
       submittedInteractions.add(pending.request.id);
-      const outcome = active.submitInteraction({
+      trackControl(active.submitInteraction({
         request: pending.request,
         submissionId: `${trial.ref.id}.interaction.${pending.request.id}`,
         payload,
-      });
-      if (outcome.status === "accepted_for_resolution") interactionSubmissionCount += 1;
+      }).then(outcome => {
+        if (outcome.status === "accepted_for_resolution") interactionSubmissionCount += 1;
+      }));
     }
   };
   const unsubscribeInteractions = options.interactionAnswers === undefined
@@ -830,11 +838,11 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   const unsubscribeSuspension = active.subscribe((projection) => {
     if (projection.status !== "suspended" || suspendedRunCancellationRequested) return;
     suspendedRunCancellationRequested = true;
-    active.cancel({
+    trackControl(active.cancel({
       origin: "host",
       reasonCode: "host_requested",
       reason: "The deterministic Evaluation target does not resume a suspended Run.",
-    });
+    }));
   });
   submitConfiguredInteractions(active.getProjection());
   const hostResult = await active.wait().finally(() => {
@@ -842,6 +850,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     unsubscribeInteractions();
     unsubscribeSuspension();
   });
+  await Promise.all(controlSubmissions);
+  if (controlFailure !== undefined) throw controlFailure;
   const terminalProjection = active.getProjection();
   const productResult = product.projectResult(
     hostResult.runResult,
@@ -1009,6 +1019,15 @@ function createEvaluationActionRecordPort(prefix: string): ActionRecordPort {
   return Object.freeze({
     async recordPreEffect() {
       return next("pre-effect");
+    },
+    async recordDispatchIntent() {
+      return next("dispatch-intent");
+    },
+    async recordAttemptResult() {
+      return next("attempt-result");
+    },
+    async recordRetry() {
+      return next("retry");
     },
     async recordPostEffect() {
       return next("post-effect");

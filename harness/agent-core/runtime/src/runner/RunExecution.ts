@@ -1,7 +1,13 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
+import { OperationCommitError } from "@agent-anything/operation-catalog/result";
+import { toolRevisionKey } from "@agent-anything/tools/identity";
+import type { ToolResultPresenter } from "./ToolResultPresenter.js";
+import { presentToolResultReferences } from "./ToolResultPresenter.js";
 import { deriveRunStatusAfterPendingChange } from "./RunPendingStatus.js";
 import { RunExecutionFlow } from "./RunExecutionFlow.js";
+import { admitObservedToolCall } from "./ToolCallAdmissionFlow.js";
 import { RunInputNotifications } from "./RunInputNotifications.js";
+import { sameRunCommitValue } from "./RunCommitValue.js";
 import { RUN_CONTROL_EXECUTION_FLOW, RUN_SUSPENSION_WAIT_FLOW } from "./RunControlExecutionFlow.js";
 import { DESCENDANT_TRANSFER_EXECUTION_FLOW } from "./DescendantTransferExecutionFlow.js";
 import { createExecutionFlowDefinition, ExecutionFlowInvocation, ExecutionFlowPath, type ExecutionFlowContext, type ExecutionFlowOccurrenceRef, type ExecutionFlowStep } from "@agent-anything/observability/execution-flow";
@@ -49,6 +55,8 @@ import {
 import type {
   ResolvedOperationBinding,
 } from "@agent-anything/operation-catalog/binding";
+import { snapshotResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
+import { snapshotOperationCorrelation, snapshotOperationInvocationRef, operationRevisionKey } from "@agent-anything/operation-catalog/identity";
 import type {
   OperationCorrelation,
   OperationInvocationContext,
@@ -57,6 +65,7 @@ import type {
 } from "@agent-anything/operation-catalog/identity";
 import {
   createOperationResult,
+  rejectOperationResultOutput,
   type OperationFailure,
   type OperationResult,
 } from "@agent-anything/operation-catalog/result";
@@ -101,6 +110,7 @@ import {
   snapshotModelJsonValue,
   snapshotModelMessage,
   snapshotModelToolResult,
+  snapshotModelToolResultContent,
   type ModelCallSettlementKind,
   type ModelJsonValue,
   type ModelMessage,
@@ -109,7 +119,6 @@ import {
 } from "@agent-anything/model-interaction";
 import {
   materializeToolCall,
-  admitToolCall,
   type ToolCallAdmission,
   type ToolCall,
   type ToolCallAttempt,
@@ -145,6 +154,7 @@ import {
   createRunResult,
   createRunFailureCause,
   createRunObservation,
+  projectPendingRunSubject,
   runSettlementCauseCode,
   sameRunSuspensionRef,
   toRunCancellationSummary,
@@ -258,6 +268,17 @@ import { evaluateRunDeadline, evaluateRunNumericLimits, type RunLimitViolation }
 import { recordRunnerLifecycle } from "./RunnerObservability.js";
 import { completeRunnerTrace, createRunnerTraceAssembler } from "./RunnerTracing.js";
 import { RunStateWriter } from "./RunStateWriter.js";
+import { RunCommitError, type RunCommit, type RunControlCheckpoint } from "./RunCommitPort.js";
+import { ControllerCheckpointError, type ControllerCheckpointPort } from "../controller/ControllerCheckpoint.js";
+import { RetryCheckpointError } from "../retry/RetryCheckpoint.js";
+import { RunTreeCommitWriter } from "./RunTreeCommitWriter.js";
+import { retainRunConfiguration } from "./RunConfigurationCheckpoint.js";
+import { projectRunTreeTerminal, RunTreeExecution } from "./RunTreeExecution.js";
+import { retainControllerOperation, retainDecisionCallProgress, restoreControllerOperation, validateDecisionCheckpoint } from "./RunDecisionCheckpoint.js";
+import { RunRecoveryError } from "./RunRecovery.js";
+import { ActionRecordCommitError, ActionRecoveryError, type ActionExecutionRequest } from "@agent-anything/action-execution/enforcement";
+import { CompositeCommitError, CompositeRecoveryError } from "@agent-anything/operation-composition/execution";
+
 import { createCurrentRunContextAdmissionProfile, createCurrentRunContextContributions, createDelegationSelectedContextAdmissionProfile, createDelegationSelectedContextContribution, createObservationContextAdmissionProfile, createObservationContextContribution, createControllerFeedbackContextAdmissionProfile, createControllerFeedbackContextContribution, createSteeringContextAdmissionProfile, createSteeringContextContribution, createTaskContextAdmissionProfile, createTaskContextContribution } from "../context-contribution/index.js";
 import type {
   DescendantDispatchProvenance,
@@ -265,6 +286,21 @@ import type {
   RunTreeExecutionSnapshot,
 } from "./RunTreeExecution.js";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
+
+function assertExecutionCommitConfirmed(error: unknown): void {
+  if (error instanceof OperationCommitError) throw error;
+  if (error instanceof RunCommitError || error instanceof RunRecoveryError || error instanceof ControllerCheckpointError || error instanceof RetryCheckpointError || error instanceof ActionRecordCommitError || error instanceof ActionRecoveryError || error instanceof CompositeCommitError || error instanceof CompositeRecoveryError) throw error;
+}
+
+function retryBookkeepingOwner(state: RunState<unknown>, previous: RunState<unknown> | null): string | null {
+  const changes = state.items.slice(previous?.items.length ?? 0);
+  if (changes.length === 0) return null;
+  const first = changes[0]!.payload;
+  if ((first.kind !== "pending_transition" && first.kind !== "retry_transition") || first.pending.kind !== "retry_wait") return null;
+  const id = first.pending.invocationId;
+  return changes.every(({payload}) => (payload.kind === "pending_transition" || payload.kind === "retry_transition") &&
+    payload.pending.kind === "retry_wait" && payload.pending.invocationId === id) ? id : null;
+}
 
 export interface RuntimeDescendantRunAdmissionInput {
   readonly executionFlow?: ExecutionFlowContext;
@@ -307,7 +343,7 @@ export type RuntimeDescendantRunAdmissionResult =
       readonly reservedTreeRevision: number;
       readonly treeRevision: number;
       readonly launch: () => RuntimeDescendantRunLaunchResult;
-      readonly cancelBeforeLaunch: () => RuntimeDescendantRunLaunchResult;
+      readonly cancelBeforeLaunch: () => RuntimeDescendantRunLaunchResult | Promise<RuntimeDescendantRunLaunchResult>;
     }
   | {
       readonly status: "rejected";
@@ -323,26 +359,9 @@ export type RuntimeDescendantRunAdmissionResult =
 
 export type RuntimeDescendantRunAdmitter = (
   input: RuntimeDescendantRunAdmissionInput,
-) => RuntimeDescendantRunAdmissionResult;
+) => RuntimeDescendantRunAdmissionResult | Promise<RuntimeDescendantRunAdmissionResult>;
 
-type TerminalCandidate<TOutput> =
-  | {
-      readonly status: "completed";
-      readonly output: TOutput;
-      readonly source?: RunCauseSourceRef;
-    }
-  | {
-      readonly status: "failed";
-      readonly failure: RunFailureCause;
-      readonly source?: RunCauseSourceRef;
-      readonly underlying?: readonly RunCausalLink[];
-      readonly omittedUnderlyingCount?: number;
-    }
-  | {
-      readonly status: "cancelled";
-      readonly underlying?: readonly RunCausalLink[];
-      readonly omittedUnderlyingCount?: number;
-    };
+type TerminalCandidate<TOutput> = import("./RunFinalizationCheckpoint.js").RunTerminalCandidate<TOutput>;
 
 interface CandidateBasis<TOutput> {
   readonly turn: ControllerTurnRef;
@@ -428,7 +447,19 @@ interface AdmittedDescendantExecution {
   >;
 }
 
-type DescendantPreparationOutcome = DescendantExecutionOutcome | AdmittedDescendantExecution;
+type DescendantPreparationOutcome = DescendantExecutionOutcome | AdmittedDescendantExecution |
+  {readonly status: "restored"; readonly outcome: Promise<DescendantExecutionOutcome>};
+
+export interface RestoredDescendantRoute {
+  readonly relation: DescendantRunRelation;
+  readonly request: DelegationRequest;
+  readonly dispatch: DescendantDispatchProvenance;
+  readonly action: RuntimeRunAction;
+  readonly handle: RunHandle;
+  readonly getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null;
+  readonly resourceSettlement: Promise<RunTreeResourceSettlement>;
+  readonly modelInteractionSeed: readonly ModelMessage[];
+}
 
 type DescendantRejectionOperationStatus = Exclude<
   import("./RunnerDependencies.js").DescendantOperationOutcome["status"],
@@ -466,6 +497,7 @@ interface ManagedActiveDescendant {
   readonly continuationModelInteractionSeed: readonly ModelMessage[];
   readonly initialBoundary: Promise<DescendantExecutionOutcome>;
   resolveInitialBoundary(outcome: DescendantExecutionOutcome): void;
+  rejectInitialBoundary(error: unknown): void;
   readonly initialDelivery: Promise<void>;
   markInitialDelivered(): void;
   initialBoundaryKind: "pending" | "suspended" | "terminal";
@@ -480,6 +512,16 @@ interface InteractionActionContext {
 }
 
 export class RunExecution<TOutput> {
+  private readonly restoredDescendants: RestoredDescendantRoute[] = [];
+  private readonly restoredDescendantOutcomes = new Map<string, Promise<DescendantExecutionOutcome>>();
+
+  restoreDescendant(route: RestoredDescendantRoute): void {
+    if (!this.restored || route.relation.parent.id !== this.runId ||
+        this.restoredDescendants.some(value => value.relation.ref.id === route.relation.ref.id)) {
+      throw new TypeError("Invalid restored descendant route.");
+    }
+    this.restoredDescendants.push(route);
+  }
   getTerminalFlowOccurrence(): ExecutionFlowOccurrenceRef | null {
     return this.terminalResult === null ? null : this.flow.current?.ref ?? null;
   }
@@ -488,6 +530,9 @@ export class RunExecution<TOutput> {
   private readonly actionFlows = new Map<string, ExecutionFlowPath>();
   private readonly executionFailureSettlements = new Map<string, "failure" | "success" | "unchanged" | null>();
   private readonly operationFlows = new Map<string, ExecutionFlowPath>();
+  private readonly operationCalls = new Map<string, ToolCall>();
+  private readonly resultDeliveries = new Map<string, RunControlCheckpoint["resultDeliveries"][number]>();
+  private resultDeliveryTail: Promise<void> = Promise.resolve();
   private readonly startedAt: string;
   private readonly startedAtMs: number;
   private readonly writer: RunStateWriter<TOutput>;
@@ -514,13 +559,17 @@ export class RunExecution<TOutput> {
     number
   >();
   private readonly childHandles = new Map<string, ManagedActiveDescendant>();
+  private readonly descendantSettlementWaits = new Set<Promise<void>>();
   private readonly settledDelegations = new Map<string, {
     readonly result: DelegationResult;
   }>();
   private readonly continuationRecords = new Map<string, RuntimeContinuationRecord>();
+  private readonly descendantTransfers = new Map<string, RunControlCheckpoint["descendantTransfers"][number]>();
   private readonly interactionActions = new Map<string, InteractionActionContext>();
+  private readonly deliveredInteractions = new Set<string>();
   private readonly interactionSettlements: QueuedInteractionSettlement[] = [];
   private readonly modelCallSettlementWaits = new Set<Promise<void>>();
+  private readonly deferredInteractionActions = new Map<string, RuntimeRunAction>();
   private readonly steeringQueue: RunSteeringCommand[] = [];
   private readonly steeringLedger = new Map<string, {
     readonly fingerprint: string;
@@ -532,16 +581,35 @@ export class RunExecution<TOutput> {
   private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
   private readonly decisionBasis = new RunDecisionBasis();
-  private readonly inputNotifications = new RunInputNotifications();
+  private readonly inputNotifications: RunInputNotifications;
   private pendingCompletionCall: {
     readonly call: ModelToolCall;
     readonly turn: ControllerTurnRef;
     stateResult: ModelToolResult | null;
   } | null = null;
+  private acceptedDecision: RunControlCheckpoint["decision"] = null;
+  private controllerInvocation: RunControlCheckpoint["controllerInvocation"] = null;
+  private readonly controllerCheckpoints = new Map<string, unknown>();
+  private completionNotification: RunControlCheckpoint["completionNotification"] = null;
+  private readonly retainedRetryEvents: import("../retry/index.js").RetryEvent[] = [];
+  private stagedAgentBinding: {agent: Agent<TOutput>; binding: AgentInstructionBinding} | null = null;
+  private persistenceStarted = false;
+  private initialized = false;
+  private finalizationCheckpoint: RunControlCheckpoint["finalization"] = null;
+  private readonly lifecycleRecordings = new Map<string, RunControlCheckpoint["lifecycleRecordings"][number]>();
+  private continuingDecision = false;
+  private recoveringController = false;
+  private resolveStarted!: () => void;
+  private rejectStarted!: (error: unknown) => void;
+  private readonly started = new Promise<void>((resolve, reject) => {this.resolveStarted = resolve; this.rejectStarted = reject;});
+  private readonly operationPreparations = new Map<string, RunControlCheckpoint["operations"][number]>();
+  private readonly operationResults = new Map<string, OperationResult>();
+  private readonly operationExecutions = new Map<string, RunControlCheckpoint["operationExecutions"][number][1]>();
   private readonly retryScopes = new Map<string, RunRetryWaitScope>();
   private readonly toolExposure: RunToolExposureCoordinator;
   private readonly transcript: RunTranscriptRecorder;
   private accountedResourceItemCount = 0;
+  private contextPayloadBytes: number;
   private resourceFailure: Extract<
     RunTreeResourceRecordResult,
     { readonly status: "limit_exceeded" | "measurement_unavailable" }
@@ -566,16 +634,21 @@ export class RunExecution<TOutput> {
     startedAt: string,
     deadlineAt: string,
     private readonly admitDescendantRun: RuntimeDescendantRunAdmitter,
-    initialContextBytes: number,
-    private readonly runTree: import("./RunTreeExecution.js").RunTreeExecution,
+    private readonly initialContextBytes: number,
+    private readonly initialRunTree: RunTreeExecution,
     private readonly onUpdate: (update: RunExecutionUpdate<TOutput>) => void,
     executionFlow?: ExecutionFlowContext,
+    private readonly treeCommits?: RunTreeCommitWriter,
+    private readonly restored?: RunCommit,
   ) {
+    void this.started.catch(() => {});
     this.flow = new RunExecutionFlow(executionFlow ?? dependencies.executionFlow ?? {}, runId);
     this.startedAt = startedAt;
+    this.contextPayloadBytes = restored?.control.contextPayloadBytes ?? initialContextBytes;
+    this.inputNotifications = restored ? RunInputNotifications.restore(runId, restored.control.inputNotifications) : new RunInputNotifications();
     this.startedAtMs = Date.parse(this.startedAt);
     this.activeAgent = agent;
-    this.activeInstructionBinding = createAgentInstructionBinding({
+    this.activeInstructionBinding = restored?.control.instructionBinding ?? createAgentInstructionBinding({
       run: Object.freeze({ id: runId }),
       agent,
       effectiveFromRunRevision: 0,
@@ -586,19 +659,24 @@ export class RunExecution<TOutput> {
       agent.instructions.ref.revision,
     );
     this.transcript = new RunTranscriptRecorder(dependencies.runTranscriptPort ?? null, dependencies.runTranscriptObserver);
+    const activation = restored ? globalThis.crypto.randomUUID() : null;
+    const observationIdentity: ResolvedRunnerDependencies["createId"] = value => {
+      const id = dependencies.createId(value);
+      return activation === null ? id : `${id}:activation:${activation}`;
+    };
     this.traceAssembler = createRunnerTraceAssembler({
       runId,
       taskId: input.task.id,
       lineage,
       observers: runTraceObservers,
-      createId: dependencies.createId,
+      createId: observationIdentity,
     });
     this.eventStream = new RuntimeEventStream({
       runId,
       taskId: input.task.id,
       lineage,
       now: dependencies.now,
-      createEventId: ({ sequence }) => dependencies.createId({
+      createEventId: ({ sequence }) => observationIdentity({
         kind: "runtime_event",
         runId,
         sequence,
@@ -608,7 +686,7 @@ export class RunExecution<TOutput> {
         ...(this.traceAssembler === null ? [] : [this.traceAssembler]),
       ]),
     });
-    const initial = createInitialRunState({
+    const initial = restored ? structuredClone(restored.state) as RunState<TOutput> : createInitialRunState({
       runId,
       agent,
       instructionBinding: this.activeInstructionBinding,
@@ -622,10 +700,11 @@ export class RunExecution<TOutput> {
       initial,
       dependencies.now,
       dependencies.createId,
-      (state, previous) => this.onStateCommitted(state, previous),
+      (state, previous, owner) => this.onStateCommitted(state, previous, owner),
+      (state, previous, accept, owner) => this.persistRunCommit(state, previous, accept, owner),
     );
     this.lastAuthorityPermission = initial.permission;
-    this.recordTreeResources({
+    if (!restored && !this.treeCommits) this.recordTreeResources({
       contextBytes: Object.freeze({
         status: "measured" as const,
         value: initialContextBytes,
@@ -635,19 +714,90 @@ export class RunExecution<TOutput> {
     const approvalProtocol = createApprovalInteractionProtocol({
       validateDecision: (subject, submission, request) =>
         this.validateApprovalDecision(subject, submission, request.id),
-      applyDecision: (subject, resolution, request) =>
-        this.applyApprovalDecision(subject, resolution, request.id),
+      applyDecision: async (subject, resolution, request) =>
+        (await this.applyApprovalDecision(subject, resolution, request.id)),
     }) as unknown as CapturedInteractionProtocol;
-    this.interactions = new RunInteractionCoordinator({
+    const interactionDependencies: ConstructorParameters<typeof RunInteractionCoordinator>[0] = {
       runId,
       registry: dependencies.interactions,
       localProtocols: Object.freeze([approvalProtocol]),
       now: dependencies.now,
       createId: (kind, sequence) => dependencies.createId({ kind, runId, sequence }),
-      onOpened: (pending, parentRunAction) => this.openPendingInteraction(pending, parentRunAction),
+      onOpened: async (pending, parentRunAction) => (await this.openPendingInteraction(pending, parentRunAction)),
       onSettled: (pending, terminal, settlement) =>
         this.queueInteractionSettlement(pending, terminal, settlement),
-    });
+      onChanged: async () => { await this.writer.commitState(() => ({})); },
+      onFailure: error => this.writer.fail(error),
+    };
+    this.interactions = restored ? RunInteractionCoordinator.restore(interactionDependencies, restored.control.interactions)
+      : new RunInteractionCoordinator(interactionDependencies);
+    if (restored) {
+      const control = restored.control;
+      if (restored.state.run.id !== runId || restored.state.startedAt !== startedAt || restored.state.deadlineAt !== deadlineAt) {
+        throw new TypeError("Restored Run identity or original deadline is inconsistent.");
+      }
+      if (control.decision) validateDecisionCheckpoint(control.decision, restored.state);
+      for (const [kind, sequence] of control.identitySequences) this.identitySequences.set(kind as Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"], sequence);
+      this.nextInteractionRequest = control.nextInteractionRequest;
+      this.instructionRevisionByAgentRevision.clear();
+      for (const entry of control.instructionRevisions) this.instructionRevisionByAgentRevision.set(...entry);
+      for (const entry of control.operationCalls) this.operationCalls.set(...entry);
+      for (const delivery of control.resultDeliveries) this.resultDeliveries.set(delivery.input.presentation.modelCallRef.id, delivery);
+      for (const entry of control.operations) this.operationPreparations.set(entry.binding.invocation.id, entry);
+      for (const result of control.operationResults) this.operationResults.set(result.ref.invocation.id, result);
+      for (const entry of control.operationExecutions) this.operationExecutions.set(...entry);
+      for (const entry of control.executionFailureSettlements) this.executionFailureSettlements.set(...entry);
+      for (const entry of control.steering.ledger) this.steeringLedger.set(entry.command.commandId, entry);
+      this.steeringQueue.push(...control.steering.pending);
+      this.steeringEpoch = control.steering.epoch;
+      for (const action of control.deferredInteractionActions) this.deferredInteractionActions.set(action.ref.id, action);
+      for (const entry of control.interactionActions) this.interactionActions.set(entry.requestId, {action: entry.action, toolCall: entry.toolCall});
+      for (const id of control.deliveredInteractions) this.deliveredInteractions.add(id);
+      for (const entry of control.descendantTransfers) {
+        this.descendantTransfers.set(entry.childRunId, entry);
+        if (entry.result) this.settledDelegations.set(entry.result.ref.id, {result: entry.result});
+      }
+      for (const entry of control.descendantContinuations) this.continuationRecords.set(entry.correlation.ref.id, {...entry});
+      this.acceptedDecision = control.decision;
+      this.controllerInvocation = control.controllerInvocation;
+      for (const [key, value] of control.controllerCheckpoints) this.controllerCheckpoints.set(key, value);
+      this.completionNotification = control.completionNotification;
+      this.pendingCompletionCall = control.pendingCompletion === null ? null : {...control.pendingCompletion};
+      this.retainedRetryEvents.push(...control.retryEvents);
+      this.persistenceStarted = true;
+      this.initialized = control.initialized;
+      this.finalizationCheckpoint = control.finalization;
+      for (const record of control.lifecycleRecordings) this.lifecycleRecordings.set(record.phase, record);
+      if (control.finalization) {
+        const bound = (dependencies.resourceFinalizers ?? []).map(value => value.binding ?? null);
+        if (JSON.stringify(bound) !== JSON.stringify(control.finalization.finalizers.map(value => value.binding))) {
+          throw new RunRecoveryError(runId, "resource_finalizer_binding_unavailable", runId);
+        }
+      }
+      this.continuingDecision = control.decision?.status === "active";
+      this.recoveringController = control.controllerInvocation?.status === "pending";
+      if (this.recoveringController) {
+        const id = control.controllerInvocation!.turn.id;
+        const revision = control.decisionBases.find(([key]) => key === id)?.[1];
+        if (revision === undefined) throw new RunRecoveryError(runId, "controller_basis_unavailable", id);
+        this.decisionBasis.capture(id, revision);
+      } else if (control.completionNotification) {
+        const id = control.completionNotification.turn.id;
+        const revision = control.decisionBases.find(([key]) => key === id)?.[1];
+        if (revision !== undefined) this.decisionBasis.capture(id, revision);
+      }
+      this.emittedItemCount = initial.items.length;
+      this.accountedResourceItemCount = initial.items.length;
+      this.runStartedEventEmitted = this.initialized;
+      const issue = this.interactions.getRecoveryIssues()[0];
+      if (issue) throw new RunRecoveryError(runId, issue.code, issue.request.id);
+      if (control.controllerInvocation?.status === "pending" && !this.dependencies.controller.recover) {
+        throw new RunRecoveryError(runId, "controller_invocation_requires_reconciliation", control.controllerInvocation.turn.id);
+      }
+      if (control.completionNotification?.outcome.status === "pending" && !this.dependencies.controller.recoverBeforeCompletion) {
+        throw new RunRecoveryError(runId, "completion_notification_unconfirmed", control.completionNotification.turn.id);
+      }
+    }
     this.toolExposure = new RunToolExposureCoordinator({
       run: initial.run,
       lineage,
@@ -667,7 +817,7 @@ export class RunExecution<TOutput> {
       cancellation: config.cancellation.context,
       operationSettlementTimeoutMs: config.cancellationLimits.operationSettlementTimeoutMs,
       now: dependencies.now,
-      onCancellationObserved: (request) => this.enterCancelling(request),
+      onCancellationObserved: async (request) => (await this.enterCancelling(request)),
     });
 
     const actionComposition = dependencies.operations.actionExecution;
@@ -677,7 +827,7 @@ export class RunExecution<TOutput> {
           ...actionComposition,
           permission: createActionPermissionAssessmentPort({
             now: dependencies.now,
-            consumeCoverage: (coverageId) => this.consumeApprovalCoverage(coverageId),
+            consumeCoverage: async (coverageId) => (await this.consumeApprovalCoverage(coverageId)),
           }),
           approval: this.createActionApprovalPort(),
           observer: composeActionExecutionObservers(
@@ -685,17 +835,38 @@ export class RunExecution<TOutput> {
             actionExecutionObserver,
           ),
           now: dependencies.now,
-          createId: (kind) => `${this.id("action")}:${kind}`,
         });
   }
 
-  submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome {
-    const local = this.interactions.submit(input);
+  private get runTree(): RunTreeExecution { return this.treeCommits?.tree ?? this.initialRunTree; }
+
+  prepareAdmission(tree: RunTreeExecution): RunCommit {
+    if (this.persistenceStarted) throw new TypeError("Run admission is already committed.");
+    const state = this.writer.getSnapshot();
+    tree.markStarted(this.runId, this.startedAt);
+    tree.recordResources(this.runId, {contextBytes: {status: "measured", value: this.initialContextBytes}});
+    return this.createRunCommit(state, null);
+  }
+
+  acceptAdmission(): void { this.persistenceStarted = true; }
+
+  async confirmCancellation(): Promise<void> {
+    await this.started;
+    await this.interruptionCoordinator.flush();
+  }
+
+  private async changeTree<T>(change: (tree: RunTreeExecution) => T): Promise<T> {
+    if (!this.treeCommits) return change(this.runTree);
+    return this.treeCommits.transaction(({tree}) => ({runs: [], value: change(tree)}));
+  }
+
+  async submitInteraction(input: InteractionSubmissionInput): Promise<InteractionSubmissionOutcome> {
+    const local = await this.interactions.submit(input);
     if (local.status !== "rejected" || local.code !== "interaction_not_pending") {
       return local;
     }
     for (const { handle } of this.childHandles.values()) {
-      const outcome = handle.submitInteraction(input);
+      const outcome = await handle.submitInteraction(input);
       if (outcome.status !== "rejected" || outcome.code !== "interaction_not_pending") {
         return outcome;
       }
@@ -703,86 +874,85 @@ export class RunExecution<TOutput> {
     return local;
   }
 
-  submitResume(input: RunResumeRequestInput): RunResumeReceipt {
+  async submitResume(input: RunResumeRequestInput): Promise<RunResumeReceipt> {
     const flow = new ExecutionFlowPath(RUN_CONTROL_EXECUTION_FLOW, {...this.flow.context, relationship:"spawn"}, this.runId, []);
     const before = this.writer.getSnapshot();
     flow.advance("receive", {control:"resume",status:before.status,runRevision:before.revision});
     const admission = flow.advance("admit");
     try {
-      const receipt = this.applyResume(input);
+      const receipt = (await this.applyResume(input));
       admission.check("control_admission", receipt.status === "accepted" ? "passed" : "not_satisfied", {status:receipt.status,code:receipt.status === "rejected" ? receipt.code : null});
       flow.advance("receipt", {runStatus:this.writer.getSnapshot().status,runRevision:this.writer.getSnapshot().revision});
       return receipt;
     } finally {flow.close("returned");}
   }
 
-  private applyResume(input: RunResumeRequestInput): RunResumeReceipt {
-    const current = this.writer.getSnapshot();
+  private async applyResume(input: RunResumeRequestInput): Promise<RunResumeReceipt> {
+    const waiter = this.suspendedWaiter;
+    const receipt = await this.writer.transaction<RunResumeReceipt>(current => {
+    const reject = (code: Parameters<typeof rejectedResume>[0], id: string) => ({value: rejectedResume(code, id, current.revision)});
     const requestId = typeof input?.id === "string" ? input.id : "";
     let candidate: RunResumeRequestInput;
     try {
       candidate = snapshotRunResumeRequestInput(input);
     } catch {
-      return rejectedResume("resume_invalid", requestId, current.revision);
+      return reject("resume_invalid", requestId);
     }
     if (current.status === "cancelling") {
-      return rejectedResume("run_cancelling", candidate.id, current.revision);
+      return reject("run_cancelling", candidate.id);
     }
     if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
-      return rejectedResume("run_settled", candidate.id, current.revision);
+      return reject("run_settled", candidate.id);
     }
-    if (this.settling) return rejectedResume("run_settling", candidate.id, current.revision);
+    if (this.settling) return reject("run_settling", candidate.id);
     if (current.status !== "suspended" || this.suspendedWaiter === null) {
-      return rejectedResume("run_not_suspended", candidate.id, current.revision);
+      return reject("run_not_suspended", candidate.id);
     }
     if (candidate.expectedRunRevision !== current.revision) {
-      return rejectedResume("run_revision_stale", candidate.id, current.revision);
+      return reject("run_revision_stale", candidate.id);
     }
     if (!sameRunSuspensionRef(candidate.suspension, current.suspension.ref)) {
-      return rejectedResume("suspension_stale", candidate.id, current.revision);
+      return reject("suspension_stale", candidate.id);
     }
     const request: RunResumeRequest = Object.freeze({
       ...candidate,
       run: current.run,
       requestedAt: this.now(),
     });
-    const waiter = this.suspendedWaiter;
-    const next = this.writer.commit({
+    return {payloads: [{
       kind: "suspension_transition",
       transition: "resumed",
       suspension: current.suspension,
       resume: request,
-    }, () => Object.freeze({
+    }], patch: {
       status: this.statusAfterPendingChange({ ...current, status: "running", suspension: null } as RunState<TOutput>, current.pending),
       suspension: null,
-    }));
-    this.suspendedWaiter = null;
-    waiter.resolve();
-    return Object.freeze({
-      status: "accepted" as const,
-      request,
-      currentRunRevision: next.revision,
+    }, value: {status: "accepted", request, currentRunRevision: current.revision + 1}};
     });
+    if (receipt.status === "rejected") return receipt;
+    this.suspendedWaiter = null;
+    waiter?.resolve();
+    return receipt;
   }
 
-  submitSuspend(input: RunSuspendRequestInput): RunSuspendReceipt {
+  async submitSuspend(input: RunSuspendRequestInput): Promise<RunSuspendReceipt> {
     const flow = new ExecutionFlowPath(RUN_CONTROL_EXECUTION_FLOW, {...this.flow.context, relationship:"spawn"}, this.runId, []);
     const before = this.writer.getSnapshot();
     flow.advance("receive", {control:"suspend",status:before.status,runRevision:before.revision});
     const admission = flow.advance("admit");
     try {
-      const receipt = this.applySuspend(input);
+      const receipt = (await this.applySuspend(input));
       admission.check("control_admission", receipt.status === "accepted" ? "passed" : "not_satisfied", {status:receipt.status,code:receipt.status === "rejected" ? receipt.code : null});
       flow.advance("receipt", {runStatus:this.writer.getSnapshot().status,runRevision:this.writer.getSnapshot().revision});
       return receipt;
     } finally {flow.close("returned");}
   }
 
-  private applySuspend(input: RunSuspendRequestInput): RunSuspendReceipt {
-    const current = this.writer.getSnapshot();
-    const reject = (code: Extract<RunSuspendReceipt, {status: "rejected"}>["code"]): RunSuspendReceipt => ({
+  private async applySuspend(input: RunSuspendRequestInput): Promise<RunSuspendReceipt> {
+    return this.writer.transaction<RunSuspendReceipt>(current => {
+    const reject = (code: Extract<RunSuspendReceipt, {status: "rejected"}>["code"]): {value: RunSuspendReceipt} => ({value: {
       status: "rejected", code, requestId: typeof input?.id === "string" ? input.id : "", currentRunRevision: current.revision,
-    });
+    }});
     let request: RunSuspendRequestInput;
     try { request = snapshotRunSuspendRequestInput(input); } catch { return reject("suspend_invalid"); }
     if (this.terminalResult !== null || ["completed", "failed", "cancelled"].includes(current.status)) return reject("run_settled");
@@ -809,17 +979,16 @@ export class RunExecution<TOutput> {
       resume = resolve;
     });
     this.suspendedWaiter = Object.freeze({ suspension, resolve: resume, resumed });
-    this.writer.commit({
+    return {payloads: [{
       kind: "suspension_transition",
       transition: "suspended",
       suspension,
       resume: null,
-    }, () => Object.freeze({
+    }], patch: {
       status: "suspended" as const,
       suspension,
-    }));
-
-    return Object.freeze({status: "accepted", suspension, currentRunRevision: nextRevision});
+    }, value: {status: "accepted", suspension, currentRunRevision: nextRevision}};
+    });
   }
 
   private async awaitSuspension(): Promise<void> {
@@ -887,8 +1056,18 @@ export class RunExecution<TOutput> {
     });
   }
 
-  submitSteering(input: RunSteeringInput): RunSteeringSubmissionReceipt {
-    const state = this.writer.getSnapshot();
+  async submitSteering(input: RunSteeringInput): Promise<RunSteeringSubmissionReceipt> {
+    const receipt = await this.writer.transaction(state => {
+      const value = this.acceptSteering(input, state);
+      return value.status === "accepted_for_application"
+        ? {value, payloads: [], patch: {}}
+        : {value};
+    });
+    if (receipt.status === "accepted_for_application") await this.interactions.invalidateAll("run_steering_pending");
+    return receipt;
+  }
+
+  private acceptSteering(input: RunSteeringInput, state: RunState<TOutput>): RunSteeringSubmissionReceipt {
     let candidate: RunSteeringInput;
     try {
       candidate = snapshotRunSteeringInput(input);
@@ -927,7 +1106,7 @@ export class RunExecution<TOutput> {
         run: state.run,
         commandId: candidate.commandId,
       }),
-      acceptedRunRevision: state.revision,
+      acceptedRunRevision: state.revision + 1,
     });
     this.steeringLedger.set(candidate.commandId, Object.freeze({
       fingerprint,
@@ -935,14 +1114,13 @@ export class RunExecution<TOutput> {
     }));
     this.steeringQueue.push(command);
     this.steeringEpoch += 1;
-    this.interactions.invalidateAll("run_steering_pending");
     return Object.freeze({
       status: "accepted_for_application" as const,
       command,
     });
   }
 
-  submitDescendantSteering(input: DelegationSteeringRoute): DelegationSteeringReceipt {
+  async submitDescendantSteering(input: DelegationSteeringRoute): Promise<DelegationSteeringReceipt> {
     let route: DelegationSteeringRoute;
     try {
       route = snapshotDelegationSteeringRoute(input);
@@ -973,7 +1151,7 @@ export class RunExecution<TOutput> {
         status: "routed" as const,
         relation: route.relation,
         child: route.child,
-        submission: direct.handle.steer(route.steering),
+        submission: await direct.handle.steer(route.steering),
       });
     }
     const settled = [...this.settledDelegations.values()].find(({ result }) =>
@@ -991,7 +1169,7 @@ export class RunExecution<TOutput> {
       );
     }
     for (const { handle } of this.childHandles.values()) {
-      const nested = handle.steerDescendant(route);
+      const nested = await handle.steerDescendant(route);
       if (
         nested.status !== "rejected" ||
         nested.code !== "delegation_relation_unknown"
@@ -1006,7 +1184,7 @@ export class RunExecution<TOutput> {
     );
   }
 
-  submitDescendantResume(input: DelegationResumeRoute): DelegationResumeReceipt {
+  async submitDescendantResume(input: DelegationResumeRoute): Promise<DelegationResumeReceipt> {
     let route: DelegationResumeRoute;
     try {
       route = snapshotDelegationResumeRoute(input);
@@ -1037,7 +1215,7 @@ export class RunExecution<TOutput> {
         status: "routed" as const,
         relation: route.relation,
         child: route.child,
-        resume: direct.handle.resume(route.resume),
+        resume: await direct.handle.resume(route.resume),
       });
     }
     const settled = [...this.settledDelegations.values()].find(({ result }) =>
@@ -1055,7 +1233,7 @@ export class RunExecution<TOutput> {
       );
     }
     for (const { handle } of this.childHandles.values()) {
-      const nested = handle.resumeDescendant(route);
+      const nested = await handle.resumeDescendant(route);
       if (
         nested.status !== "rejected" ||
         nested.code !== "delegation_relation_unknown"
@@ -1075,8 +1253,22 @@ export class RunExecution<TOutput> {
     const initialization = this.flow.enter("initialize", {agentId: this.activeAgent.id, revision: this.writer.getSnapshot().revision}, [
       {owner: "runtime", kind: "contribution", id: `${this.runId}:input`, revision: "1"}, configurationRef,
     ]);
-    this.interruptionCoordinator.start();
     try {
+      if (!this.persistenceStarted) await this.persistRunCommit(this.writer.getSnapshot(), null);
+      this.interruptionCoordinator.start();
+      this.resolveStarted();
+      await this.interruptionCoordinator.flush();
+      if (this.restored) {
+        await this.interactions.activateRestored();
+        for (const route of this.restoredDescendants) {
+          const managed = await this.attachDescendant(route, true);
+          this.restoredDescendantOutcomes.set(route.action.ref.id, managed.initialBoundary);
+        }
+        this.publishCurrentState();
+      }
+      await this.deliverToolResults();
+      if (this.finalizationCheckpoint) return await this.settle(this.finalizationCheckpoint.candidate as TerminalCandidate<TOutput>);
+      if (!this.initialized) {
       const initialContext = this.delegationRequest === null
         ? this.writer.getSnapshot().context
         : this.delegationContextMaterials.reduce((context, material) => {
@@ -1110,8 +1302,10 @@ export class RunExecution<TOutput> {
         runId: this.runId,
         task: this.input.task,
       });
-      this.writer.commitState((current) => Object.freeze({
-        status: "running" as const,
+      (await this.writer.commitState((current) => {
+        this.initialized = true;
+        return Object.freeze({
+        status: current.status === "cancelling" ? "cancelling" as const : "running" as const,
         context: this.applyContextContributions(
           initialContext,
           Object.freeze([taskContribution]),
@@ -1119,7 +1313,7 @@ export class RunExecution<TOutput> {
           "run_initialization",
           this.runId,
         ),
-      }));
+      }); }));
       this.emit("run.started", {
         status: "running",
         activeAgentId: this.activeAgent.id,
@@ -1132,6 +1326,7 @@ export class RunExecution<TOutput> {
       initialization.output({owner:"context",kind:"context",id:this.writer.getSnapshot().context.ref.id,revision:String(this.writer.getSnapshot().context.ref.version)});
       this.emitCommittedContextTransition(this.writer.getSnapshot().context);
       this.emitCommittedRunItems(this.writer.getSnapshot());
+      }
       const startFailures = await this.recordLifecycle("started");
       initialization.check("required_start_records", startFailures.length ? "error" : "passed", {failureCount: startFailures.length});
       if (startFailures.length > 0) {
@@ -1144,11 +1339,11 @@ export class RunExecution<TOutput> {
           )),
         });
       }
-
       while (this.terminalResult === null) {
+        await this.interruptionCoordinator.flush();
         const controls = this.flow.enter("controls", {status: this.writer.getSnapshot().status, revision: this.writer.getSnapshot().revision});
         await this.awaitSuspension();
-        this.drainInteractionSettlements();
+        (await this.drainInteractionSettlements());
         controls.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
         if (this.config.cancellation.context.request !== null) {
           for (const check of ["resource_account", "deadline", "numeric_limits"]) controls.check(check, "not_evaluated", {reason: "cancellation_requested"});
@@ -1160,7 +1355,7 @@ export class RunExecution<TOutput> {
           return await this.settleResourceFailure(this.resourceFailure);
         }
         controls.check("resource_account", "passed", {failurePresent: false});
-        this.drainSteering("apply");
+        (await this.drainSteering("apply"));
         const deadline = evaluateRunDeadline({
           deadlineAt: this.writer.getSnapshot().deadlineAt,
           now: this.now(),
@@ -1171,7 +1366,7 @@ export class RunExecution<TOutput> {
           return await this.settleLimitViolation(deadline);
         }
 
-        const numericLimit = evaluateRunNumericLimits({
+        const numericLimit = this.continuingDecision || this.recoveringController ? null : evaluateRunNumericLimits({
           counters: this.writer.getSnapshot().counters,
           limits: this.config.limits,
         });
@@ -1194,48 +1389,50 @@ export class RunExecution<TOutput> {
         if (decision.decision.kind === "propose_completion" && decision.decision.completionSource.kind === "model_call") {
           const call = this.findModelToolCall(decision.decision.completionSource.modelCallRef);
           if (call === null) throw new TypeError("Completion call was not recorded.");
-          this.pendingCompletionCall = { call, turn: decision.turn, stateResult: null };
+          this.pendingCompletionCall ??= { call, turn: decision.turn, stateResult: null };
         }
         const decisionRef = {owner:"runtime",kind:"contribution",id:`${decision.turn.id}:decision`,revision:String(decision.basisRevision)};
         this.flow.current?.output(decisionRef);
         const decisionStep = this.flow.enter("decision", {kind: decision.decision.kind, turnId: decision.turn.id, basisRevision: decision.basisRevision}, [decisionRef]);
         if (this.resourceFailure !== null) {
           for (const check of ["current_basis", "cancellation"]) decisionStep.check(check, "not_evaluated", {reason: "resource_failure"});
-          this.settleUnprocessedModelCalls(decision.decision, decision.turn, "invalidated", "run_resource_limit_before_model_calls");
+          (await this.settleUnprocessedModelCalls(decision.decision, decision.turn, "invalidated", "run_resource_limit_before_model_calls"));
           return await this.settleResourceFailure(this.resourceFailure);
         }
-        const settlementsAfterDecision = this.drainInteractionSettlements();
+        const settlementsAfterDecision = (await this.drainInteractionSettlements());
         decisionStep.check("current_basis", settlementsAfterDecision ? "not_satisfied" : "passed", {settlementsAfterDecision});
         decisionStep.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
         if (this.config.cancellation.context.request !== null) {
-          this.settleUnprocessedModelCalls(
+          (await this.settleUnprocessedModelCalls(
             decision.decision,
             decision.turn,
             "cancelled",
             "run_cancelled_before_model_calls",
-          );
+          ));
           return await this.settle({ status: "cancelled" });
         }
         if (settlementsAfterDecision > 0) {
-          this.settleUnprocessedModelCalls(
+          (await this.settleUnprocessedModelCalls(
             decision.decision,
             decision.turn,
             "invalidated",
             "run_basis_changed_before_model_calls",
-          );
+          ));
+          await this.retireDecision(decision.turn);
           continue;
         }
-        if (this.drainSteering("apply") > 0) {
-          this.settleUnprocessedModelCalls(
+        if ((await this.drainSteering("apply")) > 0) {
+          (await this.settleUnprocessedModelCalls(
             decision.decision,
             decision.turn,
             "invalidated",
             "run_steering_invalidated_model_calls",
-          );
+          ));
+          await this.retireDecision(decision.turn);
           continue;
         }
         if (decision.decision.kind === "continue_with_feedback") {
-          this.commitControllerFeedback(decision.decision.feedback);
+          (await this.commitControllerFeedback(decision.decision.feedback, decision.turn));
           continue;
         }
         const admissionStep = this.flow.enter("admission", {turnId: decision.turn.id, calls: decision.decision.candidates.length}, [decisionRef]);
@@ -1246,9 +1443,9 @@ export class RunExecution<TOutput> {
           instructionBinding: decision.prepared.input.instructionBinding,
           projection: decision.prepared.context,
           admissions: new Map(decision.decision.candidates.flatMap((candidate) => candidate.kind === "tool_request"
-            ? [[candidate, admitToolCall({ candidate: candidate.tool, selection: this.config.tools,
+            ? [[candidate, admitObservedToolCall({ candidate: candidate.tool, selection: this.config.tools,
                 exposure: decision.prepared.input.toolExposure, modelCall: candidate.modelCallRef,
-                semanticValidators: this.dependencies.operations.toolInputSemanticValidators })] as const]
+                semanticValidators: this.dependencies.operations.toolInputSemanticValidators }, admissionStep.context, this.runId)] as const]
             : [])),
         };
         const rejectedAdmissions = [...basis.admissions.values()].filter(value => value.status === "rejected").length;
@@ -1267,27 +1464,27 @@ export class RunExecution<TOutput> {
           dispatchStep.check("cancellation", this.config.cancellation.context.request !== null ? "not_satisfied" : "passed");
           if (this.config.cancellation.context.request !== null) {
             for (const check of ["steering", "action_capacity"]) dispatchStep.check(check, "not_evaluated", {reason: "cancellation_requested"});
-            this.settleCandidateRange(
+            (await this.settleCandidateRange(
               decision.decision.candidates,
               index,
               decision.turn,
               "cancelled",
               "run_cancelled_before_model_call",
-            );
+            ));
             break;
           }
-          this.drainInteractionSettlements();
-          const steeringChanges = this.drainSteering("apply");
+          (await this.drainInteractionSettlements());
+          const steeringChanges = (await this.drainSteering("apply"));
           dispatchStep.check("steering", steeringChanges > 0 ? "not_satisfied" : "passed", {applied:steeringChanges});
           if (steeringChanges > 0) {
             dispatchStep.check("action_capacity", "not_evaluated", {reason: "steering_applied"});
-            this.settleCandidateRange(
+            (await this.settleCandidateRange(
               decision.decision.candidates,
               index,
               decision.turn,
               "invalidated",
               "run_steering_invalidated_model_call",
-            );
+            ));
             break;
           }
           let outcome: CandidateProcessingOutcome<TOutput>;
@@ -1303,13 +1500,13 @@ export class RunExecution<TOutput> {
                 remaining: remainingActionCapacity, required: siblingCount, maxActions: this.config.limits.maxActions,
               });
               if (remainingActionCapacity < siblingCount) {
-                this.settleCandidateRange(
+                (await this.settleCandidateRange(
                   decision.decision.candidates.slice(index, index + siblingCount),
                   0,
                   decision.turn,
                   "invalidated",
                   "runtime_action_limit_reached",
-                );
+                ));
                 outcome = Object.freeze({
                   dispatchStop: "action_limit",
                   terminal: null,
@@ -1344,8 +1541,9 @@ export class RunExecution<TOutput> {
               );
             }
           } catch (error) {
+            assertExecutionCommitConfirmed(error);
             const cancelled = this.config.cancellation.context.request !== null;
-            this.settleCandidateRange(
+            (await this.settleCandidateRange(
               decision.decision.candidates,
               index + 1,
               decision.turn,
@@ -1353,37 +1551,37 @@ export class RunExecution<TOutput> {
               cancelled
                 ? "run_cancelled_after_model_call_failure"
                 : "run_execution_failure_before_model_call",
-            );
+            ));
             throw error;
           }
           if (outcome.terminal !== null) {
-            this.settleCandidateRange(
+            (await this.settleCandidateRange(
               decision.decision.candidates,
               index + 1,
               decision.turn,
               "invalidated",
               "run_terminated_before_model_call",
-            );
+            ));
             return await this.settle(outcome.terminal);
           }
-          if (this.drainSteering("apply") > 0) {
-            this.settleCandidateRange(
+          if ((await this.drainSteering("apply")) > 0) {
+            (await this.settleCandidateRange(
               decision.decision.candidates,
               index + 1,
               decision.turn,
               "invalidated",
               "run_steering_invalidated_model_call",
-            );
+            ));
             break;
           }
           if (outcome.dispatchStop !== null) {
-            this.settleCandidateRange(
+            (await this.settleCandidateRange(
               decision.decision.candidates,
               index + 1,
               decision.turn,
               "invalidated",
               `run_${outcome.dispatchStop}_before_model_call`,
-            );
+            ));
             break;
           }
         }
@@ -1397,9 +1595,12 @@ export class RunExecution<TOutput> {
           const completion = await this.processCompletionCandidate(decision.turn, decision.decision, decision.prepared, decision.basisRevision);
           if (completion !== null) return await this.settle(completion);
         }
+        await this.retireDecision(decision.turn);
       }
       return this.terminalResult;
     } catch (error) {
+      this.rejectStarted(error);
+      assertExecutionCommitConfirmed(error);
       if (this.terminalResult !== null) return this.terminalResult;
       if (this.config.cancellation.context.request !== null &&
           !(error instanceof OperationSettlementTimeoutError)) {
@@ -1413,14 +1614,15 @@ export class RunExecution<TOutput> {
       return await this.settle(failure);
     } finally {
       this.flow.close(this.terminalResult?.status ?? "failed");
-      this.interactions.close();
+      this.interactions.dispose();
       this.interruptionCoordinator.dispose();
     }
   }
 
-  private commitControllerFeedback(
+  private async commitControllerFeedback(
     feedback: import("../controller/index.js").ControllerFeedback,
-  ): void {
+    retire?: ControllerTurnRef,
+  ): Promise<void> {
     const current = this.writer.getSnapshot();
     const contribution = createControllerFeedbackContextContribution({
       id: this.currentContextContributionId(
@@ -1435,9 +1637,11 @@ export class RunExecution<TOutput> {
     });
     publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
       occurredAt: contribution.source.observedAt, source: contribution.source, value: feedback});
-    this.writer.commit(
+    (await this.writer.commit(
       { kind: "controller_feedback", feedback },
-      (state) => Object.freeze({
+      (state) => {
+        if (retire) this.markDecisionRetired(retire);
+        return Object.freeze({
         context: this.applyContextContributions(
           state.context,
           Object.freeze([contribution]),
@@ -1445,14 +1649,26 @@ export class RunExecution<TOutput> {
           "controller_feedback",
           feedback.source.id,
         ),
-      }),
-    );
+      }); },
+    ));
   }
 
-  private hasUnsettledDescendantObligations(): boolean {
+  private markDecisionRetired(turn: ControllerTurnRef): void {
+    if (this.acceptedDecision?.turn.id !== turn.id || turn.run.id !== this.runId) {
+      throw new TypeError("Only the current accepted decision can be retired.");
+    }
+    this.acceptedDecision = {...this.acceptedDecision, status: "retired"};
+  }
+
+  private async retireDecision(turn: ControllerTurnRef): Promise<void> {
+    if (this.acceptedDecision?.status === "retired") return;
+    await this.writer.commitState(() => {this.markDecisionRetired(turn); return {};});
+  }
+
+  private async hasUnsettledDescendantObligations(): Promise<boolean> {
     const state = this.writer.getSnapshot();
     if (!state.pending.some((pending) => pending.kind === "descendant_run")) return false;
-    this.commitControllerFeedback(Object.freeze({
+    (await this.commitControllerFeedback(Object.freeze({
       source: Object.freeze({
         owner: "agent-runtime",
         kind: "active_descendant_completion_obligation",
@@ -1461,7 +1677,7 @@ export class RunExecution<TOutput> {
       }),
       code: "active_descendant_result_pending",
       message: "The Run cannot end while descendant work remains unsettled. Continue other work, steer or resume the exact active Child, or cancel it before stopping.",
-    }));
+    })));
     return true;
   }
 
@@ -1471,6 +1687,12 @@ export class RunExecution<TOutput> {
     original: PreparedControllerOperation<TOutput>,
     basisRevision: number,
   ): Promise<TerminalCandidate<TOutput> | null> {
+    const acceptedBeforeRestart = this.writer.getSnapshot().items.find(item => item.payload.kind === "completion_acceptance" &&
+      item.payload.candidateId === turn.id && item.payload.candidateRevision === String(turn.sequence));
+    if (acceptedBeforeRestart?.payload.kind === "completion_acceptance") {
+      await this.settleCompletionCall("succeeded", "completion_candidate_accepted", acceptedBeforeRestart.payload.source);
+      return {status: "completed", output: decision.output, source: acceptedBeforeRestart.payload.source};
+    }
     const step = this.flow.enter("completion", {turnId: turn.id}, [
       {owner: "runtime", kind: "contribution", id: `${turn.id}:decision`, revision: String(basisRevision)},
       ...decision.candidates.map(candidate => ({owner: "runtime", kind: "call", id: candidate.modelCallRef.id, revision: null})),
@@ -1481,13 +1703,13 @@ export class RunExecution<TOutput> {
     }
     const terminal = this.completionLimitFailure();
     if (terminal !== null) return terminal;
-    if (this.deferCompletionForNotifications(turn, step)) return null;
-    const changed = this.drainSteering("apply") > 0 || this.completionBasisChanged(turn);
+    if ((await this.deferCompletionForNotifications(turn, step))) return null;
+    const changed = (await this.drainSteering("apply")) > 0 || this.completionBasisChanged(turn);
     const current = this.writer.getSnapshot();
     step.check("active_state", current.status === "running" || current.status === "waiting" ? "passed" : "not_satisfied", {status: current.status, revision: current.revision});
     step.check("current_basis", changed ? "not_satisfied" : "passed");
     if (changed || (current.status !== "running" && current.status !== "waiting")) {
-      this.declineCompletion(turn, "completion_basis_invalidated", "The ending proposal is no longer current. Use the updated Run state before proposing another final response.");
+      (await this.declineCompletion(turn, "completion_basis_invalidated", "The ending proposal is no longer current. Use the updated Run state before proposing another final response."));
       return null;
     }
     const keys = new Set(decision.candidates.map(candidate => modelCallRefKey(candidate.modelCallRef)));
@@ -1501,46 +1723,96 @@ export class RunExecution<TOutput> {
       completionStateUpdate: includesCompletionUpdate ? stateResult?.settlement ?? "missing" : null});
     if (failed) {
       if (includesCompletionUpdate && stateResult?.settlement !== "succeeded") {
-        this.declineCompletion(turn, "completion_state_update_failed", "The state update submitted with this ending proposal was not accepted. Read stateUpdate in this call's returned result for its rejection reason and correct that input before proposing completion again. Other successful calls remain settled; do not repeat them unnecessarily.");
+        (await this.declineCompletion(turn, "completion_state_update_failed", "The state update submitted with this ending proposal was not accepted. Read stateUpdate in this call's returned result for its rejection reason and correct that input before proposing completion again. Other successful calls remain settled; do not repeat them unnecessarily."));
       } else {
-        this.declineCompletion(turn, "completion_calls_not_successful", "One or more requests accompanying this final response did not succeed. Read their returned results before choosing a new action or final response; do not repeat successful calls unnecessarily.");
+        (await this.declineCompletion(turn, "completion_calls_not_successful", "One or more requests accompanying this final response did not succeed. Read their returned results before choosing a new action or final response; do not repeat successful calls unnecessarily."));
       }
       return null;
     }
-    const outstanding = this.hasUnsettledDescendantObligations();
+    const outstanding = (await this.hasUnsettledDescendantObligations());
     step.check("descendant_obligations", outstanding ? "not_satisfied" : "passed", {pendingDescendants: current.pending.filter(pending => pending.kind === "descendant_run").length});
     if (outstanding) {
-      this.settleCompletionCall("invalidated", "active_descendant_result_pending");
+      (await this.settleCompletionCall("invalidated", "active_descendant_result_pending"));
       return null;
     }
     const controller = this.dependencies.controller;
-    if (controller.beforeCompletion !== undefined) {
-      this.synchronizeCurrentContext();
+    const retainedNotification = this.restored?.control.completionNotification?.turn.id === turn.id
+      ? this.restored.control.completionNotification : null;
+    if (retainedNotification) {
+      if (this.decisionBasis.revision(turn.id, current.revision) !== retainedNotification.basisRevision) {
+        await this.declineCompletion(turn, "completion_basis_invalidated", "The Run changed after the retained ending notification. Use its current state before proposing completion again.");
+        this.decisionBasis.release(turn.id);
+        return null;
+      }
+      if (retainedNotification.outcome.status === "failed") {
+        const outcome = retainedNotification.outcome;
+        throw new ControllerError(outcome.failure, outcome.operationSettlement, outcome.deadline);
+      }
+      if (retainedNotification.outcome.status === "interrupted") {
+        await this.declineCompletion(turn, "completion_basis_invalidated", "The ending notification was interrupted by a Run change. Use the current state before proposing another final response.");
+        this.decisionBasis.release(turn.id);
+        return null;
+      }
+      const disposition = retainedNotification.outcome.status === "returned" ? retainedNotification.outcome.disposition : null;
+      if (disposition?.kind === "continue_with_feedback") {
+        const recorded = this.writer.getSnapshot().items.some(item => item.payload.kind === "controller_feedback" &&
+          item.payload.feedback.source.id === disposition.feedback.source.id &&
+          item.payload.feedback.source.revision === disposition.feedback.source.revision &&
+          item.payload.feedback.code === disposition.feedback.code);
+        if (!recorded) await this.commitControllerFeedback(disposition.feedback);
+        await this.settleCompletionCall("invalidated", disposition.feedback.code, disposition.feedback.source);
+        this.decisionBasis.release(turn.id);
+        return null;
+      }
+    }
+    if (controller.beforeCompletion !== undefined && retainedNotification?.outcome.status !== "returned") {
+      if (!retainedNotification) (await this.synchronizeCurrentContext());
       const state = this.writer.getSnapshot();
-      const prepared = prepareControllerOperation({
+      const notificationRevision = retainedNotification?.basisRevision ?? state.revision;
+      const prepared = retainedNotification ? restoreControllerOperation(retainedNotification.prepared, this.activeAgent) : prepareControllerOperation({
         agent: this.activeAgent, instructionBinding: this.activeInstructionBinding,
         runInput: this.input, config: this.config, state, iteration: turn.sequence,
         exposure: original.input.toolExposure, contextProjection: this.dependencies.contextProjection,
         requestedAt: this.now(), modelInteractionSeed: this.modelInteractionSeed,
         descendants: this.projectDescendantTargets(), projectionRequestId: `${turn.id}:completion-context:${state.revision}`,
       });
-      const notification = Object.freeze({turn, stateRevision: state.revision,
+      const notification = Object.freeze({turn, stateRevision: notificationRevision,
         current: prepared.input, output: decision.output, completionSource: decision.completionSource,
         settlements: Object.freeze(settlements)});
       const notificationStep = this.flow.enter("before_completion", {turnId: turn.id, stateRevision: state.revision}, [
         this.flow.invocation.material("Completion notification", "post_settlement", notification),
       ]);
-      this.decisionBasis.capture(turn.id, state.revision);
-      const retry = this.createRetryScope(turn.id, state.revision);
+      if (!retainedNotification) this.decisionBasis.capture(turn.id, notificationRevision);
+      const retry = this.createRetryScope(turn.id, notificationRevision);
       try {
-        const disposition = await this.interruptionCoordinator.execute("controller", () => controller.beforeCompletion!(notification, {
+        if (!retainedNotification) await this.writer.commitState(() => {
+          this.completionNotification = {turn, basisRevision: notificationRevision,
+            prepared: retainControllerOperation(prepared), output: decision.output,
+            completionSource: decision.completionSource, settlements,
+            outcome: {status: "pending"}};
+          return {};
+        }, turn.id);
+        const invoke = retainedNotification ? controller.recoverBeforeCompletion : controller.beforeCompletion;
+        if (!invoke) throw new RunRecoveryError(this.runId, "completion_notification_unconfirmed", turn.id);
+        const disposition = await this.interruptionCoordinator.execute("controller", () => invoke.call(controller, notification, {
+          checkpoints: this.controllerCheckpointPort(turn.id, "completion"),
+          runCheckpoints: this.controllerCheckpointPort(turn.id, "run"),
           executionFlow: this.flow.context, cancellation: this.config.cancellation.context,
           retry: {waitControl: retry, providerRequest: this.config.retry.providerRequest, structuredOutput: this.config.retry.structuredOutput,
-            deadlineAt: state.deadlineAt, events: this.retryEvents()},
+            deadlineAt: state.deadlineAt, events: this.retryEvents(turn.id)},
         }), state.deadlineAt);
+        const retainedDisposition = disposition?.kind === "continue_with_feedback"
+          ? {kind: "continue_with_feedback" as const, feedback: snapshotControllerFeedback(disposition.feedback)}
+          : disposition?.kind === "allow" ? {kind: "allow" as const} : null;
+        if (retainedDisposition === null) throw new TypeError("Controller completion disposition is invalid.");
+        await this.writer.commitState(() => {
+          this.completionNotification = {...this.completionNotification!,
+            outcome: {status: "returned", disposition: retainedDisposition}};
+          return {};
+        }, turn.id);
         notificationStep.output(this.flow.invocation.material("Completion disposition", "returned", disposition));
         const cancelled = this.config.cancellation.context.request !== null;
-        const invalidated = this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== state.revision ||
+        const invalidated = this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== notificationRevision ||
           this.steeringQueue.length > 0 || this.interactionSettlements.length > 0;
         const limitFailure = this.completionLimitFailure();
         notificationStep.check("current_basis", invalidated ? "not_satisfied" : "passed");
@@ -1548,33 +1820,46 @@ export class RunExecution<TOutput> {
         if (cancelled) return {status: "cancelled"};
         if (limitFailure !== null) return limitFailure;
         if (invalidated) {
-          this.declineCompletion(turn, "completion_basis_invalidated", "The Run changed while processing its ending proposal. Use the current state before proposing another final response.");
+          (await this.declineCompletion(turn, "completion_basis_invalidated", "The Run changed while processing its ending proposal. Use the current state before proposing another final response."));
           return null;
         }
         if (disposition?.kind === "continue_with_feedback") {
           const feedback = snapshotControllerFeedback(disposition.feedback);
-          this.commitControllerFeedback(feedback);
-          this.settleCompletionCall("invalidated", feedback.code, feedback.source);
+          (await this.commitControllerFeedback(feedback));
+          (await this.settleCompletionCall("invalidated", feedback.code, feedback.source));
           return null;
         }
         if (disposition?.kind !== "allow") throw new TypeError("Controller completion disposition is invalid.");
       } catch (error) {
+        assertExecutionCommitConfirmed(error);
+        const failure = error instanceof ControllerError ? error : new ControllerError({kind: "model", failure: {
+          code: "model_output_invalid", retryable: false, message: "Controller completion notification failed.",
+          metadata: {error: error instanceof Error ? error.name : "unknown"}}});
+        if (this.completionNotification?.outcome.status === "pending") {
+          await this.writer.commitState(() => {
+            this.completionNotification = {...this.completionNotification!, outcome: error instanceof RetryInvocationInvalidatedError
+              ? {status: "interrupted"} : {status: "failed", errorName: failure.name, failure: failure.failure,
+                operationSettlement: failure.operationSettlement, deadline: failure.deadline}};
+            return {};
+          }, turn.id);
+        }
         if (error instanceof RetryInvocationInvalidatedError) {
-          this.declineCompletion(turn, "completion_basis_invalidated", "The ending notification was interrupted by a Run change. Use the current state before proposing another final response.");
+          (await this.declineCompletion(turn, "completion_basis_invalidated", "The ending notification was interrupted by a Run change. Use the current state before proposing another final response."));
           return null;
         }
         if (error instanceof ControllerError || this.config.cancellation.context.request !== null) throw error;
-        throw new ControllerError({kind: "model", failure: {code: "model_output_invalid", retryable: false, message: "Controller completion notification failed.", metadata: {error: error instanceof Error ? error.name : "unknown"}}});
+        throw failure;
       } finally {
         retry.dispose();
         this.retryScopes.delete(turn.id);
         this.decisionBasis.release(turn.id);
       }
     }
+    this.decisionBasis.release(turn.id);
     const acceptance = this.flow.enter("acceptance", {turnId: turn.id, revision: this.writer.getSnapshot().revision});
-    if (this.deferCompletionForNotifications(turn, acceptance)) return null;
-    const accepted = this.acceptRunCompletion({ id: turn.id, revision: String(turn.sequence) }, decision.completionSource);
-    this.settleCompletionCall("succeeded", "completion_candidate_accepted", accepted.source);
+    if ((await this.deferCompletionForNotifications(turn, acceptance))) return null;
+    const accepted = (await this.acceptRunCompletion({ id: turn.id, revision: String(turn.sequence) }, decision.completionSource));
+    (await this.settleCompletionCall("succeeded", "completion_candidate_accepted", accepted.source));
     return {status: "completed", output: decision.output, source: accepted.source};
   }
 
@@ -1584,23 +1869,23 @@ export class RunExecution<TOutput> {
     return deadline === null ? null : {status: "failed", failure: runtimeFailure(deadline.code, deadline.message, deadline.metadata)};
   }
 
-  private collectInputNotifications(): void {
+  private async collectInputNotifications(): Promise<void> {
     const facts = this.inputNotifications.collect(this.runId, this.dependencies.inputNotifications,
       this.dependencies.contextProjection.maxContributionPayloadBytes);
     for (const notification of facts) {
-      this.writer.commitItems([{kind: "input_notification", notification}]);
+      (await this.writer.commitItems([{kind: "input_notification", notification}]));
       publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
         occurredAt: notification.occurredAt, source: {...notification.source, observedAt: notification.occurredAt}, value: notification});
     }
   }
 
-  private deferCompletionForNotifications(turn: ControllerTurnRef, step: ExecutionFlowStep): boolean {
-    this.collectInputNotifications();
+  private async deferCompletionForNotifications(turn: ControllerTurnRef, step: ExecutionFlowStep): Promise<boolean> {
+    (await this.collectInputNotifications());
     const pending = this.inputNotifications.undelivered;
     step.check("input_notifications", pending > 0 ? "not_satisfied" : "passed", {undelivered: pending});
     if (pending === 0) return false;
-    this.declineCompletion(turn, "completion_input_pending",
-      "New execution facts arrived after the input used for this ending proposal. Read input_notifications in the next context before deciding whether to continue or submit a new final response. Do not repeat successful calls merely because this proposal was deferred.");
+    (await this.declineCompletion(turn, "completion_input_pending",
+      "New execution facts remain to be accepted as host notifications. Read those facts before deciding whether to continue or submit a new final response. Do not repeat successful calls merely because this proposal was deferred."));
     return true;
   }
 
@@ -1611,16 +1896,16 @@ export class RunExecution<TOutput> {
       (item.payload.transition === "steering" || item.payload.transition === "active_agent"));
   }
 
-  private declineCompletion(turn: ControllerTurnRef, code: string, message: string): void {
-    this.commitControllerFeedback({source: {owner: "agent-runtime", kind: "completion", id: turn.id, revision: String(turn.sequence)}, code, message});
-    this.settleCompletionCall("invalidated", code);
+  private async declineCompletion(turn: ControllerTurnRef, code: string, message: string): Promise<void> {
+    (await this.commitControllerFeedback({source: {owner: "agent-runtime", kind: "completion", id: turn.id, revision: String(turn.sequence)}, code, message}));
+    (await this.settleCompletionCall("invalidated", code));
   }
 
-  private settleCompletionCall(settlement: ModelCallSettlementKind, code: string, source?: ModelToolResult["sourceRefs"][number]): void {
+  private async settleCompletionCall(settlement: ModelCallSettlementKind, code: string, source?: ModelToolResult["sourceRefs"][number]): Promise<void> {
     const pending = this.pendingCompletionCall;
     if (pending === null) return;
     if (!this.hasModelCallSettlement(pending.call)) {
-      this.commitLocalModelCallResult(pending.call, settlement, {
+      (await this.commitLocalModelCallResult(pending.call, settlement, {
         status: settlement, code,
         ...(pending.stateResult === null ? {} : {stateUpdate: {
           settlement: pending.stateResult.settlement, content: pending.stateResult.content,
@@ -1629,17 +1914,17 @@ export class RunExecution<TOutput> {
         owner: source.owner, kind: source.kind, id: source.id, revision: source.revision,
       } : {
         owner: "agent-runtime", kind: "controller_turn", id: pending.turn.id, revision: String(pending.turn.sequence),
-      }]);
+      }]));
     }
     const actionRef = pending.stateResult?.sourceRefs.find(ref => ref.kind === "run_action");
     if (actionRef !== undefined) this.closeModelCallFlow(actionRef.id, pending.call.modelCallRef.id, settlement);
     this.pendingCompletionCall = null;
   }
 
-  private acceptRunCompletion(
+  private async acceptRunCompletion(
     proposal: Readonly<{ readonly id: string; readonly revision: string }>,
     completionSource: import("../controller/index.js").CompletionSource,
-  ): { readonly kind: "completed"; readonly source: RunCauseSourceRef } {
+  ): Promise<{ readonly kind: "completed"; readonly source: RunCauseSourceRef }> {
     const state = this.writer.getSnapshot();
     const source: RunCauseSourceRef = Object.freeze({
       owner: "agent-runtime",
@@ -1648,7 +1933,7 @@ export class RunExecution<TOutput> {
       revision: proposal.revision,
       run: state.run,
     });
-    this.writer.commitItems(Object.freeze([Object.freeze({
+    (await this.writer.commitItems(Object.freeze([Object.freeze({
       kind: "completion_acceptance" as const,
       source,
       candidateId: proposal.id,
@@ -1656,7 +1941,7 @@ export class RunExecution<TOutput> {
       completionSource,
       basisRevision: state.revision,
       acceptedAt: this.now(),
-    })]));
+    })])));
     return Object.freeze({ kind: "completed" as const, source });
   }
 
@@ -1672,10 +1957,10 @@ export class RunExecution<TOutput> {
     return null;
   }
 
-  private commitModelCallSettlement(
+  private async commitModelCallSettlement(
     action: RuntimeRunAction,
     fallback: ModelCallSettlementKind | null,
-  ): void {
+  ): Promise<void> {
     if (action.provenance.kind !== "controller") return;
     const call = this.findModelToolCall(action.provenance.modelCallRef);
     if (call === null) {
@@ -1694,9 +1979,13 @@ export class RunExecution<TOutput> {
     if (observation === null && fallback === null) {
       return;
     }
-    const projected = observation === null
+    const toolCall = this.operationCalls.get(action.ref.id);
+    const presenter = toolCall === undefined ? undefined : this.dependencies.operations.resultPresenters
+      ?.find(binding => toolRevisionKey(binding.tool) === toolRevisionKey(toolCall.toolRevision));
+    const projected: ReturnType<typeof projectObservationSettlement> = observation === null
       ? Object.freeze({
           settlement: fallback!,
+          presentation: resultPresentation("complete"),
           content: Object.freeze({
             status: fallback!,
             code: fallback === "cancelled"
@@ -1704,7 +1993,7 @@ export class RunExecution<TOutput> {
               : "model_call_failed",
           }) as ModelJsonValue,
         })
-      : projectObservationSettlement(observation);
+      : projectObservationSettlement(observation, presenter);
     const sourceRefs = observation === null
       ? Object.freeze([Object.freeze({
           owner: "agent-runtime",
@@ -1725,39 +2014,39 @@ export class RunExecution<TOutput> {
             id: observation.id,
             revision: null,
           }),
+          ...(observation.payload.kind === "operation" ? [Object.freeze({
+            owner: "operation-catalog", kind: "operation_result", id: observation.payload.result.ref.id,
+            revision: observation.payload.result.binding.operation.revision,
+          })] : []),
         ]);
-    let result: ModelToolResult;
-    try {
-      result = snapshotModelToolResult({
-        modelCallRef: call.modelCallRef,
-        providerCallRef: call.providerCallRef,
-        name: call.name,
-        settlement: projected.settlement,
-        content: projected.content,
-        sourceRefs,
-      });
-    } catch {
-      result = snapshotModelToolResult({
-        modelCallRef: call.modelCallRef,
-        providerCallRef: call.providerCallRef,
-        name: call.name,
-        settlement: projected.settlement,
-        content: Object.freeze({
-          status: projected.settlement,
-          code: "model_result_projection_bounded",
-        }),
-        sourceRefs,
-      });
-    }
+    const result = snapshotModelToolResult({
+      modelCallRef: call.modelCallRef,
+      providerCallRef: call.providerCallRef,
+      name: call.name,
+      settlement: projected.settlement,
+      presentation: projected.presentation,
+      content: projected.content,
+      sourceRefs: [...sourceRefs, ...(projected.references ?? []), {owner: "agent-runtime", kind: "model_call", id: call.modelCallRef.id,
+        revision: null, runId: this.runId}],
+    });
     // A state-maintaining ending call receives one result after its ending disposition.
     if (completing !== null) {
-      completing.stateResult = result;
+      await this.writer.commitState(() => {completing.stateResult = result; return {};});
       return;
     }
-    this.writer.commit({
+    (await this.writer.commit({
       kind: "model_call_settlement",
       result,
-    }, current => ({
+    }, current => {
+      this.operationCalls.delete(action.ref.id);
+      if (presenter?.committed !== undefined && toolCall !== undefined && observation?.payload.kind === "operation") {
+        this.resultDeliveries.set(result.modelCallRef.id, {presenter: presenter.ref,
+          input: {runId: this.runId, call: toolCall, correlation: this.runActionCorrelation(action),
+            resultRevision: findRegisteredOperation(this.dependencies.operations.catalog,
+              observation.payload.result.ref.invocation.operation)!.operation.resultSchemaRevision,
+            result: observation.payload.result, presentation: result}});
+      }
+      return {
       status: this.statusAfterPendingChange(current, current.pending, action.ref.id),
       counters: {
         ...current.counters,
@@ -1765,8 +2054,26 @@ export class RunExecution<TOutput> {
           current.counters.consecutiveActionFailures, action, observation, result.settlement,
         ),
       },
-    }));
+    }; }));
     this.closeModelCallFlow(action.ref.id, call.modelCallRef.id, result.settlement);
+    await this.deliverToolResults();
+  }
+
+  private deliverToolResults(): Promise<void> {
+    this.resultDeliveryTail = this.resultDeliveryTail.then(() => this.drainToolResultDeliveries());
+    return this.resultDeliveryTail;
+  }
+
+  private async drainToolResultDeliveries(): Promise<void> {
+    for (const [id, delivery] of this.resultDeliveries) {
+      const presenter = this.dependencies.operations.resultPresenters?.find(item =>
+        toolRevisionKey(item.tool) === toolRevisionKey(delivery.input.call.toolRevision) &&
+        item.ref.id === delivery.presenter.id && item.ref.revision === delivery.presenter.revision);
+      if (!presenter?.committed) throw new RunRecoveryError(this.runId, "result_delivery_owner_unavailable", id);
+      try { await presenter.committed(delivery.input); }
+      catch (cause) { throw new RunCommitError(`${this.runId}:result-delivery:${id}`, {cause}); }
+      await this.writer.commitState(() => {this.resultDeliveries.delete(id); return {};});
+    }
   }
 
   private countExecutionSettlement(
@@ -1816,48 +2123,48 @@ export class RunExecution<TOutput> {
     this.actionFlows.delete(actionId);
   }
 
-  private settleUnprocessedModelCalls(
+  private async settleUnprocessedModelCalls(
     decision: ControllerDecision<TOutput>,
     turn: ControllerTurnRef,
     settlement: "invalidated" | "cancelled",
     code: string,
-  ): void {
+  ): Promise<void> {
     if (decision.kind === "continue_with_feedback") return;
-    this.settleCandidateRange(decision.candidates, 0, turn, settlement, code);
-    this.settleCompletionCall(settlement, code);
+    (await this.settleCandidateRange(decision.candidates, 0, turn, settlement, code));
+    (await this.settleCompletionCall(settlement, code));
   }
 
-  private settleCandidateRange(
+  private async settleCandidateRange(
     candidates: readonly ProgressionCandidate[],
     startIndex: number,
     turn: ControllerTurnRef,
     settlement: "invalidated" | "cancelled",
     code: string,
-  ): void {
+  ): Promise<void> {
     for (let index = startIndex; index < candidates.length; index += 1) {
-      this.commitUnadmittedModelCallSettlement(
+      (await this.commitUnadmittedModelCallSettlement(
         candidates[index]!,
         turn,
         settlement,
         code,
-      );
+      ));
     }
   }
 
-  private commitUnadmittedModelCallSettlement(
+  private async commitUnadmittedModelCallSettlement(
     candidate: ProgressionCandidate,
     turn: ControllerTurnRef,
     settlement: "invalidated" | "cancelled",
     code: string,
-  ): void {
+  ): Promise<void> {
     const call = this.findModelToolCall(candidate.modelCallRef);
     if (call === null || this.hasModelCallSettlement(call)) return;
     if (this.pendingCompletionCall !== null &&
       modelCallRefKey(this.pendingCompletionCall.call.modelCallRef) === modelCallRefKey(call.modelCallRef)) {
-      this.settleCompletionCall(settlement, code);
+      (await this.settleCompletionCall(settlement, code));
       return;
     }
-    this.commitLocalModelCallResult(call, settlement, {
+    (await this.commitLocalModelCallResult(call, settlement, {
       status: settlement,
       code,
     }, Object.freeze([Object.freeze({
@@ -1865,17 +2172,17 @@ export class RunExecution<TOutput> {
       kind: "controller_turn",
       id: turn.id,
       revision: String(turn.sequence),
-    })]));
+    })])));
   }
 
-  private commitLocalModelCallResult(
+  private async commitLocalModelCallResult(
     call: ModelToolCall,
     settlement: ModelCallSettlementKind,
     content: unknown,
     sourceRefs: ModelToolResult["sourceRefs"],
-  ): void {
+  ): Promise<void> {
     const projected = modelSettlement(settlement, content);
-    this.writer.commit({
+    (await this.writer.commit({
       kind: "model_call_settlement",
       result: snapshotModelToolResult({
         modelCallRef: call.modelCallRef,
@@ -1883,9 +2190,13 @@ export class RunExecution<TOutput> {
         name: call.name,
         settlement,
         content: projected.content,
-        sourceRefs,
+        presentation: projected.presentation,
+        sourceRefs: sourceRefs.some(ref => ref.owner === "agent-runtime" && ref.kind === "model_call" &&
+          ref.id === call.modelCallRef.id && ref.runId === this.runId) ? sourceRefs :
+          [...sourceRefs, {owner: "agent-runtime", kind: "model_call", id: call.modelCallRef.id,
+            revision: null, runId: this.runId}],
       }),
-    });
+    }));
   }
 
   private findModelToolCall(ref: import("@agent-anything/model-interaction").ModelCallRef): ModelToolCall | null {
@@ -1930,19 +2241,50 @@ export class RunExecution<TOutput> {
     readonly agent: Agent<TOutput>;
     readonly prepared: PreparedControllerOperation<TOutput>;
   } | null> {
+    if (this.continuingDecision) {
+      const retained = this.acceptedDecision!;
+      let agent = this.activeAgent;
+      if (!sameAgentRef(agent, retained.prepared.input.agent)) {
+        const binding = await this.dependencies.agents?.resolve(retained.prepared.input.agent);
+        if (binding?.status !== "admitted" || binding.agent === null) {
+          throw new RunRecoveryError(this.runId, "decision_agent_unavailable", retained.turn.id);
+        }
+        agent = snapshotAgent(binding.agent as Agent<TOutput>);
+      }
+      const prepared = restoreControllerOperation(retained.prepared, agent);
+      this.continuingDecision = false;
+      return {decision: retained.value as ControllerDecision<TOutput>, turn: retained.turn,
+        basisRevision: retained.basisRevision, agent, prepared};
+    }
     const flow = new ExecutionFlowPath(CONTROLLER_EXECUTION_FLOW, this.flow.context, this.runId, []);
     let flowDisposition: "returned" | "failed" | "interrupted" = "interrupted";
     try {
-    this.collectInputNotifications();
-    this.synchronizeCurrentContext();
-    const notificationCheckpoint = this.inputNotifications.checkpoint;
+    const resuming = this.recoveringController ? this.controllerInvocation : null;
+    this.recoveringController = false;
+    if (!resuming) {
+      (await this.collectInputNotifications());
+      (await this.synchronizeCurrentContext());
+    }
     const state = this.writer.getSnapshot();
-    const iteration = state.counters.controllerTurns + 1;
-    const turn: ControllerTurnRef = Object.freeze({
+    const basisRevision = resuming?.basisRevision ?? state.revision;
+    const iteration = resuming?.turn.sequence ?? state.counters.controllerTurns + 1;
+    const turn: ControllerTurnRef = resuming?.turn ?? Object.freeze({
       run: state.run,
       id: this.id("controller_turn", iteration),
       sequence: iteration,
     });
+    const inputDelivery = resuming ? resuming.prepared.input.inputDelivery : this.inputNotifications.prepare(this.runId, turn.id);
+    if (inputDelivery) publishRunExecutionObservation(this.dependencies.executionObserver, {
+      kind: "input_delivery_prepared", runId: this.runId, occurredAt: this.now(), turnId: turn.id, batch: inputDelivery,
+    });
+    let prepared: PreparedControllerOperation<TOutput>;
+    let exposure: import("@agent-anything/tools/selection").ToolExposureProof;
+    let contextStep;
+    if (resuming) {
+      prepared = restoreControllerOperation(resuming.prepared, this.activeAgent);
+      exposure = prepared.input.toolExposure;
+      contextStep = flow.advance("context", {restored: true, turnId: turn.id});
+    } else {
     let resolvedExposure;
     const exposureStep = flow.advance("exposure", {turnId: turn.id, revision: state.revision});
     try {
@@ -1953,21 +2295,21 @@ export class RunExecution<TOutput> {
     }
     exposureStep.check("basis_revision", resolvedExposure.runRevision === state.revision ? "passed" : "not_satisfied");
     if (resolvedExposure.runRevision !== state.revision) return null;
-    const exposure = resolvedExposure.proof;
+    exposure = resolvedExposure.proof;
     if (this.dependencies.executionObserver) publishRunExecutionObservation(this.dependencies.executionObserver, {
       kind: "tool_exposure", runId: this.runId, occurredAt: null, turnId: turn.id,
       exposure: resolvedExposure.exposure, proof: exposure,
       selected: Object.freeze(this.config.tools.tools.filter((tool) => tool.origins.includes("model")).map((tool) => tool.registration.descriptor.ref)),
     });
-    let prepared: PreparedControllerOperation<TOutput>;
     const exposureRef = {owner: "runtime", kind: "turn", id: turn.id, revision: null};
     exposureStep.output(exposureRef);
-    const contextStep = flow.advance("context", {}, [exposureRef,
+    contextStep = flow.advance("context", {}, [exposureRef,
       {owner:"context",kind:"context",id:state.context.ref.id,revision:String(state.context.ref.version)},
       {owner:"runtime",kind:"contribution",id:`${this.runId}:input`,revision:"1"},
     ]);
     try {
       prepared = prepareControllerOperation({
+        inputDelivery,
         agent: this.activeAgent,
         instructionBinding: this.activeInstructionBinding,
         runInput: this.input,
@@ -2002,6 +2344,12 @@ export class RunExecution<TOutput> {
       throw error;
     }
     this.decisionBasis.capture(turn.id, state.revision);
+    await this.writer.commitState(() => {
+      this.controllerInvocation = {turn, basisRevision: state.revision,
+        prepared: retainControllerOperation(prepared), status: "pending"};
+      return {};
+    }, turn.id);
+    }
     const controllerInputRef = recordControllerInput(flow, prepared.input);
     contextStep.output(controllerInputRef);
     const controlsRef = flow.material("Controller invocation controls", "before_invocation", {
@@ -2010,31 +2358,39 @@ export class RunExecution<TOutput> {
       excludedExecutableFields: ["cancellation.signal", "retry.waitControl", "retry.events", "executionFlow.observer"],
     });
     flow.advance("controller", {turnId: turn.id}, [controllerInputRef, controlsRef]);
-    const retryScope = this.createRetryScope(turn.id, state.revision, flow.callContext);
+    const retryScope = this.createRetryScope(turn.id, basisRevision, flow.callContext);
     this.emit("controller.started", { turnId: turn.id, iteration });
     try {
+      if (resuming && (this.decisionBasis.revision(turn.id, state.revision) !== basisRevision ||
+          this.steeringQueue.length > 0 || this.interactionSettlements.length > 0)) {
+        throw new RetryInvocationInvalidatedError();
+      }
       const candidate = await this.interruptionCoordinator.execute(
         "controller",
         () => executeControllerOperation({
           dependencies: this.dependencies,
           prepared,
           config: this.config,
-          retryEvents: this.retryEvents(),
+          retryEvents: this.retryEvents(turn.id),
           retryWaitControl: retryScope,
           executionFlow: flow.callContext,
+          checkpoints: this.controllerCheckpointPort(turn.id),
+          runCheckpoints: this.controllerCheckpointPort(turn.id, "run"),
+          recovering: resuming !== null,
         }),
         state.deadlineAt,
       );
       const validityStep = flow.advance("validity");
       // Exposure is request provenance. Live availability is checked on each
       // selected binding before materialization, not on unrelated catalog paths.
-      const stale = this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== state.revision ||
+      const stale = this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== basisRevision ||
         this.interactionSettlements.length > 0 ||
         this.steeringQueue.length > 0 ||
         this.config.cancellation.context.request !== null;
       validityStep.check("freshness", stale ? "not_satisfied" : "passed", {capturedRevision: state.revision, currentRevision: this.writer.getSnapshot().revision, relevantRevision: this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision)});
       if (stale) {
-        this.writer.commit({
+        this.controllerInvocation = {...this.controllerInvocation!, status: "interrupted"};
+        (await this.writer.commit({
           kind: "controller_turn",
           turn,
           status: "interrupted",
@@ -2048,7 +2404,7 @@ export class RunExecution<TOutput> {
             ...current.counters,
             controllerTurns: iteration,
           }),
-        }));
+        })));
         this.emit("controller.finished", {
           turnId: turn.id,
           iteration,
@@ -2062,7 +2418,6 @@ export class RunExecution<TOutput> {
       let decision: ControllerDecision<TOutput>;
       try {
         decision = validateControllerDecision(candidate, prepared.input);
-        this.inputNotifications.delivered(notificationCheckpoint);
         decisionStep.check("decision_contract", "passed", {kind: decision.kind});
       } catch (error) {
         decisionStep.check("decision_contract", "error", {reason: "invalid_controller_decision"});
@@ -2071,7 +2426,9 @@ export class RunExecution<TOutput> {
       const decisionRef = {owner:"runtime",kind:"contribution",id:`${turn.id}:decision`,revision:String(state.revision)};
       publishRunExecutionObservation(this.dependencies.executionObserver, {kind:"controller_decision",runId:this.runId,occurredAt:new Date().toISOString(),turnId:turn.id,basisRevision:state.revision,decision});
       decisionStep.output(decisionRef);
-      this.writer.commit({
+      (await this.writer.commitItems([
+        ...(inputDelivery && decision.inputDeliveryReceipt ? [{kind: "input_delivery" as const,
+          batch: inputDelivery, receipt: decision.inputDeliveryReceipt, turn}] : []), {
         kind: "controller_turn",
         turn,
         status: "decided",
@@ -2080,12 +2437,25 @@ export class RunExecution<TOutput> {
         toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
         modelItems: decision.modelItems,
         failure: null,
-      }, (current) => Object.freeze({
+      }], (current) => {
+        if (inputDelivery && decision.inputDeliveryReceipt) {
+          this.inputNotifications.accepted(inputDelivery, decision.inputDeliveryReceipt);
+        }
+        this.acceptedDecision = {status: "active", turn, basisRevision, value: decision,
+          prepared: retainControllerOperation(prepared), calls: []};
+        this.controllerInvocation = {...this.controllerInvocation!, status: "returned"};
+        if (decision.kind === "propose_completion" && decision.completionSource.kind === "model_call") {
+          const key = modelCallRefKey(decision.completionSource.modelCallRef);
+          const item = decision.modelItems.find(item => item.kind === "model_tool_call" && modelCallRefKey(item.call.modelCallRef) === key);
+          if (!item || item.kind !== "model_tool_call") throw new TypeError("Completion call is missing from accepted Turn.");
+          this.pendingCompletionCall = {call: item.call, turn, stateResult: null};
+        }
+        return Object.freeze({
         counters: Object.freeze({
           ...current.counters,
           controllerTurns: iteration,
         }),
-      }));
+      }); }));
       this.emit("controller.finished", {
         turnId: turn.id,
         iteration,
@@ -2097,19 +2467,22 @@ export class RunExecution<TOutput> {
       return Object.freeze({
         decision,
         turn,
-        basisRevision: state.revision,
+        basisRevision,
         agent: this.activeAgent,
         prepared,
       });
     } catch (error) {
+      assertExecutionCommitConfirmed(error);
       if (error instanceof RetryInvocationInvalidatedError) {
-        this.writer.commit({kind: "controller_turn", turn, status: "interrupted", decisionKind: null, instructionBinding: prepared.input.instructionBinding.ref, toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id), modelItems: Object.freeze([]), failure: null}, current => ({counters: {...current.counters, controllerTurns: iteration}}));
+        this.controllerInvocation = {...this.controllerInvocation!, status: "interrupted"};
+        (await this.writer.commit({kind: "controller_turn", turn, status: "interrupted", decisionKind: null, instructionBinding: prepared.input.instructionBinding.ref, toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id), modelItems: Object.freeze([]), failure: null}, current => ({counters: {...current.counters, controllerTurns: iteration}})));
         this.emit("controller.finished", {turnId: turn.id, iteration, status: "interrupted", code: "retry_invocation_invalidated", decisionKind: null});
         return null;
       }
       if (this.config.cancellation.context.request !== null) throw error;
       const terminal = this.failureFromError(error);
-      this.writer.commit({
+      this.controllerInvocation = {...this.controllerInvocation!, status: "failed"};
+      (await this.writer.commit({
         kind: "controller_turn",
         turn,
         status: "failed",
@@ -2123,7 +2496,7 @@ export class RunExecution<TOutput> {
           ...current.counters,
           controllerTurns: iteration,
         }),
-      }));
+      })));
       this.emit("controller.finished", {
         turnId: turn.id,
         iteration,
@@ -2142,20 +2515,42 @@ export class RunExecution<TOutput> {
   }
 
   private createRetryScope(invocationId: string, revision: number, executionFlow = this.flow.context): RunRetryWaitScope {
+    const state = this.writer.getSnapshot();
+    const waits = state.items.flatMap(({payload}) => payload.kind === "pending_transition" &&
+      payload.pending.kind === "retry_wait" && payload.pending.invocationId === invocationId ? [payload.pending] : []);
+    const pending = state.pending.find((value): value is Extract<PendingRunSubject, {kind: "retry_wait"}> =>
+      value.kind === "retry_wait" && value.invocationId === invocationId) ?? null;
     const scope = new RunRetryWaitScope({
       runId: this.runId, invocationId, branchId: invocationId,
       executionFlow,
+      retained: {generation: Math.max(0, ...waits.map(value => value.generation)), pending},
       deadlineAt: this.writer.getSnapshot().deadlineAt,
       cancellation: this.config.cancellation.context, now: () => this.now(),
       snapshot: () => this.writer.getSnapshot(),
       isCurrent: () => this.decisionBasis.revision(invocationId, this.writer.getSnapshot().revision) === revision &&
         this.steeringQueue.length === 0 && this.interactionSettlements.length === 0,
-      open: pending => this.addPending(pending),
-      ready: pending => this.writer.commit({ kind: "retry_transition", transition: "ready", pending }),
-      close: (pending, outcome) => this.removePending(pending, outcome === "elapsed" ? "resolved" : "invalidated", pending.waitId),
+      open: async pending => (await this.addPending(pending)),
+      ready: async pending => (await this.writer.commit({ kind: "retry_transition", transition: "ready", pending })),
+      close: async (pending, outcome) => (await this.removePending(pending, outcome === "elapsed" ? "resolved" : "invalidated", pending.waitId)),
     });
     this.retryScopes.set(invocationId, scope);
     return scope;
+  }
+
+  private controllerCheckpointPort(invocationId: string, scope = "decision"): ControllerCheckpointPort {
+    const identity = (key: string) => JSON.stringify([scope === "run" ? this.runId : invocationId, scope, key]);
+    return {
+      read: key => structuredClone(this.controllerCheckpoints.get(identity(key)) ?? null),
+      commit: async (key, value) => {
+        const snapshot = structuredClone(value);
+        try {
+          await this.writer.commitState(() => {
+            this.controllerCheckpoints.set(identity(key), snapshot);
+            return {};
+          }, invocationId);
+        } catch (cause) { throw new ControllerCheckpointError(key, {cause}); }
+      },
+    };
   }
 
   private async settleLimitViolation(
@@ -2196,7 +2591,7 @@ export class RunExecution<TOutput> {
     };
   }
 
-  private synchronizeCurrentContext(): void {
+  private async synchronizeCurrentContext(): Promise<void> {
     const state = this.writer.getSnapshot();
     const runStateId = this.currentContextContributionId(state.context, "agent-runtime", "run_state")
       ?? this.id("context_contribution");
@@ -2212,16 +2607,16 @@ export class RunExecution<TOutput> {
       plan,
       createdAt: this.now(),
     });
-    const notificationContribution = this.inputNotifications.contribution(this.runId);
-    const contributions = notificationContribution === null ? currentContributions : [...currentContributions, notificationContribution];
+    const contributions = currentContributions;
     for (const contribution of contributions) {
       publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
         occurredAt: contribution.source.observedAt, source: contribution.source,
-        ...(contribution.source.kind === "input_notifications" ? {inputs: this.inputNotifications.sources} : {}),
+        ...(contribution.source.kind === "run_plan" && plan !== null
+            ? {inputs: [{owner: "runtime", kind: "plan", id: plan.id, revision: String(plan.version)}]} : {}),
         value: contribution.source.kind === "run_state" ? {revision: state.revision, status: state.status, activeAgent: state.activeAgent, pending: state.pending}
           : contribution.source.kind === "run_plan" ? plan : contribution.payload});
     }
-    this.writer.commitState((current) => Object.freeze({
+    (await this.writer.commitState((current) => Object.freeze({
       context: this.applyContextContributions(
         current.context,
         contributions,
@@ -2229,7 +2624,7 @@ export class RunExecution<TOutput> {
         "controller_context_prepared",
         null,
       ),
-    }));
+    })));
   }
 
   private currentContextContributionId(
@@ -2274,8 +2669,8 @@ export class RunExecution<TOutput> {
   ): Promise<CandidateProcessingOutcome<TOutput>> {
     if (this.dependencies.executionObserver) candidates.forEach((candidate, index) => publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "scheduling", runId: this.runId, occurredAt: null, call: candidate.modelCallRef, position: start + index, disposition: "admitted", rule: "registered_concurrency_group", groupId: `${basis.turn.id}:${start}`, reason: null }));
     // Reserve RunAction identities in source order, then drain every started call.
-    const results = await Promise.allSettled(candidates.map((candidate, index) =>
-      this.processCandidate(candidate, start + index, basis)));
+    const results = await Promise.allSettled(candidates.map(async (candidate, index) =>
+      (await this.processCandidate(candidate, start + index, basis))));
     const failure = results.find((result) => result.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
     const outcomes = results.map((result) => (result as PromiseFulfilledResult<CandidateProcessingOutcome<TOutput>>).value);
@@ -2327,14 +2722,24 @@ export class RunExecution<TOutput> {
     for (let siblingIndex = 0; siblingIndex < candidates.length; siblingIndex += 1) {
       const candidate = candidates[siblingIndex]!;
       const candidateIndex = startIndex + siblingIndex;
-      const toolCallId = this.id("tool_call");
-      const action = this.materializeControllerRunAction(
+      const existing = this.writer.getSnapshot().items.flatMap(item => item.payload.kind === "run_action" &&
+        item.payload.action.provenance.kind === "controller" && item.payload.action.provenance.turn.id === basis.turn.id &&
+        item.payload.action.provenance.candidateIndex === candidateIndex ? [item.payload.action] : [])[0];
+      const recorded = this.findModelToolCall(candidate.modelCallRef);
+      if ((recorded && this.hasModelCallSettlement(recorded)) || (existing && this.findRunActionObservation(existing.ref))) {
+        if (existing && recorded && !this.hasModelCallSettlement(recorded)) await this.commitModelCallSettlement(existing, null);
+        continue;
+      }
+      const toolCallId = existing?.subject.kind === "tool" ? existing.subject.toolCallId : this.id("tool_call");
+      if (toolCallId === null) throw new TypeError("Retained descendant Tool Call identity is missing.");
+      const action = existing ?? (await this.materializeControllerRunAction(
         candidate,
         candidateIndex,
         basis,
         toolCallId,
-      );
-      const materialized = materializeToolCall({
+      ));
+      const savedCall = this.operationCalls.get(action.ref.id);
+      const materialized = savedCall ? {status: "materialized" as const, call: savedCall} : materializeToolCall({
         admission: await this.revalidateToolAdmission(basis.admissions.get(candidate)!),
         parentRunAction: action.ref, toolCallId, createdAt: this.now(),
       });
@@ -2353,6 +2758,7 @@ export class RunExecution<TOutput> {
       if (materialized.call.binding.kind !== "descendant_agent") {
         throw new TypeError("Concurrent descendant grouping resolved a non-Agent Tool binding.");
       }
+      if (!savedCall) await this.writer.commitState(() => {this.operationCalls.set(action.ref.id, materialized.call); return {};});
       const dispatch: DescendantDispatchProvenance = Object.freeze({
         schemaVersion: 1 as const,
         requestedForm: "concurrent_sibling" as const,
@@ -2375,8 +2781,8 @@ export class RunExecution<TOutput> {
       }));
     }
 
-    this.drainInteractionSettlements();
-    const steered = this.drainSteering("apply") > 0;
+    (await this.drainInteractionSettlements());
+    const steered = (await this.drainSteering("apply")) > 0;
     const invalidatedBeforeLaunch = this.config.cancellation.context.request !== null || steered;
     const dispatchStop = this.config.cancellation.context.request !== null
       ? "cancellation" : steered ? "steering" : null;
@@ -2386,8 +2792,8 @@ export class RunExecution<TOutput> {
       if (entry.kind !== "descendant") return null;
       const preparation = entry.preparation;
       return preparation.status === "admitted"
-        ? this.launchAdmittedDescendant(preparation, invalidatedBeforeLaunch)
-        : preparation;
+        ? (await this.launchAdmittedDescendant(preparation, invalidatedBeforeLaunch))
+        : preparation.status === "restored" ? preparation.outcome : preparation;
     }));
 
     let firstFailure: unknown = null;
@@ -2402,13 +2808,13 @@ export class RunExecution<TOutput> {
           entry.validation,
           this.now(),
         );
-        this.commitObservation(entry.action, {
+        (await this.commitObservation(entry.action, {
           kind: "tool_rejected",
           attempt: entry.attempt,
           code: entry.code,
           message: entry.message,
           toolResult,
-        }, [toolResultLowerRef(toolResult)], "tools");
+        }, [toolResultLowerRef(toolResult)], "tools"));
         this.emit("tool.input.rejected", {
           attemptId: entry.attempt.ref.id,
           requestedName: entry.attempt.requestedName,
@@ -2418,24 +2824,24 @@ export class RunExecution<TOutput> {
           omittedIssueCount: entry.validation?.omittedIssueCount ?? 0,
           modelCallId: entry.attempt.ref.modelCall?.id ?? null,
         });
-        this.commitModelCallSettlement(entry.action, null);
+        (await this.commitModelCallSettlement(entry.action, null));
         continue;
       }
       if (settled.status === "rejected") {
-        this.commitModelCallSettlement(
+        (await this.commitModelCallSettlement(
           entry.action,
           this.config.cancellation.context.request === null ? "failed" : "cancelled",
-        );
+        ));
         firstFailure ??= settled.reason;
         continue;
       }
-      this.commitDescendantExecutionOutcome(
+      (await this.commitDescendantExecutionOutcome(
         entry.action,
         entry.call,
         settled.value!,
         entry.startedAt,
-      );
-      this.commitModelCallSettlement(entry.action, null);
+      ));
+      (await this.commitModelCallSettlement(entry.action, null));
     }
     if (firstFailure !== null) throw firstFailure;
     return Object.freeze({
@@ -2450,28 +2856,47 @@ export class RunExecution<TOutput> {
     basis: CandidateBasis<TOutput>,
   ): Promise<CandidateProcessingOutcome<TOutput>> {
     const state = this.writer.getSnapshot();
-    if (state.counters.runActions >= this.config.limits.maxActions) {
-      this.commitUnadmittedModelCallSettlement(
+    const recordedCall = this.findModelToolCall(candidate.modelCallRef);
+    const existing = state.items.flatMap(item => item.payload.kind === "run_action" &&
+      item.payload.action.provenance.kind === "controller" &&
+      item.payload.action.provenance.turn.id === basis.turn.id &&
+      item.payload.action.provenance.candidateIndex === index ? [item.payload.action] : [])[0];
+    const settled = recordedCall !== null && this.hasModelCallSettlement(recordedCall);
+    const observation = existing ? this.findRunActionObservation(existing.ref) : null;
+    if (settled || observation) {
+      if (!settled && existing && !(this.pendingCompletionCall?.stateResult && recordedCall &&
+          modelCallRefKey(this.pendingCompletionCall.call.modelCallRef) === modelCallRefKey(recordedCall.modelCallRef))) {
+        await this.commitModelCallSettlement(existing!, null);
+      }
+      return {dispatchStop: observation?.payload.kind === "handoff" ? "handoff" : null,
+        terminal: observation?.payload.kind === "operation" && observation.payload.result.status === "unknown_effect"
+          ? {status: "failed", failure: createRunFailureCause("operation", observation.payload.result.failure)} : null};
+    }
+    if (!existing && state.counters.runActions >= this.config.limits.maxActions) {
+      (await this.commitUnadmittedModelCallSettlement(
         candidate,
         basis.turn,
         "invalidated",
         "runtime_action_limit_reached",
-      );
+      ));
       return Object.freeze({ dispatchStop: "action_limit", terminal: null });
     }
-    const reservedId = candidate.kind === "operation_request"
+    const reservedId = existing ? existing.subject.kind === "operation" ? existing.subject.invocationId
+      : existing.subject.kind === "tool" ? existing.subject.toolCallId
+      : existing.subject.kind === "interaction" ? existing.subject.request?.id ?? null : null
+      : candidate.kind === "operation_request"
       ? this.id("operation_invocation")
       : candidate.kind === "interaction_request"
         ? this.id("interaction_request", this.nextInteractionRequest++)
         : candidate.kind === "tool_request"
           ? this.id("tool_call")
           : null;
-    const action = this.materializeControllerRunAction(
+    const action = existing ?? (await this.materializeControllerRunAction(
       candidate,
       index,
       basis,
       reservedId,
-    );
+    ));
 
     let dispatchStop: CandidateProcessingOutcome<TOutput>["dispatchStop"] = null;
     let terminal: TerminalCandidate<TOutput> | null = null;
@@ -2500,11 +2925,11 @@ export class RunExecution<TOutput> {
           break;
         }
         case "model_call_rejection":
-          this.commitObservation(action, {
+          (await this.commitObservation(action, {
             kind: "model_call_rejected",
             code: candidate.code,
             message: candidate.message,
-          }, [], "agent-runtime");
+          }, [], "agent-runtime"));
           break;
         case "operation_request": {
           const outcome = await this.executeOperationCandidate(
@@ -2513,7 +2938,7 @@ export class RunExecution<TOutput> {
             reservedId!,
           );
           if (outcome !== null) {
-            this.commitOperationObservation(action, outcome);
+            (await this.commitOperationObservation(action, outcome));
             if (outcome.result.status === "unknown_effect") {
               terminal = {
                 status: "failed",
@@ -2525,24 +2950,25 @@ export class RunExecution<TOutput> {
           break;
         }
       }
-      this.commitModelCallSettlement(action, null);
+      (await this.commitModelCallSettlement(action, null));
       return Object.freeze({ dispatchStop, terminal });
     } catch (error) {
-      this.commitModelCallSettlement(
+      assertExecutionCommitConfirmed(error);
+      (await this.commitModelCallSettlement(
         action,
         this.config.cancellation.context.request === null ? "failed" : "cancelled",
-      );
+      ));
       throw error;
     }
   }
 
-  private materializeControllerRunAction(
+  private async materializeControllerRunAction(
     candidate: ProgressionCandidate,
     candidateIndex: number,
     basis: CandidateBasis<TOutput>,
     reservedId: string | null,
-  ): RuntimeRunAction {
-    const state = this.writer.getSnapshot();
+  ): Promise<RuntimeRunAction> {
+    const action = await this.writer.transaction(state => {
     const sequence = state.counters.runActions + 1;
     const ref = Object.freeze({
       run: state.run,
@@ -2595,13 +3021,14 @@ export class RunExecution<TOutput> {
       }),
       materializedAt: this.now(),
     });
-    this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
-      status: current.status === "waiting" ? "running" : current.status,
+    return {payloads: [{kind: "run_action", action}], value: action, patch: {
+      status: state.status === "waiting" ? "running" : state.status,
       counters: Object.freeze({
-        ...current.counters,
+        ...state.counters,
         runActions: sequence,
       }),
-    }));
+    }};
+    });
     const flow = new ExecutionFlowPath(RUN_CALL_EXECUTION_FLOW, this.flow.context, this.runId, [{owner:"runtime",kind:"call",id:candidate.modelCallRef.id,revision:null}]);
     const admission = basis.admissions.get(candidate);
     const binding = admission?.status === "trusted" ? admission.binding
@@ -2618,13 +3045,13 @@ export class RunExecution<TOutput> {
     return action;
   }
 
-  private materializeWorkflowRunAction(input: {
+  private async materializeWorkflowRunAction(input: {
     readonly operation: OperationRevisionRef;
     readonly invocationId: string;
     readonly compositeId: string;
     readonly nodeId: string;
-  }): RuntimeRunAction {
-    const state = this.writer.getSnapshot();
+  }): Promise<RuntimeRunAction> {
+    return this.writer.transaction(state => {
     const sequence = state.counters.runActions + 1;
     const ref = Object.freeze({
       run: state.run,
@@ -2651,15 +3078,15 @@ export class RunExecution<TOutput> {
       }),
       materializedAt: this.now(),
     });
-    this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
-      status: current.status === "waiting" ? "running" : current.status,
-      counters: Object.freeze({ ...current.counters, runActions: sequence }),
-    }));
-    return action;
+    return {payloads: [{kind: "run_action", action}], value: action, patch: {
+      status: state.status === "waiting" ? "running" : state.status,
+      counters: Object.freeze({ ...state.counters, runActions: sequence }),
+    }};
+    });
   }
 
   private async applyPlanCandidate(action: RuntimeRunAction, candidate: unknown): Promise<void> {
-    const state = this.writer.getSnapshot();
+    const committed = await this.writer.transaction(state => {
     const result = state.plan === null
       ? applyPlanUpdate({
           currentPlan: null,
@@ -2674,18 +3101,28 @@ export class RunExecution<TOutput> {
           limits: this.config.limits.plan,
           now: this.now(),
         });
-    if (result.status === "applied") {
-      this.writer.commit({
+    const observation = createRunObservation({
+      id: this.id("observation", state.counters.observations + 1), runId: this.runId,
+      actionId: action.ref.id, kind: "plan_update", createdAt: this.now(), metadata: {},
+      owner: "runtime", runAction: action.ref, lowerRefs: [], payload: {kind: "plan_update", result: result.observation},
+    });
+    const contribution = createObservationContextContribution({id: this.id("context_contribution"), observation});
+    const context = this.applyContextContributions(state.context, [contribution],
+      createObservationContextAdmissionProfile(observation.owner), "observation_committed", observation.id);
+    return {value: {observation, context}, payloads: [
+      ...(result.status === "applied" ? [{
         kind: "state_transition",
         transition: "plan",
         previousRevision: state.plan?.version ?? null,
         plan: projectPlan(result.plan),
-      }, () => Object.freeze({ plan: result.plan }));
-    }
-    this.commitObservation(action, {
-      kind: "plan_update",
-      result: result.observation,
-    }, [], "runtime");
+      } as const] : []), {kind: "observation", observation},
+    ], patch: {
+      context,
+      plan: result.status === "applied" ? result.plan : state.plan,
+      counters: {...state.counters, observations: state.counters.observations + 1},
+    }};
+    });
+    this.publishObservationFlow(action, committed.observation, committed.context);
   }
 
   private async applyHandoffCandidate(
@@ -2694,12 +3131,12 @@ export class RunExecution<TOutput> {
     basis: CandidateBasis<TOutput>,
   ): Promise<boolean> {
     const state = this.writer.getSnapshot();
-    const rejected = (code: string): boolean => {
-      this.commitObservation(action, {
+    const rejected = async (code: string): Promise<boolean> => {
+      (await this.commitObservation(action, {
         kind: "handoff",
         status: "rejected",
         code,
-      }, [], "agent-runtime");
+      }, [], "agent-runtime"));
       return true;
     };
     if (
@@ -2723,8 +3160,6 @@ export class RunExecution<TOutput> {
       !sameAgentRef(resolution.agent, request.targetAgent)
     ) return rejected(resolution.code ?? "handoff_agent_not_admitted");
 
-    const previous = state.activeAgent;
-    const previousInstructionBinding = state.activeInstructionBinding;
     const nextAgent = snapshotAgent(resolution.agent as Agent<TOutput>);
     const knownInstructionRevision = this.instructionRevisionByAgentRevision.get(
       agentRevisionKey(nextAgent),
@@ -2735,46 +3170,45 @@ export class RunExecution<TOutput> {
     ) {
       return rejected("handoff_agent_revision_conflict");
     }
+    const committed = await this.writer.transaction(current => {
     const nextInstructionBinding = createAgentInstructionBinding({
-      run: state.run,
+      run: current.run,
       agent: nextAgent,
-      effectiveFromRunRevision: state.revision + 1,
-      supersedes: previousInstructionBinding,
+      effectiveFromRunRevision: current.revision + 1,
+      supersedes: current.activeInstructionBinding,
     });
     const nextContext = this.handoffContext(
       request.transferPolicy,
-      state.context,
+      current.context,
       basis.projection,
     );
-    this.writer.commit({
+    const observation = createRunObservation({
+      id: this.id("observation", current.counters.observations + 1), runId: this.runId,
+      actionId: action.ref.id, kind: "handoff", createdAt: this.now(), metadata: {},
+      owner: "agent-runtime", runAction: action.ref, lowerRefs: [{owner: "agent-runtime",
+        kind: "agent_admission_evidence", id: request.admissionEvidenceRef, revision: request.targetAgent.revision}],
+      payload: {kind: "handoff", status: "applied", code: null},
+    });
+    const contribution = createObservationContextContribution({id: this.id("context_contribution"), observation});
+    const context = this.applyContextContributions(nextContext, [contribution],
+      createObservationContextAdmissionProfile(observation.owner), "observation_committed", observation.id);
+    this.stagedAgentBinding = {agent: nextAgent, binding: nextInstructionBinding};
+    return {value: {observation, context}, payloads: [{
       kind: "state_transition",
       transition: "active_agent",
-      previousAgent: previous,
+      previousAgent: current.activeAgent,
       activeAgent: toAgentRevisionRef(nextAgent),
-      previousInstructionBinding,
+      previousInstructionBinding: current.activeInstructionBinding,
       activeInstructionBinding: nextInstructionBinding.ref,
       reason: request.reason,
-    }, () => Object.freeze({
+    }, {kind: "observation", observation}], patch: {
       activeAgent: toAgentRevisionRef(nextAgent),
       activeInstructionBinding: nextInstructionBinding.ref,
-      context: nextContext,
-    }));
-    this.activeAgent = nextAgent;
-    this.activeInstructionBinding = nextInstructionBinding;
-    this.instructionRevisionByAgentRevision.set(
-      agentRevisionKey(nextAgent),
-      nextAgent.instructions.ref.revision,
-    );
-    this.commitObservation(action, {
-      kind: "handoff",
-      status: "applied",
-      code: null,
-    }, [{
-      owner: "agent-runtime",
-      kind: "agent_admission_evidence",
-      id: request.admissionEvidenceRef,
-      revision: request.targetAgent.revision,
-    }], "agent-runtime");
+      context,
+      counters: {...current.counters, observations: current.counters.observations + 1},
+    }};
+    });
+    this.publishObservationFlow(action, committed.observation, committed.context);
     return true;
   }
 
@@ -2822,7 +3256,10 @@ export class RunExecution<TOutput> {
     candidate: InteractionRequestCandidate,
     requestId: string,
   ): Promise<boolean> {
-    const opened = this.interactions.open({
+    if (await this.continueRetainedInteraction(action, candidate.blockingScope)) return candidate.blockingScope !== "none";
+    this.interactionActions.set(requestId, Object.freeze({action, toolCall: null}));
+    if (candidate.blockingScope === "none") this.deferredInteractionActions.set(action.ref.id, action);
+    const opened = await this.interactions.open({
       requestId,
       protocol: candidate.protocol,
       executionFlow: this.actionFlows.get(action.ref.id)?.callContext,
@@ -2837,29 +3274,24 @@ export class RunExecution<TOutput> {
       createdAt: this.now(),
     });
     if (opened.status !== "opened") {
-      this.commitObservation(action, {
+      this.interactionActions.delete(requestId);
+      this.deferredInteractionActions.delete(action.ref.id);
+      (await this.commitObservation(action, {
         kind: "interaction",
         owner: opened.owner,
         status: "failed",
         contentDigest: null,
         value: Object.freeze({ code: opened.code }),
         toolResult: null,
-      }, [], opened.owner);
+      }, [], opened.owner));
       return candidate.blockingScope !== "none";
     }
-    this.interactionActions.set(
-      interactionRequestKey(opened.pending.request),
-      Object.freeze({ action, toolCall: null }),
-    );
     if (candidate.blockingScope === "none") {
-      this.trackModelCallSettlement(opened.completion);
+      this.trackModelCallSettlement(opened.completion, action);
       return false;
     }
-    const settlement = await opened.completion;
-    this.drainInteractionSettlements();
-    if (this.interactionActions.delete(interactionRequestKey(opened.pending.request))) {
-      this.commitInteractionObservation(action, settlement, null);
-    }
+    await opened.completion;
+    (await this.drainInteractionSettlements());
     return true;
   }
 
@@ -2878,7 +3310,8 @@ export class RunExecution<TOutput> {
     toolCallId: string,
     admission: ToolCallAdmission,
   ): Promise<CandidateProcessingOutcome<TOutput>> {
-    const materialized = materializeToolCall({
+    const retainedCall = this.operationCalls.get(action.ref.id);
+    const materialized = retainedCall ? {status: "trusted" as const, call: retainedCall} : materializeToolCall({
       admission: await this.revalidateToolAdmission(admission),
       parentRunAction: action.ref, toolCallId, createdAt: this.now(),
     });
@@ -2890,13 +3323,13 @@ export class RunExecution<TOutput> {
         materialized.validation,
         this.now(),
       );
-      this.commitObservation(action, {
+      (await this.commitObservation(action, {
         kind: "tool_rejected",
         attempt: materialized.attempt,
         code: materialized.code,
         message: materialized.message,
         toolResult,
-      }, [toolResultLowerRef(toolResult)], "tools");
+      }, [toolResultLowerRef(toolResult)], "tools"));
       this.emit("tool.input.rejected", {
         attemptId: materialized.attempt.ref.id,
         requestedName: materialized.attempt.requestedName,
@@ -2909,22 +3342,26 @@ export class RunExecution<TOutput> {
       return Object.freeze({ dispatchStop: null, terminal: null });
     }
     const call = materialized.call;
+    if (!retainedCall) {
+      await this.writer.commitState(() => {this.operationCalls.set(action.ref.id, call); return {};});
+    }
     switch (call.binding.kind) {
       case "operation": {
+        const retained = [...this.operationPreparations.values()].find(value => value.action.ref.id === action.ref.id);
         const result = await this.executeOperation({
           action,
           operation: call.binding.operation,
           request: call.input,
           requestOrigin: call.origin === "model" ? "tool_request" : "trusted_workflow",
-          invocationId: this.id("operation_invocation"),
+          invocationId: retained?.binding.invocation.id ?? this.id("operation_invocation"),
           parentInvocation: null,
           basis: call,
         });
         if (result !== null) {
-          this.commitOperationObservation(action, {
+          (await this.commitOperationObservation(action, {
             result,
             toolResult: adaptToolResult(call, result),
-          });
+          }));
           if (result.status === "unknown_effect") {
             return Object.freeze({
               dispatchStop: null,
@@ -2956,8 +3393,11 @@ export class RunExecution<TOutput> {
     call: ToolCall,
   ): Promise<boolean> {
     if (call.binding.kind !== "interaction") return false;
+    if (await this.continueRetainedInteraction(action, call.binding.blockingScope)) return call.binding.blockingScope !== "none";
     const requestId = this.id("interaction_request", this.nextInteractionRequest++);
-    const opened = this.interactions.open({
+    this.interactionActions.set(requestId, Object.freeze({action, toolCall: call}));
+    if (call.binding.blockingScope === "none") this.deferredInteractionActions.set(action.ref.id, action);
+    const opened = await this.interactions.open({
       requestId,
       protocol: call.binding.protocol,
       executionFlow: this.actionFlows.get(action.ref.id)?.callContext,
@@ -2977,6 +3417,8 @@ export class RunExecution<TOutput> {
       createdAt: call.createdAt,
     });
     if (opened.status !== "opened") {
+      this.interactionActions.delete(requestId);
+      this.deferredInteractionActions.delete(action.ref.id);
       const result = failedToolResult(
         call,
         Object.freeze({ owner: opened.owner, kind: "interaction_request", id: requestId, revision: "1" }),
@@ -2985,28 +3427,33 @@ export class RunExecution<TOutput> {
         call.createdAt,
         this.now(),
       );
-      this.commitObservation(action, {
+      (await this.commitObservation(action, {
         kind: "interaction",
         owner: opened.owner,
         status: "failed",
         contentDigest: null,
         value: Object.freeze({ code: opened.code }),
         toolResult: result,
-      }, [toolResultLowerRef(result)], opened.owner);
+      }, [toolResultLowerRef(result)], opened.owner));
       return call.binding.blockingScope !== "none";
     }
-    this.interactionActions.set(
-      interactionRequestKey(opened.pending.request),
-      Object.freeze({ action, toolCall: call }),
-    );
     if (call.binding.blockingScope === "none") {
-      this.trackModelCallSettlement(opened.completion);
+      this.trackModelCallSettlement(opened.completion, action);
       return false;
     }
-    const settlement = await opened.completion;
-    this.drainInteractionSettlements();
-    if (this.interactionActions.delete(interactionRequestKey(opened.pending.request))) {
-      this.commitInteractionObservation(action, settlement, call);
+    await opened.completion;
+    (await this.drainInteractionSettlements());
+    return true;
+  }
+
+  private async continueRetainedInteraction(action: RuntimeRunAction, scope: PendingInteractionRef["blockingScope"]): Promise<boolean> {
+    const saved = this.interactions.checkpoint().records.find(record => record.request.parentRunAction?.id === action.ref.id);
+    if (!saved) return false;
+    const completion = this.interactions.completion(saved.request.ref)!;
+    if (scope === "none") this.trackModelCallSettlement(completion, action);
+    else {
+      await completion;
+      await this.drainInteractionSettlements();
     }
     return true;
   }
@@ -3049,12 +3496,27 @@ export class RunExecution<TOutput> {
     const requestRef = {owner: "operations", kind: "contribution", id: `${input.invocationId}:request`, revision: "1"};
     publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "operation_request", runId: this.runId, occurredAt: new Date().toISOString(),
       invocationId: input.invocationId, parentRunActionId: input.action.ref.id, operation: input.operation, request: input.request, requestOrigin: input.requestOrigin});
-    const observeResult = (result: OperationResult): OperationResult => {
+    const observeResult = async (result: OperationResult): Promise<OperationResult> => {
       publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "operation_result", runId: this.runId, occurredAt: result.finishedAt, invocationId: input.invocationId, result});
-      flow.current?.output({owner: "operations", kind: "contribution", id: result.ref.id, revision: null});
-      return result;
+      const registration = findRegisteredOperation(this.dependencies.operations.catalog, input.operation)!;
+      const validation = this.dependencies.operations.resultContracts.validate(registration,
+        {id: input.invocationId, operation: input.operation}, result);
+      const accepted = validation.status === "valid" ? result : rejectOperationResultOutput(result, validation);
+      publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "operation_result_validation", runId: this.runId,
+        occurredAt: result.finishedAt, invocationId: input.invocationId, validation, acceptedResult: accepted.ref});
+      if (accepted !== result) publishRunExecutionObservation(this.dependencies.executionObserver,
+        {kind: "operation_result", runId: this.runId, occurredAt: accepted.finishedAt, invocationId: input.invocationId, result: accepted});
+      flow.current?.output({owner: "operations", kind: "contribution", id: accepted.ref.id, revision: null});
+      await this.writer.commitState(() => {this.operationResults.set(input.invocationId, accepted); return {};});
+      return accepted;
     };
     try {
+    const saved = this.operationResults.get(input.invocationId);
+    if (saved) {
+      if (saved.ref.invocation.operation.revision !== input.operation.revision) throw new TypeError("Retained Operation revision mismatch.");
+      flowDisposition = "returned";
+      return saved;
+    }
     const registrationStep = flow.advance("registration", {invocationId:input.invocationId, origin:input.requestOrigin}, [requestRef]);
     const registration = findRegisteredOperation(
       this.dependencies.operations.catalog,
@@ -3063,32 +3525,32 @@ export class RunExecution<TOutput> {
     registrationStep.check("registration", registration && !registration.retirement ? "passed" : "not_satisfied");
     if (registration === undefined) {
       registrationStep.check("origin", "not_evaluated", {reason: "operation_not_registered"});
-      this.commitRejectedOperation(
+      (await this.commitRejectedOperation(
         input.action,
         "operation-catalog",
         "operation_not_registered",
         "The requested Operation revision is not registered.",
-      );
+      ));
       return null;
     }
     if (registration.retirement !== null) {
       registrationStep.check("origin", "not_evaluated", {reason: "operation_retired"});
-      this.commitRejectedOperation(
+      (await this.commitRejectedOperation(
         input.action,
         "operation-catalog",
         "operation_retired",
         "The requested Operation revision is retired.",
-      );
+      ));
       return null;
     }
     registrationStep.check("origin", registration.allowedRequestOrigins.includes(input.requestOrigin) ? "passed" : "not_satisfied");
     if (!registration.allowedRequestOrigins.includes(input.requestOrigin)) {
-      this.commitRejectedOperation(
+      (await this.commitRejectedOperation(
         input.action,
         "operation-catalog",
         "operation_request_origin_denied",
         "The requested origin is not admitted for this Operation revision.",
-      );
+      ));
       return null;
     }
     const invocation: OperationInvocationRef = Object.freeze({
@@ -3102,7 +3564,8 @@ export class RunExecution<TOutput> {
       interruption: this.invocationInterruption(),
     });
     const bindingStep = flow.advance("binding", {}, [requestRef]);
-    const resolution = await this.dependencies.operations.bindings.resolve({
+    const retainedPreparation = this.operationPreparations.get(input.invocationId);
+    const resolution = retainedPreparation ? {status: "resolved" as const, binding: retainedPreparation.binding} : await this.dependencies.operations.bindings.resolve({
       operation: registration,
       context,
       request: input.request,
@@ -3113,15 +3576,18 @@ export class RunExecution<TOutput> {
     bindingStep.output(bindingRef);
     if (resolution.status !== "resolved") {
       bindingStep.check("binding", "not_satisfied", {status: resolution.status, code: resolution.code});
-      const result = this.operationFailureResult(
+      const failure = this.operationFailureResult(
         registration,
         invocation,
-        "unavailable",
-        "operation-catalog",
+        resolution.status === "invalid" ? "invalid" : "unavailable",
+        resolution.status === "invalid" ? resolution.owner : "operation-catalog",
         resolution.code,
         this.now(),
         this.now(),
       );
+      const result = resolution.status === "invalid" ? createOperationResult({...failure, status: "invalid",
+        failure: {...failure.failure!, message: resolution.message},
+        metadata: {effectCertainty: "none", completionExtent: "none"}}) : failure;
       this.emitOperation(registration, resolutionBindingKind(registration), context, result);
       return observeResult(result);
     }
@@ -3145,7 +3611,11 @@ export class RunExecution<TOutput> {
       return observeResult(result);
     }
 
-    const startedAt = this.now();
+    const startedAt = retainedPreparation?.startedAt ?? this.now();
+    if (!retainedPreparation) await this.writer.commitState(() => {
+      this.operationPreparations.set(invocation.id, {action: input.action, binding, startedAt});
+      return {};
+    });
     this.emit("operation.started", {
       invocationId: invocation.id,
       operationNamespace: invocation.operation.operation.namespace,
@@ -3160,13 +3630,13 @@ export class RunExecution<TOutput> {
     let result: OperationResult;
     flow.advance("execute", {bindingKind:binding.kind, invocationId:invocation.id}, [bindingRef]);
     try {
-      const execute = () => this.executeResolvedBinding(
+      const execute = async () => (await this.executeResolvedBinding(
         registration,
         input.action,
         binding,
         context,
         startedAt,
-      );
+      ));
       result = input.parentInvocation === null
         ? await this.interruptionCoordinator.execute(
             "tool",
@@ -3175,6 +3645,7 @@ export class RunExecution<TOutput> {
           )
         : await execute();
     } catch (error) {
+      assertExecutionCommitConfirmed(error);
       if (error instanceof OperationSettlementTimeoutError) throw error;
       result = this.operationFailureResult(
         registration,
@@ -3195,8 +3666,8 @@ export class RunExecution<TOutput> {
       resultId: result.ref.id,
       lowerResultRefs: Object.freeze(result.lowerRefs.map((reference) => reference.id)),
     }, result.finishedAt);
+    result = await observeResult(result);
     const resultRef = {owner: "operations", kind: "contribution", id: result.ref.id, revision: null};
-    observeResult(result);
     flow.advance("result", {status:result.status, resultId:result.ref.id, code:result.failure?.code ?? null}, [resultRef]).output(resultRef);
     flowDisposition = result.status === "failed" ? "failed" : "returned";
     return result;
@@ -3226,13 +3697,20 @@ export class RunExecution<TOutput> {
             this.now(),
           );
         }
-        const result = await handler.execute({
+        const retainedExecution = this.operationExecutions.get(binding.invocation.id);
+        if (retainedExecution && retainedExecution.kind !== "internal") throw new TypeError("Operation execution kind changed.");
+        if (!retainedExecution) await this.writer.commitState(() => {
+          this.operationExecutions.set(binding.invocation.id, {kind: "internal"}); return {};
+        });
+        const invocation = {
           runId: this.runId,
           parentRunAction: action.ref,
           binding,
           deadlineAt: this.writer.getSnapshot().deadlineAt,
           interruption: context.interruption,
-        });
+        };
+        const result = retainedExecution ? await handler.reconcile?.(invocation) : await handler.execute(invocation);
+        if (!result) throw new RunRecoveryError(this.runId, "internal_operation_outcome_unconfirmed", binding.invocation.id);
         if (
           result.ref.invocation.id !== binding.invocation.id ||
           result.binding.revision !== binding.binding.revision ||
@@ -3254,7 +3732,7 @@ export class RunExecution<TOutput> {
       case "hosted":
         return this.executeCanonicalAction(registration, action, binding, context, startedAt);
       case "composite":
-        return this.executeComposite(registration, action, binding, context, startedAt);
+        return (await this.executeComposite(registration, action, binding, context, startedAt));
       case "descendant_agent":
         return this.executeDescendant(registration, action, binding, context, startedAt);
     }
@@ -3279,9 +3757,15 @@ export class RunExecution<TOutput> {
       );
     }
     const dispatchSteeringEpoch = this.steeringEpoch;
-    const outcome = await this.actionExecution.execute({
+    const retainedExecution = this.operationExecutions.get(binding.invocation.id);
+    if (retainedExecution && retainedExecution.kind !== "action") throw new TypeError("Operation execution kind changed.");
+    const actionId = retainedExecution?.kind === "action" ? retainedExecution.id : this.id("action");
+    if (!retainedExecution) await this.writer.commitState(() => {
+      this.operationExecutions.set(binding.invocation.id, {kind: "action", id: actionId}); return {};
+    });
+    const executionRequest: ActionExecutionRequest = {
       executionFlow: this.operationFlows.get(context.invocation.id)?.callContext ?? this.actionFlows.get(action.ref.id)?.callContext,
-      action: Object.freeze({ id: this.id("action") }),
+      action: Object.freeze({ id: actionId }),
       parentRunAction: action.ref,
       runId: this.runId,
       binding,
@@ -3306,7 +3790,12 @@ export class RunExecution<TOutput> {
           basis,
         ),
       }),
-    });
+    };
+    const recovery = this.dependencies.operations.actionRecovery;
+    if (retainedExecution && !recovery) throw new RunRecoveryError(this.runId, "action_recovery_owner_unavailable", actionId);
+    const recovered = retainedExecution ? await this.actionExecution.recover(executionRequest, recovery!) : null;
+    const outcome = !recovered || recovered.status === "no_dispatch_record"
+      ? await this.actionExecution.execute(executionRequest) : recovered;
     if (outcome.status === "pending_interaction") {
       return this.operationFailureResult(
         registration,
@@ -3349,8 +3838,24 @@ export class RunExecution<TOutput> {
         this.now(),
       );
     }
-    const compositeId = this.id("composite");
-    const pending: PendingRunSubject = Object.freeze({
+    const retainedExecution = this.operationExecutions.get(binding.invocation.id);
+    if (retainedExecution && retainedExecution.kind !== "composite") throw new TypeError("Retained Composite execution kind mismatch.");
+    const compositeId = retainedExecution?.id ?? this.id("composite");
+    let checkpoint: import("@agent-anything/operation-composition/execution").CompositeCommit | null = null;
+    if (retainedExecution) {
+      if (!this.dependencies.compositeRecovery || !this.dependencies.compositeCommits) {
+        throw new RunRecoveryError(this.runId, "composite_reconciliation_unavailable", compositeId);
+      }
+      checkpoint = await this.dependencies.compositeRecovery.readLatestComposite(compositeId);
+      if (checkpoint && checkpoint.runId !== this.runId) throw new TypeError("Retained Composite Run mismatch.");
+    } else {
+      await this.writer.commitState(() => {
+        this.operationExecutions.set(binding.invocation.id, {kind: "composite", id: compositeId});
+        return {};
+      });
+    }
+    const pending: PendingRunSubject = this.writer.getSnapshot().pending.find(value => value.kind === "composite" &&
+      value.compositeId === compositeId && value.nodeId === "aggregate") ?? Object.freeze({
       kind: "composite",
       compositeId,
       nodeId: "aggregate",
@@ -3358,13 +3863,69 @@ export class RunExecution<TOutput> {
       required: true,
       openedInRunRevision: this.writer.getSnapshot().revision,
     });
-    this.addPending(pending);
+    if (!this.writer.getSnapshot().pending.some(value => value.kind === "composite" && value.compositeId === compositeId)) {
+      await this.addPending(pending);
+    }
+    const executeChild: import("@agent-anything/operation-composition/execution").CompositeChildExecutionPort["start"] = async child => {
+      try {
+        const retained = this.writer.getSnapshot().items.flatMap(item => item.payload.kind === "run_action" &&
+          item.payload.action.provenance.kind === "trusted_workflow" &&
+          item.payload.action.provenance.workflow.invocationId === compositeId &&
+          item.payload.action.provenance.nodeRef === child.node.id ? [item.payload.action] : []);
+        if (retained.length > 1 || child.instance !== 1) throw new CompositeRecoveryError(compositeId, "child_identity_ambiguous");
+        if (!retained[0] && this.writer.getSnapshot().counters.runActions >= this.config.limits.maxActions) {
+          return {runAction: null, result: null, failure: {code: "runtime_action_limit_reached",
+            message: "Composite child exceeds remaining RunAction capacity.", retryable: false, metadata: {nodeId: child.node.id}}};
+        }
+        const saved = retained[0];
+        if (saved && saved.subject.kind !== "operation") throw new TypeError("Retained Composite child kind mismatch.");
+        const invocationId = saved?.subject.kind === "operation" ? saved.subject.invocationId : this.id("operation_invocation");
+        if (invocationId === null) throw new CompositeRecoveryError(compositeId, "child_invocation_missing");
+        // Materialization is acknowledged before any child preparation or dispatch.
+        // Its absence proves that the owner has not started this admitted node.
+        const childAction = saved ?? await this.materializeWorkflowRunAction({
+          operation: child.node.operation, invocationId, compositeId, nodeId: child.node.id,
+        });
+        const observation = this.findRunActionObservation(childAction.ref);
+        if (observation?.payload.kind === "operation") return {runAction: childAction.ref, result: observation.payload.result};
+        const result = observation ? null : await this.executeOperation({
+          action: childAction, operation: child.node.operation, request: child.request, requestOrigin: "trusted_workflow",
+          invocationId, parentInvocation: binding.invocation, basis: child, allowedBindings: child.node.allowedBindings,
+          executionFlow: child.executionFlow,
+        });
+        if (result === null) {
+          const rejected = this.findRunActionObservation(childAction.ref)?.payload;
+          return {runAction: childAction.ref, result: null, failure: {
+            code: rejected?.kind === "operation_rejected" ? rejected.code : "composite_child_rejected",
+            message: rejected?.kind === "operation_rejected" ? rejected.message : "Composite child was rejected before execution.",
+            retryable: false, metadata: {nodeId: child.node.id},
+          }};
+        }
+        await this.commitOperationObservation(childAction, {result, toolResult: null});
+        return {runAction: childAction.ref, result};
+      } catch (cause) {
+        if (cause instanceof RunCommitError || cause instanceof ActionRecordCommitError || cause instanceof OperationCommitError) {
+          throw new CompositeCommitError(`${compositeId}:child:${child.node.id}`, {cause});
+        }
+        if (cause instanceof RunRecoveryError || cause instanceof ActionRecoveryError) {
+          throw new CompositeRecoveryError(compositeId, cause.code);
+        }
+        throw cause;
+      }
+    };
     try {
       const execution = new CompositeExecution(
         compositeId,
         resolved.definition,
         {
           ...resolved.execution,
+          ...(this.dependencies.compositeCommits ? {commits: {runId: this.runId, port: this.dependencies.compositeCommits}} : {}),
+          ...(checkpoint ? {recovery: {checkpoint, reconcile: async child => {
+            const outcome = await executeChild({...child, definition: resolved.definition.ref, instance: child.state.instance});
+            return {nodeId: child.node.id, instance: child.state.instance, runAction: outcome.runAction,
+              status: outcome.result?.status ?? "invalid", result: outcome.result,
+              failure: outcome.result ? outcome.result.failure : outcome.failure};
+          }}} : {}),
           executionFlow: {...this.operationFlows.get(context.invocation.id)?.callContext,runId:this.runId},
           now: this.dependencies.now,
           observer: (definition, snapshot) => {
@@ -3374,48 +3935,11 @@ export class RunExecution<TOutput> {
               parentRunActionId: action.ref.id, definition, snapshot,
             });
           },
-          children: {
-            start: async (child) => {
-              if (this.writer.getSnapshot().counters.runActions >= this.config.limits.maxActions) {
-                return Object.freeze({ runAction: null, result: null, failure: Object.freeze({
-                  code: "runtime_action_limit_reached", message: "Composite child exceeds remaining RunAction capacity.",
-                  retryable: false, metadata: Object.freeze({ nodeId: child.node.id }),
-                }) });
-              }
-              const invocationId = this.id("operation_invocation");
-              const childAction = this.materializeWorkflowRunAction({
-                operation: child.node.operation,
-                invocationId,
-                compositeId,
-                nodeId: child.node.id,
-              });
-              const result = await this.executeOperation({
-                action: childAction,
-                operation: child.node.operation,
-                request: child.request,
-                requestOrigin: "trusted_workflow",
-                invocationId,
-                parentInvocation: binding.invocation,
-                basis: child,
-                allowedBindings: child.node.allowedBindings,
-                executionFlow: child.executionFlow,
-              });
-              if (result === null) {
-                const observation = this.findRunActionObservation(childAction.ref);
-                const rejected = observation?.payload.kind === "operation_rejected" ? observation.payload : null;
-                return Object.freeze({ runAction: childAction.ref, result: null,
-                  failure: Object.freeze({ code: rejected?.code ?? "composite_child_rejected",
-                    message: rejected?.message ?? "Composite child was rejected before execution.",
-                    retryable: false, metadata: Object.freeze({ nodeId: child.node.id }) }) });
-              }
-              this.commitOperationObservation(childAction, { result, toolResult: null });
-              return Object.freeze({ runAction: childAction.ref, result });
-            },
-          },
+          children: {start: executeChild},
         },
       );
       const result = await execution.run(binding.request, context.interruption);
-      return operationResultFromComposite(
+      const output = operationResultFromComposite(
         registration,
         binding,
         result,
@@ -3423,8 +3947,12 @@ export class RunExecution<TOutput> {
         this.now(),
         this.id("operation_result"),
       );
-    } finally {
-      this.removePending(pending, "resolved", null);
+      await this.removePending(pending, "resolved", null);
+      return output;
+    } catch (error) {
+      assertExecutionCommitConfirmed(error);
+      await this.removePending(pending, "failed", null);
+      throw error;
     }
   }
 
@@ -3456,17 +3984,17 @@ export class RunExecution<TOutput> {
       action,
       call,
     );
-    this.commitDescendantExecutionOutcome(action, call, descendant, startedAt);
+    (await this.commitDescendantExecutionOutcome(action, call, descendant, startedAt));
   }
 
-  private commitDescendantExecutionOutcome(
+  private async commitDescendantExecutionOutcome(
     action: RuntimeRunAction,
     call: ToolCall,
     descendant: DescendantExecutionOutcome,
     startedAt: string,
-  ): void {
+  ): Promise<void> {
     if (descendant.status === "rejected") {
-      this.commitDescendantToolObservation(
+      (await this.commitDescendantToolObservation(
         action,
         call,
         descendant.relationId,
@@ -3476,7 +4004,7 @@ export class RunExecution<TOutput> {
         operationFailure("agent-runtime", descendant.code),
         startedAt,
         null,
-      );
+      ));
       return;
     }
     if (descendant.status === "suspended") {
@@ -3497,13 +4025,13 @@ export class RunExecution<TOutput> {
             ),
           });
         }
-        this.commitDescendantProgressObservation(
+        (await this.commitDescendantProgressObservation(
           action,
           call,
           descendant.progress,
           mapped,
           startedAt,
-        );
+        ));
       } finally {
         // Terminal transfer cannot remain blocked if Parent-side projection fails.
         managed?.markInitialDelivered();
@@ -3512,14 +4040,15 @@ export class RunExecution<TOutput> {
     }
     let mapped: import("./RunnerDependencies.js").DescendantOperationOutcome;
     try {
-      mapped = this.dependencies.operations.delegation!.resultProjection.project(
+      mapped = await this.dependencies.operations.delegation!.resultProjection.project(
         Object.freeze({
           result: descendant.result,
           continuation: descendant.continuation,
         }),
       );
-    } catch {
-      this.commitDescendantToolObservation(
+    } catch (error) {
+      assertExecutionCommitConfirmed(error);
+      (await this.commitDescendantToolObservation(
         action,
         call,
         descendant.relationId,
@@ -3529,10 +4058,10 @@ export class RunExecution<TOutput> {
         operationFailure("agent-runtime", "delegation_result_projection_failed"),
         startedAt,
         descendant.result,
-      );
+      ));
       return;
     }
-    this.commitDescendantToolObservation(
+    (await this.commitDescendantToolObservation(
       action,
       call,
       descendant.relationId,
@@ -3542,7 +4071,7 @@ export class RunExecution<TOutput> {
       mapped.failure,
       startedAt,
       descendant.result,
-    );
+    ));
   }
 
   private async executeToolDescendantMessage(
@@ -3558,7 +4087,7 @@ export class RunExecution<TOutput> {
         call.input as Parameters<typeof snapshotDescendantMessageRequest>[0],
       );
     } catch {
-      this.commitDescendantToolObservation(
+      (await this.commitDescendantToolObservation(
         action,
         call,
         null,
@@ -3568,7 +4097,7 @@ export class RunExecution<TOutput> {
         operationFailure("agent-runtime", "descendant_message_invalid"),
         startedAt,
         null,
-      );
+      ));
       return;
     }
     const active = [...this.childHandles.values()].find(
@@ -3576,15 +4105,15 @@ export class RunExecution<TOutput> {
     );
     if (active !== undefined) {
       if (!sameAgentRef(active.request.childAgent, targetAgent)) {
-        this.commitDescendantToolObservation(
+        (await this.commitDescendantToolObservation(
           action, call, active.relationId, active.childRunId, "invalid", null,
           operationFailure("agent-runtime", "agent_target_incompatible"),
           startedAt, null,
-        );
+        ));
         return;
       }
       const before = active.handle.getSnapshot();
-      const steering = active.handle.steer({
+      const steering = await active.handle.steer({
         commandId: `${call.toolCallId}:steer`,
         expectedRunRevision: before.runRevision,
         instruction: request.prompt,
@@ -3592,24 +4121,25 @@ export class RunExecution<TOutput> {
         submittedAt: this.now(),
       });
       if (steering.status === "rejected") {
-        this.commitDescendantToolObservation(
+        (await this.commitDescendantToolObservation(
           action, call, active.relationId, active.childRunId, "unavailable", null,
           operationFailure("agent-runtime", steering.code),
           startedAt, null,
-        );
+        ));
         return;
       }
       let resumed = false;
       if (before.status === "suspended" && before.suspension !== null) {
-        const receipt = active.handle.resume({
+        const afterSteering = active.handle.getSnapshot();
+        const receipt = await active.handle.resume({
           id: `${call.toolCallId}:resume`,
-          expectedRunRevision: before.runRevision,
+          expectedRunRevision: afterSteering.runRevision,
           suspension: before.suspension.ref,
           origin: "model",
           reason: "The Parent Agent supplied new steering for this suspended Child Run.",
         });
         if (receipt.status === "rejected") {
-          this.commitDescendantToolObservation(
+          (await this.commitDescendantToolObservation(
             action, call, active.relationId, active.childRunId, "partial",
             Object.freeze({
               agent_id: active.childRunId,
@@ -3622,13 +4152,13 @@ export class RunExecution<TOutput> {
             }),
             operationFailure("agent-runtime", receipt.code),
             startedAt, null,
-          );
+          ));
           return;
         }
         resumed = true;
       }
       const after = active.handle.getSnapshot();
-      this.commitDescendantToolObservation(
+      (await this.commitDescendantToolObservation(
         action,
         call,
         active.relationId,
@@ -3648,25 +4178,25 @@ export class RunExecution<TOutput> {
         null,
         startedAt,
         null,
-      );
+      ));
       return;
     }
 
     const target = this.continuationRecords.get(request.agent_id);
     if (target === undefined) {
-      this.commitDescendantToolObservation(
+      (await this.commitDescendantToolObservation(
         action, call, null, null, "unavailable", null,
         operationFailure("agent-runtime", "agent_target_unknown"),
         startedAt, null,
-      );
+      ));
       return;
     }
     if (target.status !== "available") {
-      this.commitDescendantToolObservation(
+      (await this.commitDescendantToolObservation(
         action, call, null, target.correlation.sourceChild.id, "unavailable", null,
         operationFailure("agent-runtime", "agent_target_stale"),
         startedAt, null,
-      );
+      ));
       return;
     }
     if (
@@ -3674,11 +4204,11 @@ export class RunExecution<TOutput> {
       target.correlation.parent.id !== this.runId ||
       !sameAgentRef(target.correlation.agent, targetAgent)
     ) {
-      this.commitDescendantToolObservation(
+      (await this.commitDescendantToolObservation(
         action, call, null, null, "invalid", null,
         operationFailure("agent-runtime", "agent_target_incompatible"),
         startedAt, null,
-      );
+      ));
       return;
     }
     const descendant = await this.executeDescendantRun(action, call);
@@ -3686,7 +4216,7 @@ export class RunExecution<TOutput> {
       const code = isContinuationNotResumableCode(descendant.code)
         ? "agent_target_not_resumable"
         : descendant.code;
-      this.commitDescendantToolObservation(
+      (await this.commitDescendantToolObservation(
         action,
         call,
         descendant.relationId,
@@ -3696,22 +4226,23 @@ export class RunExecution<TOutput> {
         operationFailure("agent-runtime", code),
         startedAt,
         null,
-      );
+      ));
       return;
     }
     if (descendant.status === "suspended") {
-      this.commitDescendantExecutionOutcome(action, call, descendant, startedAt);
+      (await this.commitDescendantExecutionOutcome(action, call, descendant, startedAt));
       return;
     }
     let mapped: import("./RunnerDependencies.js").DescendantOperationOutcome;
     try {
-      mapped = this.dependencies.operations.delegation!.resultProjection.project(
+      mapped = await this.dependencies.operations.delegation!.resultProjection.project(
         Object.freeze({
           result: descendant.result,
           continuation: descendant.continuation,
         }),
       );
-    } catch {
+    } catch (error) {
+      assertExecutionCommitConfirmed(error);
       mapped = Object.freeze({
         status: "failed" as const,
         output: null,
@@ -3721,7 +4252,7 @@ export class RunExecution<TOutput> {
         ),
       });
     }
-    this.commitDescendantToolObservation(
+    (await this.commitDescendantToolObservation(
       action,
       call,
       descendant.relationId,
@@ -3731,7 +4262,7 @@ export class RunExecution<TOutput> {
       mapped.failure,
       startedAt,
       descendant.result,
-    );
+    ));
   }
 
   private async executeDescendantRun(
@@ -3741,8 +4272,8 @@ export class RunExecution<TOutput> {
   ): Promise<DescendantExecutionOutcome> {
     const prepared = await this.prepareDescendantRun(action, call, dispatch);
     return prepared.status === "admitted"
-      ? this.launchAdmittedDescendant(prepared)
-      : prepared;
+      ? (await this.launchAdmittedDescendant(prepared))
+      : prepared.status === "restored" ? prepared.outcome : prepared;
   }
 
   private async prepareDescendantRun(
@@ -3750,6 +4281,8 @@ export class RunExecution<TOutput> {
     call: ToolCall,
     dispatch: DescendantDispatchProvenance,
   ): Promise<DescendantPreparationOutcome> {
+    const restored = this.restoredDescendantOutcomes.get(action.ref.id);
+    if (restored) return {status: "restored", outcome: restored};
     if (
       call.binding.kind !== "descendant_agent" &&
       call.binding.kind !== "descendant_message"
@@ -4044,7 +4577,7 @@ export class RunExecution<TOutput> {
 
     const relationId = this.id("descendant_relation");
 
-    const admission = this.admitDescendantRun({
+    const admission = await this.admitDescendantRun({
       executionFlow: {...this.actionFlows.get(action.ref.id)?.callContext, relationship:"spawn"},
       relationId,
       relationKind: request.continuation !== null ? "continuation" : "delegation",
@@ -4115,7 +4648,7 @@ export class RunExecution<TOutput> {
     } = prepared;
     const started = !cancelBeforeLaunch && this.config.cancellation.context.request === null
       ? admission.launch()
-      : admission.cancelBeforeLaunch();
+      : await admission.cancelBeforeLaunch();
     if (started.status === "rejected") {
       if (continuationRecord?.status === "starting") {
         continuationRecord.status = "available";
@@ -4149,8 +4682,19 @@ export class RunExecution<TOutput> {
       dispatch,
     );
 
-    const child = started.handle;
-    const pending: PendingRunSubject = Object.freeze({
+    const managed = await this.attachDescendant({relation: started.relation, request, dispatch, action,
+      handle: started.handle, getTerminalFlowOccurrence: started.getTerminalFlowOccurrence,
+      resourceSettlement: started.resourceSettlement, modelInteractionSeed: continuationModelInteractionSeed}, false);
+    return managed.initialBoundary;
+  }
+
+  private async attachDescendant(route: RestoredDescendantRoute, restored: boolean): Promise<ManagedActiveDescendant> {
+    const {relation, request, dispatch, action, handle: child} = route;
+    const relationId = relation.ref.id;
+    const composition = this.dependencies.operations.delegation;
+    if (!composition) throw new RunRecoveryError(this.runId, "delegation_binding_unavailable", relationId);
+    const pending: PendingRunSubject = this.writer.getSnapshot().pending.find(value => value.kind === "descendant_run" &&
+      value.relationId === relationId && value.childRunId === child.runId) ?? Object.freeze({
       kind: "descendant_run",
       relationId,
       childRunId: child.runId,
@@ -4160,10 +4704,13 @@ export class RunExecution<TOutput> {
     });
 
     let resolveInitialBoundary!: (outcome: DescendantExecutionOutcome) => void;
+    let rejectInitialBoundary!: (error: unknown) => void;
     let initialBoundaryResolved = false;
-    const initialBoundary = new Promise<DescendantExecutionOutcome>((resolve) => {
+    const initialBoundary = new Promise<DescendantExecutionOutcome>((resolve, reject) => {
       resolveInitialBoundary = resolve;
+      rejectInitialBoundary = reject;
     });
+    void initialBoundary.catch(() => {});
     let resolveInitialDelivery!: () => void;
     let initialDeliveryResolved = false;
     const initialDelivery = new Promise<void>((resolve) => {
@@ -4171,21 +4718,26 @@ export class RunExecution<TOutput> {
     });
     const managed: ManagedActiveDescendant = {
       relationId,
-      relation: started.relation,
+      relation,
       request,
       childRunId: child.runId,
       handle: child,
-      getTerminalFlowOccurrence: started.getTerminalFlowOccurrence,
+      getTerminalFlowOccurrence: route.getTerminalFlowOccurrence,
       action,
       composition,
       pending,
-      resourceSettlement: started.resourceSettlement,
-      continuationModelInteractionSeed,
+      resourceSettlement: route.resourceSettlement,
+      continuationModelInteractionSeed: route.modelInteractionSeed,
       initialBoundary,
       resolveInitialBoundary(outcome) {
         if (initialBoundaryResolved) return;
         initialBoundaryResolved = true;
         resolveInitialBoundary(outcome);
+      },
+      rejectInitialBoundary(error) {
+        if (initialBoundaryResolved) return;
+        initialBoundaryResolved = true;
+        rejectInitialBoundary(error);
       },
       initialDelivery,
       markInitialDelivered() {
@@ -4198,8 +4750,25 @@ export class RunExecution<TOutput> {
       transferState: "pending",
       unsubscribe: () => {},
     };
+    if (restored) {
+      const observations = this.writer.getSnapshot().items.flatMap(item => item.payload.kind === "observation" &&
+        item.payload.observation.runAction.id === action.ref.id ? [item.payload.observation] : []);
+      for (const observation of observations) {
+        if (observation.payload.kind !== "descendant_progress") continue;
+        const progress = observation.payload.progress;
+        managed.reportedSuspensions.add(`${progress.suspension.ref.id}@${progress.suspension.ref.revision}:${progress.childRunRevision}`);
+      }
+      const initial = observations.find(observation => observation.payload.kind === "descendant_run" ||
+        (observation.payload.kind === "descendant_progress" && observation.payload.toolResult !== null));
+      if (initial) {
+        managed.initialBoundaryKind = initial.payload.kind === "descendant_progress" ? "suspended" : "terminal";
+        managed.markInitialDelivered();
+      }
+    }
     this.childHandles.set(relationId, managed);
-    this.addPending(pending);
+    if (!this.writer.getSnapshot().pending.some(value => value.kind === "descendant_run" && value.relationId === relationId)) {
+      await this.addPending(pending);
+    }
     managed.unsubscribe = child.subscribe((snapshot) => {
       this.publishCurrentState();
       if (
@@ -4210,11 +4779,22 @@ export class RunExecution<TOutput> {
         this.observeManagedDescendantSuspension(managed, snapshot);
       }
     });
-    void child.wait().then(
-      (result) => this.finalizeManagedDescendant(managed, result, dispatch),
-      () => this.failManagedDescendant(managed, "delegation_result_invalid"),
+    const settlement = child.wait().then(
+      async (result) => (await this.finalizeManagedDescendant(managed, result, dispatch)),
+      async (error) => {
+        assertExecutionCommitConfirmed(error);
+        await this.failManagedDescendant(managed, "delegation_result_invalid");
+      },
     );
-    return initialBoundary;
+    this.descendantSettlementWaits.add(settlement);
+    void settlement.then(
+      () => { this.descendantSettlementWaits.delete(settlement); },
+      error => {
+        this.descendantSettlementWaits.delete(settlement);
+        this.failDescendantDelivery(managed, error);
+      },
+    );
+    return managed;
   }
 
   private observeManagedDescendantSuspension(
@@ -4245,14 +4825,24 @@ export class RunExecution<TOutput> {
       }));
       return;
     }
-    void managed.initialDelivery.then(() => {
+    void managed.initialDelivery.then(async () => {
       if (
         managed.transferState !== "pending" ||
         managed.handle.getResult() !== null ||
         this.terminalResult !== null
       ) return;
-      this.commitAsyncDescendantProgress(managed, progress);
-    });
+      (await this.commitAsyncDescendantProgress(managed, progress));
+    }).catch(error => this.failDescendantDelivery(managed, error));
+  }
+
+  private failDescendantDelivery(managed: ManagedActiveDescendant, cause: unknown): void {
+    const error = cause instanceof RunCommitError || cause instanceof ActionRecordCommitError || cause instanceof CompositeCommitError
+      ? cause : new RunCommitError(`${this.runId}:descendant:${managed.relationId}`, {cause});
+    managed.rejectInitialBoundary(error);
+    this.writer.fail(error);
+    this.interruptionCoordinator.fail(error);
+    this.suspendedWaiter?.resolve();
+    managed.unsubscribe();
   }
 
   private async finalizeManagedDescendant(
@@ -4274,15 +4864,21 @@ export class RunExecution<TOutput> {
     try {
     let resourceSettlement: RunTreeResourceSettlement;
     let delegationResult: DelegationResult;
+    const retained = this.descendantTransfers.get(managed.childRunId);
+    if (retained?.status === "failed") {
+      await this.failManagedDescendant(managed, retained.code!);
+      flow.close("failed");
+      return;
+    }
     try {
       flow.advance("account");
       resourceSettlement = await managed.resourceSettlement;
       flow.advance("project");
-      const narrative = managed.composition.narrativeProjection.project({
+      const narrative = retained?.result ? null : managed.composition.narrativeProjection.project({
         request: managed.request,
         childResult: result,
       });
-      delegationResult = constructDelegationResult({
+      delegationResult = retained?.result ?? constructDelegationResult({
         resultId: this.id("delegation_result"),
         request: managed.request,
         correlation: Object.freeze({
@@ -4306,7 +4902,7 @@ export class RunExecution<TOutput> {
     } catch {
       if (flow.current) flow.current.end("failed");
       flow.close("failed");
-      this.failManagedDescendant(managed, "delegation_result_invalid");
+      (await this.failManagedDescendant(managed, "delegation_result_invalid"));
       return;
     }
 
@@ -4314,14 +4910,20 @@ export class RunExecution<TOutput> {
     this.settledDelegations.set(delegationResult.ref.id, Object.freeze({
       result: delegationResult,
     }));
-    const continuation = this.retainDescendantContinuation(
+    const continuation = retained ? [...this.continuationRecords.values()].find(value =>
+      value.sourceResult.ref.id === delegationResult.ref.id)?.correlation ?? null : this.retainDescendantContinuation(
       managed.request,
       delegationResult,
       result,
       managed.continuationModelInteractionSeed,
     );
+    if (!retained) {
+      this.descendantTransfers.set(managed.childRunId, {childRunId: managed.childRunId,
+        relationId: managed.relationId, action: managed.action, result: delegationResult, status: "settled", code: null});
+      if (this.treeCommits) await this.writer.commitState(() => ({}));
+      else this.runTree.settleDescendantTransfer(managed.childRunId, "settled");
+    }
     managed.transferState = "settled";
-    this.runTree.settleDescendantTransfer(managed.childRunId, "settled");
     this.emitDescendantSettled(managed, delegationResult, dispatch);
     const outcome: DescendantExecutionOutcome = Object.freeze({
       status: "settled" as const,
@@ -4335,30 +4937,33 @@ export class RunExecution<TOutput> {
     if (managed.initialBoundaryKind === "pending") {
       managed.initialBoundaryKind = "terminal";
       managed.resolveInitialBoundary(outcome);
-    } else {
+    } else if (managed.initialBoundaryKind === "suspended") {
       await managed.initialDelivery;
       if (this.terminalResult === null) {
-        this.commitDescendantResultTransfer(managed, delegationResult, continuation?.ref ?? null);
+        (await this.commitDescendantResultTransfer(managed, delegationResult, continuation?.ref ?? null));
       }
     }
-    this.cleanupManagedDescendant(managed, "resolved", delegationResult.ref.id);
+    (await this.cleanupManagedDescendant(managed, "resolved", delegationResult.ref.id));
     flow.advance("settle", {resultId:delegationResult.ref.id});
     flow.close("returned", undefined, [{owner:"agent-runtime",kind:"contribution",id:delegationResult.ref.id,revision:delegationResult.ref.revision}]);
     } catch (error) {flow.close("failed");throw error;}
   }
 
-  private failManagedDescendant(
+  private async failManagedDescendant(
     managed: ManagedActiveDescendant,
     code: "delegation_result_invalid",
-  ): void {
+  ): Promise<void> {
     if (managed.transferState !== "pending") return;
-    managed.transferState = "failed";
     const childNode = this.runTree.getSnapshot().nodes.find(
       (node) => node.runId === managed.childRunId,
     );
     if (childNode?.resultTransfer === "pending") {
-      this.runTree.settleDescendantTransfer(managed.childRunId, "failed");
+      this.descendantTransfers.set(managed.childRunId, {childRunId: managed.childRunId,
+        relationId: managed.relationId, action: managed.action, result: null, status: "failed", code});
+      if (this.treeCommits) await this.writer.commitState(() => ({}));
+      else this.runTree.settleDescendantTransfer(managed.childRunId, "failed");
     }
+    managed.transferState = "failed";
     if (managed.initialBoundaryKind === "pending") {
       managed.initialBoundaryKind = "terminal";
       managed.resolveInitialBoundary(rejectedDescendant(
@@ -4368,9 +4973,9 @@ export class RunExecution<TOutput> {
         "failed",
       ));
     } else {
-      void managed.initialDelivery.then(() => {
-        if (this.terminalResult !== null) return;
-        this.commitObservation(managed.action, {
+      await managed.initialDelivery;
+      if (this.terminalResult === null) {
+        await this.commitDescendantNotification(managed.action, {
           kind: "descendant_result_transfer",
           childRunId: managed.childRunId,
           result: null,
@@ -4383,21 +4988,21 @@ export class RunExecution<TOutput> {
           id: managed.childRunId,
           revision: "failed",
         }], "agent-runtime");
-      });
+      }
     }
-    this.cleanupManagedDescendant(managed, "failed", null);
+    (await this.cleanupManagedDescendant(managed, "failed", null));
   }
 
-  private cleanupManagedDescendant(
+  private async cleanupManagedDescendant(
     managed: ManagedActiveDescendant,
     transition: "resolved" | "failed",
     recordRef: string | null,
-  ): void {
+  ): Promise<void> {
     managed.unsubscribe();
+    (await this.removePending(managed.pending, transition, recordRef));
     if (this.childHandles.get(managed.relationId) === managed) {
       this.childHandles.delete(managed.relationId);
     }
-    this.removePending(managed.pending, transition, recordRef);
     this.publishCurrentState();
   }
 
@@ -4552,7 +5157,6 @@ export class RunExecution<TOutput> {
       status: "available",
     };
     this.continuationRecords.set(correlation.ref.id, record);
-    this.publishCurrentState();
     return correlation;
   }
 
@@ -4611,13 +5215,13 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private commitDescendantProgressObservation(
+  private async commitDescendantProgressObservation(
     action: RuntimeRunAction,
     call: ToolCall,
     progress: DescendantProgress,
     projected: import("./RunnerDependencies.js").DescendantOperationOutcome,
     startedAt: string,
-  ): void {
+  ): Promise<void> {
     const finishedAt = this.now();
     const settlement = Object.freeze({
       owner: "agent-runtime",
@@ -4645,7 +5249,7 @@ export class RunExecution<TOutput> {
             finishedAt,
             projected.status === "timed_out" ? "timeout" : "failed",
           );
-    this.commitObservation(action, {
+    (await this.commitObservation(action, {
       kind: "descendant_progress",
       progress,
       output: projected.output,
@@ -4658,13 +5262,13 @@ export class RunExecution<TOutput> {
         revision: String(progress.childRunRevision),
       },
       toolResultLowerRef(toolResult),
-    ], "agent-runtime");
+    ], "agent-runtime"));
   }
 
-  private commitAsyncDescendantProgress(
+  private async commitAsyncDescendantProgress(
     managed: ManagedActiveDescendant,
     progress: DescendantProgress,
-  ): void {
+  ): Promise<void> {
     let output: unknown = null;
     try {
       output = managed.composition.progressProjection.project(
@@ -4673,7 +5277,7 @@ export class RunExecution<TOutput> {
     } catch {
       // The Core progress record remains authoritative even if Product projection fails.
     }
-    this.commitObservation(managed.action, {
+    (await this.commitDescendantNotification(managed.action, {
       kind: "descendant_progress",
       progress,
       output,
@@ -4683,18 +5287,22 @@ export class RunExecution<TOutput> {
       kind: "descendant_progress",
       id: progress.childRun.id,
       revision: String(progress.childRunRevision),
-    }], "agent-runtime");
+    }], "agent-runtime"));
   }
 
-  private commitDescendantResultTransfer(
+  private async commitDescendantResultTransfer(
     managed: ManagedActiveDescendant,
     result: DelegationResult,
     continuation: Readonly<{ readonly id: string; readonly revision: string }> | null,
-  ): void {
+  ): Promise<void> {
+    if (this.writer.getSnapshot().items.some(item => item.payload.kind === "observation" &&
+        item.payload.observation.payload.kind === "descendant_result_transfer" &&
+        item.payload.observation.payload.childRunId === managed.childRunId)) return;
     let projected: import("./RunnerDependencies.js").DescendantOperationOutcome;
     try {
-      projected = managed.composition.resultProjection.project({ result, continuation });
-    } catch {
+      projected = await managed.composition.resultProjection.project({ result, continuation });
+    } catch (error) {
+      assertExecutionCommitConfirmed(error);
       projected = Object.freeze({
         status: "failed" as const,
         output: null,
@@ -4704,7 +5312,7 @@ export class RunExecution<TOutput> {
         ),
       });
     }
-    this.commitObservation(managed.action, {
+    (await this.commitDescendantNotification(managed.action, {
       kind: "descendant_result_transfer",
       childRunId: managed.childRunId,
       result,
@@ -4716,10 +5324,19 @@ export class RunExecution<TOutput> {
       kind: "delegation_result",
       id: result.ref.id,
       revision: result.ref.revision,
-    }], "agent-runtime");
+    }], "agent-runtime"));
   }
 
-  private commitDescendantToolObservation(
+  private async commitDescendantNotification(
+    action: RuntimeRunAction,
+    payload: Extract<RunObservation["payload"], {kind: "descendant_progress" | "descendant_result_transfer"}>,
+    lowerRefs: RunObservation["lowerRefs"],
+    owner: string,
+  ): Promise<void> {
+    await this.commitObservation(action, payload, lowerRefs, owner, true);
+  }
+
+  private async commitDescendantToolObservation(
     action: RuntimeRunAction,
     call: ToolCall,
     relationId: string | null,
@@ -4729,7 +5346,7 @@ export class RunExecution<TOutput> {
     failure: OperationFailure | null,
     startedAt: string,
     delegationResult: DelegationResult | null,
-  ): void {
+  ): Promise<void> {
     const finishedAt = this.now();
     const settlement = Object.freeze({
       owner: "agent-runtime",
@@ -4757,13 +5374,14 @@ export class RunExecution<TOutput> {
             finishedAt,
             status === "timed_out" ? "timeout" : "failed",
           );
-    this.commitObservation(action, {
+    (await this.commitObservation(action, {
       kind: "descendant_run",
       childRunId,
       status,
       output,
       failure,
       toolResult,
+      result: delegationResult,
     }, [
       {
         owner: "agent-runtime",
@@ -4772,13 +5390,13 @@ export class RunExecution<TOutput> {
         revision: delegationResult?.ref.revision ?? settlement.revision,
       },
       toolResultLowerRef(toolResult),
-    ], "agent-runtime");
+    ], "agent-runtime"));
   }
 
-  private commitOperationObservation(
+  private async commitOperationObservation(
     action: RuntimeRunAction,
     outcome: OperationExecutionOutcome,
-  ): void {
+  ): Promise<void> {
     const lowerRefs = [
       {
         owner: outcome.result.semanticOwner,
@@ -4790,32 +5408,32 @@ export class RunExecution<TOutput> {
         ? []
         : [toolResultLowerRef(outcome.toolResult)]),
     ];
-    this.commitObservation(action, {
+    (await this.commitObservation(action, {
       kind: "operation",
       result: outcome.result,
       toolResult: outcome.toolResult,
-    }, lowerRefs, outcome.result.semanticOwner);
+    }, lowerRefs, outcome.result.semanticOwner));
   }
 
-  private commitRejectedOperation(
+  private async commitRejectedOperation(
     action: RuntimeRunAction,
     owner: string,
     code: string,
     message: string,
-  ): void {
-    this.commitObservation(action, {
+  ): Promise<void> {
+    (await this.commitObservation(action, {
       kind: "operation_rejected",
       owner,
       code,
       message,
-    }, [], owner);
+    }, [], owner));
   }
 
-  private commitInteractionObservation(
+  private async commitInteractionObservation(
     action: RuntimeRunAction,
     settlement: RuntimeInteractionSettlement,
     call: ToolCall | null,
-  ): void {
+  ): Promise<void> {
     if (settlement.status === "resolved") {
       const toolResult = call === null
         ? null
@@ -4831,7 +5449,7 @@ export class RunExecution<TOutput> {
             call.createdAt,
             this.now(),
           );
-      this.commitObservation(action, {
+      (await this.commitObservation(action, {
         kind: "interaction",
         owner: settlement.outcome.request.protocol.owner,
         status: "resolved",
@@ -4846,7 +5464,7 @@ export class RunExecution<TOutput> {
           revision: settlement.outcome.resolution.resolutionRevision,
         },
         ...(toolResult === null ? [] : [toolResultLowerRef(toolResult)]),
-      ], settlement.outcome.request.protocol.owner);
+      ], settlement.outcome.request.protocol.owner));
       return;
     }
     const toolResult = call === null
@@ -4864,23 +5482,24 @@ export class RunExecution<TOutput> {
           call.createdAt,
           this.now(),
         );
-    this.commitObservation(action, {
+    (await this.commitObservation(action, {
       kind: "interaction",
       owner: settlement.owner,
       status: settlement.status,
       contentDigest: null,
       value: Object.freeze({ code: settlement.code }),
       toolResult,
-    }, toolResult === null ? [] : [toolResultLowerRef(toolResult)], settlement.owner);
+    }, toolResult === null ? [] : [toolResultLowerRef(toolResult)], settlement.owner));
   }
 
-  private commitObservation(
+  private async commitObservation(
     action: RuntimeRunAction,
     payload: RunObservation["payload"],
     lowerRefs: RunObservation["lowerRefs"],
     owner: string,
-  ): void {
-    const state = this.writer.getSnapshot();
+    notifyModel = false,
+  ): Promise<RunObservation> {
+    return this.writer.transaction(state => {
     const sequence = state.counters.observations + 1;
     const observation = createRunObservation({
       id: this.id("observation", sequence),
@@ -4898,27 +5517,45 @@ export class RunExecution<TOutput> {
       id: this.id("context_contribution"),
       observation,
     });
-    const observationRef = {owner, kind: "contribution", id: observation.id, revision: "1"};
-    const actionFlow = this.actionFlows.get(action.ref.id);
-    actionFlow?.current?.output(observationRef);
-    const observationStep = actionFlow?.advance("observation", {kind: payload.kind, owner}, [observationRef]);
-    this.writer.commit({ kind: "observation", observation }, (current) => Object.freeze({
-      context: this.applyContextContributions(
-        current.context,
+    const context = this.applyContextContributions(
+        state.context,
         Object.freeze([contribution]),
         createObservationContextAdmissionProfile(observation.owner),
         "observation_committed",
         observation.id,
-      ),
+      );
+    const notifications: import("../run/RunItem.js").RunItemPayload<TOutput>[] = [];
+    if (notifyModel) {
+      if (payload.kind !== "descendant_progress" && payload.kind !== "descendant_result_transfer") {
+        throw new TypeError("This observation has no descendant notification contract.");
+      }
+      const projected = projectObservationSettlement(observation);
+      const notification = this.inputNotifications.admitOwned(this.runId, {
+        source: {owner, kind: payload.kind, id: observation.id, revision: "1"}, occurredAt: observation.createdAt,
+        data: {settlement: projected.settlement, presentation: projected.presentation, content: projected.content},
+      }, this.dependencies.contextProjection.maxContributionPayloadBytes,
+      modelSettlement(projected.settlement, undefined, descendantDeliveryFacts(payload)));
+      notifications.push({kind: "input_notification", notification});
+    }
+    return {payloads: [{kind: "observation", observation}, ...notifications], value: {observation, context}, patch: {
+      context,
       counters: Object.freeze({
-        ...current.counters,
+        ...state.counters,
         observations: sequence,
       }),
-    }));
-    const context = this.writer.getSnapshot().context;
-    observationStep?.output(observationRef,
-      {owner: "context", kind: "context", id: context.ref.id, revision: String(context.ref.version)},
-      {owner: "context", kind: "contribution", id: contribution.ref.id, revision: contribution.ref.revision});
+    }};
+    }).then(({observation, context}) => {
+      this.publishObservationFlow(action, observation, context);
+      return observation;
+    });
+  }
+
+  private publishObservationFlow(action: RuntimeRunAction, observation: RunObservation, context: ActiveContext): void {
+    const reference = {owner: observation.owner, kind: "contribution", id: observation.id, revision: "1"};
+    const flow = this.actionFlows.get(action.ref.id);
+    flow?.current?.output(reference);
+    flow?.advance("observation", {kind: observation.kind, owner: observation.owner}, [reference]).output(
+      reference, {owner: "context", kind: "context", id: context.ref.id, revision: String(context.ref.version)});
   }
 
   private applyContextContributions(
@@ -5016,7 +5653,8 @@ export class RunExecution<TOutput> {
       0,
     );
     if (admittedPayloadBytes > 0) {
-      this.recordTreeResources({
+      this.contextPayloadBytes += admittedPayloadBytes;
+      if (!this.treeCommits) this.recordTreeResources({
         contextBytes: Object.freeze({
           status: "measured" as const,
           value: admittedPayloadBytes,
@@ -5027,7 +5665,7 @@ export class RunExecution<TOutput> {
     return next;
   }
 
-  private openPendingInteraction(pending: PendingInteractionRef, parentRunAction: RunActionRef | null): void {
+  private async openPendingInteraction(pending: PendingInteractionRef, parentRunAction: RunActionRef | null): Promise<void> {
     const value: PendingRunSubject = Object.freeze({
       kind: "interaction",
       interaction: pending,
@@ -5035,7 +5673,7 @@ export class RunExecution<TOutput> {
       required: pending.blockingScope !== "none",
       openedInRunRevision: this.writer.getSnapshot().revision,
     });
-    this.writer.commit({
+    (await this.writer.commit({
       kind: "pending_transition",
       transition: "opened",
       pending: value,
@@ -5046,7 +5684,7 @@ export class RunExecution<TOutput> {
         pending: nextPending,
         status: this.statusAfterPendingChange(current, nextPending),
       });
-    });
+    }));
     this.emit("interaction.opened", {
       requestId: pending.request.id,
       protocolOwner: pending.request.protocol.owner,
@@ -5062,11 +5700,11 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private settlePendingInteraction(
+  private async settlePendingInteraction(
     pending: PendingInteractionRef,
     terminal: InteractionTerminalRecord,
     settlement: RuntimeInteractionSettlement,
-  ): void {
+  ): Promise<void> {
     const state = this.writer.getSnapshot();
     const current = state.pending.find((candidate) =>
       candidate.kind === "interaction" && sameInteractionRequest(
@@ -5077,7 +5715,7 @@ export class RunExecution<TOutput> {
     if (current === undefined) return;
     const transition = terminal.kind;
     const recordRef = terminalRecordRef(terminal);
-    this.writer.commit({
+    (await this.writer.commit({
       kind: "pending_transition",
       transition,
       pending: current,
@@ -5088,7 +5726,7 @@ export class RunExecution<TOutput> {
         pending: nextPending,
         status: this.statusAfterPendingChange(snapshot, nextPending),
       });
-    });
+    }));
     this.emit("interaction.settled", {
       requestId: pending.request.id,
       pendingVersion: pending.request.requestVersion,
@@ -5103,7 +5741,8 @@ export class RunExecution<TOutput> {
     terminal: InteractionTerminalRecord,
     settlement: RuntimeInteractionSettlement,
   ): void {
-    const key = interactionRequestKey(pending.request);
+    const key = pending.request.id;
+    if (this.deliveredInteractions.has(key) || this.interactionSettlements.some(item => item.pending.request.id === key)) return;
     const context = this.interactionActions.get(key) ?? null;
     this.interactionSettlements.push(Object.freeze({
       pending,
@@ -5112,21 +5751,31 @@ export class RunExecution<TOutput> {
       action: context?.action ?? null,
       toolCall: context?.toolCall ?? null,
     }));
-    this.interactionActions.delete(key);
   }
 
-  private drainInteractionSettlements(): number {
+  private async drainInteractionSettlements(): Promise<number> {
+    // The queue is a wakeup optimization. The acknowledged owner record is the source.
+    for (const record of this.interactions.settledRecords()) {
+      this.queueInteractionSettlement(record.execution.pending, record.execution.terminal!, record.settlement!);
+    }
     let count = 0;
     while (this.interactionSettlements.length > 0) {
-      const queued = this.interactionSettlements.shift()!;
-      this.settlePendingInteraction(queued.pending, queued.terminal, queued.settlement);
-      if (queued.action !== null) {
-        this.commitInteractionObservation(
+      const queued = this.interactionSettlements[0]!;
+      (await this.settlePendingInteraction(queued.pending, queued.terminal, queued.settlement));
+      const alreadyObserved = queued.action !== null && this.writer.getSnapshot().items.some(item =>
+        item.payload.kind === "observation" && item.payload.observation.runAction.id === queued.action!.ref.id &&
+        item.payload.observation.payload.kind === "interaction");
+      if (queued.action !== null && !alreadyObserved) {
+        (await this.commitInteractionObservation(
           queued.action,
           queued.settlement,
           queued.toolCall,
-        );
+        ));
       }
+      this.deliveredInteractions.add(queued.pending.request.id);
+      this.interactionActions.delete(queued.pending.request.id);
+      await this.writer.commitState(() => ({}));
+      this.interactionSettlements.shift();
       count += 1;
     }
     return count;
@@ -5134,7 +5783,9 @@ export class RunExecution<TOutput> {
 
   private trackModelCallSettlement(
     completion: Promise<RuntimeInteractionSettlement>,
+    action: RuntimeRunAction,
   ): void {
+    this.deferredInteractionActions.set(action.ref.id, action);
     let wait!: Promise<void>;
     wait = completion.then(() => undefined).finally(() => {
       this.modelCallSettlementWaits.delete(wait);
@@ -5143,25 +5794,29 @@ export class RunExecution<TOutput> {
   }
 
   private async waitForModelCallSettlements(): Promise<void> {
-    if (this.modelCallSettlementWaits.size === 0) return;
     await Promise.all([...this.modelCallSettlementWaits]);
+    (await this.drainInteractionSettlements());
+    for (const action of this.deferredInteractionActions.values()) {
+      if (action.provenance.kind !== "controller") continue;
+      const call = this.findModelToolCall(action.provenance.modelCallRef);
+      if (call !== null && !this.hasModelCallSettlement(call)) (await this.commitModelCallSettlement(action, null));
+    }
+    this.deferredInteractionActions.clear();
   }
 
-  private drainSteering(
+  private async drainSteering(
     disposition: "apply" | "cancelled" | "run_settled",
-  ): number {
+  ): Promise<number> {
     if (this.steeringQueue.length === 0) return 0;
-    const queued = this.steeringQueue.splice(0);
+    const queued = [...this.steeringQueue];
     const latest = queued.at(-1)!;
     for (const command of queued) {
       const status: RunSteeringApplication["status"] = disposition === "apply"
         ? command === latest ? "applied" : "superseded"
         : disposition;
-      const current = this.writer.getSnapshot();
-      const application: RunSteeringApplication = Object.freeze({
+      const application: Omit<RunSteeringApplication, "appliedInRunRevision"> = Object.freeze({
         command,
         status,
-        appliedInRunRevision: current.revision + 1,
         supersededByCommandId: status === "superseded" ? latest.commandId : null,
         reasonCode: status === "cancelled"
           ? "run_cancellation_requested"
@@ -5179,11 +5834,15 @@ export class RunExecution<TOutput> {
             createdAt: command.submittedAt,
           })
         : null;
-      this.writer.commit({
+      (await this.writer.transaction(state => {
+      const position = this.steeringQueue.findIndex(item => item.commandId === command.commandId);
+      if (position < 0) return {value: undefined};
+      this.steeringQueue.splice(position, 1);
+      return {value: undefined, payloads: [{
         kind: "state_transition",
         transition: "steering",
-        steering: application,
-      }, (state) => status === "applied"
+        steering: {...application, appliedInRunRevision: state.revision + 1},
+      }], patch: status === "applied"
         ? Object.freeze({
             context: this.applyContextContributions(
               state.context,
@@ -5194,7 +5853,8 @@ export class RunExecution<TOutput> {
             ),
             plan: null,
           })
-        : Object.freeze({}));
+        : Object.freeze({})};
+      }));
     }
     return queued.length;
   }
@@ -5213,8 +5873,8 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private addPending(pending: PendingRunSubject): void {
-    this.writer.commit({
+  private async addPending(pending: PendingRunSubject): Promise<void> {
+    (await this.writer.commit({
       kind: "pending_transition",
       transition: "opened",
       pending,
@@ -5222,24 +5882,25 @@ export class RunExecution<TOutput> {
     }, (current) => {
       const next = Object.freeze([...current.pending, pending]);
       return Object.freeze({ pending: next, status: this.statusAfterPendingChange(current, next) });
-    });
+    }));
   }
 
-  private removePending(
+  private async removePending(
     pending: PendingRunSubject,
     transition: "resolved" | "cancelled" | "failed" | "invalidated" | "expired",
     recordRef: string | null,
-  ): void {
-    const current = this.writer.getSnapshot();
-    if (!current.pending.includes(pending)) return;
-    this.writer.commit({
-      kind: "pending_transition",
-      transition,
-      pending,
-      recordRef,
-    }, (state) => {
-      const next = Object.freeze(state.pending.filter((candidate) => candidate !== pending));
-      return Object.freeze({ pending: next, status: this.statusAfterPendingChange(state, next) });
+  ): Promise<void> {
+    const expected = projectPendingRunSubject(pending);
+    await this.writer.transaction(state => {
+      const recorded = state.pending.find(candidate => {
+        const actual = projectPendingRunSubject(candidate);
+        return actual.kind === expected.kind && actual.owner === expected.owner && actual.subjectId === expected.subjectId &&
+          actual.revision === expected.revision && actual.branchId === expected.branchId;
+      });
+      if (!recorded) return {value: undefined};
+      const next = Object.freeze(state.pending.filter(candidate => candidate !== recorded));
+      return {value: undefined, payloads: [{kind: "pending_transition", transition, pending: recorded, recordRef}],
+        patch: {pending: next, status: this.statusAfterPendingChange(state, next)}};
     });
   }
 
@@ -5285,7 +5946,7 @@ export class RunExecution<TOutput> {
           permissions: this.config.permissions,
         });
         const authorityBasis = this.runTree.captureAuthorityBasis(this.runId);
-        const admission = this.runTree.admitApproval({
+        const admission = await this.changeTree(tree => tree.admitApproval({
           requestId,
           runId: this.runId,
           actionId: input.action.id,
@@ -5293,7 +5954,7 @@ export class RunExecution<TOutput> {
           workspaceId: this.config.workspace?.primary.id ?? null,
           environmentId: this.config.permissions.permissionProfile.environmentId,
           operationFingerprint,
-        });
+        }));
         if (admission.status === "limit_exceeded") {
           return Object.freeze({
             status: "limit_exceeded" as const,
@@ -5312,17 +5973,17 @@ export class RunExecution<TOutput> {
         let settlementKind: import("./RunTreeApprovalAccount.js").RunTreeApprovalSettlementKind =
           "request_failure";
         let settled = false;
-        const settleApproval = (
+        const settleApproval = async (
           kind: import("./RunTreeApprovalAccount.js").RunTreeApprovalSettlementKind,
-        ): void => {
+        ): Promise<void> => {
           if (settled) return;
           settled = true;
-          this.runTree.settleApproval(requestId, kind);
+          await this.changeTree(tree => tree.settleApproval(requestId, kind));
         };
         try {
         const pendingVersion = 1;
         const createdAt = this.now();
-        const opened = this.interactions.open({
+        const opened = await this.interactions.open({
           requestId,
           protocol: APPROVAL_INTERACTION_PROTOCOL,
           executionFlow: input.parentRunAction === null ? undefined : this.actionFlows.get(input.parentRunAction.id)?.callContext,
@@ -5388,13 +6049,13 @@ export class RunExecution<TOutput> {
             now: this.dependencies.now,
           });
           if (reviewResult.kind === "failed") {
-            this.interactions.fail(opened.pending.request, "permission", reviewResult.failure.code);
+            await this.interactions.fail(opened.pending.request, "permission", reviewResult.failure.code);
             reviewerFailed = true;
           } else if (reviewResult.kind === "cancelled") {
             settlementKind = "interrupted";
-            this.interactions.invalidate(opened.pending.request, "approval_review_cancelled");
+            await this.interactions.invalidate(opened.pending.request, "approval_review_cancelled");
           } else {
-            this.interactions.submit({
+            await this.interactions.submit({
               request: opened.pending.request,
               submissionId: reviewResult.outcome.submission.submissionId,
               contentDigest: await approvalSubmissionDigest(reviewResult.outcome.submission),
@@ -5404,7 +6065,7 @@ export class RunExecution<TOutput> {
           }
         }
         const settlement = await opened.completion;
-        this.drainInteractionSettlements();
+        (await this.drainInteractionSettlements());
         if (settlement.status !== "resolved") {
           settlementKind = reviewerFailed
             ? "reviewer_failure"
@@ -5456,7 +6117,7 @@ export class RunExecution<TOutput> {
           authoritySnapshotId: `run-permission:${this.writer.getSnapshot().revision}`,
         });
         } finally {
-          settleApproval(settlementKind);
+          await settleApproval(settlementKind);
         }
       },
     });
@@ -5505,12 +6166,11 @@ export class RunExecution<TOutput> {
     resolution: ApprovalInteractionResolution,
     requestId: string,
   ): Promise<ApprovalApplicationOutcome> {
-    const immediate = applyImmediateApprovalAuthority({
-      permission: this.writer.getSnapshot().permission,
-      decision: resolution.decision,
+    const immediate = await this.writer.transaction<ReturnType<typeof applyImmediateApprovalAuthority>>(state => {
+      const value = applyImmediateApprovalAuthority({permission: state.permission, decision: resolution.decision});
+      return value.status === "applied" ? {value, payloads: [], patch: {permission: value.permission}} : {value};
     });
     if (immediate.status === "applied") {
-      this.writer.commitState(() => Object.freeze({ permission: immediate.permission }));
       return immediate.application;
     }
     if (immediate.status === "not_applicable") return immediate.application;
@@ -5537,24 +6197,27 @@ export class RunExecution<TOutput> {
       now: this.dependencies.now,
     });
     if (result.kind === "applied") {
+      await this.writer.commitState(state => {
       const permission = result.owner === "permission"
         ? applyCommittedSessionAuthority({
-            permission: this.writer.getSnapshot().permission,
+            permission: state.permission,
             record: result.record as import("@agent-anything/permission").SessionAuthorityRecord,
           })
         : applyCommittedPolicyAmendment({
-            permission: this.writer.getSnapshot().permission,
+            permission: state.permission,
             record: result.record as import("@agent-anything/governance").AppliedPolicyAmendmentRecord,
           });
-      this.writer.commitState(() => Object.freeze({ permission }));
+      return {permission};
+      });
     }
     return result.application;
   }
 
-  private consumeApprovalCoverage(coverageId: string): boolean {
-    const current = this.writer.getSnapshot().permission;
+  private async consumeApprovalCoverage(coverageId: string): Promise<boolean> {
+    return this.writer.transaction(state => {
+    const current = state.permission;
     const coverage = current.actionCoverage.find((candidate) => candidate.id === coverageId);
-    if (coverage === undefined) return false;
+    if (coverage === undefined) return {value: false};
     const result = consumeActionApprovalCoverage({
       permission: current,
       coverageId,
@@ -5562,9 +6225,9 @@ export class RunExecution<TOutput> {
       actionId: coverage.actionId,
       actionFingerprint: coverage.actionFingerprint,
     });
-    if (result.status !== "consumed") return false;
-    this.writer.commitState(() => Object.freeze({ permission: result.permission }));
-    return true;
+    if (result.status !== "consumed") return {value: false};
+    return {value: true, payloads: [], patch: {permission: result.permission}};
+    });
   }
 
   private actionPermissionContext() {
@@ -5580,19 +6243,19 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private enterCancelling(request: import("../run/index.js").RunCancellationRequest): void {
+  private async enterCancelling(request: import("../run/index.js").RunCancellationRequest): Promise<void> {
     const state = this.writer.getSnapshot();
     if (!isActiveStatus(state.status)) return;
     const summary = toRunCancellationSummary(request);
-    this.writer.commit({
+    (await this.writer.commit({
       kind: "cancellation_transition",
       transition: "requested",
       cancellation: summary,
     }, () => Object.freeze({
       status: "cancelling" as const,
       cancellationRequest: request,
-    }));
-    this.interactions.cancelAll(request.id);
+    })));
+    await this.interactions.cancelAll(request.id);
     const waiter = this.suspendedWaiter;
     this.suspendedWaiter = null;
     waiter?.resolve();
@@ -5602,17 +6265,40 @@ export class RunExecution<TOutput> {
     if (this.terminalResult !== null) return this.terminalResult;
     if (this.settlementPromise !== null) return this.settlementPromise;
     this.settling = true;
-    this.settlementPromise = Promise.resolve().then(() => this.performSettlement(candidate));
+    this.settlementPromise = Promise.resolve().then(async () => (await this.performSettlement(candidate)));
     return this.settlementPromise;
   }
 
+  private async settleCancelledDescendants(): Promise<void> {
+    // Recovery cancellation bypasses decision execution, but not admitted Child delivery.
+    await Promise.all(this.restoredDescendants.map(async route => {
+      const call = this.operationCalls.get(route.action.ref.id);
+      if (!call) return;
+      if (this.findRunActionObservation(route.action.ref) === null) {
+        const outcome = await this.restoredDescendantOutcomes.get(route.action.ref.id)!;
+        await this.commitDescendantExecutionOutcome(route.action, call, outcome, call.createdAt);
+      }
+      await this.commitModelCallSettlement(route.action, null);
+    }));
+    // Child terminal state alone does not include its Parent-owned transfer and cleanup.
+    await Promise.all([...this.descendantSettlementWaits]);
+    await this.waitForModelCallSettlements();
+  }
+
   private async performSettlement(candidate: TerminalCandidate<TOutput>): Promise<RunResult<TOutput>> {
+    if (!this.finalizationCheckpoint) await this.writer.commitState(() => {
+      this.finalizationCheckpoint = {candidate, startedAt: this.now(),
+        cancellation: this.config.cancellation.context.request ? toRunCancellationSummary(this.config.cancellation.context.request) : null,
+        finalizers: (this.dependencies.resourceFinalizers ?? []).map(finalizer => ({binding: finalizer.binding ?? null, status: "not_started", failure: null}))};
+      return {};
+    });
+    await this.interruptionCoordinator.flush();
     const finalizerStep = this.flow.enter("finalizers", {candidate: candidate.status});
-    this.drainSteering(candidate.status === "cancelled" ? "cancelled" : "run_settled");
-    this.interactions.close();
-    this.drainInteractionSettlements();
-    this.settleCompletionCall(candidate.status === "cancelled" ? "cancelled" : "invalidated",
-      candidate.status === "failed" ? candidate.failure.failure.code : "run_terminated_before_completion_acceptance");
+    (await this.drainSteering(candidate.status === "cancelled" ? "cancelled" : "run_settled"));
+    await this.interactions.close();
+    (await this.drainInteractionSettlements());
+    (await this.settleCompletionCall(candidate.status === "cancelled" ? "cancelled" : "invalidated",
+      candidate.status === "failed" ? candidate.failure.failure.code : "run_terminated_before_completion_acceptance"));
     let terminal = candidate;
     const stateBeforeFinalization = this.writer.getSnapshot();
     if (stateBeforeFinalization.plan?.status === "active") {
@@ -5627,35 +6313,46 @@ export class RunExecution<TOutput> {
         now: this.now(),
       });
       if (abandoned.status === "abandoned") {
-        this.writer.commit({
+        (await this.writer.commit({
           kind: "state_transition",
           transition: "plan",
           previousRevision: stateBeforeFinalization.plan.version,
           plan: projectPlan(abandoned.plan),
-        }, () => Object.freeze({ plan: abandoned.plan }));
+        }, () => Object.freeze({ plan: abandoned.plan })));
       }
     }
 
     const finalization = createRunFinalizationContext({
       runId: this.runId,
-      cancellation: this.config.cancellation.context.request === null
-        ? null
-        : toRunCancellationSummary(this.config.cancellation.context.request),
+      cancellation: this.finalizationCheckpoint!.cancellation,
       timeoutMs: this.config.cancellationLimits.finalizationTimeoutMs,
-      startedAt: this.now(),
+      startedAt: this.finalizationCheckpoint!.startedAt,
+      currentAt: this.now(),
     });
     try {
       const resourceFailures = await Promise.all(
-        (this.dependencies.resourceFinalizers ?? []).map(async (finalizer) => {
+        (this.dependencies.resourceFinalizers ?? []).map(async (finalizer, index) => {
+          const retained = this.finalizationCheckpoint!.finalizers[index]!;
+          if (retained.status === "settled") return retained.failure;
+          const recovering = retained.status === "pending";
+          if (this.restored && retained.binding === null) throw new RunRecoveryError(this.runId, "resource_finalizer_binding_unavailable", String(index));
+          if (!recovering) await this.updateFinalizer(index, {status: "pending", failure: null});
+          let failure: RunFailureCause | null;
           try {
-            return await finalizer.finalize(finalization.context);
-          } catch {
-            return runtimeFailure(
+            failure = recovering ? finalizer.reconcile
+              ? await finalizer.reconcile(finalization.context)
+              : runtimeFailure("runtime_resource_finalization_unconfirmed", "Interrupted resource cleanup has no reconciliation implementation.", {finalizer: retained.binding?.id ?? index})
+              : await finalizer.finalize(finalization.context);
+          } catch (error) {
+            assertExecutionCommitConfirmed(error);
+            failure = runtimeFailure(
               "runtime_resource_finalization_failed",
               "A required Run resource finalizer failed.",
               {},
             );
           }
+          await this.updateFinalizer(index, {status: "settled", failure});
+          return failure;
         }),
       );
       const failures = [
@@ -5683,6 +6380,18 @@ export class RunExecution<TOutput> {
       finalization.dispose();
     }
 
+    if (this.config.cancellation.context.request !== null) {
+      try {
+        await this.settleCancelledDescendants();
+        finalizerStep.check("descendant_settlement", "passed", {pendingTransfers: this.descendantSettlementWaits.size});
+      } catch (error) {
+        finalizerStep.check("descendant_settlement", "error", {settlementConfirmed: false});
+        throw error;
+      }
+    } else {
+      finalizerStep.check("descendant_settlement", "not_evaluated", {reason: "not_cancellation"});
+    }
+
     if (this.resourceFailure !== null) {
       const resource = this.resourceFailureCandidate(this.resourceFailure);
       terminal = terminal.status === "completed"
@@ -5694,7 +6403,8 @@ export class RunExecution<TOutput> {
           );
     }
     const stateBeforeTerminal = this.writer.getSnapshot();
-    const resultResource = this.runTree.recordResources(this.runId, {
+    const resultAccountingTree = this.treeCommits ? RunTreeExecution.restore(this.runTree.checkpoint(), () => this.now()) : this.runTree;
+    const resultUsage = {
       resultBytes: Object.freeze({
         status: "measured" as const,
         value: measureTerminalResultBytes(
@@ -5703,7 +6413,9 @@ export class RunExecution<TOutput> {
           stateBeforeTerminal.artifactRefs,
         ),
       }),
-    });
+    };
+    const resultResource = resultAccountingTree.recordResources(this.runId, resultUsage);
+    if (this.treeCommits) this.terminalResourceUsage = resultUsage;
     if (resultResource.status !== "recorded") {
       const resource = this.resourceFailureCandidate(resultResource);
       terminal = terminal.status === "completed"
@@ -5714,7 +6426,7 @@ export class RunExecution<TOutput> {
             "terminalization_failure",
           );
     }
-    this.runTree.settleResources(this.runId);
+    if (!this.treeCommits) this.runTree.settleResources(this.runId);
     finalizerStep.check("resource_account", this.resourceFailure !== null || resultResource.status !== "recorded" ? "not_satisfied" : "passed", {
       failurePresent: this.resourceFailure !== null, resultAccounting: resultResource.status,
     });
@@ -5749,8 +6461,10 @@ export class RunExecution<TOutput> {
             completedAt,
             cause: cause.ref,
           });
-    this.writer.commitItems(Object.freeze([
+    (await this.writer.commitItems(Object.freeze([
       Object.freeze({ kind: "settlement_cause" as const, cause }),
+      ...(this.inputNotifications.undelivered > 0 ? [Object.freeze({kind: "input_delivery_closed" as const,
+        reason: settlement.status, entries: this.inputNotifications.pendingEntries})] : []),
       Object.freeze({
         kind: "terminal_transition" as const,
         status: settlement.status,
@@ -5764,7 +6478,7 @@ export class RunExecution<TOutput> {
       cancellationRequest,
       completedAt,
       Object.freeze([...current.settlementCauses, cause]),
-    ));
+    )));
     await this.transcript.flush();
     const state = this.writer.getSnapshot();
     const base = {
@@ -5908,6 +6622,7 @@ export class RunExecution<TOutput> {
   }
 
   private failureFromError(error: unknown): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
+    assertExecutionCommitConfirmed(error);
     if (error instanceof ContextContractError) {
       return {
         status: "failed",
@@ -6074,10 +6789,17 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private retryEvents(): RetryEventSink {
+  private retryEvents(bookkeepingInvocationId: string | null = null): RetryEventSink {
     return Object.freeze({
-      emit: (candidate: import("../retry/index.js").RetryEvent) => {
-        this.recordRetry(snapshotRetryEvent(candidate, this.runId));
+      emit: async (candidate: import("../retry/index.js").RetryEvent) => {
+        const event = snapshotRetryEvent(candidate, this.runId);
+        const recorded = await this.writer.transaction(() => {
+          if (this.retainedRetryEvents.some(previous => JSON.stringify(previous) === JSON.stringify(event))) return {value: false};
+          this.retainedRetryEvents.push(event);
+          return {payloads: [], patch: {}, value: true, bookkeepingInvocationId};
+        });
+        if (!recorded) return;
+        this.recordRetry(event);
         this.publishCurrentState();
       },
     });
@@ -6107,23 +6829,20 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private onStateCommitted(state: RunState<TOutput>, previous: RunState<TOutput>): void {
-    const changes = state.items.slice(previous.items.length);
-    const owner = changes.length > 0 && changes.every(item =>
-      (item.payload.kind === "pending_transition" || item.payload.kind === "retry_transition") && item.payload.pending.kind === "retry_wait")
-      ? (changes[0]!.payload as Extract<RunItemPayload<TOutput>, { readonly kind: "pending_transition" | "retry_transition" }>).pending
-      : null;
-    const retryOwner = owner?.kind === "retry_wait" && changes.every(item =>
-      (item.payload.kind === "pending_transition" || item.payload.kind === "retry_transition") &&
-      item.payload.pending.kind === "retry_wait" && item.payload.pending.invocationId === owner.invocationId)
-      ? owner.invocationId : null;
-    this.decisionBasis.committed(state.revision, retryOwner);
+  private onStateCommitted(state: RunState<TOutput>, previous: RunState<TOutput>, bookkeepingInvocationId: string | null): void {
+    if (this.stagedAgentBinding && sameInstructionBindingRef(this.stagedAgentBinding.binding.ref, state.activeInstructionBinding)) {
+      this.activeAgent = this.stagedAgentBinding.agent;
+      this.activeInstructionBinding = this.stagedAgentBinding.binding;
+      this.instructionRevisionByAgentRevision.set(agentRevisionKey(this.activeAgent), this.activeAgent.instructions.ref.revision);
+      this.stagedAgentBinding = null;
+    }
+    this.decisionBasis.committed(state.revision, bookkeepingInvocationId ?? retryBookkeepingOwner(state, previous));
     for (const scope of this.retryScopes.values()) scope.notifyStateChanged();
-    if (state.permission !== this.lastAuthorityPermission) {
+    if (!this.treeCommits && state.permission !== this.lastAuthorityPermission) {
       this.lastAuthorityPermission = state.permission;
       this.runTree.advanceAuthorityRevision(this.runId);
     }
-    this.accountCommittedResources(state);
+    if (!this.treeCommits) this.accountCommittedResources(state);
     this.transcript.record(state.items);
     if (previous.context !== state.context) publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "context_committed", runId: this.runId, occurredAt: state.context.createdAt, context: state.context });
     if (state.status !== previous.status) {
@@ -6142,17 +6861,138 @@ export class RunExecution<TOutput> {
     this.publishCurrentState();
   }
 
+  private terminalResourceUsage: Parameters<RunTreeExecution["recordResources"]>[1] | null = null;
+
+  private async persistRunCommit(state: RunState<TOutput>, previous: RunState<TOutput> | null, accept?: () => void, bookkeepingInvocationId: string | null = null): Promise<void> {
+    const port = this.dependencies.runCommits;
+    if (!port && !this.treeCommits) return;
+    const commitId = `${this.runId}:commit:${state.revision}`;
+    try {
+      const commit = this.createRunCommit(state, previous, bookkeepingInvocationId);
+      if (this.treeCommits) {
+        let failure: typeof this.resourceFailure = null;
+        await this.treeCommits.transaction(({tree, members}) => {
+          const record = (usage: Parameters<RunTreeExecution["recordResources"]>[1]) => {
+            const result = tree.recordResources(this.runId, usage);
+            if (result.status !== "recorded") failure ??= result;
+          };
+          if (previous === null) {
+            tree.markStarted(this.runId, state.startedAt);
+          } else if (state.permission !== previous.permission) tree.advanceAuthorityRevision(this.runId);
+          const retainedContextBytes = members.find(member => member.head.state.run.id === this.runId)
+            ?.head.control.contextPayloadBytes ?? 0;
+          const contextDelta = commit.control.contextPayloadBytes - retainedContextBytes;
+          if (!Number.isSafeInteger(contextDelta) || contextDelta < 0) throw new TypeError("Run Context resource account moved backwards.");
+          if (contextDelta > 0) record({contextBytes: {status: "measured", value: contextDelta}});
+          this.accountResourceItems(state, previous?.items.length ?? 0, record);
+          const cancellation = this.config.cancellation.context.request;
+          if (cancellation !== null) tree.recordCancellation(this.runId, cancellation);
+          for (const transfer of commit.control.descendantTransfers) {
+            if (tree.getSnapshot().nodes.find(node => node.runId === transfer.childRunId)?.resultTransfer === "pending") {
+              tree.settleDescendantTransfer(transfer.childRunId, transfer.status);
+            }
+          }
+          if (state.settlementCause !== null && state.completedAt !== null &&
+              (state.status === "completed" || state.status === "failed" || state.status === "cancelled")) {
+            if (this.terminalResourceUsage !== null) record(this.terminalResourceUsage);
+            tree.settleResources(this.runId);
+            tree.settleRun(this.runId, state.status, projectRunTreeTerminal(state.settlementCause), state.completedAt);
+          } else tree.updateLifecycle(this.runId, state.status);
+          return {runs: [commit], value: undefined};
+        }, () => {
+          this.persistenceStarted = true;
+          this.resourceFailure ??= failure;
+          accept?.();
+        });
+      } else {
+        const receipt = await port!.commitRun(structuredClone(commit));
+        if (receipt.recordId !== commit.id || receipt.revision !== state.revision) throw new TypeError("Run commit receipt mismatch.");
+        this.persistenceStarted = true;
+      }
+    } catch (cause) {
+      throw new RunCommitError(commitId, {cause});
+    }
+  }
+
+  private createRunCommit(state: RunState<TOutput>, previous: RunState<TOutput> | null, bookkeepingInvocationId: string | null = null): RunCommit {
+    const notifications = new Map<number, import("./RunInputNotifications.js").RunInputNotification>();
+    let cursor = 0;
+    let admissionSequence = 0;
+    for (const {payload} of state.items) {
+      if (payload.kind === "input_notification") {
+        notifications.set(payload.notification.sequence, payload.notification);
+        cursor = Math.max(cursor, payload.notification.sourceSequence ?? 0);
+        admissionSequence = Math.max(admissionSequence, payload.notification.sequence);
+      } else if (payload.kind === "input_delivery") {
+        for (const entry of payload.batch.entries) notifications.delete(entry.sequence);
+      } else if (payload.kind === "input_delivery_closed") {
+        for (const entry of payload.entries) notifications.delete(entry.sequence);
+      }
+    }
+    const {cancellation: _cancellation, ...config} = this.config;
+    const staged = this.stagedAgentBinding && sameInstructionBindingRef(this.stagedAgentBinding.binding.ref, state.activeInstructionBinding)
+      ? this.stagedAgentBinding : null;
+    const instructionRevisions = new Map(this.instructionRevisionByAgentRevision);
+    if (staged) instructionRevisions.set(agentRevisionKey(staged.agent), staged.agent.instructions.ref.revision);
+    const commit: RunCommit = {
+      id: `${this.runId}:commit:${state.revision}`,
+      expectedRevision: previous?.revision ?? null,
+      state,
+      control: {
+        initialized: this.initialized,
+        finalization: this.finalizationCheckpoint,
+        lifecycleRecordings: [...this.lifecycleRecordings.values()],
+        controllerCheckpoints: [...this.controllerCheckpoints],
+        identitySequences: [...this.identitySequences], nextInteractionRequest: this.nextInteractionRequest, activeAgent: state.activeAgent,
+        instructionBinding: staged?.binding ?? this.activeInstructionBinding,
+        instructionRevisions: [...instructionRevisions],
+        instructions: (staged?.agent ?? this.activeAgent).instructions,
+        agentDefinition: (() => {const {output: _output, ...definition} = staged?.agent ?? this.activeAgent; return definition;})(),
+        contextPayloadBytes: this.contextPayloadBytes,
+        operationCalls: [...this.operationCalls], operations: [...this.operationPreparations.values()],
+        resultDeliveries: [...this.resultDeliveries.values()],
+        operationResults: [...this.operationResults.values()],
+        operationExecutions: [...this.operationExecutions],
+        executionFailureSettlements: [...this.executionFailureSettlements],
+        steering: {epoch: this.steeringEpoch, pending: [...this.steeringQueue], ledger: [...this.steeringLedger.values()]},
+        decisionBases: this.decisionBasis.snapshot(state.revision, bookkeepingInvocationId ?? retryBookkeepingOwner(state, previous)), deferredInteractionActions: [...this.deferredInteractionActions.values()],
+        inputNotifications: {cursor, admissionSequence, pending: [...notifications.values()]},
+        decision: this.acceptedDecision === null ? null : {...this.acceptedDecision,
+          calls: retainDecisionCallProgress(this.acceptedDecision, state)},
+        pendingCompletion: this.pendingCompletionCall,
+        descendantTransfers: [...this.descendantTransfers.values()],
+        descendantContinuations: [...this.continuationRecords.values()],
+        cancellation: this.config.cancellation.context.request,
+        controllerInvocation: this.controllerInvocation,
+        retryEvents: [...this.retainedRetryEvents],
+        completionNotification: this.completionNotification,
+        interactions: this.interactions.checkpoint(),
+        interactionActions: [...this.interactionActions].map(([requestId, context]) => ({requestId, ...context})),
+        deliveredInteractions: [...this.deliveredInteractions],
+      },
+      admission: this.persistenceStarted ? null : {input: this.input, config: retainRunConfiguration(config), modelInteractionSeed: this.modelInteractionSeed,
+        lineage: this.lineage, rootTask: this.rootTask, rootConfig: retainRunConfiguration(this.rootConfig),
+        delegationRequest: this.delegationRequest, delegationContextMaterials: this.delegationContextMaterials},
+    };
+    return structuredClone(commit);
+  }
+
   private accountCommittedResources(state: RunState<TOutput>): void {
-    while (this.accountedResourceItemCount < state.items.length) {
-      const item = state.items[this.accountedResourceItemCount++]!;
+    this.accountResourceItems(state, this.accountedResourceItemCount, usage => this.recordTreeResources(usage));
+    this.accountedResourceItemCount = state.items.length;
+  }
+
+  private accountResourceItems(state: RunState<TOutput>, from: number,
+    record: (usage: Parameters<RunTreeExecution["recordResources"]>[1]) => void): void {
+    for (const item of state.items.slice(from)) {
       if (item.payload.kind === "run_action") {
-        this.recordTreeResources({
+        record({
           actions: Object.freeze({ status: "measured" as const, value: 1 }),
         });
         continue;
       }
       if (item.payload.kind !== "controller_turn") continue;
-      this.recordTreeResources({
+      record({
         controllerTurns: Object.freeze({ status: "measured" as const, value: 1 }),
       });
       let responseCorrelationCount = 0;
@@ -6161,7 +7001,7 @@ export class RunExecution<TOutput> {
         responseCorrelationCount += 1;
         const usage = modelItem.usage;
         const metering = this.dependencies.controller.resourceMetering;
-        this.recordTreeResources({
+        record({
           modelInputTokens: providerUsageMeasurement(
             usage?.inputTokens ?? null,
             metering.modelInputTokens,
@@ -6178,7 +7018,7 @@ export class RunExecution<TOutput> {
       }
       if (responseCorrelationCount === 0) {
         const metering = this.dependencies.controller.resourceMetering;
-        this.recordTreeResources({
+        record({
           modelInputTokens: absentProviderUsageMeasurement(metering.modelInputTokens),
           modelOutputTokens: absentProviderUsageMeasurement(metering.modelOutputTokens),
           costUnits: absentProviderUsageMeasurement(metering.costUnits),
@@ -6399,8 +7239,20 @@ export class RunExecution<TOutput> {
     skipKinds = new Set<import("../run/index.js").RunFailureKind>(),
     context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
   ): Promise<RunFailureCause[]> {
+    const retained = this.lifecycleRecordings.get(phase);
+    if (retained && retained.status !== "pending") return [...retained.failures];
+    if (retained) {
+      const failures: RunFailureCause[] = [];
+      for (const kind of ["audit", "telemetry"] as const) {
+        if (this.config[kind] === "required") failures.push(createRunFailureCause(kind, {
+          code: `${kind}_recording_unconfirmed`, message: "Required lifecycle recording was interrupted and cannot be replayed safely.", retryable: false, metadata: {phase}}));
+      }
+      await this.writer.commitState(() => {this.lifecycleRecordings.set(phase, {phase, status: "interrupted", failures}); return {};});
+      return failures;
+    }
+    await this.writer.commitState(() => {this.lifecycleRecordings.set(phase, {phase, status: "pending", failures: []}); return {};});
     const state = this.writer.getSnapshot();
-    return recordRunnerLifecycle({
+    const failures = await recordRunnerLifecycle({
       phase,
       runId: this.runId,
       taskId: state.taskId,
@@ -6417,6 +7269,16 @@ export class RunExecution<TOutput> {
       auditPort: this.dependencies.auditPort,
       telemetryPort: this.dependencies.telemetryPort,
       skipKinds,
+    });
+    await this.writer.commitState(() => {this.lifecycleRecordings.set(phase, {phase, status: "settled", failures}); return {};});
+    return failures;
+  }
+
+  private async updateFinalizer(index: number, outcome: Pick<NonNullable<RunControlCheckpoint["finalization"]>["finalizers"][number], "status" | "failure">): Promise<void> {
+    await this.writer.commitState(() => {
+      const checkpoint = this.finalizationCheckpoint!;
+      this.finalizationCheckpoint = {...checkpoint, finalizers: checkpoint.finalizers.map((entry, position) => position === index ? {...entry, ...outcome} : entry)};
+      return {};
     });
   }
 
@@ -6597,6 +7459,7 @@ function operationResultFromComposite(
       compositeId: result.compositeId,
       childCount: result.children.length,
       compositeSettlement: createCompositeResultSummary(result),
+      resultConstruction: result.reduction,
     }),
   } as OperationResult);
 }
@@ -6751,12 +7614,16 @@ function bindingMatchesResolution(
   context: OperationInvocationContext,
   binding: ResolvedOperationBinding,
 ): boolean {
-  return binding.kind === registration.binding.kind &&
-    binding.invocation.id === context.invocation.id &&
-    binding.invocation.operation.revision === context.invocation.operation.revision &&
-    binding.binding.revision === registration.binding.ref.revision &&
-    binding.resolverRevision === registration.binding.resolverRevision &&
-    binding.correlation.kind === context.correlation.kind;
+  try {
+    const checked = snapshotResolvedOperationBinding(binding, value => value);
+    return checked.kind === registration.binding.kind &&
+      sameRunCommitValue(checked.invocation, snapshotOperationInvocationRef(context.invocation)) &&
+      operationRevisionKey(checked.binding.operation) === operationRevisionKey(registration.binding.ref.operation) &&
+      checked.binding.revision === registration.binding.ref.revision &&
+      checked.resolverRevision === registration.binding.resolverRevision &&
+      sameRunCommitValue(checked.correlation, snapshotOperationCorrelation(context.correlation)) &&
+      sameRunCommitValue(checked.parentInvocation, context.parentInvocation === null ? null : snapshotOperationInvocationRef(context.parentInvocation));
+  } catch { return false; }
 }
 
 function resolutionBindingKind(registration: RegisteredOperation): ResolvedOperationBinding["kind"] {
@@ -7004,9 +7871,11 @@ function deriveActiveStatus(
   return deriveRunStatusAfterPendingChange(status, pending);
 }
 
-function projectObservationSettlement(observation: RunObservation): {
+function projectObservationSettlement(observation: RunObservation, presenter?: ToolResultPresenter): {
   readonly settlement: ModelCallSettlementKind;
   readonly content: ModelJsonValue;
+  readonly presentation: import("@agent-anything/model-interaction").ModelResultPresentation;
+  readonly references?: readonly import("@agent-anything/operation-catalog/result").OperationLowerResultRef[];
 } {
   const payload = observation.payload;
   switch (payload.kind) {
@@ -7023,12 +7892,27 @@ function projectObservationSettlement(observation: RunObservation): {
     case "operation": {
       const composite = readCompositeResultSummary(payload.result.metadata.compositeSettlement);
       const detail = readOperationLimitFailureDetail(payload.result.failure?.detail);
-      return modelSettlement(
+      let output = payload.result.output;
+      let disposition: "complete" | "bounded" = "complete";
+      let presentationFailed = false;
+      let references: readonly import("@agent-anything/operation-catalog/result").OperationLowerResultRef[] = [];
+      try { references = presentToolResultReferences(presenter, payload.result); }
+      catch { presentationFailed = true; }
+      if (presenter !== undefined) {
+        try {
+          const presented = presenter.present(payload.result);
+          if (presented.disposition !== "complete" && presented.disposition !== "bounded") throw new TypeError("Invalid presentation disposition.");
+          output = presented.output;
+          disposition = presented.disposition;
+        } catch { presentationFailed = true; }
+      }
+      return {...modelSettlement(
         operationModelSettlement(payload.result.status),
-        {
+        presentationFailed ? undefined : {
           kind: payload.kind,
           status: payload.result.status,
-          output: payload.result.output,
+          output,
+          ...(references.length ? {references: references.map(ref => ({...ref}))} : {}),
           ...projectActionEffectFacts(payload.result),
           ...(composite === null ? {} : {composite}),
           failure: payload.result.failure === null
@@ -7040,7 +7924,15 @@ function projectObservationSettlement(observation: RunObservation): {
                 ...(detail === null ? {} : {detail}),
               },
         },
-      );
+        {kind: payload.kind, status: payload.result.status, ...projectActionEffectFacts(payload.result),
+          ...(references.length ? {references: references.map(ref => ({...ref}))} : {}),
+          failure: payload.result.failure === null ? null : {
+            owner: payload.result.failure.owner.slice(0, 256), code: payload.result.failure.code.slice(0, 256),
+            message: payload.result.failure.message.slice(0, 1_000),
+            messageTruncated: payload.result.failure.message.length > 1_000,
+          }},
+        presenter === undefined ? undefined : {presenter: presenter.ref, disposition, failureCode: null},
+      ), references};
     }
     case "operation_rejected":
     case "model_call_rejected":
@@ -7082,6 +7974,7 @@ function projectObservationSettlement(observation: RunObservation): {
           kind: payload.kind,
           status: payload.status,
           childRunId: payload.childRunId,
+          ...descendantDeliveryFacts(payload),
           output: payload.output,
           failure: payload.failure === null
             ? null
@@ -7090,7 +7983,7 @@ function projectObservationSettlement(observation: RunObservation): {
                 code: payload.failure.code,
                 message: payload.failure.message,
               },
-        },
+        }, descendantDeliveryFacts(payload),
       );
     case "descendant_progress":
       return modelSettlement("succeeded", {
@@ -7101,7 +7994,7 @@ function projectObservationSettlement(observation: RunObservation): {
         suspension: payload.progress.suspension,
         admittedControls: payload.progress.admittedControls,
         output: payload.output,
-      });
+      }, descendantDeliveryFacts(payload));
     case "descendant_result_transfer":
       return modelSettlement(
         operationModelSettlement(payload.status),
@@ -7109,6 +8002,7 @@ function projectObservationSettlement(observation: RunObservation): {
           kind: payload.kind,
           status: payload.status,
           childRunId: payload.childRunId,
+          ...descendantDeliveryFacts(payload),
           output: payload.output,
           failure: payload.failure === null
             ? null
@@ -7117,9 +8011,24 @@ function projectObservationSettlement(observation: RunObservation): {
                 code: payload.failure.code,
                 message: payload.failure.message,
               },
-        },
+        }, descendantDeliveryFacts(payload),
       );
   }
+}
+
+function descendantDeliveryFacts(payload: Extract<RunObservation["payload"],
+  {kind: "descendant_run" | "descendant_result_transfer" | "descendant_progress"}>): Readonly<Record<string, ModelJsonValue>> {
+  if (payload.kind === "descendant_progress") return {
+    kind: payload.kind, status: "suspended", childRunId: payload.progress.childRun.id,
+    childRunRevision: payload.progress.childRunRevision, suspension: snapshotModelJsonValue(payload.progress.suspension, "suspension"),
+    admittedControls: snapshotModelJsonValue(payload.progress.admittedControls, "admittedControls"),
+  };
+  const result = payload.result;
+  return {kind: payload.kind, status: payload.status, childRunId: payload.childRunId,
+    ...(result === null ? {} : {childTerminalStatus: result.terminal.status, childTerminalCode: result.terminal.code,
+      resultRef: snapshotModelJsonValue(result.ref, "resultRef"), effects: {status: result.effects.status,
+        attempted: result.effects.attempted, settled: result.effects.settled, uncertain: result.effects.uncertain}}),
+    failureCode: payload.failure?.code ?? null};
 }
 
 function projectActionEffectFacts(result: OperationResult): Readonly<Record<string, ModelJsonValue>> {
@@ -7138,17 +8047,33 @@ function projectActionEffectFacts(result: OperationResult): Readonly<Record<stri
 function modelSettlement(
   settlement: ModelCallSettlementKind,
   content: unknown,
-): { readonly settlement: ModelCallSettlementKind; readonly content: ModelJsonValue } {
+  knownOutcome: Readonly<Record<string, ModelJsonValue>> = {},
+  presentation?: import("@agent-anything/model-interaction").ModelResultPresentation,
+): { readonly settlement: ModelCallSettlementKind; readonly content: ModelJsonValue;
+  readonly presentation: import("@agent-anything/model-interaction").ModelResultPresentation } {
   let snapshot: ModelJsonValue;
+  let failureCode: string | null = null;
   try {
-    snapshot = snapshotModelJsonValue(content, "ModelToolResult.content");
+    snapshot = snapshotModelToolResultContent(content);
   } catch {
-    snapshot = Object.freeze({
+    failureCode = "model_result_projection_unavailable";
+    snapshot = snapshotModelToolResultContent({
       status: settlement,
+      ...knownOutcome,
       code: "model_result_projection_unavailable",
+      message: "The call settled, but its result content could not be presented. This is not evidence that execution failed or had no effects; do not repeat an effect solely to obtain missing output.",
     });
   }
-  return Object.freeze({ settlement, content: snapshot });
+  return Object.freeze({ settlement, content: snapshot,
+    presentation: presentation === undefined
+      ? resultPresentation(failureCode === null ? "complete" : "unavailable", failureCode)
+      : Object.freeze({...presentation, ...(failureCode === null ? {} : {disposition: "unavailable" as const, failureCode})}) });
+}
+
+function resultPresentation(
+  disposition: "complete" | "unavailable", failureCode: string | null = null,
+): import("@agent-anything/model-interaction").ModelResultPresentation {
+  return Object.freeze({presenter: Object.freeze({id: "agent-runtime.observation", revision: "1"}), disposition, failureCode});
 }
 
 function operationModelSettlement(

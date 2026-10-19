@@ -2,9 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   createHelarcProviderProfile,
   selectHelarcProviderProfile,
+  snapshotHelarcProviderModelSettings,
 } from "./index.js";
 
 describe("createHelarcProviderProfile", () => {
+  it("rejects obsolete output-cap settings rather than silently restoring them", () => {
+    expect(() => snapshotHelarcProviderModelSettings({ service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 } as never, "openai-compatible")).toThrow();
+    const result = createHelarcProviderProfile({ id: "local", providerKind: "ollama", displayName: "Local",
+      baseUrl: "http://localhost:11435", model: "test", timeoutMs: 1000, credentialStatus: "empty_allowed",
+      ollamaRuntime: { contextWindowTokens: 16384, maximumOutputTokens: 2048 } as never });
+    expect(result).toMatchObject({ ok: false, error: { code: "provider_profile_ollama_runtime_invalid" } });
+  });
+
   it("creates safe provider profile metadata without secrets", () => {
     const result = createHelarcProviderProfile({
       id: " local ",
@@ -28,7 +37,7 @@ describe("createHelarcProviderProfile", () => {
         model: "model-a",
         timeoutMs: 1500,
         ollamaRuntime: null,
-        modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+        modelSettings: { service: "generic", thinking: { mode: "default" } },
         credentialStatus: "present",
         qualificationPolicy: "require_qualified",
         isActive: true,
@@ -40,7 +49,7 @@ describe("createHelarcProviderProfile", () => {
   it("allows a connection without a model but not model-specific thinking", () => {
     const input = { id: "connection", providerKind: "openai-compatible" as const, displayName: "Connection",
       baseUrl: "https://provider.test", model: "  ", timeoutMs: 30000, credentialStatus: "present" as const,
-      modelSettings: { service: "deepseek" as const, thinking: { mode: "default" as const }, maximumOutputTokens: 4096 } };
+      modelSettings: { service: "deepseek" as const, thinking: { mode: "default" as const } } };
     expect(createHelarcProviderProfile(input)).toMatchObject({ ok: true, profile: { model: "" } });
     expect(createHelarcProviderProfile({ ...input,
       modelSettings: { ...input.modelSettings, thinking: { mode: "enabled" } } })).toMatchObject({
@@ -58,7 +67,6 @@ describe("createHelarcProviderProfile", () => {
       timeoutMs: 30_000,
       ollamaRuntime: {
         contextWindowTokens: 16_384,
-        maximumOutputTokens: 2_048,
       },
       credentialStatus: "empty_allowed",
     });
@@ -71,7 +79,6 @@ describe("createHelarcProviderProfile", () => {
         baseUrlOrigin: "http://localhost:11434",
         ollamaRuntime: {
           contextWindowTokens: 16_384,
-          maximumOutputTokens: 2_048,
         },
         credentialStatus: "empty_allowed",
         isActive: false,
@@ -89,7 +96,6 @@ describe("createHelarcProviderProfile", () => {
       timeoutMs: 30_000,
       ollamaRuntime: {
         contextWindowTokens: 16_384,
-        maximumOutputTokens: 2_048,
       },
       credentialStatus: "empty_allowed",
       qualificationPolicy: "permissive" as never,
@@ -123,8 +129,7 @@ describe("createHelarcProviderProfile", () => {
       model: "gemma4:e4b",
       timeoutMs: 30_000,
       ollamaRuntime: {
-        contextWindowTokens: 2_048,
-        maximumOutputTokens: 2_048,
+        contextWindowTokens: 0,
       },
       credentialStatus: "empty_allowed",
     });

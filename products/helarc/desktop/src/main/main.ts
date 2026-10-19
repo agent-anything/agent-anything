@@ -3,12 +3,16 @@ import { BrowserWindow, app, dialog } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
+import { HelarcExecutionStore } from "./execution-storage/HelarcExecutionStore.js";
+import { reconcileInterruptedHooks } from "./execution-storage/reconcileInterruptedHooks.js";
 import { HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
+import { HelarcExecutionDiagnostics } from "./diagnostics/HelarcExecutionDiagnostics.js";
 import { HelarcStorageService } from "./storage/HelarcStorageService.js";
 import { registerHelarcIpc } from "./ipc.js";
 import { FileHelarcContextManifestStore } from "./context-manifest/index.js";
 import { FileHelarcModelContinuationStore } from "./model-continuity/index.js";
 import { createHelarcProvider } from "./provider/createHelarcProvider.js";
+import { restoreHelarcProvider } from "./provider/restoreHelarcProvider.js";
 import { createElectronProviderCredentialStore } from "./provider/createElectronProviderCredentialStore.js";
 import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfileStore.js";
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
@@ -25,11 +29,13 @@ import { HelarcQualificationService } from "./qualification/HelarcQualificationS
 import { DEFAULT_HELARC_RUN_LIMITS } from "./run/HelarcHostRunComposition.js";
 import { HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS } from "@agent-anything/helarc-local-environment/filesystem";
 import { HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID,
-  selectNativeShell, projectNativeShellRuntimeProfile } from "@agent-anything/helarc-local-environment/command";
+  selectNativeShell, projectNativeShellRuntimeProfile, createCommandInputContract } from "@agent-anything/helarc-local-environment/command";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 let inspection: Promise<HelarcInspection> | null = null;
 let inspectionClosed = false;
+let executionStore: Promise<HelarcExecutionStore> | null = null;
+let executionDiagnostics: HelarcExecutionDiagnostics | null = null;
 const qualifications = new Set<HelarcQualificationService>();
 
 app.on("before-quit", (event) => {
@@ -38,8 +44,11 @@ app.on("before-quit", (event) => {
   inspectionClosed = true;
   void (async () => {
     for (const qualification of qualifications) await qualification.close();
+    await executionStore?.then(store => store.close());
     await inspection!.then((source) => source.close());
-  })().catch(() => {}).finally(() => app.quit());
+  })().catch(() => {}).finally(async () => {
+    try { await executionDiagnostics?.flush(); } finally { app.quit(); }
+  });
 });
 
 app.whenReady().then(() => {
@@ -63,8 +72,14 @@ async function createWindow(): Promise<void> {
     join(currentDir, "../preload/preload.cjs"),
   ));
   const userDataPath = app.getPath("userData");
+  executionDiagnostics ??= new HelarcExecutionDiagnostics(join(userDataPath, "execution-diagnostics.json"));
   inspection ??= HelarcInspection.create(join(userDataPath, "inspection-settings.json"));
   const inspectionSource = await inspection;
+  executionStore ??= HelarcExecutionStore.open(join(userDataPath, "execution"), undefined, inspectionSource.evidenceObserver, inspectionSource.fileMaterialObserver, executionDiagnostics).then(async store => {
+    try { await reconcileInterruptedHooks(store, record => inspectionSource.definitions?.recoveredHook(record)); return store; }
+    catch (error) { await store.close(); throw error; }
+  });
+  const executions = await executionStore;
   const storage = new HelarcStorageService(userDataPath, () => inspectionSource.snapshot().health);
   window.once("closed", () => storage.close());
   const instructionSettingsStore = new FileHelarcInstructionSettingsStore(join(userDataPath, "instruction-settings.json"));
@@ -100,6 +115,15 @@ async function createWindow(): Promise<void> {
     contextManifestStore.listManifests(),
   ]);
   const controller = new HelarcMainController({
+    executionDiagnostics,
+    executionStore: executions,
+    async recoverProvider(saved) {
+      const resolved = await providerProfileStore.resolveProfile(saved.providerProfile.id, providerCredentialStore);
+      if (!resolved.ok || resolved.profile.revision !== saved.providerProfile.revision) {
+        throw new Error("The original Provider configuration or credential is unavailable.");
+      }
+      return restoreHelarcProvider(saved, resolved.config.apiKey, inspectionSource.providerObserver);
+    },
     commandOutputDirectory: join(userDataPath, "command-output"),
     projects: await projectStore.listProjects(),
     responseDelivery: "streaming",
@@ -129,7 +153,7 @@ async function createWindow(): Promise<void> {
     store: new HelarcQualificationStore(join(userDataPath, "model-qualification.json")),
     configuration() {
       const current = controller.getQualificationConfiguration();
-      return current ? { ...current, shellRuntime, planLimits: DEFAULT_HELARC_RUN_LIMITS.plan,
+      return current ? { ...current, shellRuntime, inputContract: createCommandInputContract(), planLimits: DEFAULT_HELARC_RUN_LIMITS.plan,
         fileActionAdapterIds: HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS,
         shellActionAdapterId: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID,
         taskStopActionAdapterId: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID } : null;

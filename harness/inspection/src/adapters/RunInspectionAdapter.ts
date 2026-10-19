@@ -54,6 +54,19 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
       });
     } else if (payload.kind === "model_call_settlement") {
       const call = ref("runtime", "call", payload.result.modelCallRef.id);
+      const presentation = ref("runtime", "contribution", `${call.id}:presentation`, "1");
+      r.offer({subject: presentation, occurredAt: item.createdAt,
+        payload: {kind: "event", name: `model_result.presentation.${payload.result.presentation.disposition}`,
+          sequence: item.ref.sequence, code: payload.result.presentation.failureCode},
+        links: [inspectionLink("produces", subject, presentation), inspectionLink("delivers", presentation, call),
+          ...payload.result.sourceRefs.filter(source => source.kind === "operation_result").map(source =>
+            inspectionLink("transforms", ref("operations", "contribution", source.id), presentation,
+              {operation: `${payload.result.presentation.presenter.id}@${payload.result.presentation.presenter.revision}`})),
+          ...payload.result.sourceRefs.filter(source => ["execution", "effect", "support", "material"].includes(source.kind)).map(source =>
+            inspectionLink("delivers", ref(source.owner, "contribution", `${source.kind}:${source.id}`, source.revision), presentation,
+              {operation: "execution_reference_delivery"}))],
+        contents: [{name: "Result presentation", class: "agent", stage: "presented", mediaType: "application/json",
+          value: payload.result as unknown as InspectionJson}]});
       r.offer({ subject: call, occurredAt: item.createdAt, payload: { kind: "scheduling", position: payload.result.modelCallRef.contentBlockOrdinal, disposition: "settled", rule: "model_call_settlement", reason: null, groupId: null },
         links: [inspectionLink("settles", subject, call)], contents: [{ name: "Model Tool Result", class: "agent", stage: "settled", mediaType: "application/json", value: payload.result as unknown as InspectionJson }],
       });
@@ -66,21 +79,62 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
       if (transferred) {
         links.push(inspectionLink("delivers", ref("agent-runtime", "contribution", resultRef.id, resultRef.revision), target, { operation: "descendant_result_delivery" }));
       }
+      if (observation.payload.kind === "plan_update" && observation.payload.result.status !== "rejected") {
+        const result = observation.payload.result;
+        links.push(inspectionLink(result.status === "applied" ? "produces" : "binding", target,
+          ref("runtime", "contribution", result.planId, String(result.version)), { operation: `plan_update.${result.status}` }));
+      }
       r.offer({ subject: target, occurredAt: observation.createdAt,
         payload: { kind: "transfer", stage: transferred ? "delivered" : "produced", producerId: observation.runAction.id, consumerId: record.runId, operation: observation.payload.kind }, links,
         contents: [{ name: "Run Observation", class: "agent", stage: transferred ? "delivered" : "produced", mediaType: "application/json", value: observation as unknown as InspectionJson }],
+      });
+    } else if (payload.kind === "state_transition" && payload.transition === "plan") {
+      const plan = ref("runtime", "contribution", payload.plan.id, String(payload.plan.version));
+      r.offer({ subject: plan, occurredAt: item.createdAt,
+        payload: { kind: "event", name: "plan.committed", sequence: payload.plan.version, code: null },
+        links: [inspectionLink("produces", subject, plan),
+          ...(payload.previousRevision === null ? [] : [inspectionLink("transforms",
+            ref("runtime", "contribution", payload.plan.id, String(payload.previousRevision)), plan, { operation: "plan_transition" })])],
+        contents: [{ name: "Committed Plan", class: "agent", stage: "committed", mediaType: "application/json", value: payload.plan as unknown as InspectionJson }],
       });
     } else if (payload.kind === "input_notification") {
       const notification = payload.notification;
       r.offer({subject, occurredAt: item.createdAt, payload: {kind: "event", name: "input_notification.admitted", sequence: item.ref.sequence, code: null},
         links: [inspectionLink("delivers", ref(notification.source.owner, "contribution", notification.source.id, notification.source.revision), subject)],
       });
+    } else if (payload.kind === "input_delivery_closed") {
+      r.offer({subject, occurredAt: item.createdAt,
+        payload: {kind: "event", name: "input_delivery.closed_without_acceptance", sequence: item.ref.sequence, code: payload.reason},
+        links: payload.entries.map(entry => inspectionLink("includes",
+          ref(entry.source.owner, "contribution", entry.source.id, entry.source.revision), subject)),
+        contents: [{name: "Unaccepted input at Run closure", class: "agent", stage: "closed", mediaType: "application/json",
+          value: payload as unknown as InspectionJson}]});
+    } else if (payload.kind === "input_delivery") {
+      const batch = ref("agent-runtime", "contribution", payload.batch.id, payload.batch.revision);
+      const via = payload.receipt.via;
+      r.offer({subject: batch, occurredAt: item.createdAt,
+        payload: {kind: "event", name: "input_delivery.accepted", sequence: item.ref.sequence, code: null},
+        links: [inspectionLink("trigger", subject, batch),
+          inspectionLink("delivers", batch, ref("runtime", "turn", payload.turn.id), {operation: `${via.kind}_input_acceptance`}),
+          ...(via.kind === "provider" ? [inspectionLink("includes", batch,
+            ref("model-interaction", "request", via.requestId), {operation: "accepted_input_delivery"})] : [])],
+        contents: [{name: "Accepted input delivery", class: "agent", stage: "accepted", mediaType: "application/json",
+          value: payload as unknown as InspectionJson}]});
     } else if (payload.kind === "controller_turn") {
       const turn = ref("runtime", "turn", payload.turn.id);
       r.offer({ subject: turn, occurredAt: item.createdAt, payload: { kind: "event", name: "controller_turn.committed", sequence: null, code: null },
         links: [inspectionLink("trigger", subject, turn), ...payload.toolExposure.exposedTools.map((tool) => inspectionLink("binding", r.ref("tools", "definition", `${tool.tool.namespace}.${tool.tool.name}`, null, tool.revision), turn))],
         contents: [{ name: "Controller turn and exposure", class: "agent", stage: "committed", mediaType: "application/json", value: payload as unknown as InspectionJson }],
       });
+      for (const model of payload.modelItems) {
+        if (model.kind !== "assistant_text" && model.kind !== "model_tool_call") continue;
+        const modelRef = model.kind === "model_tool_call" ? ref("runtime", "call", model.call.modelCallRef.id)
+          : ref("runtime", "contribution", model.id);
+        r.offer({subject: modelRef, occurredAt: item.createdAt,
+          payload: {kind: "event", name: `controller.${model.kind}.committed`, sequence: null, code: null},
+          links: [inspectionLink("contains", turn, modelRef)],
+          contents: [{name: "Committed model item", class: "agent", stage: "committed", mediaType: "application/json", value: model as unknown as InspectionJson}]});
+      }
     }
   }
 }

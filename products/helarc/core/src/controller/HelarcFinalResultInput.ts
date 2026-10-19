@@ -6,14 +6,14 @@ export function finalResultInputError(
   limits: PlanLimits,
 ): string | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return "final_result input must be an object containing response and, when required, plan.";
+    return "final_result input must be an object with optional response and, when required, plan.";
   }
   const input = value as Record<string, unknown>;
   if (Object.keys(input).some(key => key !== "response" && key !== "plan")) {
     return "final_result accepts only response and plan; remove the other fields.";
   }
-  if (typeof input.response !== "string") {
-    return "final_result.response must be a string; an empty string is allowed.";
+  if (Object.hasOwn(input, "response") && typeof input.response !== "string") {
+    return "final_result.response must be a string when supplied; omit it to adopt existing text, or use an empty string for no final reply.";
   }
   if (!("plan" in input)) {
     return hasPlan ? "final_result.plan is required because a Plan exists. Submit its complete final step/status array, even when unchanged; unfinished steps may remain." : null;

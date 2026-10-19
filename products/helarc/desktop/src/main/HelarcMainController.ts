@@ -1,4 +1,6 @@
 import { persistenceFailureCode, type HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
+import { reportExecutionFailure, type ExecutionDiagnosticSink } from "./diagnostics/HelarcExecutionDiagnostics.js";
+import { restoreHelarcTerminalResult } from "./execution-storage/restoreHelarcTerminalResult.js";
 import {
   createDefaultHelarcInstructionSettings,
   snapshotHelarcInstructionSettings,
@@ -192,6 +194,7 @@ export interface HelarcThreadLatestRunSnapshot {
 }
 
 export interface HelarcMainSnapshot {
+  execution: "idle" | "starting" | "active";
   projects: readonly HelarcProject[];
   selectedProjectId: string | null;
   status: HelarcMainSnapshotStatus;
@@ -296,6 +299,9 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  executionDiagnostics?: ExecutionDiagnosticSink;
+  executionStore?: import("./execution-storage/HelarcExecutionStore.js").HelarcExecutionStore;
+  recoverProvider?: (admission: import("./execution-storage/HelarcExecutionAdmission.js").HelarcExecutionAdmission) => Promise<Provider>;
   commandOutputDirectory: string;
   projects?: readonly HelarcProject[];
   responseDelivery?: "buffered" | "streaming";
@@ -338,6 +344,9 @@ type DesktopActiveRunSlot =
     };
 
 export class HelarcMainController {
+  private readonly executionStore: HelarcMainControllerInput["executionStore"];
+  private readonly executionDiagnostics: ExecutionDiagnosticSink | undefined;
+  private readonly recoverProvider: HelarcMainControllerInput["recoverProvider"];
   private readonly commandOutputDirectory: string;
   private readonly responseDelivery: "buffered" | "streaming";
   readonly workbench: HelarcWorkbenchQueries;
@@ -402,6 +411,9 @@ export class HelarcMainController {
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput) {
+    this.executionStore = input.executionStore;
+    this.executionDiagnostics = input.executionDiagnostics;
+    this.recoverProvider = input.recoverProvider;
     this.persistenceDiagnostics = input.persistenceDiagnostics;
     this.commandOutputDirectory = input.commandOutputDirectory;
     this.responseDelivery = input.responseDelivery ?? "buffered";
@@ -471,6 +483,7 @@ export class HelarcMainController {
 
   getSnapshot(): HelarcMainSnapshot {
     return {
+      execution: this.activeRunSlot.kind === "reserved" ? "starting" : this.activeRunSlot.kind === "active" ? "active" : "idle",
       projects: this.projects,
       selectedProjectId: this.selectedProjectId,
       status: this.getCurrentStatus(),
@@ -521,7 +534,7 @@ export class HelarcMainController {
   dispatchHostCommand(
     candidate: unknown,
     expectedKind: HostCommandKind,
-  ): HostCommandReceipt {
+  ): Promise<HostCommandReceipt> {
     return this.hostCommandDispatcher.dispatch(candidate, expectedKind);
   }
 
@@ -693,6 +706,7 @@ export class HelarcMainController {
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
       const preparedHostRun = await prepareHelarcHostRun({
+        executionStore: this.executionStore,
         commandOutputDirectory: this.commandOutputDirectory,
         responseDelivery: this.responseDelivery,
         retainCommandOutput: async (harnessRunId, executionId, paths) => {
@@ -803,6 +817,87 @@ export class HelarcMainController {
       );
       this.publishSnapshot();
       return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+  }
+
+  async listRecoverableWork(): Promise<readonly import("../shared/HelarcExecutionRecovery.js").HelarcRecoverableWork[]> {
+    if (!this.executionStore) return [];
+    const entries = await this.executionStore.listProductRuns();
+    const active = this.activeRunSlot;
+    return entries.filter(entry => !entry.delivered &&
+      !(active.kind !== "empty" && active.threadId === entry.admission.sessionId && active.productRunId === entry.admission.productRunId))
+      .map(entry => ({id: entry.admission.rootRunId, threadId: entry.admission.sessionId,
+        title: entry.admission.task.input.prompt.slice(0, 160), revision: entry.revision,
+        state: entry.terminal ? "delivery_pending" as const : "interrupted" as const}));
+  }
+
+  async recoverWork(request: import("../shared/HelarcExecutionRecovery.js").HelarcRecoverWorkInput): Promise<import("../shared/HelarcExecutionRecovery.js").HelarcRecoverWorkResult> {
+    if (!this.executionStore) return {ok: false, message: "Execution recovery is unavailable."};
+    if (this.activeRunSlot.kind !== "empty") return {ok: false, message: "Wait for current work to settle."};
+    if (!request || typeof request.id !== "string" || !Number.isSafeInteger(request.revision) ||
+        !["continue", "cancel"].includes(request.intent)) return {ok: false, message: "Invalid recovery request."};
+    const entry = (await this.executionStore.listProductRuns()).find(item => item.admission.rootRunId === request.id && !item.delivered);
+    if (!entry || entry.revision !== request.revision) return {ok: false, message: "Retained execution changed; reload its recovery entry."};
+    const saved = entry.admission;
+    const opened = await this.openThread(saved.sessionId);
+    if (!opened.ok) return {ok: false, message: opened.error.message};
+    if (this.activeRunSlot.kind !== "empty") return {ok: false, message: "Another execution started."};
+    const record = this.currentThreadRecord;
+    const retainedRun = record?.runs.find(run => run.id === saved.productRunId);
+    if (!retainedRun) return {ok: false, message: "Original conversation work is unavailable."};
+    if (entry.terminal && retainedRun.terminal) {
+      await this.executionStore.commitProductDelivery(saved.rootRunId);
+      return {ok: true};
+    }
+    const token = Symbol(saved.productRunId);
+    this.activeRunSlot = {kind: "reserved", token, threadId: saved.sessionId, productRunId: saved.productRunId};
+    this.lastError = null;
+    this.publishSnapshot();
+    try {
+      if (entry.terminal) {
+        const release = this.executionStore.acquireRun(saved.rootRunId);
+        try {
+          const records = await this.executionStore.readRunTree(saved.rootRunId);
+          if (!records) throw new Error("Original Run Tree admission is unavailable.");
+          const restored = restoreHelarcTerminalResult(saved, records);
+          await this.persistWorkContextTerminal(restored);
+          await this.executionStore.commitProductDelivery(saved.rootRunId);
+          this.inspection?.recordRecoveredDelivery({runId: saved.rootRunId, threadId: saved.sessionId,
+            productRunId: saved.productRunId, checkpointId: records.commit.id,
+            checkpointRevision: records.commit.revision, completedAt: restored.runResult.completedAt});
+        } finally {release();}
+        this.releaseActiveRunSlot(token);
+        this.publishSnapshot();
+        return {ok: true};
+      }
+      if (!this.recoverProvider) throw new Error("Original Provider binding is unavailable.");
+      const provider = await this.recoverProvider(saved);
+      const prepared = await prepareHelarcHostRun({executionStore: this.executionStore, recoveryAdmission: saved,
+        commandOutputDirectory: this.commandOutputDirectory, responseDelivery: saved.responseDelivery,
+        retainCommandOutput: (runId, executionId, paths) => this.commandOutputRegistry.register(
+          {threadId: saved.sessionId, productRunId: saved.productRunId, runId}, executionId, this.commandOutputDirectory, paths),
+        inspection: this.inspection, instructionSettings: saved.instructionSettings,
+        task: saved.task, inputItems: saved.inputItems, sessionId: saved.sessionId, productRunId: saved.productRunId,
+        workspaceResolver: {async resolve() {return saved.workspace;}},
+        workspaceSelection: {kind: "references", primaryRef: saved.workspace.primary.id, additionalRefs: saved.workspace.additional.map(root => root.id)},
+        identityResolver: {async resolve() {return saved.identity;}},
+        identitySelection: saved.identity.kind === "anonymous" ? {kind: "anonymous"} : {kind: "reference", identityRef: saved.identity.id},
+        provider, providerProfile: saved.providerProfile, qualificationCatalog: saved.qualificationCatalog ?? undefined,
+        modelContinuationStore: this.modelContinuationStore, contextManifestPersistence: this.contextManifestPersistence,
+        runTranscriptPort: this.runTranscriptPort, permissionPreset: saved.permissionPreset, enforcement: saved.enforcement,
+        runLimits: saved.runLimits, runTreeLimits: saved.runTreeLimits, commandLimits: saved.commandLimits ?? undefined,
+        sessionAuthorityPort: this.sessionAuthorityStore, persistentPolicyAmendments: this.policyAmendmentStore});
+      const composition = await prepared.recover(request.intent);
+      this.acceptedTask = {id: saved.task.id, prompt: saved.task.input.prompt};
+      this.attachActiveHostRun(token, saved.sessionId, saved.productRunId, composition.activeRun);
+      void this.observeActiveRun(token, composition.result);
+      return {ok: true};
+    } catch (cause) {
+      this.releaseActiveRunSlot(token);
+      const message = cause instanceof Error ? cause.message : "Execution recovery could not be confirmed.";
+      this.setError("run_execution_failed", message);
+      this.publishSnapshot();
+      return {ok: false, message};
     }
   }
 
@@ -1018,9 +1113,15 @@ export class HelarcMainController {
     let outcome: HelarcHostRunResult;
     try {
       outcome = await result;
-    } catch {
+    } catch (error) {
       const failedSlot = this.activeRunSlot;
       if (failedSlot.kind !== "active" || failedSlot.token !== token) return;
+      reportExecutionFailure(this.executionDiagnostics, "active_run_rejected", {
+        threadId: failedSlot.threadId, productRunId: failedSlot.productRunId,
+        runId: failedSlot.handle.runId, runRevision: this.runProjection?.host.runRevision ?? null,
+        lastObservedStatus: this.runProjection?.host.status ?? null,
+        projectionSequence: failedSlot.projectionSequence,
+      }, error);
       failedSlot.finishing = true;
       failedSlot.pendingProjection = null;
       await failedSlot.progressTail;
@@ -1050,6 +1151,7 @@ export class HelarcMainController {
 
     try {
       await this.persistWorkContextTerminal(outcome);
+      await this.executionStore?.commitProductDelivery(outcome.harnessRunId);
       if (slot.persistenceFailure !== null && this.lastError?.code === "run_persistence_failed") this.lastError = null;
     } catch (cause) {
       this.recordPersistenceFailure(slot, "run_terminal", cause);
@@ -1081,7 +1183,7 @@ export class HelarcMainController {
       threadId,
       productRunId,
       handle: activeRun,
-      projectionSequence: 0,
+      projectionSequence: this.currentThreadRecord?.runs.find(run => run.id === productRunId)?.projectionSequence ?? 0,
       pendingProjection: null,
       progressWriting: false,
       finishing: false,
@@ -1212,8 +1314,10 @@ export class HelarcMainController {
   }
 
   private getCurrentStatus(): HelarcMainSnapshotStatus {
-    if (this.runProjection !== null) return this.runProjection.display.status;
     if (this.activeRunSlot.kind === "reserved") return "starting";
+    if (this.runProjection !== null && (this.activeRunSlot.kind === "active" || this.runProjection.display.terminal)) {
+      return this.runProjection.display.status;
+    }
     return this.lastError?.code === "run_execution_failed"
       ? "failed"
       : this.inactiveStatus;
@@ -1352,12 +1456,6 @@ export class HelarcMainController {
       outcome.product,
       artifacts.map((artifact) => artifact.id),
     );
-    if (assistantMessage === null) {
-      throw new HelarcDesktopPersistenceError(
-        "terminal_message_invalid",
-        "The terminal assistant Message is invalid.",
-      );
-    }
     const commit: HelarcRunTerminalCommit = {
       kind: "run_terminal",
       commitId: `helarc-terminal-${run.id}`,
@@ -1436,10 +1534,14 @@ function createAssistantTerminalMessage(
     createdAt: terminal.completedAt,
     relatedRunIds: [run.id],
     relatedArtifactIds,
-    metadata: { outputSource: product.output.source },
+    metadata: { outputSource: product.output.source,
+      ...(product.output.finalReply ? {finalReply: {...product.output.finalReply, ending: {...product.output.finalReply.ending}}} : {}) },
   });
 
-  return result.ok ? result.message : null;
+  if (!result.ok) {
+    throw new HelarcDesktopPersistenceError("terminal_message_invalid", "The terminal assistant Message is invalid.");
+  }
+  return result.message;
 }
 
 function createTerminalArtifacts(
@@ -1452,7 +1554,7 @@ function createTerminalArtifacts(
   const safeOutput = product.output;
   const summary = safeOutput.agentSummary;
 
-  if (summary !== null && summary !== undefined) {
+  if (typeof summary === "string" && summary.trim()) {
     const artifact = createArtifact({
       id: `${run.id}-artifact-final-output`,
       threadId: record.thread.id,
@@ -1469,6 +1571,7 @@ function createTerminalArtifacts(
       payload: safeOutput
         ? {
             agentSummary: safeOutput.agentSummary,
+            outputSource: JSON.parse(JSON.stringify(safeOutput.source)) as HelarcSafeValue,
             runtimeStatus: safeOutput.runtimeStatus,
             enforcement: {
               selected: safeOutput.enforcement.selected,
@@ -1581,11 +1684,12 @@ function operationEffectArtifactRefs(product: HelarcProductResult): readonly Hel
 function createAssistantTerminalMessageContent(
   terminal: HostTerminalRunProjection,
   product: HelarcProductResult,
-): string {
+): string | null {
   const summary = product.output.agentSummary;
-  if (summary) {
+  if (summary?.trim()) {
     return summary;
   }
+  if (product.status === "completed") return null;
 
   if (terminal.status === "cancelled") {
     return "Run cancelled.";
@@ -1605,7 +1709,7 @@ function createAssistantTerminalMessageContent(
     return "Run rejected.";
   }
 
-  return product.status === "completed" ? "Run completed." : `Run ${product.status}.`;
+  return `Run ${product.status}.`;
 }
 
 function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcActiveThreadSnapshot | null {

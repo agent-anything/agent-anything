@@ -67,7 +67,7 @@ export interface OllamaProviderConfig {
   readonly timeoutMs: number;
   readonly runtime: {
     readonly contextWindowTokens: number;
-    readonly maximumOutputTokens: number;
+    readonly maximumOutputTokens?: number;
   };
   readonly nativeToolInteraction: {
     readonly supported: boolean;
@@ -108,7 +108,12 @@ export class OllamaProvider implements Provider {
       model: this.config.model,
       revision: `ollama.api.context-window.v1:${this.config.runtime.contextWindowTokens}`,
     });
-    const requestedOutput = Object.freeze({
+    const requestedOutput = this.config.runtime.maximumOutputTokens === undefined ? Object.freeze({
+      unit: "tokens" as const,
+      maximum: null,
+      source: "unspecified" as const,
+      revision: "ollama.api.num-predict.unspecified.v1",
+    }) : Object.freeze({
       unit: "tokens" as const,
       maximum: this.config.runtime.maximumOutputTokens,
       source: "host_configured" as const,
@@ -117,7 +122,7 @@ export class OllamaProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "ollama.api.adapter.v6",
+      adapterRevision: "ollama.api.adapter.v7",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -167,7 +172,7 @@ export class OllamaProvider implements Provider {
       metadata: Object.freeze({ generationConfiguration: Object.freeze({
         think: this.config.think ?? null,
         modelArtifact: this.config.modelArtifact ?? null,
-        maximumOutputTokens: this.config.runtime.maximumOutputTokens,
+        maximumOutputTokens: this.config.runtime.maximumOutputTokens ?? null,
       }) }),
     });
   }
@@ -308,7 +313,7 @@ export class OllamaProvider implements Provider {
               ...(contextWindowExceeded
                 ? {
                     contextWindowTokens: this.config.runtime.contextWindowTokens,
-                    maximumOutputTokens: this.config.runtime.maximumOutputTokens,
+                    maximumOutputTokens: this.config.runtime.maximumOutputTokens ?? null,
                   }
                 : {}),
               requestDiagnostic,
@@ -466,10 +471,10 @@ function encodeOllamaRequest(
 
 function ollamaRuntimeOptions(
   config: Readonly<OllamaProviderConfig>,
-): Readonly<{ num_ctx: number; num_predict: number }> {
+): Readonly<{ num_ctx: number; num_predict?: number }> {
   return Object.freeze({
     num_ctx: config.runtime.contextWindowTokens,
-    num_predict: config.runtime.maximumOutputTokens,
+    ...(config.runtime.maximumOutputTokens === undefined ? {} : { num_predict: config.runtime.maximumOutputTokens }),
   });
 }
 
@@ -827,7 +832,10 @@ function renderInstructions(instructions: ModelInstructions): string {
 }
 
 function renderToolResultContent(result: ModelToolResult): string {
-  return JSON.stringify({ settlement: result.settlement, content: result.content });
+  return JSON.stringify({ settlement: result.settlement, content: result.content,
+    ...(result.presentation.disposition === "complete" ? {} : {presentation: {
+      disposition: result.presentation.disposition, failureCode: result.presentation.failureCode,
+    }}) });
 }
 
 async function readOllamaHttpErrorDiagnostic(
@@ -933,9 +941,11 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
     !isRecord(input.runtime) ||
     !Number.isSafeInteger(input.runtime.contextWindowTokens) ||
     input.runtime.contextWindowTokens <= 0 ||
-    !Number.isSafeInteger(input.runtime.maximumOutputTokens) ||
-    input.runtime.maximumOutputTokens <= 0 ||
-    input.runtime.maximumOutputTokens >= input.runtime.contextWindowTokens
+    (input.runtime.maximumOutputTokens !== undefined && (
+      !Number.isSafeInteger(input.runtime.maximumOutputTokens) ||
+      input.runtime.maximumOutputTokens <= 0 ||
+      input.runtime.maximumOutputTokens >= input.runtime.contextWindowTokens
+    ))
   ) {
     throw new TypeError("Ollama runtime limits are invalid.");
   }
@@ -964,7 +974,7 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
     ...(input.think === undefined ? {} : { think: input.think }),
     runtime: Object.freeze({
       contextWindowTokens: input.runtime.contextWindowTokens,
-      maximumOutputTokens: input.runtime.maximumOutputTokens,
+      ...(input.runtime.maximumOutputTokens === undefined ? {} : { maximumOutputTokens: input.runtime.maximumOutputTokens }),
     }),
     nativeToolInteraction: Object.freeze({
       supported: input.nativeToolInteraction.supported,

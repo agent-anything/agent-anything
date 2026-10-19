@@ -17,7 +17,7 @@ async function setup() {
 function input(patch: Partial<SaveHelarcProviderProfileInput> = {}): SaveHelarcProviderProfileInput {
   return { providerKind: "openai-compatible", displayName: "Provider", baseUrl: "https://provider.test/v1",
     model: "model", timeoutMs: 30000, ollamaRuntime: null,
-    modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+    modelSettings: { service: "generic", thinking: { mode: "default" } },
     apiKeyUpdate: "set", apiKey: "secret-key", ...patch };
 }
 describe("named Provider profiles", () => {
@@ -125,7 +125,7 @@ describe("named Provider profiles", () => {
   it("rejects invalid URLs, runtime limits and service/transport combinations before saving credentials", async () => {
     const { store, credentials } = await setup();
     for (const patch of [{ baseUrl: "https://user:secret@provider.test" }, { baseUrl: "http://remote.test" },
-      { providerKind: "ollama" as const, ollamaRuntime: null }, { modelSettings: { service: "ollama" as const, thinking: { mode: "default" as const }, maximumOutputTokens: 10 } }]) {
+      { providerKind: "ollama" as const, ollamaRuntime: null }, { modelSettings: { service: "ollama" as const, thinking: { mode: "default" as const } } }]) {
       expect(await store.saveActiveProfile(input(patch), credentials)).toMatchObject({ ok: false });
     }
     expect(await store.listProfiles(credentials)).toEqual([]);

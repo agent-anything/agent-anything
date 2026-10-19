@@ -54,10 +54,6 @@ describe("Plan transitions", () => {
     [{ plan: [] }, "Plan must contain at least one step."],
     [{ plan: [{ step: "", status: "pending" }] }, "Plan step text must not be empty."],
     [{ plan: [{ step: "One", status: "unknown" }] }, "Plan step status is not supported."],
-    [{ plan: [
-      { step: "One", status: "in_progress" },
-      { step: "Two", status: "in_progress" },
-    ] }, "At most one Plan step may be in progress."],
   ])("rejects invalid model input without creating Plan state", (candidate, message) => {
     expect(validatePlanUpdate(candidate, createLimits())).toMatchObject({status: "rejected", message});
     const result = applyPlanUpdate({
@@ -92,6 +88,25 @@ describe("Plan transitions", () => {
       status: "rejected",
       observation: { status: "rejected", code: "plan_limit_exceeded" },
     });
+  });
+
+  it("preserves several in-progress steps without imposing execution order", () => {
+    const candidate = { plan: [
+      { step: "Combine findings", status: "pending" },
+      { step: "Investigate environment", status: "in_progress" },
+      { step: "Investigate inputs", status: "in_progress" },
+    ] };
+    const result = applyPlanUpdate({ currentPlan: null, newPlanId: "plan-1", candidate,
+      limits: createLimits(), now: "2026-10-13T00:00:00.000Z" });
+    expect(result).toMatchObject({ status: "applied", plan: { version: 1, status: "active", steps: candidate.plan } });
+    if (result.status !== "applied") throw new Error("Expected accepted progress.");
+    expect(applyPlanUpdate({ currentPlan: result.plan, candidate,
+      limits: createLimits(), now: "2026-10-13T00:01:00.000Z" }))
+      .toMatchObject({ status: "no_change", plan: { version: 1, steps: candidate.plan }, lifecycle: [] });
+    expect(applyPlanUpdate({ currentPlan: result.plan,
+      candidate: { plan: [...candidate.plan, { step: "", status: "pending" }] },
+      limits: createLimits(), now: "2026-10-13T00:01:00.000Z" }))
+      .toMatchObject({ status: "rejected", plan: result.plan, lifecycle: [] });
   });
 
   it("returns no_change for the same normalized Plan and preserves version and timestamps", () => {

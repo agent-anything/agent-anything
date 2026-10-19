@@ -50,6 +50,7 @@ export interface HelarcProductOutput {
   };
   readonly agentSummary: string | null;
   readonly source: HelarcAgentOutput["source"];
+  readonly finalReply?: HelarcAgentOutput["finalReply"];
   readonly runtimeStatus: RunResultStatus;
   readonly enforcement: HelarcEnforcementSummary;
   readonly safeErrors: readonly { readonly code: string; readonly message: string }[];
@@ -198,7 +199,8 @@ export function projectHelarcProductResult(
         additionalIds: Object.freeze(workspace.additional.map(({ id }) => id)),
       }),
       agentSummary: agentOutput?.summary ?? null,
-      source: agentOutput?.source ?? { kind: "product_status" as const },
+      source: projectOutputSource(agentOutput?.source, runResult),
+      ...(agentOutput?.finalReply ? {finalReply: agentOutput.finalReply} : {}),
       runtimeStatus: runResult.status,
       enforcement: Object.freeze(createEnforcementSummary(runResult, selectedEnforcement)),
       safeErrors: Object.freeze(safeErrors.map((error) => Object.freeze({ ...error }))),
@@ -219,6 +221,15 @@ export function projectHelarcProductResult(
     ]),
     artifactRefs: Object.freeze([...runResult.artifactRefs]),
   });
+}
+
+function projectOutputSource(source: HelarcAgentOutput["source"] | undefined, result: RunResult<HelarcAgentOutput>): HelarcAgentOutput["source"] {
+  if (!source) return {kind: "product_status"};
+  if (source.kind !== "model_text" || !source.adopted || source.adopted.runItem !== null) return source;
+  const item = result.items.find(item => item.payload.kind === "controller_turn" && item.payload.modelItems.some(model =>
+    model.kind === "assistant_text" && model.turnId === source.turnId && source.modelItemIds.includes(model.id)));
+  return item ? Object.freeze({...source, adopted: Object.freeze({...source.adopted,
+    runItem: Object.freeze({id: item.ref.id, sequence: item.ref.sequence})})}) : source;
 }
 
 export function mapRuntimeEventToHelarcActivity(

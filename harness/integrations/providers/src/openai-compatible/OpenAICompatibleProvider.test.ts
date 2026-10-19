@@ -17,6 +17,28 @@ import {
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 
 describe("OpenAICompatibleProvider", () => {
+  it("omits caller output limits in native and structured requests when unspecified", async () => {
+    const { maximumOutputTokens: _maximum, ...settings } = config();
+    const bodies: Record<string, unknown>[] = [];
+    const provider = new OpenAICompatibleProvider(settings, async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return okResponse({ id: "reply", choices: [{ index: 0, finish_reason: "stop",
+        message: { role: "assistant", content: '{"action":"complete","summary":"done"}' } }] });
+    });
+    expect((await provider.send(createNativeProviderRequest(provider), context())).kind).toBe("succeeded");
+    expect((await provider.send(request(provider), context())).kind).toBe("succeeded");
+    for (const body of bodies) {
+      expect(body).not.toHaveProperty("max_tokens");
+      expect(body).not.toHaveProperty("max_completion_tokens");
+    }
+    expect(provider.modelContext.requestedOutput).toMatchObject({ maximum: null, source: "unspecified" });
+    expect(provider.descriptor.metadata.generationConfiguration).toMatchObject({ maximumOutputTokens: null });
+  });
+
+  it.each([null, 0, -1, 1.5, Infinity])("rejects invalid explicit output limit %s", maximumOutputTokens => {
+    expect(() => new OpenAICompatibleProvider({ ...config(), maximumOutputTokens } as never)).toThrow();
+  });
+
   it("observes the existing exchange without extra reads, requests or changed results", async () => {
     const sent: string[] = [];
     const parsed = vi.fn(async () => ({ id: "response-1", choices: [{ message: { content: '{"action":"complete","summary":"done"}' } }] }));

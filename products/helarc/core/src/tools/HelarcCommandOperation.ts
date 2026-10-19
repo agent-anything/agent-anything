@@ -6,6 +6,7 @@ import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import { findHelarcBaselineToolContract, type HelarcShellToolName } from "./HelarcBaselineToolContracts.js";
 import {createHelarcShellComposite} from "./HelarcShellComposite.js";
 import type {CompositeOperationResolverPort} from "@agent-anything/agent-runtime/runner";
+import { commandInputSchema, type HelarcCommandInputContract } from "./HelarcCommandInputContract.js";
 
 export const HELARC_TASK_STOP_TOOL = "TaskStop";
 
@@ -20,6 +21,7 @@ import {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERA
 export {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER, HELARC_TASK_OUTPUT_HANDLER, HELARC_SHELL_COMPOSITE, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING} from "./HelarcCommandIdentity.js";
 
 export function createHelarcCommandOperationContribution(input: {
+  readonly inputContract: HelarcCommandInputContract;
   readonly shellTool: HelarcShellToolName;
   readonly shellActionAdapterId: string;
   readonly taskStopActionAdapterId: string;
@@ -41,11 +43,11 @@ export function createHelarcCommandOperationContribution(input: {
       binding("helarc.task-stop.direct", HELARC_TASK_STOP_BINDING, input.taskStopActionAdapterId),
     ]),
     tools: Object.freeze([
-      tool("helarc.tool.shell.admission.v2", findHelarcBaselineToolContract(input.shellTool), HELARC_SHELL_BINDING, input.admittedAt),
+      tool("helarc.tool.shell.admission.v2", {...findHelarcBaselineToolContract(input.shellTool), inputSchema: commandInputSchema(input.inputContract)}, HELARC_SHELL_BINDING, input.admittedAt, input.inputContract.ref.revision),
       tool("helarc.tool.task-stop.admission.v2", findHelarcBaselineToolContract("TaskStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
       tool("helarc.tool.task-output.admission.v1", findHelarcBaselineToolContract("TaskOutput"), HELARC_TASK_OUTPUT_BINDING, input.admittedAt),
     ]),
-    composite:createHelarcShellComposite(),
+    composite:createHelarcShellComposite(input.inputContract.constraints.wait.defaultForegroundMs),
   });
 }
 
@@ -79,14 +81,14 @@ function binding(resolverId: string, bindingRef: OperationBindingRevisionRef, ta
   };
 }
 
-function tool(admissionId: string, contract: ReturnType<typeof findHelarcBaselineToolContract>, operationBinding: OperationBindingRevisionRef, admittedAt: string): ToolRegistrationInput {
+function tool(admissionId: string, contract: ReturnType<typeof findHelarcBaselineToolContract>, operationBinding: OperationBindingRevisionRef, admittedAt: string, inputRevision = "1"): ToolRegistrationInput {
   const revision = operationBinding.operation.revision;
   return {
     admissionId,
     descriptor: {
-      ref: { tool: { namespace: "helarc", name: contract.name.toLowerCase() }, revision },
+      ref: { tool: { namespace: "helarc", name: contract.name.toLowerCase() }, revision: inputRevision === "1" ? revision : `${revision}:${inputRevision}` },
       name: contract.name, description: contract.description, inputSchema: contract.inputSchema,
-      schemaRevisions: { dialect: "json-schema-2020-12", input: "1", output: revision, translation: `native-${revision}` },
+      schemaRevisions: { dialect: "json-schema-2020-12", input: inputRevision, output: revision, translation: `native-${revision}` },
       annotations: contract.annotations,
       source: { kind: "product", sourceId: "helarc", sourceRevision: revision, activationEpoch: null },
       binding: { kind: "operation", ...operationBinding }, retirement: null, metadata: { profile: "code-agent" },

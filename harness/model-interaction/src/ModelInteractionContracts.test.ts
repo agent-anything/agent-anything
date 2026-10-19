@@ -10,6 +10,7 @@ import {
   snapshotModelMessages,
   snapshotModelInstructions,
   snapshotModelToolResult,
+  snapshotModelResultPresentation,
   snapshotModelTurn,
   snapshotModelTurnFinish,
   snapshotProviderCapabilities,
@@ -177,6 +178,7 @@ describe("provider-neutral Model Interaction contracts", () => {
       providerCallRef: { providerId: "provider-1", id: "provider-call-1" },
       name: "Read",
       settlement: "denied",
+      presentation: {presenter: {id: "test", revision: "1"}, disposition: "complete", failureCode: null},
       content: { code: "permission_denied" },
       sourceRefs: [{
         owner: "permission",
@@ -191,9 +193,23 @@ describe("provider-neutral Model Interaction contracts", () => {
       providerCallRef: null,
       name: "Read",
       settlement: "succeeded",
+      presentation: {presenter: {id: "test", revision: "1"}, disposition: "complete", failureCode: null},
       content: null,
       sourceRefs: [],
     })).toThrow("bounded non-empty array");
+  });
+
+  it("keeps presentation failure independent of the execution settlement", () => {
+    const result = snapshotModelToolResult({modelCallRef: callRef(0), providerCallRef: null, name: "Write", settlement: "succeeded",
+      presentation: {presenter: {id: "write-result", revision: "2"}, disposition: "unavailable", failureCode: "result_content_unavailable"},
+      content: {status: "succeeded", code: "result_content_unavailable"},
+      sourceRefs: [{owner: "test", kind: "operation_result", id: "result-1", revision: "1"}],
+    });
+    expect(result.settlement).toBe("succeeded");
+    expect(result.presentation).toMatchObject({disposition: "unavailable", failureCode: "result_content_unavailable"});
+    expect(() => snapshotModelResultPresentation({...result.presentation, disposition: "complete"})).toThrow(/inconsistent/);
+    expect(() => snapshotModelResultPresentation({...result.presentation, failureCode: null})).toThrow(/inconsistent/);
+    expect(snapshotModelResultPresentation({...result.presentation, disposition: "bounded", failureCode: null})).toMatchObject({disposition: "bounded"});
   });
 
   it("keeps native Tools, structured generation, and streaming independent", () => {

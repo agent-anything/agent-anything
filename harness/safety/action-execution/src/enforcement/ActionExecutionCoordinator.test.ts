@@ -28,8 +28,265 @@ import {
   type ActionExecutionNotification,
   type ActionExecutionCoordinatorDependencies,
 } from "./ActionExecutionCoordinator.js";
+import { ActionRecordCommitError, ActionRecoveryError, type ActionRecordPort, type ActionRecoveryRecords,
+  type ActionPreparationRecord, type ActionDispatchIntent, type ActionAttemptResultRecord,
+  type ActionSettlementRecord, type ActionRetryRecord } from "./ActionRecordPort.js";
 
 describe("ActionExecutionCoordinator", () => {
+  it("continues an acknowledged retry with remaining delay and original Attempt identities", async () => {
+    const fixture = createFixture({retryOnce: true});
+    const retained = recoveryRecords();
+    const request = {...fixture.request, maxAttempts: 2};
+    const decision = await fixture.retryDecide();
+    fixture.retryDecide.mockResolvedValue({...decision, delayMs: 10_000});
+    fixture.retryDecide.mockClear();
+    const interrupted = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port,
+      retry: {...fixture.dependencies.retry, wait: async () => {throw new Error("owner exited during wait");}}});
+    await expect(interrupted.execute(request)).rejects.toThrow("owner exited");
+    const before = await retained.reader.readAction();
+    expect(before.attempts).toHaveLength(1);
+    fixture.order.length = 0;
+    const wait = vi.fn(async () => "elapsed" as const);
+    const restored = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port,
+      now: () => new Date(Date.parse(NOW) + 4_000).toISOString(),
+      retry: {...fixture.dependencies.retry, wait}});
+    const result = await restored.recover(request, {records: retained.reader, attempts: null});
+    expect(result).toMatchObject({status: "settled", settlement: {status: "succeeded", attempts: [
+      {id: before.attempts[0]!.intent.request.attempt.id, ordinal: 1}, {id: "action-1:attempt:2", ordinal: 2},
+    ]}});
+    expect(wait).toHaveBeenCalledWith(expect.objectContaining({delayMs: 6_000}));
+    expect(fixture.retryDecide).toHaveBeenCalledTimes(1);
+    expect(fixture.order).not.toContain("adapter.prepare");
+    expect(fixture.order).toContain("policy.evaluate");
+    expect(fixture.order).toContain("permission.assess");
+    expect(fixture.order).toContain("adapter.revalidate");
+    expect(fixture.order.filter(value => value === "executor.execute")).toHaveLength(1);
+  });
+
+  it("reuses a stop decision after a failed settlement acknowledgement", async () => {
+    const fixture = createFixture({retryOnce: true});
+    const retained = recoveryRecords();
+    const decide = vi.fn(async () => ({status: "stop" as const, code: "owner_policy_stop"}));
+    const request = {...fixture.request, maxAttempts: 2};
+    const interrupted = new ActionExecutionCoordinator({...fixture.dependencies,
+      retry: {...fixture.dependencies.retry, decide}, records: {...retained.port,
+        recordPostEffect: async () => {throw new Error("interrupted before settlement");}}});
+    await expect(interrupted.execute(request)).rejects.toBeInstanceOf(ActionRecordCommitError);
+    fixture.order.length = 0;
+    const restored = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port,
+      retry: {...fixture.dependencies.retry, decide}});
+    expect(await restored.recover(request, {records: retained.reader, attempts: null})).toMatchObject({settlement: {status: "failed", attempts: [{ordinal: 1}]}});
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(fixture.order).toEqual(["adapter.settle"]);
+  });
+
+  it("does not dispatch before retry acknowledgement, then recovers a lost acknowledgement", async () => {
+    const fixture = createFixture({retryOnce: true});
+    const retained = recoveryRecords();
+    const request = {...fixture.request, maxAttempts: 2};
+    const interrupted = new ActionExecutionCoordinator({...fixture.dependencies, records: {...retained.port,
+      async recordRetry(value) {await retained.port.recordRetry(value); throw new Error("acknowledgement lost");}}});
+    await expect(interrupted.execute(request)).rejects.toMatchObject({stage: "retry"});
+    expect(fixture.order.filter(value => value === "executor.execute")).toHaveLength(1);
+    const restored = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    expect(await restored.recover(request, {records: retained.reader, attempts: null})).toMatchObject({settlement: {status: "succeeded", attempts: [{ordinal: 1}, {ordinal: 2}]}});
+    expect(fixture.retryDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it("decides a missing retry only after the retained physical result is known", async () => {
+    const fixture = createFixture({retryOnce: true});
+    const retained = recoveryRecords();
+    const request = {...fixture.request, maxAttempts: 2};
+    const interrupted = new ActionExecutionCoordinator({...fixture.dependencies, records: {...retained.port,
+      async recordAttemptResult(value) {await retained.port.recordAttemptResult(value); throw new Error("owner exited");}}});
+    await expect(interrupted.execute(request)).rejects.toMatchObject({stage: "attempt_result"});
+    expect(fixture.retryDecide).not.toHaveBeenCalled();
+    const restored = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    expect(await restored.recover(request, {records: retained.reader, attempts: null})).toMatchObject({settlement: {status: "succeeded", attempts: [{ordinal: 1}, {ordinal: 2}]}});
+    expect(fixture.retryDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not renew limits or retry after the original deadline", async () => {
+    const fixture = createFixture({retryOnce: true});
+    const retained = recoveryRecords();
+    const request = {...fixture.request, maxAttempts: 2};
+    const interrupted = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port,
+      retry: {...fixture.dependencies.retry, wait: async () => {throw new Error("owner exited");}}});
+    await expect(interrupted.execute(request)).rejects.toThrow("owner exited");
+    fixture.order.length = 0;
+    const wait = vi.fn(async () => "elapsed" as const);
+    const restored = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port,
+      now: () => request.deadlineAt, retry: {...fixture.dependencies.retry, wait}});
+    await expect(restored.recover({...request, maxAttempts: 3}, {records: retained.reader, attempts: null})).rejects.toBeInstanceOf(ActionRecoveryError);
+    await expect(restored.recover({...request, deadlineAt: "2026-08-14T00:00:00.000Z"}, {records: retained.reader, attempts: null})).rejects.toBeInstanceOf(ActionRecoveryError);
+    expect(await restored.recover(request, {records: retained.reader, attempts: null})).toMatchObject({settlement: {status: "failed", causeRef: "action_deadline_exceeded", attempts: [{ordinal: 1}]}});
+    expect(fixture.order).toEqual(["adapter.settle"]);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("rejects altered retry timing and dispatch checkpoints without invoking effects", async () => {
+    const fixture = createFixture({retryOnce: true});
+    const retained = recoveryRecords();
+    const request = {...fixture.request, maxAttempts: 2};
+    const interrupted = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port,
+      retry: {...fixture.dependencies.retry, wait: async () => {throw new Error("owner exited");}}});
+    await expect(interrupted.execute(request)).rejects.toThrow("owner exited");
+    fixture.order.length = 0;
+    const saved = await retained.reader.readAction();
+    const restored = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    const altered = {...saved, attempts: [{...saved.attempts[0]!, retry: {...saved.attempts[0]!.retry!, notBefore: "2026-08-13T00:00:03.000Z"}}]};
+    await expect(restored.recover(request, {records: {readAction: async () => altered}, attempts: null})).rejects.toBeInstanceOf(ActionRecoveryError);
+    expect(fixture.order).toEqual([]);
+  });
+
+  it.each(["physical", "settlement"] as const)("recovers %s without preparation, approval or effect replay", async stage => {
+    const fixture = createFixture();
+    const retained = recoveryRecords();
+    const coordinator = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    const original = await coordinator.execute(fixture.request);
+    if (stage === "physical") retained.setSettlement(null);
+    fixture.order.length = 0;
+    const result = await coordinator.recover(fixture.request, {records: retained.reader, attempts: null});
+    expect(result).toMatchObject({status: "settled", settlement: {status: "succeeded", payload: {content: "hello"}, attempts: [{ordinal: 1}]}});
+    expect(fixture.order).toEqual(["adapter.settle"]);
+    if (stage === "settlement") expect(result).toEqual(original);
+  });
+
+  it("preserves preparation diagnostics without manufacturing new messages during recovery", async () => {
+    const fixture = createFixture({invalidPreparation: true});
+    const retained = recoveryRecords();
+    const coordinator = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    const original = await coordinator.execute(fixture.request);
+    fixture.order.length = 0;
+    expect(await coordinator.recover(fixture.request, {records: retained.reader, attempts: null})).toEqual(original);
+    expect(fixture.order).toEqual([]);
+  });
+
+  it("reports unresolved dispatch as unknown effects, not a fabricated physical outcome or retry", async () => {
+    const fixture = createFixture();
+    const retained = recoveryRecords();
+    const coordinator = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    await coordinator.execute(fixture.request);
+    retained.setSettlement(null);
+    retained.setResults([]);
+    fixture.order.length = 0;
+    const result = await coordinator.recover(fixture.request, {records: retained.reader, attempts: null});
+    expect(result).toMatchObject({status: "settled", settlement: {status: "unknown_effect", effectCertainty: "unknown",
+      completionExtent: "unknown", reconciliationRequired: true}});
+    expect(fixture.order).toEqual(["adapter.settle"]);
+    const records = await retained.reader.readAction();
+    expect(records.attempts[0]?.result).toBeNull();
+    expect(records.settlement).toMatchObject({sandbox: null, reconciliation: {status: "unknown"}});
+  });
+
+  it("uses correlated external evidence and retains it before semantic reconstruction", async () => {
+    const fixture = createFixture();
+    const retained = recoveryRecords();
+    const coordinator = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    await coordinator.execute(fixture.request);
+    const physical = (await retained.reader.readAction()).attempts[0]!.result!.result;
+    retained.setSettlement(null);
+    retained.setResults([]);
+    fixture.order.length = 0;
+    const result = await coordinator.recover(fixture.request, {records: retained.reader, attempts: {
+      reconcile: async () => ({status: "settled", result: physical, evidenceRefs: ["executor-receipt-1"]}),
+    }});
+    expect(result).toMatchObject({settlement: {status: "succeeded"}});
+    expect((await retained.reader.readAction()).attempts[0]?.result?.reconciliation).toEqual({evidenceRefs: ["executor-receipt-1"]});
+    expect(fixture.order).toEqual(["adapter.settle"]);
+  });
+
+  it("does not turn an empty record lookup into dispatch authority", async () => {
+    const fixture = createFixture();
+    const retained = recoveryRecords();
+    const coordinator = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    expect(await coordinator.recover(fixture.request, {records: retained.reader, attempts: null})).toEqual({status: "no_dispatch_record", prepared: null});
+    expect(fixture.order).toEqual([]);
+  });
+
+  it("refuses mismatched evidence and changed bound inputs before execution", async () => {
+    const fixture = createFixture();
+    const retained = recoveryRecords();
+    const coordinator = new ActionExecutionCoordinator({...fixture.dependencies, records: retained.port});
+    await coordinator.execute(fixture.request);
+    const physical = (await retained.reader.readAction()).attempts[0]!.result!.result;
+    retained.setSettlement(null);
+    retained.setResults([]);
+    fixture.order.length = 0;
+    await expect(coordinator.recover(fixture.request, {records: retained.reader, attempts: {
+      reconcile: async () => ({status: "settled", result: {...physical, attempt: {...physical.attempt, id: "another-attempt"}}, evidenceRefs: ["receipt"]}),
+    }})).rejects.toBeInstanceOf(ActionRecoveryError);
+    await expect(coordinator.recover({...fixture.request, binding: {...fixture.request.binding,
+      request: {path: "D:/different"}}}, {records: retained.reader, attempts: null})).rejects.toBeInstanceOf(ActionRecoveryError);
+    expect(fixture.order).toEqual([]);
+  });
+  it("awaits correlated intent and physical-result commits before dispatch and semantic settlement", async () => {
+    const fixture = createFixture();
+    const recorded: Record<string, unknown> = {};
+    let releaseIntent!: () => void;
+    let releaseResult!: () => void;
+    let enteredIntent!: () => void;
+    let enteredResult!: () => void;
+    const intentEntered = new Promise<void>(resolve => { enteredIntent = resolve; });
+    const resultEntered = new Promise<void>(resolve => { enteredResult = resolve; });
+    const intentGate = new Promise<void>(resolve => { releaseIntent = resolve; });
+    const resultGate = new Promise<void>(resolve => { releaseResult = resolve; });
+    const coordinator = new ActionExecutionCoordinator({ ...fixture.dependencies, records: {
+      async recordPreEffect(value) { recorded.preparation = value; return { recordId: "prepared" }; },
+      async recordDispatchIntent(value) {
+        recorded.intent = value; enteredIntent(); await intentGate; return { recordId: "intent" };
+      },
+      async recordAttemptResult(value) {
+        recorded.result = value; enteredResult(); await resultGate; return { recordId: "result" };
+      },
+      async recordPostEffect(value) { recorded.settlement = value; return { recordId: "settlement" }; },
+      async recordRetry() {throw new Error("Unexpected retry");},
+    } });
+    const result = coordinator.execute(fixture.request);
+    await intentEntered;
+    expect(fixture.order).not.toContain("executor.execute");
+    expect(recorded.preparation).toMatchObject({ runId: "run-1", binding: fixture.request.binding,
+      prepared: { invocation: { payload: { path: "D:/workspace/README.md" } }, semanticBasis: { operation: "read" } } });
+    expect(recorded.intent).toMatchObject({ preparationRecordId: "prepared", request: { attempt: { ordinal: 1, runId: "run-1" } } });
+    expect(Object.keys((recorded.intent as { request: object }).request)).not.toContain("interruption");
+    releaseIntent();
+    await resultEntered;
+    expect(fixture.order).toContain("executor.execute");
+    expect(fixture.order).not.toContain("adapter.settle");
+    expect(recorded.result).toMatchObject({ intentRecordId: "intent", result: { status: "settled" } });
+    releaseResult();
+    await expect(result).resolves.toMatchObject({ status: "settled", settlement: { status: "succeeded" } });
+  });
+
+  it.each(["recordPreEffect", "recordDispatchIntent", "recordAttemptResult", "recordPostEffect"] as const)(
+    "propagates %s failure without inventing an execution settlement or retry", async method => {
+      const fixture = createFixture({ retryOnce: true });
+      const failure = new Error("storage unavailable");
+      const coordinator = new ActionExecutionCoordinator({ ...fixture.dependencies, records: {
+        ...fixture.dependencies.records, [method]: async () => { throw failure; },
+      } });
+      const result = coordinator.execute({ ...fixture.request, maxAttempts: 2 });
+      await expect(result).rejects.toBeInstanceOf(ActionRecordCommitError);
+      await expect(result).rejects.toMatchObject({ cause: failure, actionId: "action-1" });
+      expect(fixture.order.filter(value => value === "executor.execute")).toHaveLength(
+        method === "recordPostEffect" ? 2 : method === "recordAttemptResult" ? 1 : 0);
+      expect(fixture.order).not.toContain("adapter.settle");
+      expect(fixture.notifications.some(value => value.kind === "settled")).toBe(false);
+    },
+  );
+
+  it("does not dispatch when ownership or authority changed during the intent commit", async () => {
+    let current = true;
+    const fixture = createFixture({ authorityCurrent: () => current });
+    const coordinator = new ActionExecutionCoordinator({ ...fixture.dependencies, records: {
+      ...fixture.dependencies.records,
+      async recordDispatchIntent() { current = false; return { recordId: "intent" }; },
+    } });
+    await expect(coordinator.execute(fixture.request)).resolves.toMatchObject({
+      settlement: { status: "invalidated", causeRef: "action_dispatch_basis_stale", effectCertainty: "none" },
+    });
+    expect(fixture.order).not.toContain("executor.execute");
+  });
   it("records authority revalidation once without extra authority checks or execution", async () => {
     for (const stale of [false, true]) {
       let checks = 0;
@@ -40,7 +297,7 @@ describe("ActionExecutionCoordinator", () => {
       const observed = facts.filter(fact => fact.kind === "constraint" && fact.stepId === "revalidate" && fact.checkId === "authority");
       expect(observed).toHaveLength(1);
       expect(observed[0]).toMatchObject({disposition: stale ? "not_satisfied" : "passed", basis: {authorityRevision: "authority-revision-1"}});
-      expect(checks).toBe(stale ? 2 : 3);
+      expect(checks).toBe(stale ? 2 : 4);
       expect(facts.some(fact => fact.kind === "material" && fact.name === "Action execution result")).toBe(true);
       expect(fixture.order.includes("executor.execute")).toBe(!stale);
     }
@@ -72,7 +329,9 @@ describe("ActionExecutionCoordinator", () => {
       "authority.capture",
       "adapter.revalidate",
       "records.pre-effect",
+      "records.dispatch-intent",
       "executor.execute",
+      "records.attempt-result",
       "records.post-effect",
       "adapter.settle",
     ]);
@@ -295,7 +554,9 @@ describe("ActionExecutionCoordinator", () => {
       "permission.consume",
       "authority.capture",
       "records.pre-effect",
+      "records.dispatch-intent",
       "executor.execute",
+      "records.attempt-result",
       "records.post-effect",
       "adapter.settle",
     ]);
@@ -590,6 +851,15 @@ function createFixture(options: FixtureOptions = {}) {
         order.push("records.pre-effect");
         return { recordId: "pre-effect-1" };
       },
+      async recordDispatchIntent() {
+        order.push("records.dispatch-intent");
+        return { recordId: "dispatch-intent-1" };
+      },
+      async recordAttemptResult() {
+        order.push("records.attempt-result");
+        return { recordId: "attempt-result-1" };
+      },
+      async recordRetry() {return {recordId: "retry-1"};},
       async recordPostEffect() {
         order.push("records.post-effect");
         return { recordId: "post-effect-1" };
@@ -607,6 +877,7 @@ function createFixture(options: FixtureOptions = {}) {
   const interruption = createInterruption();
   return {
     order,
+    dependencies,
     notifications,
     retryDecide,
     coordinator: new ActionExecutionCoordinator(dependencies),
@@ -670,6 +941,26 @@ function semanticResult(settlement: CanonicalActionSettlement) {
 function createSequentialId() {
   let sequence = 0;
   return (kind: string) => `${kind}-${++sequence}`;
+}
+
+function recoveryRecords() {
+  const preparations: {recordId: string; value: ActionPreparationRecord}[] = [];
+  const intents: {recordId: string; intent: ActionDispatchIntent}[] = [];
+  let results: ActionAttemptResultRecord[] = [];
+  let settlement: ActionSettlementRecord | null = null;
+  const retries: ActionRetryRecord[] = [];
+  const port: ActionRecordPort = {
+    async recordPreEffect(value) {const recordId = `preparation-${preparations.length}`; preparations.push({recordId, value: structuredClone(value)}); return {recordId};},
+    async recordDispatchIntent(intent) {const recordId = `intent-${intents.length}`; intents.push({recordId, intent: structuredClone(intent)}); return {recordId};},
+    async recordAttemptResult(value) {results.push(structuredClone(value)); return {recordId: `result-${results.length}`};},
+    async recordRetry(value) {retries.push(structuredClone(value)); return {recordId: `retry-${retries.length}`};},
+    async recordPostEffect(value) {settlement = structuredClone(value); return {recordId: "settlement"};},
+  };
+  const reader = {async readAction(): Promise<ActionRecoveryRecords> {return structuredClone({preparations,
+    attempts: intents.map(intent => ({...intent, result: results.find(result => result.intentRecordId === intent.recordId) ?? null,
+      retry: retries.find(retry => retry.intentRecordId === intent.recordId) ?? null})), settlement});}};
+  return {port, reader, setResults: (value: ActionAttemptResultRecord[]) => {results = value;},
+    setSettlement: (value: ActionSettlementRecord | null) => {settlement = value;}};
 }
 
 function createInterruption(): InvocationInterruptionContext {

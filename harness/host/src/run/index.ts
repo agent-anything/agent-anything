@@ -6,6 +6,7 @@ export {
   type HostRunCancellationInput,
   type HostRunCancellationReceipt,
   type HostRunManager,
+  type HostRunRecoveryInput,
   type HostRunRegistryEntry,
   type HostRunReleaseReceipt,
   type HostRunResult,

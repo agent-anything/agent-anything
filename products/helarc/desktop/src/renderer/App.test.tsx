@@ -198,6 +198,7 @@ function pendingApproval(
 
 function unconfiguredSnapshot(): HelarcMainSnapshot {
   return {
+    execution: "idle",
     status: "idle",
     workspace: null,
     workspaceProfiles: [],

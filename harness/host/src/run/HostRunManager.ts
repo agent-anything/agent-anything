@@ -85,10 +85,10 @@ export interface HostActiveRun<TOutput = unknown> {
   readonly runId: string;
   getProjection(): HostRunProjection;
   subscribe(listener: HostRunProjectionListener): () => void;
-  submitInteraction(input: HostInteractionSubmission): InteractionSubmissionOutcome;
-  steer(input: HostRunSteeringInput): HostRunSteeringReceipt;
-  resumeDescendant(input: DelegationResumeRoute): DelegationResumeReceipt;
-  cancel(input: HostRunCancellationInput): HostRunCancellationReceipt;
+  submitInteraction(input: HostInteractionSubmission): Promise<InteractionSubmissionOutcome>;
+  steer(input: HostRunSteeringInput): Promise<HostRunSteeringReceipt>;
+  resumeDescendant(input: DelegationResumeRoute): Promise<DelegationResumeReceipt>;
+  cancel(input: HostRunCancellationInput): Promise<HostRunCancellationReceipt>;
   getStatus(): HostRunStatusProjection;
   wait(): Promise<HostRunResult<TOutput>>;
   getResult(): HostRunResult<TOutput> | null;
@@ -96,9 +96,20 @@ export interface HostActiveRun<TOutput = unknown> {
 
 export interface HostRunManager {
   start<TOutput>(input: HostRunStartInput<TOutput>): HostActiveRun<TOutput>;
+  recover(input: HostRunRecoveryInput): Promise<HostActiveRun>;
   getRun(runId: string): HostActiveRun | null;
   listRuns(): readonly HostRunRegistryEntry[];
   releaseRun(runId: string): HostRunReleaseReceipt;
+}
+
+export interface HostRunRecoveryInput {
+  readonly cancellation?: RunCancellationRequestInput;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly taskId: string;
+  readonly startedAt: string;
+  readonly enforcement: RootRunConfig["permissions"]["permissionProfile"]["enforcement"];
+  readonly bindings: import("@agent-anything/agent-runtime/runner").RunRecoveryBindings;
 }
 
 export interface HostRunRegistryEntry {
@@ -150,6 +161,13 @@ export function createHostRunManager(input: CreateHostRunManagerInput): HostRunM
       return registration.activeRun;
     },
     getRun: (runId: string) => registry.get(runId),
+    async recover(recovery: HostRunRecoveryInput): Promise<HostActiveRun> {
+      const binding = createHostRunBinding(recovery, now, input.onProjectionListenerFailure);
+      const handle = await input.runner.recover(recovery.runId, recovery.bindings, {...binding.observers, recoveryCancellation: recovery.cancellation});
+      const registration = binding.bind(handle);
+      registry.admit(registration);
+      return registration.activeRun;
+    },
     listRuns: () => registry.list(),
     releaseRun: (runId: string) => registry.release(runId),
   });
@@ -162,25 +180,37 @@ function startHostRun<TOutput>(
   onListenerFailure: CreateHostRunManagerInput["onProjectionListenerFailure"],
 ): HostRunRegistration<TOutput> {
   assertStartInput(input);
+  const binding = createHostRunBinding({sessionId: input.sessionId, taskId: input.runInput.task.id,
+    startedAt: readNow(now), enforcement: input.runConfig.permissions.permissionProfile.enforcement}, now, onListenerFailure);
+  return binding.bind(runner.start(input.agent, input.runInput, input.runConfig, binding.observers));
+}
+
+function createHostRunBinding(
+  input: Pick<HostRunRecoveryInput, "sessionId" | "taskId" | "startedAt" | "enforcement">,
+  now: () => string,
+  onListenerFailure: CreateHostRunManagerInput["onProjectionListenerFailure"],
+) {
   const sessionId = input.sessionId;
-  const taskId = input.runInput.task.id;
-  const startedAt = readNow(now);
+  const taskId = input.taskId;
+  const startedAt = input.startedAt;
   let hostSequence = 0;
   let invocationState: HostInvocationState = "active";
   let runId = "";
   let store: ReturnType<typeof createHostRunProjectionStore>;
+  const pending: Array<() => void> = [];
+  const publish = (operation: () => void) => {if (store) operation(); else pending.push(operation);};
 
   const nextSequence = (): number => ++hostSequence;
   const runtimeEventPublisher: RuntimeEventPublisher = Object.freeze({
     publish(event: RuntimeEvent) {
       if (invocationState !== "active") return;
-      applyRequired(store, {
+      publish(() => applyRequired(store, {
         kind: "runtime_event",
         runId,
         sequence: nextSequence(),
         occurredAt: event.occurredAt,
         event,
-      }, "RuntimeEvent");
+      }, "RuntimeEvent"));
     },
   });
   const actionExecutionObserver: ActionExecutionObserver = Object.freeze({
@@ -189,21 +219,17 @@ function startHostRun<TOutput>(
     ) {
       if (invocationState !== "active") return;
       if (notification.kind !== "attempt_started" && notification.kind !== "settled") return;
-      applyRequired(store, {
+      publish(() => applyRequired(store, {
         kind: "action_execution",
         runId,
         sequence: nextSequence(),
         occurredAt: notification.occurredAt,
         notification,
-      }, "Action execution");
+      }, "Action execution"));
     },
   });
-  const handle: RunHandle<TOutput> = runner.start(
-    input.agent,
-    input.runInput,
-    input.runConfig,
-    { runtimeEventPublisher, actionExecutionObserver },
-  );
+  return {observers: {runtimeEventPublisher, actionExecutionObserver},
+    bind<TOutput>(handle: RunHandle<TOutput>): HostRunRegistration<TOutput> {
   runId = handle.runId;
   store = createHostRunProjectionStore({
     initial: createHostRunProjection({
@@ -211,11 +237,12 @@ function startHostRun<TOutput>(
       taskId,
       runId,
       startedAt,
-      enforcement: input.runConfig.permissions.permissionProfile.enforcement,
+      enforcement: input.enforcement,
       runTree: handle.getSnapshot().runTree,
     }),
     ...(onListenerFailure === undefined ? {} : { onListenerFailure }),
   });
+  for (const emit of pending.splice(0)) emit();
   const unsubscribeHandle = handle.subscribe((snapshot) => {
     if (invocationState !== "active") return;
     applyRequired(store, {
@@ -238,7 +265,7 @@ function startHostRun<TOutput>(
     assertRunResultIdentity(runResult, runId, taskId);
     const terminal = createHostTerminalRunProjection({
       runResult,
-      completedAt: readNow(now),
+      completedAt: runResult.completedAt,
     });
     applyRequired(store, {
       kind: "terminal_result",
@@ -267,7 +294,7 @@ function startHostRun<TOutput>(
     getProjection: () => store.getProjection(),
     subscribe: (listener: HostRunProjectionListener) => store.subscribe(listener),
     getStatus: () => store.getProjection(),
-    submitInteraction(candidate: HostInteractionSubmission): InteractionSubmissionOutcome {
+    async submitInteraction(candidate: HostInteractionSubmission): Promise<InteractionSubmissionOutcome> {
       if (invocationState !== "active") {
         return Object.freeze({ status: "rejected", code: "run_settled", receipt: null });
       }
@@ -290,7 +317,7 @@ function startHostRun<TOutput>(
           receipt: null,
         });
       }
-      const outcome = handle.submitInteraction(submission);
+      const outcome = await handle.submitInteraction(submission);
       if (outcome.status === "accepted_for_resolution" || outcome.status === "duplicate_identical") {
         applyRequired(store, {
           kind: "interaction_submission_accepted",
@@ -302,7 +329,7 @@ function startHostRun<TOutput>(
       }
       return outcome;
     },
-    steer(candidate: HostRunSteeringInput): HostRunSteeringReceipt {
+    async steer(candidate: HostRunSteeringInput): Promise<HostRunSteeringReceipt> {
       const projection = store.getProjection();
       if (invocationState !== "active") {
         return Object.freeze({
@@ -331,7 +358,7 @@ function startHostRun<TOutput>(
         });
       }
     },
-    resumeDescendant(candidate: DelegationResumeRoute): DelegationResumeReceipt {
+    async resumeDescendant(candidate: DelegationResumeRoute): Promise<DelegationResumeReceipt> {
       if (invocationState !== "active") {
         return Object.freeze({
           status: "rejected" as const,
@@ -342,12 +369,12 @@ function startHostRun<TOutput>(
       }
       return handle.resumeDescendant(candidate);
     },
-    cancel(cancellationInput: HostRunCancellationInput): HostRunCancellationReceipt {
+    async cancel(cancellationInput: HostRunCancellationInput): Promise<HostRunCancellationReceipt> {
       const currentCancellation = store.getProjection().cancellation;
       if (invocationState === "settled") {
         return Object.freeze({ status: "run_settled", cancellation: currentCancellation });
       }
-      const receipt = handle.cancel(cancellationInput);
+      const receipt = await handle.cancel(cancellationInput);
       const cancellation = toRunCancellationSummary(receipt.request);
       if (receipt.status === "run_settled") {
         return Object.freeze({ status: "run_settled", cancellation: currentCancellation });
@@ -368,6 +395,8 @@ function startHostRun<TOutput>(
     getResult: () => terminalResult,
   });
   return Object.freeze({ activeRun, release });
+    },
+  };
 }
 
 interface HostRunRegistryRecord {
@@ -384,7 +413,7 @@ class HostRunRegistry {
   admit<TOutput>(registration: HostRunRegistration<TOutput>): void {
     const activeRun = registration.activeRun;
     if (this.records.has(activeRun.runId)) {
-      activeRun.cancel({ origin: "host", reasonCode: "host_requested", reason: "Duplicate Host Run identity." });
+      void activeRun.cancel({ origin: "host", reasonCode: "host_requested", reason: "Duplicate Host Run identity." }).catch(() => {});
       registration.release();
       throw new Error(`Host Run '${activeRun.runId}' is already registered.`);
     }

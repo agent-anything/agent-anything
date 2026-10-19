@@ -25,7 +25,7 @@ const ENTRIES = Object.freeze([
     modelDescription: [
       "Create or replace the current Run Plan when an explicit multi-step representation materially improves coordination, progress tracking, or recovery.",
       "A Plan is optional and may be created or revised at any turn; do not create one for a simple direct task.",
-      "Every call replaces the complete visible Plan, so retain still-relevant steps, mark established work completed, keep future work pending, and use at most one in_progress step.",
+      "Every call replaces the complete visible Plan, so retain still-relevant steps, mark established work completed, and keep future work pending. Several steps may be in_progress when their work has started and remains unfinished; statuses report progress, not execution scheduling.",
       "Once a Plan exists, update it promptly after a step's outcome is established, when work moves to another step, or when the scope or approach changes.",
       "When ending, submit the complete final Plan snapshot inside final_result instead of calling update_plan separately in that turn. The snapshot is applied before the ending proposal is considered.",
       "Keep still-relevant unfinished work visible and use explanation to describe unresolved or changed work. Never mark unfinished steps completed merely because the Run is ending.",
@@ -36,10 +36,10 @@ const ENTRIES = Object.freeze([
   Object.freeze({
     name: "final_result" as const,
     modelDescription: [
-      "Submit your final user-facing response and propose ending this Run normally.",
+      "Propose ending this Run normally, optionally supplying a final user-facing reply.",
       "The response may be an answer, partial result, limitation, or refusal; ending does not assert that the user's objective was achieved.",
-      "Use this control when no further model turn is needed. Ordinary assistant text is commentary, not an ending signal.",
-      "Call final_result at most once per turn, with the complete response string; an empty response is valid.",
+      "Use this control when no further model turn is needed. Ordinary assistant text alone is not an ending signal.",
+      "Call final_result at most once per turn. Supply response for a new final reply. Omit response to adopt ordinary assistant text from this turn, or otherwise the immediately preceding Model Turn of this Run. If neither has text, no final reply is supplied. Adoption does not redisplay existing text. Supply an empty string to explicitly provide no reply and prevent adoption.",
       "If a Plan already exists, include its complete final snapshot in plan, even when unchanged. Report actual step progress; pending or in_progress steps do not prevent ending. Never mark unfinished work completed merely to end the Run.",
       "Without an existing Plan, omit plan or use an empty array to make no Plan update; do not create one solely to end. An existing Plan requires its complete nonempty snapshot. Do not call update_plan in the same turn as final_result; put the final snapshot in this call instead.",
       "Other Tool calls may accompany it. Their requests and the embedded Plan update are processed before ending; failed or unresolved work may return feedback instead of accepting the ending proposal.",
@@ -67,10 +67,10 @@ export function createHelarcControllerControlDefinitions(
       inputSchema: {
         type: "object",
         properties: {
-          response: {type: "string", description: "Complete user-facing final response, including any limitations. May be empty."},
+          response: {type: "string", description: "Optional new final reply. Omit to adopt ordinary assistant text from this turn or the immediately preceding local Model Turn. Empty string explicitly supplies no reply and prevents adoption."},
           plan: createPlanSchema(limits, !hasPlan),
         },
-        required: hasPlan ? ["response", "plan"] : ["response"],
+        required: hasPlan ? ["plan"] : [],
         additionalProperties: false,
       },
     },
@@ -99,7 +99,7 @@ function createPlanSchema(limits: PlanLimits, allowAbsentPlan = false): ModelJso
     type: "array",
     minItems: allowAbsentPlan ? 0 : 1,
     maxItems: limits.maxSteps,
-    description: "Complete replacement Plan in intended work order. Include all still-relevant steps and use at most one in_progress status. Unfinished steps may remain when ending." +
+    description: "Complete replacement Plan in intended work order, not an enforced execution dependency. Include all still-relevant steps; several may be in_progress. Unfinished steps may remain when ending." +
       (allowAbsentPlan ? " No Plan exists: omission or an empty array means no Plan update." : " At least one step is required."),
     items: {
       type: "object",
@@ -110,7 +110,7 @@ function createPlanSchema(limits: PlanLimits, allowAbsentPlan = false): ModelJso
         },
         status: {
           type: "string", enum: ["pending", "in_progress", "completed"],
-          description: "Current step state: pending has not started, in_progress is the one active step, and completed is established as done.",
+          description: "Reported step state: pending has not started, in_progress has started and remains unfinished, and completed is reported as done.",
         },
       },
       required: ["step", "status"],

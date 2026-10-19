@@ -10,7 +10,7 @@ export function ProjectNavigation({ snapshot, busy, active, onOpen, onNew, onEdi
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   function conversation(thread: HelarcThreadSummarySnapshot) {
-    const isWorking = snapshot.activeThread?.id === thread.id && !!snapshot.run &&
+    const isWorking = snapshot.execution === "active" && snapshot.activeThread?.id === thread.id && !!snapshot.run &&
       !snapshot.run.display.terminal &&
       (snapshot.run.display.status === "starting" || snapshot.run.display.status === "running" || snapshot.run.display.status === "cancelling");
     return <button key={thread.id} type="button" className="project-conversation"

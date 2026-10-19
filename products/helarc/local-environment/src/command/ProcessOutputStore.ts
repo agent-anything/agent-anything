@@ -12,7 +12,18 @@ interface StreamState {
   pending: Buffer; segments: Segment[]; projection: ProcessTextProjection | null;
   decoder: TextDecoder | null; strictDecoder: TextDecoder | null;
   decoderTail: Buffer; decoderPending: boolean;
-  raw: FileHandle; text: FileHandle; textBytes: number;
+  raw: FileHandle | null; text: FileHandle | null; textBytes: number;
+}
+
+export interface ProcessOutputCheckpoint {
+  readonly executionId: string;
+  readonly maximumBytes: number;
+  readonly failure: string | null;
+  readonly streams: Readonly<Record<ProcessStream, {
+    readonly received: number; readonly retained: number; readonly projected: number; readonly omitted: number;
+    readonly segments: readonly Segment[]; readonly projection: ProcessTextProjection | null;
+    readonly projectionPending: boolean; readonly textBytes: number;
+  }>>;
 }
 
 export interface ProcessOutputPaths {
@@ -34,8 +45,47 @@ export class ProcessOutputStore {
     readonly paths: ProcessOutputPaths,
     readonly maximumBytes: number,
     private readonly streams: Record<ProcessStream, StreamState>,
-    private readonly manifest: FileHandle,
+    private readonly manifest: FileHandle | null,
   ) {}
+
+  checkpoint(): ProcessOutputCheckpoint {
+    for (const stream of ["stdout", "stderr"] as const) {
+      const state = this.streams[stream];
+      if (state.pending.length) this.project(stream, state.pending.length, false);
+    }
+    const snapshot = (state: StreamState) => ({received: state.received, retained: state.retained,
+      projected: state.projected, omitted: state.omitted, segments: state.segments.map(item => ({...item})),
+      projection: state.projection && {...state.projection}, projectionPending: state.decoderPending || state.pending.length > 0,
+      textBytes: state.textBytes});
+    return {executionId: this.executionId, maximumBytes: this.maximumBytes, failure: this.failure,
+      streams: {stdout: snapshot(this.streams.stdout), stderr: snapshot(this.streams.stderr)}};
+  }
+
+  static restore(value: ProcessOutputCheckpoint, paths: ProcessOutputPaths): ProcessOutputStore {
+    if (!Number.isSafeInteger(value.maximumBytes) || value.maximumBytes < 1) throw new TypeError("Invalid retained output limit.");
+    const state = (stream: ProcessOutputCheckpoint["streams"][ProcessStream]): StreamState => {
+      for (const number of [stream.received, stream.retained, stream.projected, stream.omitted, stream.textBytes]) {
+        if (!Number.isSafeInteger(number) || number < 0) throw new TypeError("Invalid retained output positions.");
+      }
+      if (stream.retained > stream.received || stream.projected > stream.retained || stream.segments.length > MAX_SEGMENTS) throw new TypeError("Invalid retained output ranges.");
+      let end = 0;
+      for (const segment of stream.segments) {
+        if (segment.byteStart !== end || segment.byteEnd < end || segment.byteEnd > stream.projected || typeof segment.text !== "string") throw new TypeError("Invalid retained output segment.");
+        end = segment.byteEnd;
+      }
+      return {...stream, segments: stream.segments.map(item => ({...item})), pending: Buffer.alloc(0),
+        decoder: null, strictDecoder: null, decoderTail: Buffer.alloc(0), decoderPending: stream.projectionPending,
+        raw: null, text: null};
+    };
+    const result = new ProcessOutputStore(value.executionId, paths, value.maximumBytes,
+      {stdout: state(value.streams.stdout), stderr: state(value.streams.stderr)}, null);
+    result.used = value.streams.stdout.retained + value.streams.stderr.retained;
+    if (result.used > value.maximumBytes) throw new TypeError("Invalid retained output capacity.");
+    result.failure = value.failure;
+    result.closed = true;
+    result.closePromise = Promise.resolve();
+    return result;
+  }
 
   static async create(executionId: string, paths: ProcessOutputPaths, maximumBytes: number): Promise<ProcessOutputStore> {
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) throw new TypeError("Invalid process output limit.");
@@ -69,7 +119,7 @@ export class ProcessOutputStore {
     const bytes = Buffer.from(input.subarray(0, accepted));
     this.used += accepted;
     state.retained += accepted;
-    this.enqueue(async () => { await writeAll(state.raw, bytes); });
+    this.enqueue(async () => { await writeAll(state.raw!, bytes); });
     state.pending = Buffer.concat([state.pending, bytes]);
     while (state.pending.length >= SEGMENT_BYTES) this.project(stream, SEGMENT_BYTES, false);
   }
@@ -88,7 +138,12 @@ export class ProcessOutputStore {
     }))) as Readonly<Record<ProcessStream, {received:number;retained:number;projected:number;omitted:number;encoding:string|null;integrity:string|null}>>;
   }
 
-  read(cursor?: string, maximumInlineBytes = 32_768) {
+  readModelOutput(cursor?: string) {
+    // A 4096-byte segment can occupy 24576 bytes after JSON escaping.
+    return this.read(cursor, 49_152, true);
+  }
+
+  read(cursor?: string, maximumInlineBytes = 32_768, encodedJson = false) {
     if (!Number.isSafeInteger(maximumInlineBytes) || maximumInlineBytes < 24_576 || maximumInlineBytes > 131_072) {
       throw new TypeError("Process inline limit must be between 24576 and 131072 bytes.");
     }
@@ -96,8 +151,8 @@ export class ProcessOutputStore {
     for (const stream of ["stdout", "stderr"] as const) {
       if (this.streams[stream].pending.length) this.project(stream, this.streams[stream].pending.length, this.closed);
     }
-    const stdout = this.slice("stdout", position.stdout, Math.floor(maximumInlineBytes / 2));
-    const stderr = this.slice("stderr", position.stderr, Math.floor(maximumInlineBytes / 2));
+    const stdout = this.slice("stdout", position.stdout, Math.floor(maximumInlineBytes / 2), encodedJson);
+    const stderr = this.slice("stderr", position.stderr, Math.floor(maximumInlineBytes / 2), encodedJson);
     const next = { version: 1, executionId: this.executionId, generation: this.generation,
       stdout: stdout.next, stderr: stderr.next };
     return Object.freeze({ stdout: stdout.value, stderr: stderr.value,
@@ -118,7 +173,7 @@ export class ProcessOutputStore {
     this.closePromise = (async () => {
       await this.writeQueue;
       try {
-        await this.manifest.writeFile(JSON.stringify({ executionId: this.executionId, generation: this.generation,
+        await this.manifest!.writeFile(JSON.stringify({ executionId: this.executionId, generation: this.generation,
           streams: Object.fromEntries((["stdout", "stderr"] as const).map((stream) => {
             const state = this.streams[stream];
             return [stream, { receivedBytes: state.received, retainedBytes: state.retained,
@@ -179,7 +234,7 @@ export class ProcessOutputStore {
       const remaining = this.maximumBytes * 3 - state.textBytes;
       if (encoded.length <= remaining) {
         state.textBytes += encoded.length;
-        this.enqueue(async () => { await writeAll(state.text, encoded); });
+        this.enqueue(async () => { await writeAll(state.text!, encoded); });
       } else state.projection = { ...state.projection, integrity: "unavailable" };
     } else state.projection = { ...state.projection, integrity: "unavailable" };
     state.projected = byteEnd;
@@ -187,14 +242,14 @@ export class ProcessOutputStore {
       state.projection.replacementCount + [...text].filter((c) => c === "\ufffd").length };
   }
 
-  private slice(stream: ProcessStream, from: number, budget: number) {
+  private slice(stream: ProcessStream, from: number, budget: number, encodedJson: boolean) {
     const state = this.streams[stream];
     let next = from;
     let used = 0;
     const segments: Segment[] = [];
     while (next < state.segments.length) {
       const segment = state.segments[next]!;
-      const size = Buffer.byteLength(segment.text);
+      const size = encodedJson ? Buffer.byteLength(JSON.stringify(segment.text)) - 2 : Buffer.byteLength(segment.text);
       if (used + size > budget) break;
       used += size; next++; segments.push(Object.freeze({ ...segment }));
     }
@@ -221,7 +276,7 @@ export class ProcessOutputStore {
     } catch { throw new Error("process_output_cursor_invalid"); }
   }
 
-  private handles(): FileHandle[] { return [this.streams.stdout.raw, this.streams.stderr.raw, this.streams.stdout.text, this.streams.stderr.text, this.manifest]; }
+  private handles(): FileHandle[] { return [this.streams.stdout.raw, this.streams.stderr.raw, this.streams.stdout.text, this.streams.stderr.text, this.manifest].filter((handle): handle is FileHandle => handle !== null); }
   private enqueue(write: () => Promise<void>): void {
     this.writeQueue = this.writeQueue.then(write).catch((error) => { this.failure ??= message(error); });
   }

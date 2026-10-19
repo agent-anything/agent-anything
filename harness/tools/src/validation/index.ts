@@ -3,6 +3,7 @@ export type {
   ToolInputIssueReason,
   ToolInputSemanticValidation,
   ToolInputSemanticValidator,
+  ToolInputValidationCheck,
   ToolInputValidation,
   ToolInputValidationFailure,
   ToolInputValueCategory,

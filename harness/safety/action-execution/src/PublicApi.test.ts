@@ -24,6 +24,8 @@ describe("Action Execution public API", () => {
     ]);
     expect(Object.keys(enforcementApi).sort()).toEqual([
       "ActionExecutionCoordinator",
+      "ActionRecordCommitError",
+      "ActionRecoveryError",
     ]);
     expect(Object.keys(sandboxApi).sort()).toEqual([
       "createSandboxExecutionGateway",

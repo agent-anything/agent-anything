@@ -14,7 +14,7 @@ describe("Helarc Controller Control Guidance", () => {
 
     expect(definitions.map(({ name }) => name)).toEqual(["final_result", "update_plan"]);
     expect(definitions.find(({name}) => name === "final_result")?.inputSchema).toMatchObject({
-      properties: {response: {type: "string"}}, required: ["response"], additionalProperties: false,
+      properties: {response: {type: "string"}}, required: [], additionalProperties: false,
     });
     expect(definitions.every(({ description }) => description.length > 300)).toBe(true);
     expect(definitions.find(({ name }) => name === "update_plan")?.inputSchema)
@@ -56,8 +56,8 @@ describe("Helarc Controller Control Guidance", () => {
     const limits = { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 };
     const absent = createHelarcControllerControlDefinitions(HELARC_CONTROLLER_CONTROL_GUIDANCE, limits, false);
     const present = createHelarcControllerControlDefinitions(HELARC_CONTROLLER_CONTROL_GUIDANCE, limits, true);
-    expect(absent[0]?.inputSchema.required).toEqual(["response"]);
-    expect(present[0]?.inputSchema.required).toEqual(["response", "plan"]);
+    expect(absent[0]?.inputSchema.required).toEqual([]);
+    expect(present[0]?.inputSchema.required).toEqual(["plan"]);
     expect(present[0]?.inputSchema.properties?.plan).toEqual(present[1]?.inputSchema.properties?.plan);
     expect(absent[1]).toEqual(present[1]);
   });

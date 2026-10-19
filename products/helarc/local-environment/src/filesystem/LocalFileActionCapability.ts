@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, matchesGlob, relative, sep } from "node:path";
 import type {
   ActionAdapterImplementation,
@@ -65,6 +65,14 @@ import {
   type PreparedFileSystemTarget,
 } from "./FileSystemTarget.js";
 import { decodeUtf8 } from "./Utf8.js";
+import { hostFileMutationClaims } from "./FileMutationClaims.js";
+import { writeBoundFileContent } from "./FileContentMutation.js";
+import { fileAncestryIdentity, retainFileSupport, retainedFileFailureSupport, snapshotFileSupportOrigin, type FileSupportOrigin, type FileSupportServices } from "./FileSupportCapture.js";
+import { OperationCommitError } from "@agent-anything/operation-catalog/result";
+import type { ExecutionSupportMaterial } from "@agent-anything/operation-catalog/evidence";
+import { createFileBaseline } from "@agent-anything/canonical-action/subject";
+import { inspectFileContent } from "./FileContentDigest.js";
+import { createLocalFileRestorationCapability } from "./LocalFileRestorationCapability.js";
 
 const EXECUTOR_DESCRIPTOR = Object.freeze({
   id: "helarc.local.filesystem.executor",
@@ -87,6 +95,9 @@ export const HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS: CodeFileActionAdapterIds =
   ) as unknown as Record<CodeFileOperationKind, string>);
 
 export interface CreateHelarcLocalFileActionCapabilityInput {
+  readonly fileSupport?: FileSupportServices;
+  readonly executionEvidence?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceRecordPort;
+  readonly executionAccess?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort;
   readonly workspace: WorkspaceSelection | null;
   readonly limits?: Partial<CodeAgentFileLimits>;
   readonly now?: () => string;
@@ -103,14 +114,17 @@ export function createHelarcLocalFileActionCapability(
   input: CreateHelarcLocalFileActionCapabilityInput,
 ): HelarcLocalFileActionCapability {
   const limits = resolveFileSystemLimits(input.limits);
+  const restoration = createLocalFileRestorationCapability({workspace: input.workspace, support: input.fileSupport,
+    evidence: input.executionEvidence, access: input.executionAccess, now: input.now ?? (() => new Date().toISOString())});
   return Object.freeze({
     actionAdapterIds: HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS,
-    registrations: createActionRegistrationSnapshot(SPECS.map(registrationInput)),
-    adapters: Object.freeze(SPECS.map((spec) => Object.freeze({
-      adapter: createFileAdapter(spec, input.workspace, limits),
-    }))),
+    registrations: createActionRegistrationSnapshot([...SPECS.map(registrationInput), ...restoration.registrations.registrations.map(({registrationFingerprint: _fingerprint, ...entry}) => entry)]),
+    adapters: Object.freeze([...SPECS.map((spec) => Object.freeze({
+      adapter: createFileAdapter(spec, input.workspace, limits, input.fileSupport),
+    })), ...restoration.adapters]),
     executors: Object.freeze([
-      createFileExecutor(limits, input.now ?? (() => new Date().toISOString())),
+      createFileExecutor(limits, input.now ?? (() => new Date().toISOString()), input.fileSupport),
+      ...restoration.executors,
     ]),
   });
 }
@@ -163,6 +177,7 @@ function createFileAdapter(
   spec: FileActionSpec,
   workspace: WorkspaceSelection | null,
   limits: CodeAgentFileLimits,
+  support?: FileSupportServices,
 ): OperationActionAdapter<CodeFileOperationRequest, PreparedFileBasis> {
   const adapter: OperationActionAdapter<CodeFileOperationRequest, PreparedFileBasis> = {
     descriptor: spec.adapter,
@@ -189,6 +204,7 @@ function createFileAdapter(
           target,
           context.environment.environmentId,
           context.now(),
+          binding.correlation.kind === "run_action" ? {runId: binding.correlation.run.id, invocation: binding.invocation} : null,
         );
         return Object.freeze({
           status: "prepared" as const,
@@ -246,7 +262,9 @@ function createFileAdapter(
       }
     },
     async settle(prepared, settlement) {
-      return settleFileOperation(prepared, settlement);
+      const result = settleFileOperation(prepared, settlement);
+      if (result.status === "succeeded") return result;
+      return {...result, output: await retainedFileFailureSupport(support, settlement.attempts, settlement.operationInvocation)};
     },
   };
   return Object.freeze(adapter);
@@ -259,6 +277,7 @@ interface PreparedOperationInput {
 }
 
 interface PreparedFilePayload {
+  readonly supportOrigin: FileSupportOrigin | null;
   readonly operation: CodeFileOperationKind;
   readonly targetId: string;
   readonly rootName: string;
@@ -336,6 +355,7 @@ async function createFilePreparedData(
   target: PreparedFileSystemTarget,
   environmentId: string,
   createdAt: string,
+  origin: Pick<FileSupportOrigin, "runId" | "invocation"> | null,
 ): Promise<ActionAdapterPreparedData<PreparedFileBasis>> {
   const mutation = request.operation === "edit" || request.operation === "write";
   const targetId = await createCanonicalSha256Digest(
@@ -343,6 +363,12 @@ async function createFilePreparedData(
     target.pathIdentity,
   );
   const payload: PreparedFilePayload = {
+    supportOrigin: origin === null || !mutation ? null : {...origin, preparedAt: createdAt,
+      rootIdentity: target.workspaceRootIdentity.resolutionFingerprint,
+      ancestryIdentity: await fileAncestryIdentity(target.canonicalRoot, target.canonicalTarget).catch(error => {
+        if (error instanceof FileSystemError && error.code === "file_support_ancestry_unsupported") return null;
+        throw error;
+      })},
     operation: request.operation,
     targetId,
     rootName: target.rootName,
@@ -455,6 +481,7 @@ function actionDecisionOptions() {
 function createFileExecutor(
   limits: CodeAgentFileLimits,
   now: () => string,
+  fileSupport?: FileSupportServices,
 ): ActionExecutor<PreparedActionInvocation, unknown> {
   const executor: ActionExecutor<PreparedActionInvocation, unknown> = {
     descriptor: EXECUTOR_DESCRIPTOR,
@@ -473,6 +500,7 @@ function createFileExecutor(
           limits,
           context,
           () => { effectStarted = true; },
+          fileSupport, now,
         );
         return Object.freeze({
           status: "completed" as const,
@@ -480,6 +508,7 @@ function createFileExecutor(
           payload: Object.freeze({ value, startedAt, finishedAt: now() }),
         });
       } catch (error) {
+        if (error instanceof OperationCommitError) throw error;
         if (context.interruption.signal.aborted) {
           return Object.freeze({
             status: "interrupted" as const,
@@ -506,6 +535,8 @@ async function executeFile(
   limits: CodeAgentFileLimits,
   context: ActionExecutorContext,
   markEffectStarted: () => void,
+  fileSupport: FileSupportServices | undefined,
+  now: () => string,
 ): Promise<unknown> {
   switch (payload.operation) {
     case "read":
@@ -515,9 +546,15 @@ async function executeFile(
     case "grep":
       return grepFiles(payload, limits, context);
     case "edit":
-      return executeEdit(payload, limits, markEffectStarted);
+      return hostFileMutationClaims.execute(payload.canonicalTarget, payload.expectedBaseline, async () => {
+        throwIfInterrupted(context);
+        return executeMutationWithSupport(payload, context, fileSupport, now, retain => executeEdit(payload, limits, context.interruption.signal, markEffectStarted, retain));
+      });
     case "write":
-      return executeWrite(payload, limits, markEffectStarted);
+      return hostFileMutationClaims.execute(payload.canonicalTarget, payload.expectedBaseline, async () => {
+        throwIfInterrupted(context);
+        return executeMutationWithSupport(payload, context, fileSupport, now, retain => executeWrite(payload, limits, context.interruption.signal, markEffectStarted, retain));
+      });
   }
 }
 
@@ -666,14 +703,15 @@ function contentEntry(
 async function executeEdit(
   payload: PreparedFilePayload,
   limits: CodeAgentFileLimits,
+  signal: AbortSignal,
   markEffectStarted: () => void,
+  retainPreimage?: (handle: import("node:fs/promises").FileHandle | null) => Promise<void>,
 ): Promise<CodeFileEditOutput> {
   const content = boundedContent(payload, limits.maxWriteBytes);
-  await assertBaseline(payload);
   const previous = presentBaselineOutput(payload, payload.previousByteLength);
-  markEffectStarted();
-  await writeFile(payload.canonicalTarget, content, { encoding: "utf8", flag: "w" });
-  const current = await readCurrentBaselineOutput(payload);
+  const written = await writeBoundFileContent({path: payload.canonicalTarget, before: payload.expectedBaseline,
+    content: Buffer.from(content, "utf8"), signal, markEffectStarted, retainPreimage});
+  const current = baselineOutput(payload, written.byteLength, written.digest);
   return Object.freeze({
     target_id: payload.targetId,
     file_path: payload.relativePath,
@@ -687,25 +725,45 @@ async function executeEdit(
 async function executeWrite(
   payload: PreparedFilePayload,
   limits: CodeAgentFileLimits,
+  signal: AbortSignal,
   markEffectStarted: () => void,
+  retainPreimage?: (handle: import("node:fs/promises").FileHandle | null) => Promise<void>,
 ): Promise<CodeFileWriteOutput> {
   const content = boundedContent(payload, limits.maxWriteBytes);
-  await assertBaseline(payload);
   const previous = payload.expectedBaseline.kind === "present"
     ? presentBaselineOutput(payload, payload.previousByteLength)
     : null;
-  markEffectStarted();
-  await writeFile(payload.canonicalTarget, content, {
-    encoding: "utf8",
-    flag: payload.expectedBaseline.kind === "absent" ? "wx" : "w",
-  });
+  const written = await writeBoundFileContent({path: payload.canonicalTarget, before: payload.expectedBaseline,
+    content: Buffer.from(content, "utf8"), signal, markEffectStarted, retainPreimage});
   return Object.freeze({
     target_id: payload.targetId,
     file_path: payload.relativePath,
     operation: previous === null ? "created" as const : "replaced" as const,
     previous_baseline: previous,
-    current_baseline: await readCurrentBaselineOutput(payload),
+    current_baseline: baselineOutput(payload, written.byteLength, written.digest),
   });
+}
+
+async function executeMutationWithSupport<T extends CodeFileWriteOutput | CodeFileEditOutput>(
+  payload: PreparedFilePayload, context: ActionExecutorContext, services: FileSupportServices | undefined, now: () => string,
+  execute: (retain?: (handle: import("node:fs/promises").FileHandle | null) => Promise<void>) => Promise<T>,
+): Promise<T> {
+  if (!services || !payload.supportOrigin) return execute();
+  let material: ExecutionSupportMaterial | null = null;
+  const value = await execute(async handle => {
+    material = await retainFileSupport({services, origin: payload.supportOrigin!, root: payload.canonicalRoot,
+      path: payload.canonicalTarget, before: payload.expectedBaseline, byteLength: payload.previousByteLength ?? 0,
+      attempt: context.attempt, handle, signal: context.interruption.signal, now});
+  });
+  const observed = await inspectFileContent(payload.canonicalTarget);
+  if (observed.digest !== value.current_baseline.content_digest || observed.byteLength !== value.current_baseline.byte_length) {
+    throw new FileSystemError("file_target_changed", "The target changed before file-support observation settled; effects may be uncertain.");
+  }
+  const stats = observed.stats;
+  const after = createFileBaseline({kind: "present", entryKind: "file", contentDigest: observed.digest,
+    objectIdentity: process.platform === "win32" ? {kind: "win32", volumeId: String(stats.dev), fileId: String(stats.ino)} :
+      {kind: "posix", deviceId: String(stats.dev), inode: String(stats.ino)}});
+  return {...value, file_support: {material, after}};
 }
 
 async function visitFilesAndDirectories(
@@ -729,23 +787,6 @@ async function visitFilesAndDirectories(
     throwIfInterrupted(context);
     if (entry.isSymbolicLink()) continue;
     await visitFilesAndDirectories(join(target, entry.name), context, visit);
-  }
-}
-
-async function assertBaseline(payload: PreparedFilePayload): Promise<void> {
-  if (payload.expectedBaseline.kind === "absent") {
-    try {
-      await lstat(payload.canonicalTarget);
-      throw new FileSystemError("file_target_changed", "Prepared file target now exists.");
-    } catch (error) {
-      if (isNodeError(error, "ENOENT")) return;
-      throw error;
-    }
-  }
-  const stats = await stat(payload.canonicalTarget);
-  const digestValue = stats.isFile() ? digest(await readFile(payload.canonicalTarget)) : null;
-  if (digestValue !== payload.expectedBaseline.contentDigest) {
-    throw new FileSystemError("file_target_changed", "File changed before execution.");
   }
 }
 
@@ -847,6 +888,7 @@ function readPayload(invocation: PreparedActionInvocation): PreparedFilePayload 
   }
   return Object.freeze({
     operation: value.operation,
+    supportOrigin: snapshotFileSupportOrigin(value.supportOrigin),
     targetId: requiredString(value.targetId, "targetId"),
     rootName: requiredString(value.rootName, "rootName"),
     workspaceId: requiredString(value.workspaceId, "workspaceId"),
@@ -978,13 +1020,6 @@ function presentBaselineOutput(
     byteLength,
     payload.expectedBaseline.contentDigest,
   );
-}
-
-async function readCurrentBaselineOutput(
-  payload: PreparedFilePayload,
-): Promise<CodeFileBaselineOutput> {
-  const bytes = await readFile(payload.canonicalTarget);
-  return baselineOutput(payload, bytes.byteLength, digest(bytes));
 }
 
 function baselineOutput(
@@ -1124,9 +1159,4 @@ function safeMessage(error: unknown, fallback: string): string {
 
 function digest(value: Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-function isNodeError(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error &&
-    (error as NodeJS.ErrnoException).code === code;
 }

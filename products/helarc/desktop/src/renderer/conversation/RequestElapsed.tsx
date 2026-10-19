@@ -14,7 +14,7 @@ export function RequestElapsed({ snapshot, submissionStartedAt, newConversation,
   if (!pending && (newConversation || !latest || (run && run.productRunId !== latest.runId))) return null;
   const start = pending ? submissionStartedAt : latest!.startedAt;
   const end = pending ? null : run?.host.terminal?.completedAt ?? latest!.completedAt;
-  const live = pending || (!!run && !run.display.terminal);
+  const live = pending || (snapshot.execution === "active" && !!run && !run.display.terminal);
   if (!live && !end) return <span className="wb-request-elapsed" title="No recorded end time">Duration unavailable</span>;
   return <span className="wb-request-elapsed" aria-label="Request elapsed time"
     title="Time since request submission, including waits">

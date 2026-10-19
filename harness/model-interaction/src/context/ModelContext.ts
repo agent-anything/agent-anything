@@ -20,12 +20,17 @@ export type ModelContextCapacity =
       readonly revision: string;
     };
 
-export interface ProviderRequestedOutput {
+export type ProviderRequestedOutput = {
+  readonly unit: "tokens";
+  readonly maximum: null;
+  readonly source: "unspecified";
+  readonly revision: string;
+} | {
   readonly unit: "tokens";
   readonly maximum: number;
   readonly source: "product_configured" | "host_configured";
   readonly revision: string;
-}
+};
 
 export interface ModelContextHeadroom {
   readonly unit: "tokens";
@@ -155,9 +160,18 @@ export function assessModelContext(input: {
 
   let effectiveInputBudget: number | null = null;
   let disposition: ModelContextAssessmentDisposition = "unresolved";
-  if (capacity.supported) {
+  if (capacity.supported && capacity.semantics === "input_and_output" && requestedOutput.maximum === null) {
+    // Input alone can overflow a shared window, but an unknown output reservation cannot prove fit.
+    const inputCeiling = capacity.maximum - headroom.amount;
+    if (inputCeiling < 0) {
+      disposition = "proven_overflow";
+    } else if (measurement.status === "measured" && measurement.amount > inputCeiling) {
+      if (measurement.estimator.accuracy === "exact") disposition = "proven_overflow";
+      else if (measurement.estimator.accuracy === "estimated") disposition = "estimated_overflow";
+    }
+  } else if (capacity.supported) {
     effectiveInputBudget = capacity.maximum - headroom.amount -
-      (capacity.semantics === "input_and_output" ? requestedOutput.maximum : 0);
+      (capacity.semantics === "input_and_output" ? requestedOutput.maximum! : 0);
     if (effectiveInputBudget < 0) {
       disposition = "proven_overflow";
     } else if (measurement.status === "measured") {
@@ -262,6 +276,11 @@ export function snapshotProviderRequestedOutput(
   input: ProviderRequestedOutput,
 ): ProviderRequestedOutput {
   if (input.unit !== "tokens") throw new TypeError("Requested output must use tokens.");
+  if (input.source === "unspecified") {
+    if (input.maximum !== null) throw new TypeError("Unspecified output cannot declare a numeric maximum.");
+    return Object.freeze({ unit: "tokens", maximum: null, source: "unspecified",
+      revision: requiredText(input.revision, "requestedOutput.revision") });
+  }
   return Object.freeze({
     unit: "tokens",
     maximum: positiveInteger(input.maximum, "requestedOutput.maximum"),

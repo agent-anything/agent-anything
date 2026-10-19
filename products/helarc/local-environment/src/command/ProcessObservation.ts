@@ -60,7 +60,8 @@ export interface ProcessObservation {
 }
 
 export interface ProcessExecutionFact {
-  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "scope_members" | "input_notified" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired";
+  readonly activationId?: string;
+  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "scope_members" | "input_notified" | "initial_delivery_committed" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired" | "reconciled";
   readonly sequence: number;
   readonly occurredAt: string;
   readonly snapshot: ProcessSnapshot;
@@ -74,7 +75,15 @@ export interface ProcessExecutionFact {
   readonly cleanupConfirmed?: boolean;
   readonly scopeMembers?: ProcessScopeMembers;
   readonly notification?: ProcessInputNotification;
+  readonly delivery?: ProcessInitialDelivery;
   readonly outputPositions?: Readonly<Record<ProcessStream, {readonly received: number; readonly retained: number; readonly projected: number; readonly omitted: number; readonly encoding: string | null; readonly integrity: string | null}>>;
+}
+export interface ProcessInitialDelivery {
+  readonly runId: string;
+  readonly runActionId: string;
+  readonly settlementId: string;
+  readonly observationId: string | null;
+  readonly cursor: string | null;
 }
 export type ProcessExecutionObserver = (fact: ProcessExecutionFact) => void;
 

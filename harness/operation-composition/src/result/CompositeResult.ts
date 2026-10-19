@@ -47,4 +47,10 @@ export type CompositeResult<TOutput = unknown> = {
   readonly failure: CompositeFailure | null;
   readonly startedAt: string;
   readonly finishedAt: string;
+  readonly reduction: {
+    readonly reducerId: string;
+    readonly aggregateStatus: CompositeResult["status"];
+    readonly status: "constructed" | "failed";
+    readonly failure: CompositeFailure | null;
+  };
 };

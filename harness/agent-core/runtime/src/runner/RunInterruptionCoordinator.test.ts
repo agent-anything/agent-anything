@@ -8,6 +8,20 @@ import {
 const now = "2026-08-04T00:00:00.000Z";
 
 describe("RunInterruptionCoordinator", () => {
+  it("propagates an owner commit failure without treating it as cancellation or waiting for a deadline", async () => {
+    const cancellation = createRunCancellationController({runId: "run-1", now: () => now});
+    const coordinator = new RunInterruptionCoordinator({cancellation: cancellation.context,
+      operationSettlementTimeoutMs: 1000, now: () => now, onCancellationObserved: () => {}});
+    coordinator.start();
+    const call = coordinator.execute("controller", () => new Promise<never>(() => {}));
+    const failure = new Error("unconfirmed owner commit");
+    coordinator.fail(failure);
+    await expect(call).rejects.toBe(failure);
+    await expect(coordinator.flush()).rejects.toBe(failure);
+    await expect(coordinator.execute("tool", async () => "not dispatched")).rejects.toBe(failure);
+    expect(cancellation.context.request).toBeNull();
+    coordinator.dispose();
+  });
   it("tracks concurrent Tools independently and bounds every unsettled cancellation", async () => {
     vi.useFakeTimers();
     const cancellation = createRunCancellationController({ runId: "run-1", now: () => now });

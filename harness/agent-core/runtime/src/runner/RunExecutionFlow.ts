@@ -11,7 +11,7 @@ const steps = [
   {id: "completion", label: "Check normal completion candidate", kind: "check", checks: ["cancellation", "active_state", "current_basis", "call_settlements", "descendant_obligations", "input_notifications"]},
   {id: "before_completion", label: "Notify upper layer before completion", kind: "call", checks: ["current_basis", "cancellation"]},
   {id: "acceptance", label: "Accept normal completion", kind: "check", checks: ["input_notifications"]},
-  {id: "finalizers", label: "Settle resources and required records", kind: "call", checks: ["required_finalizers", "resource_account", "cancellation"]},
+  {id: "finalizers", label: "Settle resources and required records", kind: "call", checks: ["required_finalizers", "descendant_settlement", "resource_account", "cancellation"]},
   {id: "terminal", label: "Commit one terminal result", kind: "exit", checks: ["terminal_barrier"]},
 ] as const;
 type StepId = typeof steps[number]["id"];
@@ -26,7 +26,7 @@ const routes: readonly (readonly [StepId, StepId])[] = [
   ["acceptance","controls"],
 ];
 export const RUN_EXECUTION_FLOW = createExecutionFlowDefinition({
-  owner: "agent-runtime", id: "run-execution", revision: "6", label: "Harness Core Loop",
+  owner: "agent-runtime", id: "run-execution", revision: "7", label: "Harness Core Loop",
   description: "Runner-owned progression and mechanical settlement. Normal completion does not assert task success.",
   steps, transitions: routes.map(([from,to]) => ({id: `${from}:${to}`, from, to, label: `${from} to ${to}`})),
   entryStepIds: ["initialize"], exitStepIds: ["terminal"],

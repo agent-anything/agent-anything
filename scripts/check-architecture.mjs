@@ -104,6 +104,7 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/operation-catalog/catalog",
       "@agent-anything/operation-catalog/binding",
       "@agent-anything/operation-catalog/result",
+      "@agent-anything/operation-catalog/evidence",
     ]),
   ],
   [
@@ -980,6 +981,7 @@ function checkExecutionSourceTopology() {
         "binding",
         "catalog",
         "contract",
+        "evidence",
         "identity",
         "result",
       ],

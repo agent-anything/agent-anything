@@ -9,6 +9,28 @@ async function openView(page: Page, name: string) {
   else {await page.getByRole("button",{name:"More views",exact:true}).click();await page.getByRole("menuitem",{name,exact:true}).click();}
 }
 
+test("recording completeness separates native loss from telemetry omissions", async ({page}, testInfo) => {
+  const recording = await createTestRecording();
+  recording.recorder.offer({} as never);
+  await recording.recorder.flush(true);
+  const server = await startInspectorServer({root: recording.root, assets: fileURLToPath(new URL("../dist/renderer", import.meta.url))});
+  try {
+    const url = new URL(server.launchUrl);
+    url.searchParams.set("source", recording.sourceId); url.searchParams.set("dataset", recording.datasetId);
+    await page.goto(url.toString());
+    await expect(page.getByText("Native capture gaps", {exact: true})).toBeVisible();
+    await expect(page.getByText("Telemetry limitations", {exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "Recording completeness", exact: true}).click();
+    const drawer = page.getByRole("dialog", {name: "Recording completeness", exact: true});
+    await expect(drawer).toContainText("invalid_input");
+    await expect(drawer).toContainText("open_at_closure");
+    await page.screenshot({path: testInfo.outputPath("recording-completeness-desktop.png"), fullPage: true, animations: "disabled"});
+    await page.setViewportSize({width: 390, height: 844});
+    await page.screenshot({path: testInfo.outputPath("recording-completeness-narrow.png"), fullPage: true, animations: "disabled"});
+    expect(await drawer.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  } finally {await server.close(); await recording.close();}
+});
+
 test("object catalog scrolls to its last entry without hiding navigation controls", async ({ page }, testInfo) => {
   const recording = await createTestRecording();
   for (let index = 0; index < 101; index++) {

@@ -8,8 +8,8 @@ test("named profiles, metadata-backed thinking and credentials stay independent"
       id: "local", revision: "1", providerKind: "ollama", displayName: "Local Ollama",
       baseUrl: "http://localhost:11435/", model: "gemma4:e4b", timeoutMs: 300000000,
       credentialStatus: "empty_allowed", qualificationPolicy: "allow_experimental", isActive: true,
-      ollamaRuntime: { contextWindowTokens: 163840, maximumOutputTokens: 2048 },
-      modelSettings: { service: "ollama", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+      ollamaRuntime: { contextWindowTokens: 163840 },
+      modelSettings: { service: "ollama", thinking: { mode: "default" } },
     }];
     const snapshot: any = {
       projects: [], selectedProjectId: null, status: "idle", workspace: null, workspaceProfiles: [],
@@ -20,6 +20,8 @@ test("named profiles, metadata-backed thinking and credentials stay independent"
     (window as any).providerSettingsSaves = saves;
     const receipt = () => ({ status: "handled", result: structuredClone(snapshot) });
     (window as any).helarc = {
+      listRecoverableWork: async () => [],
+      recoverWork: async () => ({ok: true}),
       getSnapshot: async () => structuredClone(snapshot), subscribeSnapshot: () => () => {},
       getProviderCredentialSettings: async ({ profileId }: any) => ({ windowsAvailable: true,
         selection: profiles.find(p => p.id === profileId)?.credential ?? { source: "safe-storage" } }),

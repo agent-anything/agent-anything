@@ -13,6 +13,7 @@ export type {
 export {
   snapshotResolvedOperationBinding,
   unavailableOperationBindingResolver,
+  invalidOperationBinding,
 } from "./OperationBinding.js";
 export type {
   OperationBindingResolverRegistration,

@@ -12,7 +12,13 @@ export type HelarcOutputSource =
       readonly kind: "model_text";
       readonly turnId: string;
       readonly modelItemIds: readonly string[];
+      readonly adopted?: {
+        readonly runId: string;
+        readonly runItem: { readonly id: string; readonly sequence: number } | null;
+        readonly blocks: readonly { readonly modelItemId: string; readonly ordinal: number; readonly text: string }[];
+      };
     }
+  | { readonly kind: "no_text" }
   | { readonly kind: "model_finish"; readonly turnId: string }
   | { readonly kind: "product_status" };
 
@@ -400,9 +406,9 @@ export function appendHelarcRunPresentation(
         }, origin);
       if (model.kind === "model_tool_call") {
         const binding = resolvedCallable(model.metadata?.helarcCallableBinding);
-        if (binding.callableKind === "control" && binding.resolvedName === "final_result" && typeof model.call.input.response === "string") {
+        if (binding.callableKind === "control" && binding.resolvedName === "final_result") {
           add(model.id, {kind: "final_response", turnId: model.call.modelCallRef.turnId, modelItemId: model.id,
-            callId: model.call.modelCallRef.id, ...boundedPresentationText(model.call.input.response), disposition: "proposed"}, origin);
+            callId: model.call.modelCallRef.id, ...boundedPresentationText(typeof model.call.input.response === "string" ? model.call.input.response : ""), disposition: "proposed"}, origin);
           continue;
         }
         add(model.id, {
@@ -504,6 +510,28 @@ export function appendHelarcRunPresentation(
     payload.kind === "settlement_cause"
   ) {
     const cause = payload.cause;
+    if (payload.kind === "terminal_transition" && payload.settlement.status === "completed") {
+      const output = payload.settlement.output as import("../../controller/HelarcController.js").HelarcAgentOutput | null;
+      const replySource = output?.source;
+      if (replySource?.kind === "model_text" && replySource.adopted) {
+        const existingOrigin = records.find(entry => entry.runId === record.runId && entry.origin?.turnId === replySource.turnId)?.origin;
+        const runItem = replySource.adopted.runItem ?? existingOrigin?.source;
+        if (runItem) for (const block of replySource.adopted.blocks) {
+          const existing = records.find(entry => entry.runId === record.runId && entry.origin?.modelItemId === block.modelItemId);
+          if (existing) {
+            records = records.map(entry => entry === existing && entry.content.kind === "assistant_text"
+              ? {...entry, content: {...entry.content, ...boundedPresentationText(block.text)}} : entry);
+            continue;
+          }
+          records.push({id: block.modelItemId, runId: record.runId, sequence: nextSequence++, revision: item.committedInRevision,
+            observedAt: item.createdAt, source: {owner: "runtime", kind: "run_item", id: runItem.id, sequence: runItem.sequence},
+            origin: {runId: record.runId, turnId: replySource.turnId, turnSequence: existingOrigin?.turnSequence ?? runItem.sequence,
+              modelItemId: block.modelItemId, ordinal: block.ordinal, callId: null, source: runItem},
+            content: {kind: "assistant_text", turnId: replySource.turnId, modelItemId: block.modelItemId, ordinal: block.ordinal,
+              ...boundedPresentationText(block.text)}});
+        }
+      }
+    }
     if (payload.kind === "terminal_transition") records = records.map(entry => entry.runId === record.runId && entry.content.kind === "final_response" &&
       (entry.content.disposition === "proposed" || entry.content.disposition === "accepted")
       ? {...entry, revision: item.committedInRevision, content: {...entry.content,

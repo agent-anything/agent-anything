@@ -58,7 +58,7 @@ export function ProjectEditor({ project, snapshot, onSaved, onSnapshot, onClose 
           <button type="button" className="wb-icon" title={primary === folderId ? "Choose another primary folder before removing this folder" : "Remove folder"} aria-label={`Remove ${profile?.displayName ?? folderId}`} disabled={busy || primary === folderId} onClick={() => setFolders(folders.filter((item) => item !== folderId))}><X size={15}/></button>
         </div>;
       })}</div>
-      {snapshot.selectedProjectId === project?.id && snapshot.run && !snapshot.run.display.terminal && <p className="project-notice">Folder changes apply to new work. Current work keeps its folders.</p>}
+      {snapshot.execution === "active" && snapshot.selectedProjectId === project?.id && snapshot.run && !snapshot.run.display.terminal && <p className="project-notice">Folder changes apply to new work. Current work keeps its folders.</p>}
       {error && <p className="wb-warning" role="alert">{error}</p>}
       <footer><button type="button" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" disabled={busy || !name.trim() || !primary}><Save size={15}/>{busy ? "Saving..." : "Save"}</button></footer>
     </form>

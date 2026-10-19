@@ -1,3 +1,7 @@
+.wb-recovery { border-top: 1px solid #d9dfdc; background: #f4f7f5; padding: 8px 12px; }
+.wb-recovery-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wb-recovery-item > div { flex: 1; min-width: 0; }
+.wb-recovery-item p { margin: 3px 0; overflow-wrap: anywhere; font-size: 12px; color: #526158; }
 .wb-shell {
   height: 100dvh;
   display: flex;

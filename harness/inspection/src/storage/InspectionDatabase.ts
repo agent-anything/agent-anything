@@ -1,11 +1,13 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, openSync, writeFileSync, fsyncSync, fstatSync, closeSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inspectionSubjectKey, INSPECTION_FORMAT_VERSION, type InspectionRecord, type InspectionCoverage, type InspectionContentDescriptor } from "../records/index.js";
 import { containedInspectionPath, validateOpaqueId, type InspectionDatasetManifest } from "../sources/index.js";
+import { initialInspectionProgress, type InspectionBatchReceipt, type InspectionIngressHealth, type InspectionRecordingProgress } from "../records/index.js";
 
 export interface InspectionContentWrite { readonly descriptor: InspectionContentDescriptor; readonly text: string | null }
+export interface InspectionNativeOffer { readonly record: InspectionRecord; readonly contents: readonly InspectionContentWrite[]; readonly bytes: number }
 export interface InspectionTelemetryWrite {
   readonly id: string; readonly kind: "span" | "log"; readonly traceId: string | null;
   readonly spanId: string | null; readonly recordId: string; readonly subjectKey: string;
@@ -21,7 +23,9 @@ CREATE INDEX records_kind ON records(kind, sequence);
 CREATE TABLE relations (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, from_key TEXT NOT NULL, to_key TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL, value TEXT NOT NULL);
 CREATE INDEX relations_from ON relations(from_key, sequence);
 CREATE INDEX relations_to ON relations(to_key, sequence);
-CREATE TABLE contents (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, value TEXT NOT NULL);
+CREATE TABLE contents (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, body_id INTEGER, value TEXT NOT NULL);
+CREATE TABLE bodies (id INTEGER PRIMARY KEY, digest TEXT NOT NULL, byte_length INTEGER NOT NULL, bytes BLOB NOT NULL, UNIQUE(digest, byte_length));
+CREATE TABLE batch_receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL, value TEXT NOT NULL);
 CREATE TABLE definitions (subject_key TEXT NOT NULL, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(subject_key, sequence));
 CREATE TABLE lifecycle_definitions (subject_key TEXT NOT NULL, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(subject_key, sequence));
 CREATE TABLE subject_snapshots (subject_key TEXT NOT NULL, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(subject_key, sequence));
@@ -37,19 +41,20 @@ CREATE INDEX flow_occurrences ON flow_records(occurrence_id, sequence);
 CREATE INDEX flow_runs ON flow_records(run_id, event_kind, sequence);
 CREATE INDEX flow_steps ON flow_records(invocation_id, step_id, event_kind, sequence);
 `;
-const TABLES = ["dataset", "records", "relations", "contents", "definitions", "lifecycle_definitions", "subject_snapshots", "telemetry_spans", "telemetry_logs", "telemetry_correlations", "capture_issues", "flow_definitions", "flow_records"];
+const TABLES = ["dataset", "records", "relations", "contents", "bodies", "batch_receipts", "definitions", "lifecycle_definitions", "subject_snapshots", "telemetry_spans", "telemetry_logs", "telemetry_correlations", "capture_issues", "flow_definitions", "flow_records"];
 type Row = Record<string, string | number | null>;
 
 export class InspectionDatabase {
   private readonly db: Database.Database;
+  private readonly statements = new Map<string, Database.Statement>();
+  private nativeBatch = false;
+  private nativeTransactionMaxMs = 0;
   readonly directory: string;
 
-  constructor(directory: string, manifest?: InspectionDatasetManifest, private readonly physicalFileChanged?: (path: string, bytes: number) => void) {
+  constructor(directory: string, manifest?: InspectionDatasetManifest) {
     this.directory = directory;
     if (manifest) {
       mkdirSync(directory, { recursive: true, mode: 0o700 });
-      mkdirSync(join(directory, "content"), { mode: 0o700 });
-      mkdirSync(join(directory, "staging"), { mode: 0o700 });
     }
     const file = containedInspectionPath(directory, "inspection.sqlite");
     this.db = new Database(file, { readonly: !manifest, fileMustExist: !manifest, timeout: 250 });
@@ -60,11 +65,17 @@ export class InspectionDatabase {
         this.db.pragma("synchronous = FULL");
         this.db.pragma("wal_autocheckpoint = 1000");
         this.db.exec(SCHEMA);
-        const coverage: InspectionCoverage = { status: "open", watermark: 0, captured: 0, dropped: 0, rejected: 0, telemetryDropped: 0, heartbeat: manifest.createdAt, limitations: [] };
+        const coverage: InspectionCoverage = { status: "open", watermark: 0, captured: 0, dropped: 0, rejected: 0, telemetryDropped: 0, heartbeat: manifest.createdAt, limitations: [], recording: initialInspectionProgress() };
         this.db.prepare("INSERT INTO dataset VALUES (1, ?, ?, 0, ?)").run(INSPECTION_FORMAT_VERSION, JSON.stringify(manifest), JSON.stringify(coverage));
       }
       this.validateSchema();
     } catch (error) { this.db.close(); throw error; }
+  }
+
+  private statement(sql: string): Database.Statement {
+    let statement = this.statements.get(sql);
+    if (!statement) { statement = this.db.prepare(sql); this.statements.set(sql, statement); }
+    return statement;
   }
 
   private validateSchema(): void {
@@ -77,7 +88,7 @@ export class InspectionDatabase {
 
   engineVersion(): string { return (this.db.prepare("SELECT sqlite_version() AS version").get() as { version: string }).version; }
   snapshot(): InspectionCoverage {
-    const row = this.db.prepare("SELECT watermark, coverage FROM dataset WHERE id=1").get() as Row;
+    const row = this.statement("SELECT watermark, coverage FROM dataset WHERE id=1").get() as Row;
     return { ...JSON.parse(String(row.coverage)), watermark: Number(row.watermark) };
   }
   manifest(): InspectionDatasetManifest {
@@ -87,46 +98,48 @@ export class InspectionDatabase {
     const current = this.snapshot();
     if (!Number.isSafeInteger(watermark) || watermark < 0 || watermark > current.watermark) throw new Error("inspection_cursor_invalid");
     const issue = this.db.prepare("SELECT value FROM capture_issues WHERE sequence<=? ORDER BY sequence DESC LIMIT 1").get(watermark) as Row | undefined;
-    const base: InspectionCoverage = issue ? JSON.parse(String(issue.value)) : { ...current, status: "open", dropped: 0, rejected: 0, telemetryDropped: 0, limitations: [], heartbeat: this.manifest().createdAt };
+    const base: InspectionCoverage = issue ? JSON.parse(String(issue.value)) : { ...current, status: "open", dropped: 0, rejected: 0, telemetryDropped: 0, limitations: [], recording: initialInspectionProgress(), heartbeat: this.manifest().createdAt };
     const row = this.db.prepare("SELECT COUNT(*) AS total FROM records WHERE sequence<=?").get(watermark) as Row;
     return { ...base, watermark, captured: Number(row.total) };
   }
 
   write(record: InspectionRecord, contents: readonly InspectionContentWrite[]): { record: InspectionRecord; duplicate: boolean } {
     const fingerprint = createHash("sha256").update(JSON.stringify({ subject: record.subject, payload: record.payload, links: record.links, contents: record.contents, occurredAt: record.occurredAt, ownerSequence: record.ownerSequence })).digest("hex");
-    const prior = this.db.prepare("SELECT fingerprint, value FROM records WHERE id=?").get(record.id) as Row | undefined;
+    const prior = this.statement("SELECT fingerprint, value FROM records WHERE id=?").get(record.id) as Row | undefined;
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error("inspection_record_conflict");
       return { record: JSON.parse(String(prior.value)), duplicate: true };
     }
     this.validateFlow(record);
-    for (const content of contents) {
-      if (content.text === null) continue;
-      validateOpaqueId(content.descriptor.id);
-      const staging = containedInspectionPath(this.directory, "staging", content.descriptor.id);
-      const target = containedInspectionPath(this.directory, "content", content.descriptor.id);
-      const fd = openSync(staging, "wx", 0o600);
-      try { writeFileSync(fd, content.text, "utf8"); fsyncSync(fd); }
-      finally {
-        try { this.physicalFileChanged?.(join("staging", content.descriptor.id), fstatSync(fd).size); }
-        finally { closeSync(fd); }
-      }
-      renameSync(staging, target);
-      this.physicalFileChanged?.(join("staging", content.descriptor.id), 0);
-      this.physicalFileChanged?.(join("content", content.descriptor.id), Buffer.byteLength(content.text));
-    }
     return this.db.transaction(() => {
+      const bodies = new Map<string, number>();
+      for (const content of contents) {
+        if (content.text === null) continue;
+        validateOpaqueId(content.descriptor.id);
+        const bytes = Buffer.from(content.text, "utf8");
+        const digest = createHash("sha256").update(bytes).digest("hex");
+        if (bytes.length > 8 * 1024 * 1024 || bytes.length !== content.descriptor.retainedBytes || digest !== content.descriptor.digest)
+          throw new Error("inspection_content_integrity_failed");
+        const priorBody = this.statement("SELECT id, bytes FROM bodies WHERE digest=? AND byte_length=?").get(digest, bytes.length) as {id: number; bytes: Buffer} | undefined;
+        if (priorBody && !Buffer.from(priorBody.bytes).equals(bytes)) throw new Error("inspection_content_digest_conflict");
+        const id = priorBody?.id ?? Number(this.statement("INSERT INTO bodies(digest,byte_length,bytes) VALUES (?,?,?)").run(digest, bytes.length, bytes).lastInsertRowid);
+        bodies.set(content.descriptor.id, id);
+      }
       const previous = this.snapshot();
       const sequence = nextSequence(previous.watermark);
       const committed: InspectionRecord = { ...record, commitSequence: sequence };
       const key = inspectionSubjectKey(record.subject);
-      this.db.prepare("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(record.id, sequence, record.captureSequence, key, record.subject.runId, record.subject.owner, record.subject.kind, record.payload.kind, record.occurredAt, fingerprint, JSON.stringify(committed));
-      const relationStatement = this.db.prepare("INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?, ?)");
+      this.statement("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(record.id, sequence, record.captureSequence, key, record.subject.runId, record.subject.owner, record.subject.kind, record.payload.kind, record.occurredAt, fingerprint, JSON.stringify(committed));
+      const relationStatement = this.statement("INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?, ?)");
       for (const link of record.links) relationStatement.run(link.id, sequence, inspectionSubjectKey(link.from), inspectionSubjectKey(link.to), link.kind, record.id, JSON.stringify(link));
-      for (const descriptor of record.contents) this.db.prepare("INSERT INTO contents VALUES (?, ?, ?, ?)").run(descriptor.id, sequence, record.id, JSON.stringify(descriptor));
-      this.db.prepare("INSERT INTO subject_snapshots VALUES (?, ?, ?)").run(key, sequence, record.id);
-      if (record.payload.kind === "definition") this.db.prepare("INSERT INTO definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
-      if (record.payload.kind === "lifecycle") this.db.prepare("INSERT INTO lifecycle_definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
+      for (const descriptor of record.contents) {
+        const bodyId = bodies.get(descriptor.id) ?? null;
+        if (descriptor.availability === "present" && bodyId === null) throw new Error("inspection_content_missing");
+        this.statement("INSERT INTO contents VALUES (?, ?, ?, ?, ?)").run(descriptor.id, sequence, record.id, bodyId, JSON.stringify(descriptor));
+      }
+      this.statement("INSERT INTO subject_snapshots VALUES (?, ?, ?)").run(key, sequence, record.id);
+      if (record.payload.kind === "definition") this.statement("INSERT INTO definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
+      if (record.payload.kind === "lifecycle") this.statement("INSERT INTO lifecycle_definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
       if (record.payload.kind === "flow_definition") {
         const definition = record.payload.definition;
         this.db.prepare("INSERT INTO flow_definitions VALUES (?, ?, ?, ?)").run(flowDefinitionKey(definition), definition.contentDigest, record.id, sequence);
@@ -134,13 +147,73 @@ export class InspectionDatabase {
         const value = record.payload.observation;
         this.db.prepare("INSERT INTO flow_records VALUES (?, ?, ?, ?, ?, ?, ?)").run(sequence, flowDefinitionKey(value.definition), value.invocationId, "stepExecutionId" in value ? value.stepExecutionId : null, "stepId" in value ? value.stepId : null, value.kind, value.runId);
       }
-      this.db.prepare("UPDATE dataset SET watermark=?, coverage=? WHERE id=1").run(sequence, JSON.stringify({ ...previous, watermark: sequence, captured: previous.captured + 1, heartbeat: new Date().toISOString() }));
+      if (this.nativeBatch) this.statement("UPDATE dataset SET watermark=? WHERE id=1").run(sequence);
+      else this.statement("UPDATE dataset SET watermark=?, coverage=? WHERE id=1").run(sequence, JSON.stringify({ ...previous, watermark: sequence, captured: previous.captured + 1, heartbeat: new Date().toISOString() }));
       return { record: committed, duplicate: false };
     })();
   }
 
   writeBatch<T>(write: () => T): T {
     return this.db.transaction(write)();
+  }
+
+  receipt(id: string): InspectionBatchReceipt | null {
+    const row = this.statement("SELECT value FROM batch_receipts WHERE id=?").get(id) as Row | undefined;
+    return row ? JSON.parse(String(row.value)) : null;
+  }
+
+  writeNativeBatch(id: string, digest: string, offers: readonly InspectionNativeOffer[], health: InspectionIngressHealth): InspectionBatchReceipt {
+    if (!offers.length || offers.length > 100 || createHash("sha256").update(JSON.stringify(offers)).digest("hex") !== digest)
+      throw new Error("inspection_batch_invalid");
+    const prior = this.receipt(id);
+    if (prior) { if (prior.digest !== digest) throw new Error("inspection_batch_conflict"); return prior; }
+    const transactionStarted = performance.now();
+    const receipt = this.db.transaction(() => {
+      const started = performance.now();
+      const before = this.snapshot();
+      const progress = before.recording!;
+      let persisted = 0, duplicates = 0, rejected = 0;
+      const rejectedOffers: {sequence: number; recordId: string; code: string}[] = [];
+      const limitations = new Set(before.limitations);
+      this.nativeBatch = true;
+      try {
+        for (const offer of offers) {
+          try { if (this.write(offer.record, offer.contents).duplicate) duplicates++; else persisted++; }
+          catch (error) {
+            if (!(error instanceof Error) || !(error.message === "inspection_record_conflict" || error.message.startsWith("inspection_flow_"))) throw error;
+            rejected++; limitations.add(error.message === "inspection_record_conflict" ? "conflicting_record_identity" : error.message);
+            rejectedOffers.push({sequence: offer.record.captureSequence, recordId: offer.record.id, code: error.message});
+          }
+        }
+      } finally { this.nativeBatch = false; }
+      const nativeWatermark = this.snapshot().watermark;
+      const receipt: InspectionBatchReceipt = {id, digest, firstSequence: offers[0]!.record.captureSequence,
+        lastSequence: offers.at(-1)!.record.captureSequence, persisted, duplicates, rejected,
+        watermark: nativeWatermark + 1, nativeWatermark, precommitMs: performance.now() - started, rejectedOffers};
+      this.statement("INSERT INTO batch_receipts VALUES (?,?,?)").run(id, digest, JSON.stringify(receipt));
+      this.updateCoverage({captured: before.captured + persisted, dropped: health.dropped, rejected: health.rejected + progress.native.rejected + rejected,
+        limitations: [...limitations], recording: {...progress, ingress: health, native: {
+          persisted: progress.native.persisted + persisted, duplicates: progress.native.duplicates + duplicates,
+          rejected: progress.native.rejected + rejected, lastReceipt: receipt, target: nativeWatermark,
+          transactionMaxMs: Math.max(progress.native.transactionMaxMs, this.nativeTransactionMaxMs)}}});
+      return receipt;
+    })();
+    this.nativeTransactionMaxMs = Math.max(this.nativeTransactionMaxMs, performance.now() - transactionStarted);
+    return receipt;
+  }
+
+  updateIngress(health: InspectionIngressHealth): void {
+    const progress = this.snapshot().recording!;
+    if (health.revision < progress.ingress.revision) return;
+    this.updateCoverage({dropped: health.dropped, rejected: health.rejected + progress.native.rejected,
+      recording: {...progress, ingress: health, native: {...progress.native, transactionMaxMs: this.nativeTransactionMaxMs}}});
+  }
+
+  writeProjection(records: readonly InspectionTelemetryWrite[], projection: InspectionRecordingProgress["projection"], dropped: number): void {
+    this.writeBatch(() => {
+      for (const record of records) this.writeTelemetry(record);
+      this.updateCoverage({recording: {...this.snapshot().recording!, projection}, telemetryDropped: dropped});
+    });
   }
 
   private validateFlow(record: InspectionRecord): void {
@@ -326,10 +399,10 @@ export class InspectionDatabase {
     const descriptor = this.content(id, watermark);
     if (!descriptor) return null;
     if (descriptor.availability !== "present") return { descriptor, text: "", offset, nextOffset: null };
-    const path = containedInspectionPath(this.directory, "content", id);
-    if (!existsSync(path)) return { descriptor: { ...descriptor, availability: "unavailable", unavailableReason: "content_missing" }, text: "", offset, nextOffset: null };
-    if (statSync(path).size > 8 * 1024 * 1024 || !Number.isSafeInteger(offset) || offset < 0 || length < 4 || length > 256 * 1024) throw new Error("inspection_query_invalid");
-    const bytes = readFileSync(path);
+    const body = this.db.prepare("SELECT b.bytes FROM contents c JOIN bodies b ON b.id=c.body_id WHERE c.id=? AND c.sequence<=?").get(id, watermark) as {bytes: Buffer} | undefined;
+    if (!body) return { descriptor: { ...descriptor, availability: "unavailable", unavailableReason: "content_missing" }, text: "", offset, nextOffset: null };
+    const bytes = Buffer.from(body.bytes);
+    if (bytes.length > 8 * 1024 * 1024 || !Number.isSafeInteger(offset) || offset < 0 || length < 4 || length > 256 * 1024) throw new Error("inspection_query_invalid");
     if (bytes.length !== descriptor.retainedBytes || createHash("sha256").update(bytes).digest("hex") !== descriptor.digest) return { descriptor: { ...descriptor, availability: "unavailable", unavailableReason: "content_integrity_failed" }, text: "", offset, nextOffset: null };
     if (offset > bytes.length || (offset < bytes.length && (bytes[offset]! & 0xc0) === 0x80)) throw new Error("inspection_query_invalid");
     let end = Math.min(bytes.length, offset + length);

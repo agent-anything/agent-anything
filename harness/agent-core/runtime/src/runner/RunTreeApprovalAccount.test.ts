@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { RunTreeApprovalAccount } from "./RunTreeApprovalAccount.js";
 
 describe("RunTreeApprovalAccount", () => {
+  it("restores active requests, duplicate protection and cumulative quotas without readmission", () => {
+    const account = createAccount({maxRequestsPerOperationFingerprint: 2});
+    account.admit(request("a", "child-1", "action-1", "same"));
+    account.settle("a", "declined");
+    account.admit(request("b", "child-2", "action-2", "same"));
+    const saved = account.checkpoint();
+    const restored = RunTreeApprovalAccount.restore(saved);
+    expect(restored.getSnapshot()).toEqual(account.getSnapshot());
+    expect(restored.checkpoint()).toEqual(saved);
+    expect(() => restored.admit(request("a", "child-1", "action-1", "same"))).toThrow(/already admitted/);
+    expect(restored.admit(request("c", "child-3", "action-3", "same"))).toMatchObject({code: "approval_tree_operation_limit_exceeded"});
+    expect(restored.settle("b", "approved").settledRequests).toBe(2);
+    expect(account.getSnapshot().settledRequests).toBe(1);
+  });
+
+  it("rejects inconsistent retained approval counts instead of resetting them", () => {
+    const account = createAccount({});
+    account.admit(request("a", "child-1", "action-1", "same"));
+    const saved = account.checkpoint();
+    expect(() => RunTreeApprovalAccount.restore({...saved, totalRequests: 0})).toThrow(/inconsistent/);
+    expect(() => RunTreeApprovalAccount.restore({...saved, active: [...saved.active, ...saved.active]})).toThrow(/identity/);
+  });
   it("shares equivalent-operation and active-review limits across sibling Runs", () => {
     const account = createAccount({ maxRequestsPerOperationFingerprint: 2, maxActiveReviews: 2 });
     expect(account.admit(request("approval-1", "child-1", "action-1", "same"))).toMatchObject({

@@ -14,6 +14,7 @@ import type {
 } from "./RetryExecution.js";
 import type { RetryEvent } from "./RetryEvent.js";
 import { RetryExecutor } from "./RetryExecutor.js";
+import { RetryCheckpointError, type RetryCheckpoint, type RetryCheckpointPort } from "./RetryCheckpoint.js";
 
 interface AttemptError {
   readonly category: string;
@@ -23,6 +24,47 @@ interface AttemptError {
 }
 
 describe("RetryExecutor", () => {
+  it.each(["intent", "result", "delay", "outcome"] as const)("restores original retry progress after lost acknowledgement at %s", async point => {
+    const harness = createHarness();
+    let retained: RetryCheckpoint<string, AttemptError, string> | null = null;
+    let lost = false;
+    let dispatches = 0;
+    let reconciliations = 0;
+    const port: RetryCheckpointPort<string, AttemptError, string> = {
+      read: () => structuredClone(retained),
+      async commit(value) {
+        retained = structuredClone(value);
+        const hit = point === "intent" ? value.attempt !== null && value.attemptResult === null
+          : point === "result" ? value.attemptResult !== null
+          : point === "delay" ? value.delay !== null : value.outcome !== null;
+        if (hit && !lost) {lost = true; throw new Error("acknowledgement lost");}
+      },
+      async reconcile() {reconciliations++; return {kind: "failed", error: retryableError()};},
+    };
+    const execute = async () => {dispatches++; return {kind: "failed" as const, error: retryableError()};};
+    await expect(harness.executor.execute(harness.input({maxRetries: 1}), execute, port)).rejects.toBeInstanceOf(RetryCheckpointError);
+    if (point === "delay") harness.clock.advance(40);
+    const result = await harness.executor.execute(harness.input({maxRetries: 1}), execute, port);
+    expect(result).toMatchObject({kind: "budget_exhausted", exhaustion: {progress: {completedAttempts: 2, totalRetryDelayMs: 100}}});
+    expect(dispatches).toBe(point === "intent" ? 1 : 2);
+    expect(reconciliations).toBe(point === "intent" ? 1 : 0);
+    if (point === "delay") expect(harness.waitedDelays).toEqual([60]);
+  });
+
+  it("returns a retained successful attempt without redispatch even after the deadline", async () => {
+    const harness = createHarness();
+    let retained: RetryCheckpoint<string, AttemptError, string> | null = null;
+    let lost = false;
+    const port: RetryCheckpointPort<string, AttemptError, string> = {read: () => retained,
+      async commit(value) {retained = structuredClone(value); if (value.attemptResult && !lost) {lost = true; throw new Error("crash");}},
+      async reconcile() {throw new Error("must not reconcile a known result");}};
+    const input = harness.input({deadlineAt: "2026-07-14T00:00:01.000Z"});
+    const execute = vi.fn(async () => ({kind: "succeeded" as const, value: "recorded"}));
+    await expect(harness.executor.execute(input, execute, port)).rejects.toBeInstanceOf(RetryCheckpointError);
+    harness.clock.advance(2000);
+    expect(await harness.executor.execute(input, execute, port)).toEqual({kind: "succeeded", value: "recorded"});
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
   afterEach(() => {
     vi.useRealTimers();
   });

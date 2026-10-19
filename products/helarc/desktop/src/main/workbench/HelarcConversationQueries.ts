@@ -3,6 +3,7 @@ import { createHelarcRunProjection } from "@agent-anything/helarc/run";
 import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
 import type { WorkbenchQuerySources } from "./HelarcWorkbenchQueries.js";
 import type * as D from "../../shared/HelarcWorkbench.js";
+import { compareConversationPosition as compare } from "../../shared/HelarcWorkbench.js";
 import {
   outputModelItems,
   presentConversationWork,
@@ -18,8 +19,6 @@ import {
   textPage,
 } from "./WorkbenchReadLimits.js";
 
-const compare = (a: readonly number[], b: readonly number[]) =>
-  a[0]! - b[0]! || a[1]! - b[1]!;
 const fingerprint = (values: unknown) =>
   createHash("sha256").update(JSON.stringify(values)).digest("hex");
 const identity = (q: D.ConversationQuery) => [

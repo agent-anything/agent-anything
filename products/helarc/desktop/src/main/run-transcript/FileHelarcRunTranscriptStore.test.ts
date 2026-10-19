@@ -14,6 +14,17 @@ afterEach(async () => {
 });
 
 describe("FileHelarcRunTranscriptStore", () => {
+  it("reopens and accepts exact replay without appending duplicate history", async () => {
+    const directory = await temporaryDirectory();
+    const first = record(1, {kind: "controller_turn"});
+    await new FileHelarcRunTranscriptStore(directory).append(first);
+    const reopened = new FileHelarcRunTranscriptStore(directory);
+    expect(await reopened.append(first)).toEqual({status: "stored"});
+    expect(await reopened.append(record(1, {kind: "different"}))).toMatchObject({status: "failed"});
+    expect(await reopened.append(record(2, {kind: "terminal_transition"}))).toEqual({status: "stored"});
+    const [file] = await readdir(directory);
+    expect((await readFile(join(directory, file!), "utf8")).trim().split("\n")).toHaveLength(2);
+  });
   it("stores the exact private Transcript as ordered JSON Lines", async () => {
     const directory = await temporaryDirectory();
     const store = new FileHelarcRunTranscriptStore(directory);

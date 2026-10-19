@@ -48,6 +48,9 @@ import type {
   SandboxExecutionResult,
   SandboxPolicyEnvelope,
 } from "../sandbox/SandboxContracts.js";
+import { ActionRecordCommitError, ActionRecoveryError, type ActionRetryRecord, type ActionRecordPort, type ActionRecordReceipt,
+  type ActionRecoveryRecordPort, type ActionAttemptReconciliationPort } from "./ActionRecordPort.js";
+export type { ActionRecordPort } from "./ActionRecordPort.js";
 
 export interface ActionApprovalResolutionPort {
   resolve(input: {
@@ -72,20 +75,6 @@ export interface ActionApprovalResolutionPort {
     | { readonly status: "limit_exceeded"; readonly code: string; readonly detail: OperationLimitFailureDetail }
     | { readonly status: "failed" | "interrupted" | "unknown_effect"; readonly code: string }
   >;
-}
-
-export interface ActionRecordPort {
-  recordPreEffect(input: {
-    readonly subject: CanonicalActionSubjectRevision;
-    readonly policy: ActionPolicyAssessment;
-    readonly permission: ActionPermissionAssessment;
-    readonly dispatchPlanFingerprint: string;
-    readonly recordedAt: string;
-  }): Promise<{ readonly recordId: string }>;
-  recordPostEffect(input: {
-    readonly settlement: CanonicalActionSettlement;
-    readonly sandbox: SandboxExecutionResult | null;
-  }): Promise<{ readonly recordId: string }>;
 }
 
 export type ActionRetryDecision =
@@ -157,6 +146,10 @@ export type ActionExecutionResult<TOutput = unknown> =
       >;
     };
 
+export type ActionRecoveryResult<TOutput = unknown> =
+  | ActionExecutionResult<TOutput>
+  | {readonly status: "no_dispatch_record"; readonly prepared: PreparedAction | null};
+
 export interface ActionExecutionCoordinatorDependencies {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
@@ -168,6 +161,7 @@ export interface ActionExecutionCoordinatorDependencies {
   readonly retry: ActionRetryDecisionPort;
   readonly observer?: ActionExecutionObserver;
   readonly now?: () => string;
+  /** Must allocate unused identities across owner restarts, not reset a local counter. */
   readonly createId?: (kind: string) => string;
 }
 
@@ -228,7 +222,6 @@ export interface ActionExecutionObserver {
 export class ActionExecutionCoordinator {
   private readonly adapters;
   private readonly now: () => string;
-  private nextId = 1;
 
   constructor(private readonly dependencies: ActionExecutionCoordinatorDependencies) {
     this.adapters = createActionAdapterImplementationSnapshot(
@@ -236,6 +229,151 @@ export class ActionExecutionCoordinator {
       dependencies.adapters,
     );
     this.now = dependencies.now ?? (() => new Date().toISOString());
+  }
+
+  /** Reconcile before continuing; a new Attempt requires its own retained retry admission. */
+  async recover<TRequest, TOutput>(request: ActionExecutionRequest<TRequest>, recovery: {
+    readonly records: ActionRecoveryRecordPort;
+    readonly attempts: ActionAttemptReconciliationPort | null;
+  }): Promise<ActionRecoveryResult<TOutput>> {
+    const flow = new ExecutionFlowPath(ACTION_EXECUTION_FLOW, request.executionFlow ?? {}, request.runId,
+      [{owner: "action-execution", kind: "action", id: request.action.id, revision: null}]);
+    const step = flow.advance("recover", {actionId: request.action.id});
+    const reject = (code: string): never => {throw new ActionRecoveryError(request.action.id, code);};
+    try {
+      const records = structuredClone(await recovery.records.readAction({runId: request.runId, action: request.action}));
+      const captured = this.adapters.find(request.binding.actionAdapterId);
+      const unpreparedFailure = records.settlement?.prepared === null &&
+        records.preparations.length === 0 && records.attempts.length === 0;
+      if ((!captured || !bindingMatches(captured.registration, request.binding)) &&
+          !unpreparedFailure) reject("action_recovery_binding_unavailable");
+      const adapter = captured!;
+      const preparations = new Map(records.preparations.map(entry => [entry.recordId, entry.value]));
+      if (preparations.size !== records.preparations.length) reject("action_recovery_records_invalid");
+      for (const preparation of preparations.values()) {
+        if (preparation.runId !== request.runId ||
+            preparation.limits.maxAttempts !== request.maxAttempts || preparation.limits.deadlineAt !== request.deadlineAt ||
+            !sameRetainedValue(preparation.binding, request.binding) ||
+            !sameRetainedValue(preparation.registration, adapter.registration)) reject("action_recovery_binding_changed");
+        assertPreparedCoherence(request, adapter.registration, preparation.prepared);
+      }
+      const attemptIds = new Set<string>();
+      for (const [index, attempt] of records.attempts.entries()) {
+        const preparation = preparations.get(attempt.intent.preparationRecordId);
+        const dispatch = attempt.intent.request;
+        if (!preparation || dispatch.attempt.runId !== request.runId ||
+            dispatch.attempt.action.id !== request.action.id || dispatch.attempt.ordinal !== index + 1 ||
+            attemptIds.has(dispatch.attempt.id) ||
+            !sameRetainedValue(dispatch.invocation, preparation.prepared.invocation) ||
+            dispatch.actionRegistrationFingerprint !== adapter.registration.registrationFingerprint ||
+            (attempt.result !== null && (attempt.result.intentRecordId !== attempt.recordId ||
+              !sameRetainedValue(attempt.result.result.attempt, dispatch.attempt))) ||
+            (index < records.attempts.length - 1 && attempt.result === null)) reject("action_recovery_records_invalid");
+        attemptIds.add(dispatch.attempt.id);
+        const ledger = CanonicalActionLedger.restoreDispatch(attempt.intent.ledger);
+        if (!sameRetainedValue(ledger.getSnapshot().attempts, records.attempts.slice(0, index + 1).map(entry => ({
+          id: entry.intent.request.attempt.id, action: entry.intent.request.attempt.action, ordinal: entry.intent.request.attempt.ordinal,
+        }))) || !sameRetainedValue(ledger.getSnapshot().subjects.at(-1), preparation!.prepared.subject) ||
+            !sameRetainedValue(ledger.getSnapshot().parentRunAction, request.parentRunAction)) reject("action_recovery_records_invalid");
+        if (attempt.retry !== null) {
+          if (!attempt.result || !canConsiderRetry(attempt.result.result)) reject("action_recovery_retry_invalid");
+          this.validateRetryRecord(request, attempt.retry, attempt.recordId, dispatch.attempt, preparation!.prepared);
+        }
+        if (index < records.attempts.length - 1 && attempt.retry?.decision.status !== "retry") reject("action_recovery_retry_missing");
+      }
+      step.check("records", "passed", {preparations: preparations.size, attempts: records.attempts.length});
+      const saved = records.settlement;
+      if (saved !== null) {
+        if (saved.runId !== request.runId || !sameRetainedValue(saved.binding, request.binding) ||
+            !sameRetainedValue(saved.settlement.action, request.action) ||
+            !sameRetainedValue(saved.settlement.operationInvocation, request.binding.invocation) ||
+            !sameRetainedValue(saved.settlement.binding, request.binding.binding)) reject("action_recovery_settlement_invalid");
+        if (saved.prepared !== null) assertPreparedCoherence(request, adapter.registration, saved.prepared);
+        step.check("reconciliation", "not_applicable", {reason: "settlement_retained"});
+        const semanticResult = saved.prepared === null
+          ? semanticFailure(saved.settlement, saved.preparationFailure?.owner ?? reject("action_recovery_failure_missing"),
+            saved.preparationFailure!.code, saved.preparationFailure!.message)
+          : await adapter.adapter.settle(saved.prepared, saved.settlement);
+        flow.advance("settlement", {reused: true, settlementId: saved.settlement.ref.id});
+        flow.close("returned");
+        return {status: "settled", settlement: saved.settlement, semanticResult} as ActionRecoveryResult<TOutput>;
+      }
+      const last = records.attempts.at(-1);
+      if (!last) {
+        step.check("reconciliation", "not_applicable", {reason: "no_dispatch_record"});
+        flow.close("yielded");
+        // The caller still needs a complete mandatory dispatch path before authorizing execution.
+        return {status: "no_dispatch_record", prepared: records.preparations.at(-1)?.value.prepared ?? null};
+      }
+      const preparation = preparations.get(last.intent.preparationRecordId)!;
+      let sandbox = last.result?.result;
+      let reconciliation: import("./ActionRecordPort.js").ActionSettlementRecord["reconciliation"];
+      const attempts = records.attempts.map(attempt => ({id: attempt.intent.request.attempt.id,
+        action: attempt.intent.request.attempt.action, ordinal: attempt.intent.request.attempt.ordinal}));
+      if (!sandbox) {
+        const finding = recovery.attempts === null ? {status: "unknown" as const,
+          code: "action_interrupted_outcome_unknown", evidenceRefs: []} : await recovery.attempts.reconcile({
+            intent: last.intent, preparation});
+        reconciliation = {intentRecordId: last.recordId, status: finding.status,
+          evidenceRefs: finding.evidenceRefs, code: finding.status === "unknown" ? finding.code : null};
+        step.check("reconciliation", finding.status === "settled" ? "passed" : "not_satisfied",
+          {status: finding.status, evidenceCount: finding.evidenceRefs.length});
+        step.output(flow.material("Attempt reconciliation", "assessed", reconciliation, "execution"));
+        if (finding.status === "settled") {
+          if (finding.evidenceRefs.length === 0 || finding.evidenceRefs.some(ref => !ref.trim()) ||
+              !sameRetainedValue(finding.result.attempt, last.intent.request.attempt)) reject("action_recovery_evidence_invalid");
+          sandbox = finding.result;
+        } else {
+          if (!finding.code.trim()) reject("action_recovery_evidence_invalid");
+          const settlement: CanonicalActionSettlement = {
+            ...preparedSettlement(request, preparation.prepared, "unknown_effect", "action-execution", finding.code,
+              `${request.action.id}:recovered_settlement`, this.now(), attempts),
+            effectCertainty: "unknown", completionExtent: "unknown", reconciliationRequired: true,
+          };
+          await this.record("settlement", request.action.id, null, () => this.dependencies.records.recordPostEffect({
+            runId: request.runId, binding: request.binding, settlement, sandbox: null, prepared: preparation.prepared, reconciliation}));
+          const semanticResult = await adapter.adapter.settle(preparation.prepared, settlement);
+          flow.advance("settlement", {reused: false, settlementId: settlement.ref.id, outcome: "unknown_effect"});
+          flow.close("returned");
+          return {status: "settled", settlement, semanticResult} as ActionRecoveryResult<TOutput>;
+        }
+        await this.record("attempt_result", request.action.id, sandbox.attempt.id, () => this.dependencies.records.recordAttemptResult({
+          intentRecordId: last.recordId, result: sandbox!, recordedAt: this.now(),
+          reconciliation: {evidenceRefs: finding.evidenceRefs}}));
+      } else step.check("reconciliation", "passed", {reason: "physical_result_retained"});
+      if (canConsiderRetry(sandbox) && records.attempts.length < request.maxAttempts) {
+        const retry = last.retry ?? await this.decideAndRecordRetry(request, preparation.prepared, sandbox, last.recordId);
+        const retryStep = flow.advance("retry", {retained: last.retry !== null, remainingAttempts: retry.remainingAttempts});
+        retryStep.output(flow.material("Retained Action retry decision", "acknowledged", retry, "execution"));
+        retryStep.check("replay_basis", retry.decision.status === "retry" ? "passed" : "not_applicable");
+        if (retry.decision.status === "retry") {
+          const ledger = CanonicalActionLedger.restoreDispatch(last.intent.ledger);
+          await ledger.transition({expectedRevision: ledger.getSnapshot().revision, kind: "begin_retry_delay"});
+          const interrupted = await this.waitForRetry(request, retry, flow);
+          if (interrupted !== null) {
+            const result = await this.settlePrepared<TOutput>(ledger, request, adapter.adapter, preparation.prepared,
+              interrupted === "cancelled" ? "cancelled" : "failed", "action-execution", interrupted === "cancelled" ? "action_retry_interrupted" : "action_deadline_exceeded");
+            flow.advance("settlement", {status: result.status === "settled" ? result.settlement.status : result.status});
+            flow.close("returned");
+            return result;
+          }
+          const result = await this.executeWithFlow<TRequest, TOutput>(request, flow, {ledger, prepared: preparation.prepared});
+          if (result.status === "settled") flow.advance("settlement", {status: result.settlement.status});
+          flow.close(result.status === "pending_interaction" ? "yielded" : "returned");
+          return result;
+        }
+      }
+      const settlement = settlementFromPhysical(request, preparation.prepared, adapter.registration.binding,
+        attempts, sandbox,
+        `${request.action.id}:recovered_settlement`, this.now());
+      await this.record("settlement", request.action.id, null, () => this.dependencies.records.recordPostEffect({
+        runId: request.runId, binding: request.binding, settlement, sandbox, prepared: preparation.prepared,
+        ...(reconciliation ? {reconciliation} : {})}));
+      const semanticResult = await adapter.adapter.settle(preparation.prepared, settlement);
+      flow.advance("settlement", {reused: false, settlementId: settlement.ref.id});
+      flow.close("returned");
+      return {status: "settled", settlement, semanticResult} as ActionRecoveryResult<TOutput>;
+    } catch (error) {flow.close("failed"); throw error;}
   }
 
   async execute<TRequest, TOutput>(
@@ -254,11 +392,15 @@ export class ActionExecutionCoordinator {
   private async executeWithFlow<TRequest, TOutput>(
     request: ActionExecutionRequest<TRequest>,
     flow: ExecutionFlowPath,
+    resumed?: {readonly ledger: CanonicalActionLedger; readonly prepared: PreparedAction},
   ): Promise<ActionExecutionResult<TOutput>> {
-    const preparationStep = flow.advance("prepare", {actionId: request.action.id, enforcement: request.enforcement},
+    if (!Number.isSafeInteger(request.maxAttempts) || request.maxAttempts < 1 || !Number.isFinite(Date.parse(request.deadlineAt))) {
+      throw new TypeError("Action execution requires valid original attempt and deadline limits.");
+    }
+    const preparationStep = flow.advance(resumed ? "restore_prepared" : "prepare", {actionId: request.action.id, enforcement: request.enforcement},
       [flow.material("Action binding", "received", {action: request.action, parentRunAction: request.parentRunAction, binding: request.binding}, "execution")]);
-    const ledger = new CanonicalActionLedger(request.action, request.parentRunAction);
-    await ledger.transition({ expectedRevision: 0, kind: "begin_preparation" });
+    const ledger = resumed?.ledger ?? new CanonicalActionLedger(request.action, request.parentRunAction);
+    if (!resumed) await ledger.transition({ expectedRevision: 0, kind: "begin_preparation" });
     const captured = this.adapters.find(request.binding.actionAdapterId);
     preparationStep.check("adapter", captured !== undefined && bindingMatches(captured.registration, request.binding) ? "passed" : "not_satisfied");
     if (captured === undefined || !bindingMatches(captured.registration, request.binding)) {
@@ -273,7 +415,7 @@ export class ActionExecutionCoordinator {
       );
     }
 
-    const preparedResult = await captured.adapter.prepare(request.binding, {
+    const preparedResult = resumed ? {status: "prepared" as const, prepared: resumed.prepared} : await captured.adapter.prepare(request.binding, {
       action: request.action,
       parentRunAction: request.parentRunAction,
       subjectRevision: 1,
@@ -311,7 +453,7 @@ export class ActionExecutionCoordinator {
           actionFingerprint: fingerprint,
           sealedAt: this.now(),
         });
-    await ledger.transition({
+    if (!resumed) await ledger.transition({
       expectedRevision: ledger.getSnapshot().revision,
       kind: "record_subject",
       subject: prepared.subject,
@@ -547,26 +689,35 @@ export class ActionExecutionCoordinator {
       authorityBasis = request.authority.captureBasis();
     }
 
-    const dispatchPlanFingerprint = this.id("dispatch-plan");
+    const dispatchPlanFingerprint = `${request.action.id}:${ledger.getSnapshot().attempts.length}:${this.id("dispatch-plan")}`;
     flow.advance("record", {dispatchPlanFingerprint}, [preparedRef, policyRef, permissionRef]);
-    await this.dependencies.records.recordPreEffect({
-      subject: prepared.subject,
+    let preparationReceipt = await this.record("preparation", request.action.id, null, () => this.dependencies.records.recordPreEffect({
+      runId: request.runId,
+      prepared,
+      binding: request.binding,
+      registration: captured.registration,
       policy,
       permission,
       dispatchPlanFingerprint,
       recordedAt: this.now(),
-    });
+      limits: {maxAttempts: request.maxAttempts, deadlineAt: request.deadlineAt},
+    }));
     if (!Number.isSafeInteger(request.maxAttempts) || request.maxAttempts < 1) {
       throw new TypeError("Action execution maxAttempts must be a positive integer.");
     }
     let sandbox: SandboxExecutionResult;
     let activeDispatchPlanFingerprint = dispatchPlanFingerprint;
     while (true) {
+      if (request.interruption.signal.aborted || Date.parse(this.now()) >= Date.parse(request.deadlineAt)) {
+        return this.settlePrepared<TOutput>(ledger, request, captured.adapter, prepared,
+          request.interruption.signal.aborted ? "cancelled" : "failed", "action-execution",
+          request.interruption.signal.aborted ? "action_retry_interrupted" : "action_deadline_exceeded");
+      }
       const dispatchStep = flow.advance("sandbox", {executorId:captured.registration.executor.id});
       await ledger.claimDispatch({
         expectedRevision: ledger.getSnapshot().revision,
         claimId: this.id("dispatch-claim"),
-        attemptId: this.id("attempt"),
+        attemptId: `${request.action.id}:attempt:${ledger.getSnapshot().attempts.length + 1}`,
         planFingerprint: activeDispatchPlanFingerprint,
         claimedAt: this.now(),
       });
@@ -582,15 +733,6 @@ export class ActionExecutionCoordinator {
         actionRegistrationFingerprint: captured.registration.registrationFingerprint,
         startedAt: this.now(),
       });
-      this.notify(Object.freeze({
-        kind: "attempt_started" as const,
-        runId: request.runId,
-        actionId: request.action.id,
-        attemptId: attempt.id,
-        ordinal: attempt.ordinal,
-        enforcement: request.enforcement,
-        occurredAt: sandboxAttempt.startedAt,
-      }));
       const sandboxPolicy: SandboxPolicyEnvelope = Object.freeze({
         schemaVersion: 1 as const,
         policyId: request.policyContext.policySnapshotId,
@@ -628,17 +770,49 @@ export class ActionExecutionCoordinator {
       }
       dispatchStep.check("progression_basis", "passed");
       dispatchStep.check("authority_basis", "passed", {authorityRevision:authorityBasis.authorityRevision});
-      sandbox = await this.dependencies.sandbox.execute({
+      const dispatchRequest = {
         executionLifetime: captured.registration.executionLifetime,
-        executionFlow: flow.callContext,
         attempt: sandboxAttempt,
         policy: sandboxPolicy,
         executor: captured.registration.executor,
         actionRegistrationFingerprint: captured.registration.registrationFingerprint,
         invocation: prepared.invocation,
         deadlineAt: request.deadlineAt,
+      };
+      const intent = await this.record("dispatch_intent", request.action.id, attempt.id,
+        () => this.dependencies.records.recordDispatchIntent({
+          preparationRecordId: preparationReceipt.recordId,
+          ledger: ledger.getSnapshot(),
+          request: dispatchRequest,
+        }));
+      // Persistence can yield; recheck admission before crossing the effectful interface.
+      if (!request.isProgressionBasisCurrent() || !request.authority.isBasisCurrent(authorityBasis)) {
+        return this.settlePrepared<TOutput>(ledger, request, captured.adapter, prepared,
+          "invalidated", "agent-runtime", "action_dispatch_basis_stale");
+      }
+      if (request.interruption.signal.aborted || Date.parse(this.now()) >= Date.parse(request.deadlineAt)) {
+        return this.settlePrepared<TOutput>(ledger, request, captured.adapter, prepared,
+          request.interruption.signal.aborted ? "cancelled" : "failed", "action-execution",
+          request.interruption.signal.aborted ? "action_dispatch_interrupted" : "action_deadline_exceeded");
+      }
+      this.notify(Object.freeze({
+        kind: "attempt_started" as const,
+        runId: request.runId,
+        actionId: request.action.id,
+        attemptId: attempt.id,
+        ordinal: attempt.ordinal,
+        enforcement: request.enforcement,
+        occurredAt: sandboxAttempt.startedAt,
+      }));
+      sandbox = await this.dependencies.sandbox.execute({
+        ...dispatchRequest,
+        executionFlow: flow.callContext,
         interruption: request.interruption,
       });
+      await this.record("attempt_result", request.action.id, attempt.id,
+        () => this.dependencies.records.recordAttemptResult({
+          intentRecordId: intent.recordId, result: sandbox, recordedAt: this.now(),
+        }));
       this.notify(Object.freeze({ kind: "attempt_settled", runId: request.runId,
         actionId: request.action.id, attemptId: attempt.id, result: sandbox,
         occurredAt: sandbox.status === "settled" ? sandbox.enforcementEvidence.settledAt : null }));
@@ -647,40 +821,28 @@ export class ActionExecutionCoordinator {
       dispatchStep.output(sandboxRef);
       if (remainingAttempts < 1 || !canConsiderRetry(sandbox)) break;
       const retryStep = flow.advance("retry", {remainingAttempts}, [sandboxRef]);
-      const decision = await this.dependencies.retry.decide({
-        subject: prepared.subject,
-        attempt,
-        result: sandbox,
-        remainingAttempts,
-      });
+      const retry = await this.decideAndRecordRetry(request, prepared, sandbox, intent.recordId);
+      const decision = retry.decision;
       retryStep.output(flow.material("Action retry decision", "decided", decision, "execution"));
       if (decision.status !== "retry") {
         retryStep.check("replay_basis", "not_applicable", {reason: "retry_not_requested"});
         break;
       }
-      assertReplayBasis(prepared.subject, decision.replayBasis);
       retryStep.check("replay_basis", "passed", {decisionRecordId:decision.decisionRecordId});
-      if (!Number.isSafeInteger(decision.delayMs) || decision.delayMs < 0) {
-        throw new TypeError("Action Retry delay must be a non-negative integer.");
-      }
       await ledger.transition({
         expectedRevision: ledger.getSnapshot().revision,
         kind: "begin_retry_delay",
       });
-      flow.advance("retry_wait", {delayMs:decision.delayMs});
-      const wait = await this.dependencies.retry.wait({
-        delayMs: decision.delayMs,
-        interruption: request.interruption,
-      });
-      if (wait === "interrupted" || request.interruption.signal.aborted) {
+      const interrupted = await this.waitForRetry(request, retry, flow);
+      if (interrupted !== null) {
         return this.settlePrepared<TOutput>(
           ledger,
           request,
           captured.adapter,
           prepared,
-          "cancelled",
+          interrupted === "cancelled" ? "cancelled" : "failed",
           "action-execution",
-          "action_retry_interrupted",
+          interrupted === "cancelled" ? "action_retry_interrupted" : "action_deadline_exceeded",
         );
       }
       await ledger.transition({
@@ -715,13 +877,17 @@ export class ActionExecutionCoordinator {
       }
       activeDispatchPlanFingerprint = `${decision.decisionRecordId}:${this.id("dispatch-plan")}`;
       flow.advance("record", {dispatchPlanFingerprint:activeDispatchPlanFingerprint});
-      await this.dependencies.records.recordPreEffect({
-        subject: prepared.subject,
+      preparationReceipt = await this.record("preparation", request.action.id, null, () => this.dependencies.records.recordPreEffect({
+        runId: request.runId,
+        prepared,
+        binding: request.binding,
+        registration: captured.registration,
         policy,
         permission,
         dispatchPlanFingerprint: activeDispatchPlanFingerprint,
         recordedAt: this.now(),
-      });
+        limits: {maxAttempts: request.maxAttempts, deadlineAt: request.deadlineAt},
+      }));
     }
     const settlement = settlementFromPhysical(
       request,
@@ -736,10 +902,65 @@ export class ActionExecutionCoordinator {
       expectedRevision: ledger.getSnapshot().revision,
       settlement,
     });
-    await this.dependencies.records.recordPostEffect({ settlement, sandbox });
+    await this.record("settlement", request.action.id, null,
+      () => this.dependencies.records.recordPostEffect({ runId: request.runId, binding: request.binding, settlement, sandbox, prepared }));
     this.notifySettlement(request, settlement);
     const semanticResult = await captured.adapter.settle(prepared, settlement);
     return Object.freeze({ status: "settled" as const, settlement, semanticResult }) as ActionExecutionResult<TOutput>;
+  }
+
+  private async decideAndRecordRetry(
+    request: ActionExecutionRequest, prepared: PreparedAction, result: SandboxExecutionResult, intentRecordId: string,
+  ): Promise<ActionRetryRecord> {
+    const attempt = {id: result.attempt.id, action: result.attempt.action, ordinal: result.attempt.ordinal};
+    const remainingAttempts = request.maxAttempts - attempt.ordinal;
+    const decision = structuredClone(await this.dependencies.retry.decide({subject: prepared.subject, attempt, result, remainingAttempts}));
+    const decidedAt = this.now();
+    const notBeforeMs = decision.status === "retry" ? Date.parse(decidedAt) + decision.delayMs : null;
+    if (notBeforeMs !== null && (!Number.isSafeInteger(notBeforeMs) || Math.abs(notBeforeMs) > 8.64e15)) {
+      throw new TypeError("Action retry time is invalid.");
+    }
+    const retry: ActionRetryRecord = {intentRecordId, runId: request.runId, action: request.action, attempt, decision,
+      decidedAt, notBefore: notBeforeMs === null ? null : new Date(notBeforeMs).toISOString(), remainingAttempts,
+      limits: {maxAttempts: request.maxAttempts, deadlineAt: request.deadlineAt}};
+    this.validateRetryRecord(request, retry, intentRecordId, attempt, prepared);
+    await this.record("retry", request.action.id, attempt.id, () => this.dependencies.records.recordRetry(structuredClone(retry)));
+    return retry;
+  }
+
+  private validateRetryRecord(
+    request: ActionExecutionRequest, retry: ActionRetryRecord, intentRecordId: string,
+    attempt: import("@agent-anything/canonical-action/subject").ActionAttemptRef, prepared: PreparedAction,
+  ): void {
+    if (retry.intentRecordId !== intentRecordId || retry.runId !== request.runId || retry.action.id !== request.action.id ||
+        !sameRetainedValue(retry.attempt, {id: attempt.id, action: attempt.action, ordinal: attempt.ordinal}) ||
+        retry.limits.maxAttempts !== request.maxAttempts || retry.limits.deadlineAt !== request.deadlineAt ||
+        !Number.isSafeInteger(retry.remainingAttempts) || retry.remainingAttempts < 1 ||
+        retry.remainingAttempts !== request.maxAttempts - attempt.ordinal || !Number.isFinite(Date.parse(retry.decidedAt))) {
+      throw new ActionRecoveryError(request.action.id, "action_retry_record_invalid");
+    }
+    if (retry.decision.status === "retry") {
+      const decision = retry.decision;
+      assertReplayBasis(prepared.subject, decision.replayBasis);
+      if (!Number.isSafeInteger(decision.delayMs) || decision.delayMs < 0 || !decision.decisionRecordId.trim() ||
+          retry.notBefore === null || Date.parse(retry.notBefore) !== Date.parse(retry.decidedAt) + decision.delayMs) {
+        throw new ActionRecoveryError(request.action.id, "action_retry_record_invalid");
+      }
+    } else if (retry.decision.status !== "stop" || !retry.decision.code.trim() || retry.notBefore !== null) {
+      throw new ActionRecoveryError(request.action.id, "action_retry_record_invalid");
+    }
+  }
+
+  private async waitForRetry(request: ActionExecutionRequest, retry: ActionRetryRecord, flow: ExecutionFlowPath): Promise<"cancelled" | "deadline" | null> {
+    if (request.interruption.signal.aborted) return "cancelled";
+    const now = Date.parse(this.now());
+    const notBefore = Date.parse(retry.notBefore!);
+    if (now >= Date.parse(request.deadlineAt) || notBefore >= Date.parse(request.deadlineAt)) return "deadline";
+    const delayMs = Math.max(0, notBefore - now);
+    flow.advance("retry_wait", {delayMs, notBefore: retry.notBefore});
+    const wait = await this.dependencies.retry.wait({delayMs, interruption: request.interruption});
+    if (wait === "interrupted" || request.interruption.signal.aborted) return "cancelled";
+    return Date.parse(this.now()) >= Date.parse(request.deadlineAt) ? "deadline" : null;
   }
 
   private async settleWithoutSubject<TOutput>(
@@ -759,7 +980,9 @@ export class ActionExecutionCoordinator {
       this.now(),
     );
     await ledger.settle({ expectedRevision: ledger.getSnapshot().revision, settlement });
-    await this.dependencies.records.recordPostEffect({ settlement, sandbox: null });
+    await this.record("settlement", request.action.id, null,
+      () => this.dependencies.records.recordPostEffect({ runId: request.runId, binding: request.binding, settlement, sandbox: null, prepared: null,
+        preparationFailure: {owner, code, message} }));
     this.notifySettlement(request, settlement);
     return Object.freeze({
       status: "settled" as const,
@@ -790,7 +1013,8 @@ export class ActionExecutionCoordinator {
       failureDetail,
     );
     await ledger.settle({ expectedRevision: ledger.getSnapshot().revision, settlement });
-    await this.dependencies.records.recordPostEffect({ settlement, sandbox: null });
+    await this.record("settlement", request.action.id, null,
+      () => this.dependencies.records.recordPostEffect({ runId: request.runId, binding: request.binding, settlement, sandbox: null, prepared }));
     this.notifySettlement(request, settlement);
     return Object.freeze({
       status: "settled" as const,
@@ -799,8 +1023,22 @@ export class ActionExecutionCoordinator {
     }) as ActionExecutionResult<TOutput>;
   }
 
+  private async record(
+    stage: ActionRecordCommitError["stage"], actionId: string, attemptId: string | null,
+    commit: () => Promise<ActionRecordReceipt>,
+  ): Promise<ActionRecordReceipt> {
+    try {
+      const receipt = await commit();
+      if (typeof receipt?.recordId !== "string" || receipt.recordId.trim().length === 0) {
+        throw new TypeError("An Action record acknowledgement requires its committed record identity.");
+      }
+      return receipt;
+    }
+    catch (cause) { throw new ActionRecordCommitError(stage, actionId, attemptId, cause); }
+  }
+
   private id(kind: string): string {
-    return this.dependencies.createId?.(kind) ?? `${kind}:${this.nextId++}`;
+    return this.dependencies.createId?.(kind) ?? `${kind}:${globalThis.crypto.randomUUID()}`;
   }
 
   private notifySettlement(
@@ -1049,4 +1287,14 @@ async function actionFingerprint(subject: CanonicalActionSubjectRevision): Promi
     "@agent-anything/canonical-action/subject"
   );
   return createCanonicalActionSubjectFingerprint(subject);
+}
+
+function sameRetainedValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object" ||
+      Array.isArray(left) !== Array.isArray(right)) return false;
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  return Object.keys(a).length === Object.keys(b).length &&
+    Object.keys(a).every(key => Object.hasOwn(b, key) && sameRetainedValue(a[key], b[key]));
 }

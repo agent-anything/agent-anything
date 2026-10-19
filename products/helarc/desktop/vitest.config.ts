@@ -11,6 +11,14 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      "@agent-anything/agent-runtime/controller": resolve(currentDir, "../../../harness/agent-core/runtime/src/controller/index.ts"),
+      "@agent-anything/agent-runtime/delegation": resolve(currentDir, "../../../harness/agent-core/runtime/src/delegation/index.ts"),
+      "@agent-anything/agent-runtime/instructions": resolve(currentDir, "../../../harness/agent-core/runtime/src/instructions/index.ts"),
+      "@agent-anything/agent-runtime/plan": resolve(currentDir, "../../../harness/agent-core/runtime/src/plan/index.ts"),
+      "@agent-anything/agent-runtime/transcript": resolve(currentDir, "../../../harness/agent-core/runtime/src/transcript/index.ts"),
+      "@agent-anything/agent-runtime/retry": resolve(currentDir, "../../../harness/agent-core/runtime/src/retry/index.ts"),
+      "@agent-anything/agent-runtime/run": resolve(currentDir, "../../../harness/agent-core/runtime/src/run/index.ts"),
+      "@agent-anything/agent-runtime/runner": resolve(currentDir, "../../../harness/agent-core/runtime/src/runner/index.ts"),
       "@agent-anything/helarc/configuration": resolve(currentDir, "../core/src/configuration/index.ts"),
       "@agent-anything/helarc/work-context": resolve(currentDir, "../core/src/work-context/index.ts"),
       "@agent-anything/helarc/run": resolve(currentDir, "../core/src/run/index.ts"),

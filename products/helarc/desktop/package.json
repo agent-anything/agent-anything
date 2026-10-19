@@ -36,6 +36,7 @@
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/agent-hooks": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/context": "workspace:*",
@@ -47,9 +48,12 @@
     "@agent-anything/inspection": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/observability": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*",
+    "@agent-anything/operation-composition": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/provider-integrations": "workspace:*",
     "@agent-anything/workspace": "workspace:*",
+    "better-sqlite3": "13.0.3",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -60,6 +64,7 @@
   "devDependencies": {
     "@agent-anything/test-support": "workspace:*",
     "@playwright/test": "1.63.0",
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

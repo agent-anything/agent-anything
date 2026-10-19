@@ -1,4 +1,5 @@
 import type { ActionAttemptRef } from "@agent-anything/canonical-action/subject";
+import { OperationCommitError } from "@agent-anything/operation-catalog/result";
 import { ExecutionFlowPath } from "@agent-anything/observability/execution-flow";
 import { SANDBOX_EXECUTION_FLOW } from "./SandboxExecutionFlow.js";
 import type {
@@ -143,7 +144,8 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       try {
         flow.advance("dispatch", {executorId:request.executor.id, enforcement:request.policy.enforcement}, [requestRef]);
         result = await provider!.execute(request);
-      } catch {
+      } catch (error) {
+        if (error instanceof OperationCommitError) throw error;
         return unavailable(
           request,
           "dispatch",
@@ -266,7 +268,8 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       flow.advance("dispatch", {executorId:request.executor.id,enforcement:"disabled"},
         [flow.material("Executor invocation", "dispatch", {invocation: request.invocation, attempt: request.attempt, deadlineAt: request.deadlineAt, limits: request.policy.resourceLimits}, "execution")]);
       outcome = await executor.execute(request.invocation, context);
-    } catch {
+    } catch (error) {
+      if (error instanceof OperationCommitError) throw error;
       return unavailable(
         request,
         "dispatch",

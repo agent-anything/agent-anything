@@ -34,7 +34,6 @@ export function createHelarcProvider(config: HelarcProviderConfig, observer?: Pr
     apiKey: config.apiKey,
     model: config.model,
     timeoutMs: config.timeoutMs,
-    maximumOutputTokens: settings.maximumOutputTokens,
     service: settings.service === "deepseek" ? "deepseek" : "generic",
     ...(thinking.mode === "default" ? {} : { thinking: { type: thinking.mode } }),
     ...(thinking.mode === "enabled" && thinking.effort ? { reasoningEffort: thinking.effort } : {}),

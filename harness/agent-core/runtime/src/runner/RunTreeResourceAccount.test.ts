@@ -6,6 +6,39 @@ import {
 } from "./RunTreeResourceAccount.js";
 
 describe("RunTreeResourceAccount", () => {
+  it("restores nested reservations, unknown usage and released capacity without resetting or charging twice", () => {
+    const account = new RunTreeResourceAccount("root", envelope(100));
+    account.reserve("root", "child", amounts(60));
+    account.reserve("child", "grandchild", amounts(30));
+    account.record("grandchild", measured(10));
+    account.record("grandchild", {modelInputTokens: {status: "unknown"}});
+    account.settle("grandchild");
+    const saved = account.checkpoint();
+    const restored = RunTreeResourceAccount.restore(saved);
+    expect(restored.checkpoint()).toEqual(saved);
+    expect(restored.getSnapshot("root")).toEqual(account.getSnapshot("root"));
+    expect(() => restored.settle("grandchild")).toThrow(/already settled/);
+    restored.record("child", measured(10));
+    account.record("child", measured(10));
+    expect(restored.settle("child")).toEqual(account.settle("child"));
+    expect(restored.getSnapshot("root")).toEqual(account.getSnapshot("root"));
+    expect(RunTreeResourceAccount.restore(restored.checkpoint()).settle("root")).toEqual(account.settle("root"));
+  });
+
+  it("rejects inconsistent accounting and resource lineage", () => {
+    const account = new RunTreeResourceAccount("root", envelope(100));
+    account.reserve("root", "child", amounts(30));
+    const saved = account.checkpoint();
+    expect(() => RunTreeResourceAccount.restore({...saved, measuredConsumed: amounts(1)})).toThrow(/totals/);
+    expect(() => RunTreeResourceAccount.restore({...saved, nodes: saved.nodes.map(node => node.runId === "child"
+      ? {...node, parentRunId: "child"} : node)})).toThrow(/lineage/);
+    account.record("child", {actions: {status: "unknown"}});
+    account.settle("child");
+    const settled = account.checkpoint();
+    expect(() => RunTreeResourceAccount.restore({...settled, nodes: settled.nodes.map(node => node.runId === "child"
+      ? {...node, settlement: {...node.settlement!, status: "settled"}} : node)})).toThrow(/status/);
+    expect(() => RunTreeResourceAccount.restore({...saved, envelope: envelope(200)})).toThrow(/envelope/);
+  });
   it("transfers one finite allocation through root, child, and grandchild", () => {
     const account = new RunTreeResourceAccount("root", envelope(100));
     expect(account.record("root", measured(10)).status).toBe("recorded");

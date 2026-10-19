@@ -37,7 +37,17 @@ export type {
   RunTreeApprovalSnapshot,
 } from "./RunTreeApprovalAccount.js";
 export { Runner } from "./Runner.js";
+export { RunRecoveryError, retainedRunResult } from "./RunRecovery.js";
+export type { RunRecoveryBindings } from "./RunRecovery.js";
+export type { RunCommit, RunCommitPort, RunCommitReceipt, RunControlCheckpoint } from "./RunCommitPort.js";
+export { RunCommitError } from "./RunCommitPort.js";
+export type { RunTreeCommit, RunTreeCommitPort, RunTreeCommitReceipt, RunTreeRecoveryRecords, RetainedRunTreeMember } from "./RunTreeCommitPort.js";
+export { validateRunTreeCommit } from "./RunTreeCommitPort.js";
+export { RunTreeCommitWriter } from "./RunTreeCommitWriter.js";
+export type { RunTreeCommitDraft, PreparedRunTreeTransition } from "./RunTreeCommitWriter.js";
+export type { ToolResultPresenter } from "./ToolResultPresenter.js";
 export type { RunInputNotification, RunInputNotificationSource } from "./RunInputNotifications.js";
 export type { RunObserver, RunSnapshotObservation, RunTransitionObservation } from "./RunObserver.js";
 export { RUN_LIFECYCLE_DESCRIPTION } from "./RunObserver.js";
 export type { RunExecutionObserver, RunExecutionObservation } from "./RunExecutionObserver.js";
+export { retainRunConfiguration, restoreRunConfiguration, type RetainedRunConfig } from "./RunConfigurationCheckpoint.js";

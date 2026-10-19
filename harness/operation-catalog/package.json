@@ -4,6 +4,10 @@
   "description": "Immutable Operation identity, catalog, and trusted binding contracts for Agent Harness.",
   "type": "module",
   "exports": {
+    "./evidence": {
+      "types": "./src/evidence/index.ts",
+      "import": "./dist/evidence/index.js"
+    },
     "./identity": {
       "types": "./src/identity/index.ts",
       "import": "./dist/identity/index.js"

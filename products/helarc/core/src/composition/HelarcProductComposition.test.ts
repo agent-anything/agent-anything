@@ -96,6 +96,7 @@ describe("HelarcProductComposition", () => {
     const profile = createHelarcQualificationProfile({ provider, providerProfile, instructionSettings,
       fileActionAdapterIds: contributions.fileActions.actionAdapterIds,
       shellRuntime: contributions.commandActions.shellRuntime,
+      inputContract: contributions.commandActions.inputContract,
       shellActionAdapterId: contributions.commandActions.shellActionAdapterId,
       taskStopActionAdapterId: contributions.commandActions.taskStopActionAdapterId,
       planLimits: { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2000 },
@@ -110,6 +111,7 @@ describe("HelarcProductComposition", () => {
     const changed = createHelarcQualificationProfile({ provider, providerProfile,
       instructionSettings: { ...instructionSettings, protocol: instructionSettings.protocol.map((s, i) => i === 0 ? { ...s, enabled: true, content: "Changed protocol." } : s) },
       fileActionAdapterIds: contributions.fileActions.actionAdapterIds, shellRuntime: contributions.commandActions.shellRuntime,
+      inputContract: contributions.commandActions.inputContract,
       shellActionAdapterId: contributions.commandActions.shellActionAdapterId, taskStopActionAdapterId: contributions.commandActions.taskStopActionAdapterId,
       planLimits: { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2000 },
     });
@@ -311,9 +313,9 @@ describe("HelarcProductComposition", () => {
         dialect: "windows-powershell",
       },
     );
-    expect(baselineGuidance.release.tools).toHaveLength(12);
-    expect(baselineGuidance.release.sources).toHaveLength(12);
-    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(11);
+    expect(baselineGuidance.release.tools).toHaveLength(14);
+    expect(baselineGuidance.release.sources).toHaveLength(14);
+    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(13);
     expect(composition.controllerProtocol.toolGuidance.entries.map(({ name }) => name))
       .toEqual(expect.arrayContaining([
         "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
@@ -581,9 +583,19 @@ function createLocalContributions() {
         dialect: "windows-powershell" as const,
       },
       shellActionAdapterId: "test.shell.adapter",
+      processManagerId: "test.process-manager",
+      inputContract: {
+        ref: {owner: "test", kind: "contribution", id: "command-input", revision: "1"},
+        constraints: {timeout: {minimumMs: 1, maximumMs: 120000, defaultMs: 30000},
+          wait: {minimumPositiveMs: 1000, maximumMs: 30000, defaultForegroundMs: 10000, backgroundMs: 0},
+          command: {maximumUtf8Bytes: 65536}, description: {maximumUtf16CodeUnits: 1000},
+          capacity: {maximumActive: 8, scope: "process_manager" as const}},
+        validate: () => ({status: "valid" as const}), issueHint: () => null,
+      },
       taskStopActionAdapterId: "test.task-stop.adapter",
       taskStopBinding: HELARC_TASK_STOP_BINDING,
       taskState: { getRunSnapshots: () => [] },
+      taskDelivery: { commitInitialDelivery() {} },
       taskAvailability: {
         getRunAvailability() {
           return { revision: 0, activeTaskCount: 0, retainedTaskCount: 0 };

@@ -1,6 +1,9 @@
 /** Only an invocation's own registered Retry bookkeeping preserves its decision basis. */
 export class RunDecisionBasis {
   private readonly active = new Map<string, number>();
+  snapshot(nextRevision: number, bookkeepingInvocationId: string | null): readonly (readonly [string, number])[] {
+    return [...this.active].map(([id, revision]) => [id, id === bookkeepingInvocationId ? revision : nextRevision] as const);
+  }
 
   capture(invocationId: string, revision: number): void {
     if (this.active.has(invocationId)) throw new TypeError("Decision basis is already captured.");

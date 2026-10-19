@@ -17,13 +17,14 @@ describe("Delegation Transfer deterministic Evaluation", () => {
       completionRate: 1,
       toolCallCount: 5,
       modelTurnCount: 5,
-      latencyMs: 266,
+      // Logical clock ticks, not a wall-clock performance threshold.
+      latencyMs: 373,
       humanInteractionEvents: 0,
       terminalOutcome: "completed",
     });
     expect(Object.values(report.invariants).every(Boolean)).toBe(true);
     expect(report).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v8",
+      revision: "delegation-transfer-deterministic-evaluation-v9",
       descendantRunCount: 2,
       settledResultCount: 2,
       prohibitedDisclosureCount: 0,

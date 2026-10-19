@@ -1,5 +1,7 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
+import { snapshotToolResultPresenters } from "./ToolResultPresenter.js";
 import { publishRunObservation } from "./RunObserver.js";
+import { publishRunExecutionObservation } from "./RunExecutionObserver.js";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
@@ -33,6 +35,11 @@ import type {
   ValidatedRunConfig,
 } from "./RunConfig.js";
 import { projectRunTreeTerminal, RunTreeExecution } from "./RunTreeExecution.js";
+import { RunTreeCommitWriter } from "./RunTreeCommitWriter.js";
+import { RunRecoveryError, retainedRunResult, type RunRecoveryBindings } from "./RunRecovery.js";
+import { restoreRunConfiguration } from "./RunConfigurationCheckpoint.js";
+import type { RunCommit } from "./RunCommitPort.js";
+import { canonicalEncode } from "@agent-anything/canonical-action/subject";
 import type {
   CreateRunnerIdentityInput,
   ResolvedRunnerDependencies,
@@ -70,12 +77,16 @@ import {
 export class Runner {
   private readonly dependencies: ResolvedRunnerDependencies;
   private readonly activeRunIds = new Set<string>();
+  private readonly recoveringRunIds = new Set<string>();
 
   constructor(dependencies: RunnerDependencies) {
     if (!dependencies.controller || typeof dependencies.controller.next !== "function") {
       throw new TypeError("Runner requires a Controller.");
     }
     const now = dependencies.now ?? (() => new Date().toISOString());
+    if (dependencies.runCommits && dependencies.runTreeCommits) {
+      throw new TypeError("Run persistence must use one commit owner.");
+    }
     const contextProjection = snapshotRunnerContextProjection(
       dependencies.contextProjection,
     );
@@ -159,6 +170,8 @@ export class Runner {
       configuredObservers,
       options.actionExecutionObserver,
       options.executionFlow,
+      this.dependencies.runCommits ? undefined :
+        new RunTreeCommitWriter(tree.checkpoint(), this.dependencies.runTreeCommits ?? null, this.dependencies.now),
     ).handle;
   }
 
@@ -171,7 +184,128 @@ export class Runner {
     return this.start(agent, input, config, options).wait();
   }
 
-  private admitDescendant(
+  async recover(rootRunId: string, bindings: RunRecoveryBindings, options: RunInvocationOptions = {}): Promise<RunHandle> {
+    if (this.activeRunIds.has(rootRunId) || this.recoveringRunIds.has(rootRunId)) {
+      throw new RunRecoveryError(rootRunId, "run_already_active", rootRunId);
+    }
+    this.recoveringRunIds.add(rootRunId);
+    const recoveryId = `${rootRunId}:recovery:${globalThis.crypto.randomUUID()}`;
+    const observe = (stage: "requested" | "activated" | "unavailable", code: string | null, checkpointId: string | null = null, revision: number | null = null) =>
+      publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "execution_recovery", runId: rootRunId,
+        recoveryId, stage, code, checkpointId, revision, occurredAt: this.dependencies.now()});
+    observe("requested", null);
+    try {
+      const {handle, checkpoint} = await this.recoverOwned(rootRunId, bindings, options);
+      observe("activated", null, checkpoint.id, checkpoint.revision);
+      return handle;
+    }
+    catch (error) {observe("unavailable", error instanceof RunRecoveryError ? error.code : "recovery_binding_or_storage_unavailable"); throw error;}
+    finally { this.recoveringRunIds.delete(rootRunId); }
+  }
+
+  private async recoverOwned(rootRunId: string, bindings: RunRecoveryBindings, options: RunInvocationOptions): Promise<{
+    readonly handle: RunHandle;
+    readonly checkpoint: {readonly id: string; readonly revision: number};
+  }> {
+    if (!this.dependencies.runTreeCommits) throw new RunRecoveryError(rootRunId, "execution_store_unavailable", rootRunId);
+    if (this.activeRunIds.has(rootRunId)) throw new RunRecoveryError(rootRunId, "run_already_active", rootRunId);
+    const writer = await RunTreeCommitWriter.recover(rootRunId, this.dependencies.runTreeCommits, this.dependencies.now);
+    const records = writer?.getSnapshot();
+    if (!writer || !records) throw new RunRecoveryError(rootRunId, "run_not_found", rootRunId);
+    const checkpoint = {id: records.commit.id, revision: records.commit.revision};
+    const member = records.members.find(entry => entry.head.state.run.id === rootRunId);
+    if (!member || member.admission.lineage.kind !== "root") throw new TypeError("Root admission is unavailable.");
+    const retainedResult = retainedRunResult(member.head.state);
+    if (retainedResult) {
+      const handle = new ActiveRunHandle(rootRunId, createRunCancellationController({runId: rootRunId,
+        now: this.dependencies.now}), retainedResult, writer.tree.getSnapshot(), () => {});
+      handle.start(async () => retainedResult);
+      return {handle, checkpoint};
+    }
+    const rootBinding = await bindings.resolve(member);
+    const normalizedRoot = snapshotRunConfig(rootBinding.config);
+    if (!normalizedRoot.valid) throw new TypeError(normalizedRoot.failure.message);
+    const rootConfig = restoreRunConfiguration(member.admission.rootConfig, normalizedRoot.config);
+    const prepared = new Map<string, {handle: RunHandle; execution: RunExecution<unknown> | null;
+      getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null; activate: () => void}>();
+    // Construct every owner and route before permitting any member to advance.
+    for (const retained of records.members) {
+      const {head, admission} = retained;
+      const runId = head.state.run.id;
+      if (this.activeRunIds.has(runId)) throw new RunRecoveryError(runId, "run_already_active", runId);
+      const terminal = retainedRunResult(head.state);
+      if (terminal) {
+        const handle = new ActiveRunHandle(runId, createRunCancellationController({runId,
+          ...(head.control.cancellation ? {retainedRequest: head.control.cancellation} : {}),
+          now: this.dependencies.now, createRequestId: () => `${runId}:settled-cancellation`}),
+          terminal, writer.tree.getSnapshot(), () => {});
+        prepared.set(runId, {handle, execution: null, getTerminalFlowOccurrence: () => null,
+          activate: () => handle.start(async () => terminal)});
+        continue;
+      }
+      const trusted = runId === rootRunId ? rootBinding : await bindings.resolve(retained);
+      const agent = snapshotAgent(trusted.agent);
+      const {output: _output, ...definition} = agent;
+      const expected = canonicalEncode("run-agent-definition.v1", head.control.agentDefinition);
+      const actual = canonicalEncode("run-agent-definition.v1", definition);
+      if (expected.length !== actual.length || expected.some((value, index) => actual[index] !== value)) {
+        throw new RunRecoveryError(runId, "agent_definition_unavailable", agent.id);
+      }
+      const normalized = snapshotRunConfig(trusted.config);
+      if (!normalized.valid) throw new TypeError(normalized.failure.message);
+      const config = restoreRunConfiguration(admission.config, normalized.config);
+      restoreRunConfiguration(admission.rootConfig, rootConfig);
+      validateActionComposition(this.dependencies, config);
+      prepared.set(runId, this.startPreparedRun(runId, agent, admission.input, config,
+        admission.rootTask, rootConfig, admission.delegationRequest, admission.delegationContextMaterials,
+        admission.modelInteractionSeed, admission.lineage, writer.tree, head.control.contextPayloadBytes,
+        head.state.startedAt, head.state.deadlineAt,
+        runtimeEventPublishers(this.dependencies.runtimeEventPublisher, options.runtimeEventPublisher),
+        runTraceObservers(this.dependencies.runTraceObserver, options.runTraceObserver),
+        options.actionExecutionObserver, options.executionFlow, writer, true, head));
+    }
+    for (const retained of records.members) {
+      const {lineage, delegationRequest, modelInteractionSeed} = retained.admission;
+      if (lineage.kind !== "descendant") continue;
+      const parent = prepared.get(lineage.parent.id)!;
+      if (!parent.execution) continue;
+      const child = prepared.get(retained.head.state.run.id)!;
+      const node = records.commit.checkpoint.nodes.find(value => value.runId === child.handle.runId)!;
+      if (node.resultTransfer === "not_required") continue;
+      const parentHead = records.members.find(value => value.head.state.run.id === lineage.parent.id)!.head;
+      const action = parentHead.state.items.flatMap(item => item.payload.kind === "run_action" &&
+        item.payload.action.ref.id === lineage.parentRunAction.id ? [item.payload.action] : [])[0];
+      if (!action || !delegationRequest || !node.dispatch || !node.relationKind) {
+        throw new RunRecoveryError(lineage.parent.id, "descendant_route_incomplete", child.handle.runId);
+      }
+      const resourceSettlement = child.handle.wait().then(() => {
+        const value = writer.tree.getResourceSettlement(child.handle.runId);
+        if (!value) throw new RunRecoveryError(child.handle.runId, "descendant_resources_unsettled", child.handle.runId);
+        return value;
+      });
+      void resourceSettlement.catch(() => {});
+      parent.execution.restoreDescendant({relation: {ref: lineage.relation, kind: node.relationKind,
+        root: lineage.root, parent: lineage.parent, child: {id: child.handle.runId}, parentRunAction: lineage.parentRunAction,
+        depth: lineage.depth}, request: delegationRequest, dispatch: node.dispatch, action, handle: child.handle,
+        getTerminalFlowOccurrence: child.getTerminalFlowOccurrence, resourceSettlement, modelInteractionSeed});
+    }
+    const cancellations: Promise<unknown>[] = [];
+    for (const retained of [...records.members].sort((a, b) => a.admission.lineage.depth - b.admission.lineage.depth)) {
+      if (options.recoveryCancellation && prepared.get(retained.head.state.run.id)!.execution) {
+        // cancel() requests synchronously; its receipt waits for startup's durable
+        // cancellation transition. Awaiting it before activation would deadlock.
+        cancellations.push(prepared.get(retained.head.state.run.id)!.handle.cancel(retained.admission.lineage.kind === "root"
+          ? options.recoveryCancellation : {origin: "parent_run", reasonCode: "parent_run_cancelled", parentRunId: retained.admission.lineage.parent.id}));
+      }
+    }
+    for (const retained of [...records.members].sort((a, b) => a.admission.lineage.depth - b.admission.lineage.depth)) {
+      prepared.get(retained.head.state.run.id)!.activate();
+    }
+    await Promise.all(cancellations);
+    return {handle: prepared.get(rootRunId)!.handle, checkpoint};
+  }
+
+  private async admitDescendant(
     input: RuntimeDescendantRunAdmissionInput,
     parentRunId: string,
     parentLineage: RunLineage,
@@ -184,7 +318,8 @@ export class Runner {
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
-  ): RuntimeDescendantRunAdmissionResult {
+    treeCommits?: RunTreeCommitWriter,
+  ): Promise<RuntimeDescendantRunAdmissionResult> {
     let request: DelegationRequest;
     let agent: Agent;
     let config: ValidatedRunConfig;
@@ -265,6 +400,60 @@ export class Runner {
     }
 
     const startedAt = this.dependencies.now();
+    if (treeCommits) {
+      return treeCommits.transaction<RuntimeDescendantRunAdmissionResult>(({tree: draft}) => {
+        const reservation = draft.reserveDescendant({
+          relationId: input.relationId, relationKind: input.relationKind,
+          createChildRunId: () => this.dependencies.createRunId(), parentRunId, parentLineage,
+          parentRunAction: input.parentRunAction, parentDeadlineAt,
+          childLocalDeadlineAt: localDeadline(startedAt, config.limits.maxDurationMs),
+          resourceAllocation: delegationResourceAllocation(request.limits),
+          authorityRevision: request.authorityDerivation.revision, dispatch: input.dispatch,
+        });
+        if (reservation.status === "rejected") return {runs: [], value: reservation};
+        const childRunId = reservation.relation.child.id;
+        const prepared = this.startPreparedRun(childRunId, agent,
+          snapshotRunInput(createDelegatedRunInput({request, childRunId, startedAt})),
+          config, rootTask, rootConfig, request, contextMaterials, input.modelInteractionSeed,
+          reservation.lineage, tree, contextBytes, startedAt, reservation.deadlineAt,
+          runtimeEventPublishers, runTraceObservers, actionExecutionObserver, input.executionFlow,
+          treeCommits, true);
+        const admission = prepared.execution.prepareAdmission(draft);
+        let consumed = false;
+        const activate = () => {
+          if (consumed) throw new TypeError("A descendant admission can be consumed only once.");
+          consumed = true;
+          prepared.execution.acceptAdmission();
+          prepared.activate();
+        };
+        const launch = (): RuntimeDescendantRunLaunchResult => {
+          activate();
+          const resourceSettlement = prepared.handle.wait().then(() => {
+            const value = treeCommits.tree.getResourceSettlement(childRunId);
+            if (!value) throw new TypeError("Descendant resources are not settled.");
+            return value;
+          });
+          void resourceSettlement.catch(() => {});
+          return {status: "started", relation: reservation.relation, handle: prepared.handle,
+            getTerminalFlowOccurrence: prepared.getTerminalFlowOccurrence, resourceSettlement,
+            reservedTreeRevision: reservation.treeRevision, treeRevision: treeCommits.tree.getSnapshot().revision};
+        };
+        const cancelBeforeLaunch = async (): Promise<RuntimeDescendantRunLaunchResult> => {
+          const cancelled = prepared.handle.cancel({origin: "parent_run", reasonCode: "parent_run_cancelled", parentRunId});
+          activate();
+          await cancelled;
+          await prepared.handle.wait();
+          await treeCommits.transaction(({tree}) => {
+            tree.settleDescendantTransfer(childRunId, "not_required");
+            return {runs: [], value: undefined};
+          });
+          return {status: "rejected", code: "descendant_run_start_cancelled", relation: reservation.relation,
+            reservedTreeRevision: reservation.treeRevision, treeRevision: treeCommits.tree.getSnapshot().revision};
+        };
+        return {runs: [admission], value: {status: "admitted" as const, relation: reservation.relation,
+          reservedTreeRevision: reservation.treeRevision, treeRevision: draft.getSnapshot().revision, launch, cancelBeforeLaunch}};
+      });
+    }
     let reservation: ReturnType<RunTreeExecution["reserveDescendant"]>;
     try {
       reservation = tree.reserveDescendant({
@@ -361,6 +550,8 @@ export class Runner {
           }
           return settlement;
         });
+        // The Parent may still be awaiting the initial Child boundary.
+        void resourceSettlement.catch(() => {});
         return Object.freeze({
           status: "started" as const,
           relation: reservation.relation,
@@ -405,15 +596,21 @@ export class Runner {
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
     executionFlow?: RunInvocationOptions["executionFlow"],
+    treeCommits?: RunTreeCommitWriter,
+    deferStart = false,
+    restored?: RunCommit,
   ): {
     readonly handle: RunHandle<TOutput>;
     readonly getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null;
+    readonly execution: RunExecution<TOutput>;
+    readonly activate: () => void;
   } {
     if (this.activeRunIds.has(runId)) {
       throw new TypeError(`Runner-created runId '${runId}' is already active.`);
     }
     const cancellation = createRunCancellationController({
       runId,
+      ...(restored?.control.cancellation ? {retainedRequest: restored.control.cancellation} : {}),
       now: this.dependencies.now,
       createRequestId: (acceptedRunId) => this.dependencies.createId({
         kind: "run_cancellation_request",
@@ -434,15 +631,16 @@ export class Runner {
       tree.getSnapshot(),
       (result) => {
         try {
-          tree.settleRun(
+          if (!treeCommits) tree.settleRun(
             runId,
             result.status,
             projectRunTreeTerminal(result.cause),
             result.completedAt,
           );
-          handle.publishRunTree(tree.getSnapshot());
+          handle.publishRunTree((treeCommits?.tree ?? tree).getSnapshot());
         } finally {
           this.activeRunIds.delete(runId);
+          treeCommits?.unregisterCancellation(runId);
           unsubscribeTree();
         }
       },
@@ -479,19 +677,23 @@ export class Runner {
         config,
         rootTask,
         rootConfig,
-        tree,
+        treeCommits?.tree ?? tree,
         runtimeEventPublishers,
         runTraceObservers,
         actionExecutionObserver,
+        treeCommits,
       ),
       initialContextBytes,
       tree,
       (update) => {
-        tree.updateLifecycle(runId, update.status);
-        handle.publish(update, tree.getSnapshot());
+        if (!treeCommits) tree.updateLifecycle(runId, update.status);
+        handle.publish(update, (treeCommits?.tree ?? tree).getSnapshot());
       },
       executionFlow,
+      treeCommits,
+      restored,
     );
+    handle.bindCancellationAcceptance(() => execution.confirmCancellation());
     handle.bindInteractionSubmission((submission) =>
       execution.submitInteraction(submission)
     );
@@ -504,16 +706,33 @@ export class Runner {
     handle.bindDescendantResume((route) =>
       execution.submitDescendantResume(route)
     );
-    this.activeRunIds.add(runId);
-    tree.registerCancellation(runId, cancellation);
-    tree.markStarted(runId, startedAt);
-    if (lineage.kind === "root") {
-      unsubscribeTree = tree.subscribe((snapshot) => handle.publishRunTree(snapshot));
-    }
-    handle.start(() => execution.run());
+    const activate = () => {
+      this.activeRunIds.add(runId);
+      if (treeCommits) treeCommits.registerCancellation(runId, cancellation);
+      else {
+        tree.registerCancellation(runId, cancellation);
+        tree.markStarted(runId, startedAt);
+      }
+      if (lineage.kind === "root") {
+        unsubscribeTree = treeCommits
+          ? treeCommits.subscribe(() => handle.publishRunTree(treeCommits.tree.getSnapshot()))
+          : tree.subscribe((snapshot) => handle.publishRunTree(snapshot));
+      }
+      handle.start(async () => {
+        try { return await execution.run(); }
+        catch (error) {
+          this.activeRunIds.delete(runId);
+          treeCommits?.unregisterCancellation(runId);
+          unsubscribeTree();
+          throw error;
+        }
+      });
+    };
+    if (!deferStart) activate();
     return {
       handle,
       getTerminalFlowOccurrence: () => execution.getTerminalFlowOccurrence(),
+      execution, activate,
     };
   }
 }
@@ -601,6 +820,10 @@ function snapshotRunnerOperationComposition(
   if (input === null || typeof input !== "object" || !Array.isArray(input.availability)) {
     throw new TypeError("Runner requires explicit Operation Tool availability participants.");
   }
+  if (!input.resultContracts || input.resultContracts.catalogId !== input.catalog.id ||
+      input.resultContracts.catalogRevision !== input.catalog.revision || typeof input.resultContracts.validate !== "function") {
+    throw new TypeError("Runner requires result contracts bound to its Operation catalog.");
+  }
   const availability = input.availability.map((participant) => {
     if (
       participant === null ||
@@ -620,6 +843,7 @@ function snapshotRunnerOperationComposition(
     : snapshotRunnerDelegationComposition(input.delegation);
   return Object.freeze({
     ...input,
+    resultPresenters: snapshotToolResultPresenters(input.resultPresenters ?? []),
     internalHandlers: Object.freeze([...input.internalHandlers]),
     availability: Object.freeze(availability),
     ...(delegation === undefined ? {} : { delegation }),

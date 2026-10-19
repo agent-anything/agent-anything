@@ -4,24 +4,99 @@ import {
   type InteractionProtocolRef,
   type InteractionRequestRef,
 } from "@agent-anything/interaction/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 import {
   RunInteractionCoordinator,
   type OpenRuntimeInteractionInput,
+  type RunInteractionCheckpoint,
+  type RunInteractionCoordinatorDependencies,
 } from "./RunInteractionCoordinator.js";
+import { RunCommitError } from "./RunCommitPort.js";
 
 const NOW = "2026-08-14T00:00:00.000Z";
 
 describe("RunInteractionCoordinator adverse conformance", () => {
+  it.each(["submission", "application", "outcome"] as const)("restores the exact %s position without replaying an unknown application", async crash => {
+    let saved!: RunInteractionCheckpoint;
+    let coordinator!: RunInteractionCoordinator;
+    const apply = vi.fn((input: {resolution: unknown}) => input.resolution);
+    const fixture = createFixture({onChanged: async () => {
+      saved = coordinator.checkpoint();
+      const record = saved.records[0]!;
+      if ((crash === "submission" && record.submission !== null) ||
+          (crash === "application" && record.applicationStarted) ||
+          (crash === "outcome" && record.outcome !== null)) throw new Error("worker acknowledgement lost");
+    }}, apply);
+    coordinator = fixture.coordinator;
+    const opened = await coordinator.open(openInput());
+    if (opened.status !== "opened") throw new Error("Expected opened request");
+    const input = submission({request: opened.pending.request, submissionId: "saved-answer"});
+    if (crash === "submission") await expect(coordinator.submit(input)).rejects.toBeInstanceOf(RunCommitError);
+    else expect((await coordinator.submit(input)).status).toBe("accepted_for_resolution");
+    await expect(opened.completion).rejects.toBeInstanceOf(RunCommitError);
+    const callsBefore = apply.mock.calls.length;
+    const resumed = RunInteractionCoordinator.restore({...fixture.dependencies, onChanged: async () => {}}, saved);
+    if (crash === "application") {
+      expect(resumed.getRecoveryIssues()).toEqual([{request: input.request, code: "interaction_application_unconfirmed"}]);
+      await expect(resumed.activateRestored()).rejects.toThrow("reconciled");
+      expect(apply).toHaveBeenCalledTimes(0);
+      await resumed.cancelAll("cancel-interrupted");
+    } else {
+      expect(resumed.getRecoveryIssues()).toEqual([]);
+      await resumed.activateRestored();
+      expect(await resumed.completion(input.request)).toMatchObject({status: "resolved", applicationValue: input.payload});
+      expect(apply).toHaveBeenCalledTimes(crash === "submission" ? 1 : callsBefore);
+      expect((await resumed.submit(input)).status).toBe("duplicate_identical");
+      expect(resumed.checkpoint().records[0]!.request).toEqual(saved.records[0]!.request);
+      expect(resumed.checkpoint().nextApplication).toBe(2);
+    }
+  });
+
+  it("waits for submission persistence before acknowledging or applying the answer", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => {entered = resolve;});
+    const held = new Promise<void>(resolve => {release = resolve;});
+    const apply = vi.fn((input: {resolution: unknown}) => input.resolution);
+    const fixture = createFixture({onChanged: async () => {entered(); await held;}}, apply);
+    const opened = await fixture.coordinator.open(openInput());
+    if (opened.status !== "opened") throw new Error("Expected opened request");
+    let acknowledged = false;
+    const accepted = fixture.coordinator.submit(submission({request: opened.pending.request, submissionId: "answer"}))
+      .then(value => {acknowledged = true; return value;});
+    await waiting;
+    expect(acknowledged).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
+    release();
+    expect((await accepted).status).toBe("accepted_for_resolution");
+    expect((await opened.completion).status).toBe("resolved");
+  });
+
+  it("restores an unanswered request with its original identity and expiry", async () => {
+    const fixture = createFixture();
+    const opened = await fixture.coordinator.open(openInput());
+    if (opened.status !== "opened") throw new Error("Expected opened request");
+    const saved = fixture.coordinator.checkpoint();
+    const restored = RunInteractionCoordinator.restore(fixture.dependencies, saved);
+    expect(restored.checkpoint()).toEqual(saved);
+    expect(restored.getPendingProjections()).toEqual(fixture.coordinator.getPendingProjections());
+    await restored.activateRestored();
+    await expect(restored.activateRestored()).rejects.toThrow("already activated");
+    await restored.cancelAll("cancel");
+    expect(await restored.completion(opened.pending.request)).toMatchObject({status: "cancelled"});
+    await fixture.coordinator.close();
+  });
+
   it("distinguishes no submission from an accepted submission cancelled before resolution", async () => {
     for (const received of [false, true]) {
       const facts: ExecutionFlowObservation[] = [];
       const fixture = createFixture();
-      const opened = fixture.coordinator.open(openInput({executionFlow: {observer: {observe: fact => {facts.push(fact);}}}}));
+      const opened = (await fixture.coordinator.open(openInput({executionFlow: {observer: {observe: fact => {facts.push(fact);}}}})));
       if (opened.status !== "opened") throw new Error("Expected opened interaction");
-      if (received) fixture.coordinator.submit(submission({request: opened.pending.request, submissionId: "accepted"}));
-      fixture.coordinator.cancelAll("cancel");
+      const submitted = received ? fixture.coordinator.submit(submission({request: opened.pending.request, submissionId: "accepted"})) : null;
+      await fixture.coordinator.cancelAll("cancel");
+      await submitted;
       expect((await opened.completion).status).toBe("cancelled");
       const receipts = facts.filter(fact => fact.kind === "constraint" && fact.checkId === "submission_receipt");
       expect(receipts).toHaveLength(1);
@@ -41,7 +116,7 @@ describe("RunInteractionCoordinator adverse conformance", () => {
       protocolAvailable: true,
       hasCapacity: true,
     });
-    const opened = fixture.coordinator.open(openInput());
+    const opened = (await fixture.coordinator.open(openInput()));
     expect(opened.status).toBe("opened");
     if (opened.status !== "opened") return;
     expect(fixture.coordinator.getAvailabilitySnapshot(
@@ -53,11 +128,11 @@ describe("RunInteractionCoordinator adverse conformance", () => {
       hasCapacity: false,
     });
 
-    expect(fixture.coordinator.submit(submission({
+    expect(await fixture.coordinator.submit(submission({
       request: { ...opened.pending.request, requestVersion: 2 },
       submissionId: "stale-version",
     }))).toMatchObject({ status: "rejected", code: "interaction_version_stale" });
-    expect(fixture.coordinator.submit(submission({
+    expect(await fixture.coordinator.submit(submission({
       request: {
         ...opened.pending.request,
         subject: { ...opened.pending.request.subject, id: "wrong-subject" },
@@ -65,15 +140,15 @@ describe("RunInteractionCoordinator adverse conformance", () => {
       submissionId: "wrong-subject",
     }))).toMatchObject({ status: "rejected", code: "interaction_not_pending" });
 
-    const first = fixture.coordinator.submit(submission({
+    const first = await fixture.coordinator.submit(submission({
       request: opened.pending.request,
       submissionId: "submission-1",
     }));
-    const duplicate = fixture.coordinator.submit(submission({
+    const duplicate = await fixture.coordinator.submit(submission({
       request: opened.pending.request,
       submissionId: "submission-1",
     }));
-    const conflict = fixture.coordinator.submit(submission({
+    const conflict = await fixture.coordinator.submit(submission({
       request: opened.pending.request,
       submissionId: "submission-1",
       contentDigest: "sha256:different",
@@ -93,7 +168,7 @@ describe("RunInteractionCoordinator adverse conformance", () => {
       activeCount: 0,
       hasCapacity: true,
     });
-    expect(fixture.coordinator.submit(submission({
+    expect(await fixture.coordinator.submit(submission({
       request: opened.pending.request,
       submissionId: "late-submission",
     }))).toMatchObject({ status: "rejected", code: "interaction_not_pending" });
@@ -101,14 +176,14 @@ describe("RunInteractionCoordinator adverse conformance", () => {
 
   it("accepts transport before rejecting an ineligible responder semantically", async () => {
     const fixture = createFixture();
-    const opened = fixture.coordinator.open(openInput());
+    const opened = (await fixture.coordinator.open(openInput()));
     if (opened.status !== "opened") throw new Error("Expected an opened Interaction.");
 
-    expect(fixture.coordinator.submit(submission({
+    expect((await fixture.coordinator.submit(submission({
       request: opened.pending.request,
       submissionId: "wrong-responder",
       payload: { actorId: "ineligible", answer: "yes" },
-    })).status).toBe("accepted_for_resolution");
+    }))).status).toBe("accepted_for_resolution");
     expect(await opened.completion).toMatchObject({
       status: "failed",
       owner: "test-owner",
@@ -118,9 +193,9 @@ describe("RunInteractionCoordinator adverse conformance", () => {
 
   it("settles expiry, cancellation, invalidation, unavailability, and post-Run closure exactly", async () => {
     const expiring = createFixture();
-    const expired = expiring.coordinator.open(openInput({
+    const expired = (await expiring.coordinator.open(openInput({
       expiresAt: "2026-08-14T00:00:00.001Z",
-    }));
+    })));
     if (expired.status !== "opened") throw new Error("Expected expiring Interaction.");
     expect(await expired.completion).toMatchObject({
       status: "expired",
@@ -128,18 +203,18 @@ describe("RunInteractionCoordinator adverse conformance", () => {
     });
 
     const cancelling = createFixture();
-    const cancelled = cancelling.coordinator.open(openInput());
+    const cancelled = (await cancelling.coordinator.open(openInput()));
     if (cancelled.status !== "opened") throw new Error("Expected cancellable Interaction.");
-    cancelling.coordinator.cancelAll("cancel-request-1");
+    await cancelling.coordinator.cancelAll("cancel-request-1");
     expect(await cancelled.completion).toMatchObject({
       status: "cancelled",
       code: "interaction_cancelled",
     });
 
     const invalidating = createFixture();
-    const invalidated = invalidating.coordinator.open(openInput());
+    const invalidated = (await invalidating.coordinator.open(openInput()));
     if (invalidated.status !== "opened") throw new Error("Expected invalidatable Interaction.");
-    expect(invalidating.coordinator.invalidate(
+    expect(await invalidating.coordinator.invalidate(
       invalidated.pending.request,
       "subject_revision_stale",
     )).toBe(true);
@@ -149,21 +224,21 @@ describe("RunInteractionCoordinator adverse conformance", () => {
     });
 
     const unavailable = createFixture();
-    expect(unavailable.coordinator.open(openInput({
+    expect((await unavailable.coordinator.open(openInput({
       protocol: { owner: "missing", kind: "question", revision: "1" },
-    }))).toMatchObject({
+    })))).toMatchObject({
       status: "unavailable",
       code: "interaction_protocol_unavailable",
     });
-    unavailable.coordinator.close();
-    expect(unavailable.coordinator.open(openInput())).toMatchObject({
+    await unavailable.coordinator.close();
+    expect((await unavailable.coordinator.open(openInput()))).toMatchObject({
       status: "unavailable",
       code: "interaction_run_settled",
     });
   });
 });
 
-function createFixture() {
+function createFixture(overrides: Partial<RunInteractionCoordinatorDependencies> = {}, apply?: (input: {resolution: unknown}) => unknown) {
   const ref: InteractionProtocolRef<"question"> = {
     owner: "test-owner",
     kind: "question",
@@ -202,22 +277,23 @@ function createFixture() {
       return submission;
     },
     apply({ resolution }: any) {
-      return resolution;
+      return apply ? apply({resolution}) : resolution;
     },
   };
-  let sequence = 0;
-  const coordinator = new RunInteractionCoordinator({
+  const dependencies: RunInteractionCoordinatorDependencies = {
     runId: "run-1",
     registry: createInteractionProtocolRegistrySnapshot("runner-interactions", [{
       ref,
       protocol,
     }]),
     now: () => NOW,
-    createId: (kind) => `${kind}-${++sequence}`,
+    createId: (kind, index) => `${kind}-${index}`,
     onOpened: () => undefined,
     onSettled: () => undefined,
-  });
-  return { coordinator };
+    ...overrides,
+  };
+  const coordinator = new RunInteractionCoordinator(dependencies);
+  return { coordinator, dependencies };
 }
 
 function openInput(

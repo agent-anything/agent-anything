@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { atomicInspectionJson, registerInspectionSource, datasetDirectory, containedInspectionPath, type InspectionDatasetManifest } from "../sources/index.js";
 import { validateInspectionCapturePolicy } from "../content/index.js";
-import { InspectionDatabase } from "../storage/index.js";
+import { InspectionDatabase, type InspectionTelemetryWrite } from "../storage/index.js";
 import { InspectionStorageMaintenance } from "../storage/InspectionStorageMaintenance.js";
 import { InspectionStorageUsage } from "../storage/InspectionStorageUsage.js";
 import { INSPECTION_STORAGE_POLICY } from "../storage/InspectionStoragePolicy.js";
@@ -11,7 +11,7 @@ import { closeFailedInspectionRecording } from "./InspectionRecordingFinalizatio
 import { InspectionTelemetry } from "../telemetry/index.js";
 import type { RecorderCommand, RecorderReply } from "./InspectionRecorderProtocol.js";
 import { inspectionRecorderFailureCode } from "./InspectionRecorderError.js";
-import { INSPECTION_FORMAT_VERSION } from "../records/index.js";
+import { INSPECTION_FORMAT_VERSION, type InspectionCoverage } from "../records/index.js";
 
 const port = parentPort!;
 const send = (reply: RecorderReply) => port.postMessage(reply);
@@ -21,14 +21,13 @@ let manifest: InspectionDatasetManifest;
 let directory: string;
 let usage: InspectionStorageUsage;
 let maintenance: InspectionStorageMaintenance | undefined;
-let writerRejected = 0;
-let pendingTelemetryBytes = 0;
 let failed = false;
 let closing = false;
 let heartbeat: ReturnType<typeof setInterval> | undefined;
 let reconciliation: ReturnType<typeof setTimeout> | undefined;
 let processing = Promise.resolve();
-const updateHealth = (dropped: number, rejected: number) => db.updateCoverage({ dropped, rejected: rejected + writerRejected, telemetryDropped: telemetry.dropped });
+let projectionScheduled = false;
+const barriers = new Map<number, {target: number; close: boolean; accepted: number; healthRevision: number}>();
 function stopMaintenance(): void {
   clearInterval(heartbeat); clearTimeout(reconciliation); maintenance?.close();
 }
@@ -42,7 +41,7 @@ function fail(error: unknown): void {
   send({ kind: "failed", code });
   port.close();
 }
-function refreshBudget(): void { usage.refreshDatabase(directory); pendingTelemetryBytes = 0; }
+function refreshBudget(): void { usage.refreshDatabase(directory); }
 async function reconcileStorage(): Promise<void> {
   usage.beginReconciliation();
   const measurement = await maintenance!.measure({ datasetId: manifest.datasetId,
@@ -67,14 +66,6 @@ function scheduleReconciliation(): void {
   }, 60_000);
   reconciliation.unref();
 }
-function writeTelemetry(record: Parameters<InspectionDatabase["writeTelemetry"]>[0]): void {
-  if (failed) return;
-  const reservation = Buffer.byteLength(record.data) * 2 + 8192;
-  usage.check(pendingTelemetryBytes + reservation);
-  db.writeTelemetry(record);
-  pendingTelemetryBytes += reservation;
-}
-
 try {
   let completed = 0;
   const progress = () => send({ kind: "initializing", completed: ++completed });
@@ -95,7 +86,7 @@ try {
   atomicInspectionJson(policyPath, validateInspectionCapturePolicy(workerData.policy));
   manifest = { formatVersion: INSPECTION_FORMAT_VERSION, sourceId: source.sourceId, datasetId: randomUUID(), producerInstanceId: randomUUID(), createdAt: new Date().toISOString(), status: "open" };
   directory = datasetDirectory(workerData.root, source.sourceId, manifest.datasetId);
-  db = new InspectionDatabase(directory, manifest, (path, bytes) => usage.physicalFileChanged(path, bytes));
+  db = new InspectionDatabase(directory, manifest);
   atomicInspectionJson(join(directory, "manifest.json"), manifest);
   refreshBudget(); usage.check(); progress();
   telemetry = new InspectionTelemetry(source.sourceId, manifest.datasetId);
@@ -114,65 +105,91 @@ try {
   port.close();
 }
 
+function scheduleProjection(): void {
+  if (projectionScheduled || failed || closing) return;
+  projectionScheduled = true;
+  setImmediate(() => {
+    processing = processing.then(async () => {
+      projectionScheduled = false;
+      if (failed || closing) return;
+      await projectSlice();
+      await finishBarriers();
+      if (!failed && !closing) {
+        const progress = db.snapshot().recording!;
+        if (progress.projection.status === "active" && progress.projection.cursor < progress.native.target) scheduleProjection();
+      }
+    }).catch(fail);
+  });
+}
+
+async function projectSlice(): Promise<void> {
+  const progress = db.snapshot().recording!;
+  if (progress.projection.status !== "active" || progress.projection.cursor >= progress.native.target) return;
+  const started = performance.now();
+  const records = db.records({watermark: progress.native.target, after: progress.projection.cursor, limit: 100});
+  const cursor = records.length === 100 ? records.at(-1)!.commitSequence : progress.native.target;
+  const exported: InspectionTelemetryWrite[] = [];
+  try {
+    for (const record of records) telemetry.accept(record);
+    await telemetry.flush(record => exported.push(record));
+    usage.check(exported.reduce((sum, record) => sum + Buffer.byteLength(record.data) * 2 + 8192, 0));
+    db.writeProjection(exported, {...progress.projection, cursor, issues: telemetry.issues,
+      sliceMaxMs: Math.max(progress.projection.sliceMaxMs, performance.now() - started)}, telemetry.dropped);
+    refreshBudget();
+  } catch {
+    // SDK pairing/export state has advanced: do not replay this slice into it.
+    db.writeProjection([], {...progress.projection, status: "failed", code: "inspection_projection_failed",
+      issues: telemetry.issues}, telemetry.dropped);
+  }
+}
+
+async function finishBarriers(): Promise<void> {
+  for (const [id, barrier] of barriers) {
+    let coverage: InspectionCoverage = db.snapshot();
+    const projection = coverage.recording!.projection;
+    if (projection.status === "active" && projection.cursor < barrier.target) continue;
+    barriers.delete(id);
+    db.updateCoverage({recording: {...coverage.recording!, lastFlush: {id, accepted: barrier.accepted,
+      healthRevision: barrier.healthRevision, nativeTarget: barrier.target, projectionCursor: projection.cursor,
+      projection: projection.status === "failed" ? "failed" : "settled"}}});
+    coverage = db.snapshot();
+    if (barrier.close) {
+      const exported: InspectionTelemetryWrite[] = [];
+      if (projection.status === "active") {
+        await telemetry.close(record => exported.push(record));
+        db.writeProjection(exported, {...projection, status: "closed", issues: telemetry.issues}, telemetry.dropped);
+      }
+      closing = true; stopMaintenance();
+      db.updateCoverage({status: "closed"});
+      db.checkpoint(); coverage = db.snapshot(); db.close();
+      atomicInspectionJson(join(directory, "manifest.json"), {...manifest, status: "closed"});
+      send({kind: "flushed", id, coverage}); port.close(); return;
+    }
+    send({kind: "flushed", id, coverage});
+  }
+}
+
 if (!failed) port.on("message", (message: RecorderCommand) => {
   processing = processing.then(async () => {
     if (failed || closing) return;
-    try {
-      if (message.kind === "batch") {
-        const reservation = message.offers.reduce((sum, offer) => sum + offer.bytes * 3 + 8192 +
-          offer.contents.reduce((bytes, content) => bytes + content.descriptor.retainedBytes, 0), 0);
-        await ensureBudget(reservation);
-        let pendingSqlBytes = 0;
-        const committedRecords: Parameters<InspectionTelemetry["accept"]>[0][] = [];
-        db.writeBatch(() => {
-          for (const offer of message.offers) {
-            const contentBytes = offer.contents.reduce((sum, content) => sum + content.descriptor.retainedBytes, 0);
-            usage.check(contentBytes + pendingSqlBytes + offer.bytes * 3 + 8192);
-            try {
-              const committed = db.write(offer.record, offer.contents);
-              if (!committed.duplicate) {
-                pendingSqlBytes += offer.bytes * 3 + 8192;
-                committedRecords.push(committed.record);
-              }
-            } catch (error) {
-              if (error instanceof Error && (error.message === "inspection_record_conflict" || error.message.startsWith("inspection_flow_"))) {
-                writerRejected++;
-                const coverage = db.snapshot();
-                db.updateCoverage({ limitations: [...new Set([...coverage.limitations, error.message === "inspection_record_conflict" ? "conflicting_record_identity" : error.message])] });
-              } else throw error;
-            }
-          }
-          updateHealth(message.dropped, message.rejected);
-        });
-        refreshBudget();
-        for (const record of committedRecords) telemetry.accept(record);
-        const exported: Parameters<typeof writeTelemetry>[0][] = [];
-        await telemetry.flush(record => exported.push(record));
-        if (failed) return;
-        await ensureBudget(exported.reduce((sum, record) => sum + Buffer.byteLength(record.data) * 2 + 8192, 0));
-        db.writeBatch(() => { for (const record of exported) writeTelemetry(record); });
-        refreshBudget(); usage.check();
-        send({ kind: "ack", coverage: db.snapshot() });
-      } else {
-        if (message.close) await telemetry.close(writeTelemetry);
-        else await telemetry.flush(writeTelemetry);
-        if (failed) return;
-        updateHealth(message.dropped, message.rejected);
-        if (message.close) {
-          closing = true; stopMaintenance();
-          db.updateCoverage({ status: "closed" });
-          db.checkpoint();
-          const coverage = db.snapshot();
-          db.close();
-          atomicInspectionJson(join(directory, "manifest.json"), { ...manifest, status: "closed" });
-          send({ kind: "flushed", id: message.id, coverage });
-          port.close();
-          return;
-        }
-        await ensureBudget();
-        send({ kind: "flushed", id: message.id, coverage: db.snapshot() });
-      }
-    } catch (error) { closing = false; fail(error); }
-  });
+    if (message.kind === "batch") {
+      const reservation = message.offers.reduce((sum, offer) => sum + offer.bytes * 3 + 8192 +
+        offer.contents.reduce((bytes, content) => bytes + content.descriptor.retainedBytes * 2, 0), 0);
+      await ensureBudget(reservation);
+      const receipt = db.writeNativeBatch(message.id, message.digest, message.offers, message.health);
+      send({kind: "ack", receipt, coverage: db.snapshot()});
+      refreshBudget(); usage.check(); scheduleProjection();
+    } else if (message.kind === "health") {
+      db.updateIngress(message.health);
+      send({kind: "health_ack", revision: message.health.revision, coverage: db.snapshot()});
+    } else if (message.kind === "receipt") {
+      send({kind: "receipt", id: message.id, receipt: db.receipt(message.id), coverage: db.snapshot()});
+    } else {
+      if (barriers.size >= 16) { send({kind: "flush_rejected", id: message.id, code: "inspection_flush_capacity"}); return; }
+      db.updateIngress(message.health);
+      barriers.set(message.id, {target: db.snapshot().recording!.native.target, close: message.close, ...message.barrier});
+      await finishBarriers(); scheduleProjection();
+    }
+  }).catch(error => { closing = false; fail(error); });
 });
 port.on("close", stopMaintenance);

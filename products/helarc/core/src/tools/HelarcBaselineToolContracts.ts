@@ -1,5 +1,7 @@
 import type { ToolAnnotations, ToolJsonObject } from "@agent-anything/tools/catalog";
 import {HELARC_PROCESS_OBSERVATION_SCHEMA, HELARC_PROCESS_WAIT_SCHEMA} from "./HelarcProcessSchemas.js";
+import { EXECUTION_DETAILS_DESCRIPTION, EXECUTION_DETAILS_SCHEMA, EXECUTION_REFERENCE_SCHEMA } from "./HelarcExecutionDetails.js";
+import { FILE_RESTORE_DESCRIPTION, FILE_RESTORE_SCHEMA } from "./HelarcFileRestoration.js";
 
 export type HelarcShellToolName = "Bash" | "PowerShell";
 
@@ -29,6 +31,8 @@ export type HelarcBaselineToolName =
   | HelarcShellToolName
   | "TaskStop"
   | "TaskOutput"
+  | "ExecutionDetails"
+  | "RestoreFile"
   | "AskUserQuestion"
   | "Agent"
   | "SendMessage";
@@ -328,6 +332,10 @@ const DELEGATION_TERMINAL_OUTPUT = objectSchema(["agent_id", "status", "summary"
     items: { type: "string", minLength: 1, maxLength: 256 },
   },
   failure_code: { anyOf: [{ type: "string" }, { type: "null" }] },
+  failure: {anyOf: [{type: "object"}, {type: "null"}]},
+  execution_refs: {type: "array", maxItems: 16, items: EXECUTION_REFERENCE_SCHEMA},
+  execution_lookup: {anyOf: [{type: "null"}, {type: "object", properties: {
+    reference: EXECUTION_REFERENCE_SCHEMA, view: {const: "executions"}, after: {type: "string"}}}]},
 });
 
 const DESCENDANT_PROGRESS_OUTPUT = objectSchema(
@@ -356,6 +364,8 @@ const AGENT = contract({
   inputSchema: objectSchema(["prompt"], {
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
     description: { type: "string", minLength: 1, maxLength: 1_024 },
+    execution_refs: {type: "array", maxItems: 16, items: EXECUTION_REFERENCE_SCHEMA,
+      description: "Optional exact accessible execution/effect/support/material references to hand to this Child; at most 16. Textual IDs alone do not transfer access."},
   }),
   outputSchema: DELEGATION_RESULT_OUTPUT,
   annotations: {},
@@ -384,7 +394,7 @@ const SEND_MESSAGE = contract({
 
 const SHELL_INPUT = objectSchema(["command"], {
   command: { type: "string", minLength: 1 },
-  description: { type: "string", minLength: 1, maxLength: 1_000 },
+  description: { type: "string", minLength: 1 },
   timeout_ms: POSITIVE_INTEGER,
   wait_ms: HELARC_PROCESS_WAIT_SCHEMA,
   run_in_background: { type: "boolean" },
@@ -395,6 +405,12 @@ const BASH = shellContract("Bash");
 const POWERSHELL = shellContract("PowerShell");
 
 export const HELARC_BASELINE_TOOL_CONTRACTS = Object.freeze([
+  contract({name: "RestoreFile", description: FILE_RESTORE_DESCRIPTION, inputSchema: FILE_RESTORE_SCHEMA,
+    outputSchema: {type: "object"}, annotations: {readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false},
+    binding: operation("helarc.file-restoration", "file_system.write")}),
+  contract({name: "ExecutionDetails", description: EXECUTION_DETAILS_DESCRIPTION, inputSchema: EXECUTION_DETAILS_SCHEMA,
+    outputSchema: {type: "object"}, annotations: {readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false},
+    binding: operation("helarc.execution-details", null)}),
   READ,
   GLOB,
   GREP,

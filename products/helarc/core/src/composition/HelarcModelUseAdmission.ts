@@ -278,6 +278,8 @@ function canonicalJson(value: unknown): string {
 const TOOL_SCOPE: Readonly<Record<HelarcBaselineToolName, HelarcModelQualificationScope>> =
   Object.freeze({
     Read: "workspace_observation",
+  ExecutionDetails: "workspace_observation",
+  RestoreFile: "workspace_mutation",
     Glob: "workspace_observation",
     Grep: "workspace_observation",
     Edit: "workspace_mutation",

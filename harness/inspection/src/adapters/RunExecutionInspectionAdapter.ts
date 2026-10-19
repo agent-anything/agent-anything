@@ -10,7 +10,14 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
     const ref = (owner: string, kind: Parameters<InspectionRecorder["ref"]>[1], id: string, revision: string | null = null) => r.ref(owner, kind, id, value.runId, revision);
     const run = ref("runtime", "run", value.runId);
     const content = (name: string, data: unknown, stage: string): InspectionContentInput[] => [{ name, class: "agent", stage, mediaType: "application/json", value: data as InspectionJson }];
-    if (value.kind === "run_input") {
+    if (value.kind === "execution_recovery") {
+      const recovery = ref("runtime", "operation", value.recoveryId);
+      const checkpoint = value.checkpointId ? ref("execution-store", "contribution", value.checkpointId, String(value.revision)) : null;
+      r.offer({subject: recovery, occurredAt: value.occurredAt,
+        payload: {kind: "event", name: `execution.recovery.${value.stage}`, sequence: null, code: value.code},
+        links: [inspectionLink("contains", run, recovery), ...(checkpoint ? [inspectionLink("includes", checkpoint, recovery)] : [])],
+        contents: content("Execution recovery", value, value.stage)});
+    } else if (value.kind === "run_input") {
       const input = ref("runtime", "contribution", `${value.runId}:input`, "1");
       const configuration = ref("runtime", "contribution", `${value.runId}:configuration`, "1");
       const task = ref("agent-core", "contribution", value.input.task.id, "1");
@@ -38,6 +45,16 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
           ...value.result.lowerRefs.filter(lower=>lower.kind === "process_observation").map(lower=>
             inspectionLink("produces",ref(lower.owner,"process-observation",lower.id,lower.revision),result))],
         contents: content("Operation result", value.result, "settled")});
+    } else if (value.kind === "operation_result_validation") {
+      const result = ref("operations", "contribution", value.validation.result.id);
+      const validation = ref("operations", "contribution", `${value.validation.result.id}:validation`, "1");
+      const accepted = ref("operations", "contribution", value.acceptedResult.id);
+      r.offer({subject: validation, occurredAt: value.occurredAt,
+        payload: {kind: "event", name: "operation.result.validated", sequence: null, code: value.validation.code},
+        links: [inspectionLink("includes", result, validation, {operation: "result_contract.validate"}),
+          ...(value.acceptedResult.id === value.validation.result.id ? [] : [
+            inspectionLink("produces", validation, accepted, {operation: "result_contract.rejected_output"})])],
+        contents: content("Operation result validation", value.validation, "validated")});
     } else if (value.kind === "scheduling") {
       const call = ref("runtime", "call", value.call.id);
       const turn = ref("runtime", "turn", value.call.turnId);
@@ -66,6 +83,14 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
         links: [inspectionLink("contains", run, operation), ...(attemptId ? [inspectionLink("contains", operation, subject)] : [])],
         contents: content("Retry event", event, "published"),
       });
+    } else if (value.kind === "input_delivery_prepared") {
+      const batch = ref("agent-runtime", "contribution", value.batch.id, value.batch.revision);
+      r.offer({subject: batch, occurredAt: value.occurredAt,
+        payload: {kind: "event", name: "input_delivery.prepared", sequence: null, code: null},
+        links: [inspectionLink("binding", batch, ref("runtime", "turn", value.turnId)),
+          ...value.batch.entries.map(entry => inspectionLink("includes",
+            ref(entry.source.owner, "contribution", entry.source.id, entry.source.revision), batch))],
+        contents: content("Prepared input delivery", value.batch, "prepared")});
     } else if (value.kind === "controller_decision") {
       const turn = ref("runtime", "turn", value.turnId);
       const decision = ref("runtime", "contribution", `${value.turnId}:decision`, String(value.basisRevision));

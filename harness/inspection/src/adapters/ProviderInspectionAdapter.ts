@@ -29,12 +29,26 @@ export class ProviderInspectionAdapter implements ProviderObserver {
         links, contents: [{ name: "Semantic request", stage: "semantic", class: "provider", mediaType: "application/json", value: semantic as unknown as InspectionJson }],
       });
       const locations = modelInputSectionLocations(semantic.composition.sections);
+      for (const [messageIndex, message] of semantic.messages.entries()) {
+        for (const [blockIndex, block] of message.content.entries()) {
+          if (block.kind !== "model_tool_result") continue;
+          const origin = block.result.sourceRefs.find(source => source.owner === "agent-runtime" &&
+            source.kind === "model_call" && source.id === block.result.modelCallRef.id && source.runId !== undefined);
+          if (origin === undefined) continue;
+          const presentation = recorder.ref("runtime", "contribution", `${origin.id}:presentation`, origin.runId!, "1");
+          recorder.offer({id: `${id}:result:${messageIndex}:${blockIndex}`, subject: presentation, occurredAt: value.occurredAt,
+            payload: {kind: "transfer", stage: "included", producerId: origin.id, consumerId: semantic.requestId, operation: "model_result_history"},
+            links: [inspectionLink("includes", presentation, request, {operation: "model_result_history",
+              targetLocation: {contentId: inspectionContentId(id), partId: null,
+                jsonPointer: `/messages/${messageIndex}/content/${blockIndex}/result`, stage: "semantic"}})]});
+        }
+      }
       for (const [index, section] of semantic.composition.sections.entries()) {
         const source = recorder.ref(section.source.owner, "contribution", section.source.id, value.runId, section.source.revision);
         const paths = locations.find((location) => location.sectionId === section.id)?.jsonPointers ?? [];
         recorder.offer({ id: `${id}:section:${index}`, subject: source, occurredAt: value.occurredAt,
-          payload: { kind: "transfer", stage: "included", producerId: section.source.id, consumerId: semantic.requestId, operation: section.content.kind },
-          links: paths.map((jsonPointer) => inspectionLink("includes", source, request, { operation: section.content.kind,
+          payload: { kind: "transfer", stage: "included", producerId: section.source.id, consumerId: semantic.requestId, operation: section.kind },
+          links: paths.map((jsonPointer) => inspectionLink("includes", source, request, { operation: section.kind,
             sourceLocation: { contentId: inspectionContentId(id), partId: section.id, jsonPointer: `/composition/sections/${index}/content`, stage: "composition" },
             targetLocation: { contentId: inspectionContentId(id), partId: section.id, jsonPointer, stage: "semantic" } })),
         });

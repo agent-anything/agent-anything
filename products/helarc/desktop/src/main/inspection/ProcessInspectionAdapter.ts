@@ -42,7 +42,7 @@ export class ProcessInspectionAdapter {
     const process=ref("process",s.ref.executionId);
     const run=ref("run",s.ref.runId,null,"runtime");
     const event=ref("event",`${s.ref.executionId}:fact:${fact.sequence}`);
-    const recordId=`process:${createHash("sha256").update(s.ref.executionId).digest("hex")}:${fact.sequence}`;
+    const recordId=`process:${createHash("sha256").update(s.ref.executionId).digest("hex")}:${fact.activationId ?? "live"}:${fact.sequence}`;
     const offer=(subject:InspectionSubjectRef,payload:InspectionPayload,contents:InspectionContentInput[]=[],links:Link[]=[],id?:string)=>r.offer({
       ...(id ? {id}:{}),subject,payload,contents,links,occurredAt:fact.occurredAt,ownerSequence:fact.sequence,
     });
@@ -55,6 +55,14 @@ export class ProcessInspectionAdapter {
       const notification=ref("contribution",n.source.id,n.source.revision,n.source.owner);
       offer(notification,{kind:"event",name:`process.notification.${n.source.kind}`,sequence:n.sequence,code:null},
         [content("Run input notification",n,"published")],[link("produces",process,notification),link("trigger",event,notification)]);
+    }
+    if(fact.delivery) {
+      const delivery=ref("contribution",`${s.ref.executionId}:initial-delivery`,"1");
+      const accepted=ref("call",fact.delivery.settlementId,null,"runtime");
+      offer(delivery,{kind:"event",name:"process.initial_delivery.committed",sequence:fact.sequence,code:null},
+        [content("Initial result delivery baseline",fact.delivery,"committed")],
+        [link("trigger",accepted,delivery),link("binding",process,delivery),
+          ...(fact.delivery.observationId === null ? [] : [link("includes",ref("process-observation",fact.delivery.observationId,"1"),delivery)])]);
     }
     if(fact.kind === "retention_expired") {this.phases.delete(s.ref.executionId);return;}
     const links:Link[]=[link("contains",run,process)];

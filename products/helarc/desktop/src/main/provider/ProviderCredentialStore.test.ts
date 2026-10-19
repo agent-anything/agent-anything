@@ -29,7 +29,7 @@ async function setup() {
 }
 function input(patch: Partial<SaveHelarcProviderProfileInput> = {}): SaveHelarcProviderProfileInput {
   return { providerKind: "openai-compatible", displayName: "Provider", baseUrl: "https://provider.test/v1", model: "model",
-    timeoutMs: 30000, ollamaRuntime: null, modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+    timeoutMs: 30000, ollamaRuntime: null, modelSettings: { service: "generic", thinking: { mode: "default" } },
     apiKeyUpdate: "set", apiKey: "dummy-key", ...patch };
 }
 

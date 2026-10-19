@@ -390,6 +390,15 @@ function allowsFileSystem(
   return operation === "read" || entry.access === "write";
 }
 
+/** Reuse current profile/grant semantics for retained resource reads, without consuming action-specific approvals. */
+export function allowsRetainedFileRead(input: {readonly profile: ResolvedPermissionProfile; readonly path: string;
+  readonly grants: ReturnType<typeof grantedPermissionSets>}): boolean {
+  const {profile, path} = input;
+  if (profile.fileSystem.managedCeilings.some(ceiling => ceiling.maximumAccess === "none" &&
+      matchesPermissionFileSystemTarget(ceiling.target, path, profile.platform))) return false;
+  return allowsFileSystem(profile, path, "read") || input.grants.some(grant => allowsGrantedPath(grant, path, "read", profile.platform));
+}
+
 function allowsGrantedPath(
   grant: ReturnType<typeof grantedPermissionSets>[number],
   path: string,

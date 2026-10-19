@@ -84,6 +84,18 @@ export interface RunTreeApprovalSnapshot {
 
 interface ActiveApprovalRequest extends RunTreeApprovalAdmissionInput {}
 
+export interface RunTreeApprovalCheckpoint {
+  readonly limits: RunTreeApprovalLimits;
+  readonly active: readonly RunTreeApprovalAdmissionInput[];
+  readonly seenRequestIds: readonly string[];
+  readonly operationCounts: readonly (readonly [string, number])[];
+  readonly revision: number;
+  readonly totalRequests: number;
+  readonly settledRequests: number;
+  readonly consecutiveDeclines: number;
+  readonly consecutiveReviewerFailures: number;
+}
+
 export class RunTreeApprovalAccount {
   private readonly limits: RunTreeApprovalLimits;
   private readonly active = new Map<string, ActiveApprovalRequest>();
@@ -97,6 +109,53 @@ export class RunTreeApprovalAccount {
 
   constructor(limits: RunTreeApprovalLimits) {
     this.limits = snapshotRunTreeApprovalLimits(limits);
+  }
+
+  checkpoint(): RunTreeApprovalCheckpoint {
+    return structuredClone({limits: this.limits, active: [...this.active.values()],
+      seenRequestIds: [...this.seenRequestIds], operationCounts: [...this.operationCounts],
+      revision: this.revision, totalRequests: this.totalRequests, settledRequests: this.settledRequests,
+      consecutiveDeclines: this.consecutiveDeclines, consecutiveReviewerFailures: this.consecutiveReviewerFailures});
+  }
+
+  static restore(input: RunTreeApprovalCheckpoint): RunTreeApprovalAccount {
+    const saved = structuredClone(input);
+    const account = new RunTreeApprovalAccount(saved.limits);
+    for (const field of ["revision", "totalRequests", "settledRequests", "consecutiveDeclines", "consecutiveReviewerFailures"] as const) {
+      if (!Number.isSafeInteger(saved[field]) || saved[field] < 0) throw new TypeError(`Invalid Approval checkpoint ${field}.`);
+      account[field] = saved[field];
+    }
+    for (const id of saved.seenRequestIds) {
+      assertToken(id, "seenRequestId");
+      if (account.seenRequestIds.has(id)) throw new TypeError("Duplicate retained Approval identity.");
+      account.seenRequestIds.add(id);
+    }
+    for (const [fingerprint, count] of saved.operationCounts) {
+      assertToken(fingerprint, "operationFingerprint");
+      if (!Number.isSafeInteger(count) || count < 1 || account.operationCounts.has(fingerprint)) {
+        throw new TypeError("Invalid retained Approval operation count.");
+      }
+      account.operationCounts.set(fingerprint, count);
+    }
+    const activeCounts = new Map<string, number>();
+    for (const value of saved.active) {
+      const request = snapshotAdmission(value);
+      if (!account.seenRequestIds.has(request.requestId) || account.active.has(request.requestId)) {
+        throw new TypeError("Invalid retained active Approval identity.");
+      }
+      account.active.set(request.requestId, request);
+      activeCounts.set(request.operationFingerprint, (activeCounts.get(request.operationFingerprint) ?? 0) + 1);
+    }
+    if (saved.totalRequests !== account.seenRequestIds.size ||
+        saved.totalRequests !== saved.settledRequests + account.active.size ||
+        saved.totalRequests !== [...account.operationCounts.values()].reduce((sum, count) => sum + count, 0) ||
+        saved.revision !== saved.totalRequests + saved.settledRequests ||
+        saved.consecutiveDeclines > saved.settledRequests || saved.consecutiveReviewerFailures > saved.settledRequests ||
+        (saved.consecutiveDeclines > 0 && saved.consecutiveReviewerFailures > 0) ||
+        [...activeCounts].some(([key, count]) => count > (account.operationCounts.get(key) ?? 0))) {
+      throw new TypeError("Approval checkpoint accounting is inconsistent.");
+    }
+    return account;
   }
 
   admit(input: RunTreeApprovalAdmissionInput): RunTreeApprovalAdmission {

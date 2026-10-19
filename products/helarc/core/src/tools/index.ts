@@ -13,3 +13,5 @@ export {
   HELARC_BASELINE_TOOL_CONTRACTS,
 } from "./HelarcBaselineToolContracts.js";
 export * from "./guidance/index.js";
+export { ExecutionMaterialAccessError, type HelarcExecutionMaterialReader, type HelarcExecutionCollectionReader } from "./HelarcExecutionDetails.js";
+export type {HelarcExecutionHandoff} from "./HelarcExecutionHandoff.js";

@@ -11,8 +11,12 @@ export { RunProcessManager, ProcessManagerError } from "./RunProcessManager.js";
 export type {
   ProcessSnapshot, ProcessObservation, ProcessExecutionFact, ProcessExecutionObserver,
   ProcessCleanupSummary,
+  ProcessInitialDelivery,
 } from "./ProcessObservation.js";
 export { defaultCodeAgentCommandLimits } from "./CommandLimits.js";
+export { createCommandInputContract } from "./CommandInputContract.js";
+export type { CommandInputContract } from "./CommandInputContract.js";
+export type { CommandConstraintFact, CommandConstraintObserver } from "./CommandConstraintObservation.js";
 export type {
   CodeAgentCommandLimits,
 } from "./ProcessContracts.js";
@@ -22,3 +26,5 @@ export type { RetainedProcessOutputLocator } from "./RetainedProcessOutput.js";
 export type { ProcessOutputPaths } from "./ProcessOutputStore.js";
 export { ProcessOutputRepository } from "./ProcessOutputRepository.js";
 export { selectNativeShell, projectNativeShellRuntimeProfile } from "./CommandActionIdentity.js";
+export * from "./ProcessCheckpoint.js";
+export { validateShellSessionCommit, type ShellSessionCommit, type ShellSessionRecordPort } from "./ShellExecutionSession.js";

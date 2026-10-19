@@ -61,7 +61,6 @@ export interface HelarcProductCommandPayloadMap {
     readonly timeoutMs: number;
     readonly ollamaRuntime: {
       readonly contextWindowTokens: number;
-      readonly maximumOutputTokens: number;
     } | null;
     readonly qualificationPolicy: "require_qualified" | "allow_experimental";
     readonly apiKeyUpdate: "keep" | "set" | "clear" | "reference";

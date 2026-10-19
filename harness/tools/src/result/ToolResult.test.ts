@@ -3,6 +3,15 @@ import type { ToolCall } from "../invocation/index.js";
 import { adaptToolSemanticResult } from "./ToolResult.js";
 
 describe("adaptToolSemanticResult", () => {
+  it("retains failure diagnostics without upgrading the Tool outcome to partial success", () => {
+    const call = {toolCallId: "call", toolRevision: {tool: {namespace: "test", name: "tool"}, revision: "1"}} as ToolCall;
+    const result = adaptToolSemanticResult(call, {
+      operationInvocation: {id: "invocation", operation: {operation: {namespace: "test", name: "operation"}, revision: "1"}},
+      status: "failed", output: {handle: "started-process", exitCode: 1}, error: {code: "exit_nonzero", message: "Exit 1"},
+      startedAt: "2026-10-13T00:00:00.000Z", finishedAt: "2026-10-13T00:00:00.000Z", metadata: {},
+    });
+    expect(result).toMatchObject({status: "failed", output: {handle: "started-process", exitCode: 1}});
+  });
   it.each(["failed", "partial"] as const)("preserves approval quota detail in a %s Tool result", status => {
     const detail = {kind: "capacity", stage: "admission", scope: {owner: "test-owner", kind: "operation"},
       limit: {name: "requests", count: 8, maximum: 8}, dispatch: "never_dispatched",

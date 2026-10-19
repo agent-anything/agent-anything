@@ -1,4 +1,13 @@
 import type { RunLifecycleStatus } from "@agent-anything/agent-core/run";
+import { RunCommitError } from "./RunCommitPort.js";
+import { OperationCommitError } from "@agent-anything/operation-catalog/result";
+import { ControllerCheckpointError } from "../controller/ControllerCheckpoint.js";
+import { RetryCheckpointError } from "../retry/RetryCheckpoint.js";
+import { RunRecoveryError } from "./RunRecovery.js";
+import { ActionRecoveryError } from "@agent-anything/action-execution/enforcement";
+import { CompositeRecoveryError } from "@agent-anything/operation-composition/execution";
+import { ActionRecordCommitError } from "@agent-anything/action-execution/enforcement";
+import { CompositeCommitError } from "@agent-anything/operation-composition/execution";
 import type {
   InteractionSubmissionInput,
   InteractionSubmissionOutcome,
@@ -83,13 +92,13 @@ export interface RunHandle<TOutput = unknown> {
   readonly runId: string;
   getSnapshot(): RunOperationSnapshot<TOutput>;
   subscribe(listener: RunOperationListener<TOutput>): () => void;
-  cancel(input: RunCancellationRequestInput): RunCancellationReceipt;
-  suspend(input: RunSuspendRequestInput): RunSuspendReceipt;
-  resume(input: RunResumeRequestInput): RunResumeReceipt;
-  steer(input: RunSteeringInput): RunSteeringSubmissionReceipt;
-  steerDescendant(input: DelegationSteeringRoute): DelegationSteeringReceipt;
-  resumeDescendant(input: DelegationResumeRoute): DelegationResumeReceipt;
-  submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome;
+  cancel(input: RunCancellationRequestInput): Promise<RunCancellationReceipt>;
+  suspend(input: RunSuspendRequestInput): Promise<RunSuspendReceipt>;
+  resume(input: RunResumeRequestInput): Promise<RunResumeReceipt>;
+  steer(input: RunSteeringInput): Promise<RunSteeringSubmissionReceipt>;
+  steerDescendant(input: DelegationSteeringRoute): Promise<DelegationSteeringReceipt>;
+  resumeDescendant(input: DelegationResumeRoute): Promise<DelegationResumeReceipt>;
+  submitInteraction(input: InteractionSubmissionInput): Promise<InteractionSubmissionOutcome>;
   wait(): Promise<RunResult<TOutput>>;
   getResult(): RunResult<TOutput> | null;
 }
@@ -114,16 +123,18 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private readonly listeners = new Set<RunOperationListener<TOutput>>();
   private readonly completion: Promise<RunResult<TOutput>>;
   private resolveCompletion!: (result: RunResult<TOutput>) => void;
+  private rejectCompletion!: (error: unknown) => void;
   private snapshot: RunOperationSnapshot<TOutput>;
   private settlementApplied = false;
-  private submitInteractionImpl: ((input: InteractionSubmissionInput) => InteractionSubmissionOutcome) | null = null;
-  private steerImpl: ((input: RunSteeringInput) => RunSteeringSubmissionReceipt) | null = null;
-  private resumeImpl: ((input: RunResumeRequestInput) => RunResumeReceipt) | null = null;
-  private suspendImpl: ((input: RunSuspendRequestInput) => RunSuspendReceipt) | null = null;
+  private confirmCancellation: (() => Promise<void>) | null = null;
+  private submitInteractionImpl: ((input: InteractionSubmissionInput) => Promise<InteractionSubmissionOutcome>) | null = null;
+  private steerImpl: ((input: RunSteeringInput) => Promise<RunSteeringSubmissionReceipt>) | null = null;
+  private resumeImpl: ((input: RunResumeRequestInput) => Promise<RunResumeReceipt>) | null = null;
+  private suspendImpl: ((input: RunSuspendRequestInput) => Promise<RunSuspendReceipt>) | null = null;
   private steerDescendantImpl:
-    ((input: DelegationSteeringRoute) => DelegationSteeringReceipt) | null = null;
+    ((input: DelegationSteeringRoute) => Promise<DelegationSteeringReceipt>) | null = null;
   private resumeDescendantImpl:
-    ((input: DelegationResumeRoute) => DelegationResumeReceipt) | null = null;
+    ((input: DelegationResumeRoute) => Promise<DelegationResumeReceipt>) | null = null;
 
   constructor(
     runId: string,
@@ -149,9 +160,11 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       runTree: initialRunTree,
       result: null,
     });
-    this.completion = new Promise((resolve) => {
+    this.completion = new Promise((resolve, reject) => {
       this.resolveCompletion = resolve;
+      this.rejectCompletion = reject;
     });
+    void this.completion.catch(() => {});
   }
 
   start(execute: () => Promise<RunResult<TOutput>>): void {
@@ -160,7 +173,10 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         .then(execute)
         .then(
           (result) => this.settle(result),
-          () => this.settle(this.emergencyResult),
+          error => {
+            if (error instanceof OperationCommitError || error instanceof RunCommitError || error instanceof RunRecoveryError || error instanceof ControllerCheckpointError || error instanceof RetryCheckpointError || error instanceof ActionRecordCommitError || error instanceof ActionRecoveryError || error instanceof CompositeCommitError || error instanceof CompositeRecoveryError) this.rejectCompletion(error);
+            else this.settle(this.emergencyResult);
+          },
         );
     });
   }
@@ -229,9 +245,15 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     };
   }
 
-  cancel(input: RunCancellationRequestInput): RunCancellationReceipt {
+  bindCancellationAcceptance(confirm: () => Promise<void>): void {
+    if (this.confirmCancellation !== null) throw new TypeError("Cancellation acceptance is already bound.");
+    this.confirmCancellation = confirm;
+  }
+
+  async cancel(input: RunCancellationRequestInput): Promise<RunCancellationReceipt> {
     const receipt = this.cancellation.requestCancellation(input);
-    if (this.snapshot.result === null) {
+    if (receipt.status !== "run_settled") {
+      await this.confirmCancellation?.();
       return receipt;
     }
     return Object.freeze({
@@ -241,12 +263,12 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     });
   }
 
-  bindSuspend(suspend: (input: RunSuspendRequestInput) => RunSuspendReceipt): void {
+  bindSuspend(suspend: (input: RunSuspendRequestInput) => Promise<RunSuspendReceipt>): void {
     if (this.suspendImpl !== null) throw new TypeError("Run suspension is already bound.");
     this.suspendImpl = suspend;
   }
 
-  suspend(input: RunSuspendRequestInput): RunSuspendReceipt {
+  async suspend(input: RunSuspendRequestInput): Promise<RunSuspendReceipt> {
     if (this.snapshot.result !== null || this.suspendImpl === null) return Object.freeze({
       status: "rejected", code: this.snapshot.result !== null ? "run_settled" : "run_not_started",
       requestId: typeof input?.id === "string" ? input.id : "", currentRunRevision: this.snapshot.runRevision,
@@ -254,12 +276,12 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     return this.suspendImpl(input);
   }
 
-  bindResume(resume: (input: RunResumeRequestInput) => RunResumeReceipt): void {
+  bindResume(resume: (input: RunResumeRequestInput) => Promise<RunResumeReceipt>): void {
     if (this.resumeImpl !== null) throw new TypeError("Run resume is already bound.");
     this.resumeImpl = resume;
   }
 
-  resume(input: RunResumeRequestInput): RunResumeReceipt {
+  async resume(input: RunResumeRequestInput): Promise<RunResumeReceipt> {
     if (this.snapshot.result !== null) {
       return Object.freeze({
         status: "rejected" as const,
@@ -280,7 +302,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   }
 
   bindSteering(
-    steer: (input: RunSteeringInput) => RunSteeringSubmissionReceipt,
+    steer: (input: RunSteeringInput) => Promise<RunSteeringSubmissionReceipt>,
   ): void {
     if (this.steerImpl !== null) {
       throw new TypeError("Run steering is already bound.");
@@ -288,7 +310,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     this.steerImpl = steer;
   }
 
-  steer(input: RunSteeringInput): RunSteeringSubmissionReceipt {
+  async steer(input: RunSteeringInput): Promise<RunSteeringSubmissionReceipt> {
     if (this.snapshot.result !== null) {
       return rejectedSteering(this.runId, input, this.snapshot.runRevision, "run_settled");
     }
@@ -299,7 +321,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   }
 
   bindDescendantSteering(
-    steer: (input: DelegationSteeringRoute) => DelegationSteeringReceipt,
+    steer: (input: DelegationSteeringRoute) => Promise<DelegationSteeringReceipt>,
   ): void {
     if (this.steerDescendantImpl !== null) {
       throw new TypeError("Descendant steering is already bound.");
@@ -307,7 +329,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     this.steerDescendantImpl = steer;
   }
 
-  steerDescendant(input: DelegationSteeringRoute): DelegationSteeringReceipt {
+  async steerDescendant(input: DelegationSteeringRoute): Promise<DelegationSteeringReceipt> {
     if (this.steerDescendantImpl === null) {
       return Object.freeze({
         status: "rejected" as const,
@@ -320,7 +342,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   }
 
   bindDescendantResume(
-    resume: (input: DelegationResumeRoute) => DelegationResumeReceipt,
+    resume: (input: DelegationResumeRoute) => Promise<DelegationResumeReceipt>,
   ): void {
     if (this.resumeDescendantImpl !== null) {
       throw new TypeError("Descendant resume is already bound.");
@@ -328,7 +350,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     this.resumeDescendantImpl = resume;
   }
 
-  resumeDescendant(input: DelegationResumeRoute): DelegationResumeReceipt {
+  async resumeDescendant(input: DelegationResumeRoute): Promise<DelegationResumeReceipt> {
     if (this.resumeDescendantImpl === null) {
       return Object.freeze({
         status: "rejected" as const,
@@ -341,7 +363,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   }
 
   bindInteractionSubmission(
-    submit: (input: InteractionSubmissionInput) => InteractionSubmissionOutcome,
+    submit: (input: InteractionSubmissionInput) => Promise<InteractionSubmissionOutcome>,
   ): void {
     if (this.submitInteractionImpl !== null) {
       throw new TypeError("Run interaction submission is already bound.");
@@ -349,7 +371,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     this.submitInteractionImpl = submit;
   }
 
-  submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome {
+  async submitInteraction(input: InteractionSubmissionInput): Promise<InteractionSubmissionOutcome> {
     if (this.snapshot.result !== null) {
       return Object.freeze({ status: "rejected", code: "run_settled", receipt: null });
     }

@@ -41,7 +41,7 @@ export interface PersistedHelarcProviderProfile {
   readonly updatedAt: string;
 }
 interface StoreDocument {
-  readonly formatVersion: 5;
+  readonly formatVersion: 6;
   readonly activeProfileId: string | null;
   readonly profiles: readonly PersistedHelarcProviderProfile[];
 }
@@ -176,7 +176,7 @@ export class FileHelarcProviderProfileStore {
         baseUrl: p.baseUrl, model: p.model, timeoutMs: p.timeoutMs, ollamaRuntime: p.ollamaRuntime,
         modelSettings: p.modelSettings!, qualificationPolicy: p.qualificationPolicy, credentialRef, updatedAt: new Date().toISOString() };
       try {
-        await write(file, { formatVersion: 5, activeProfileId: id,
+        await write(file, { formatVersion: 6, activeProfileId: id,
           profiles: previous ? doc.profiles.map(p => p.id === id ? stored : p) : [...doc.profiles, stored] });
       } catch {
         if (stagedRef) {
@@ -194,10 +194,10 @@ export class FileHelarcProviderProfileStore {
   }
   private async readDocument(file: AtomicFileTransaction): Promise<StoreDocument> {
     const text = await file.readText();
-    if (text === null) return { formatVersion: 5, activeProfileId: null, profiles: [] };
+    if (text === null) return { formatVersion: 6, activeProfileId: null, profiles: [] };
     try {
       const doc = JSON.parse(text) as StoreDocument;
-      if (!doc || doc.formatVersion !== 5 || Object.keys(doc).sort().join() !== "activeProfileId,formatVersion,profiles" ||
+      if (!doc || doc.formatVersion !== 6 || Object.keys(doc).sort().join() !== "activeProfileId,formatVersion,profiles" ||
           !Array.isArray(doc.profiles) || doc.profiles.length > 64 ||
           new Set(doc.profiles.map(p => p.id)).size !== doc.profiles.length ||
           (doc.activeProfileId !== null && !doc.profiles.some(p => p.id === doc.activeProfileId)) ||

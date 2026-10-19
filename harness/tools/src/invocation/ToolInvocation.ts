@@ -66,6 +66,7 @@ export interface ToolCallAdmissionInput {
   readonly exposure: ToolExposureProof | null;
   readonly modelCall: ToolCallModelCorrelationRef | null;
   readonly semanticValidators?: readonly ToolInputSemanticValidator[];
+  readonly observeValidation?: (check: import("../validation/index.js").ToolInputValidationCheck) => void;
 }
 
 export type ToolCallAdmission = {
@@ -104,7 +105,7 @@ export function admitToolCall(input: ToolCallAdmissionInput): ToolCallAdmission 
       return reject("tool_not_exposed", "The requested Tool was not exposed to this Controller request.");
     }
   }
-  const validation = validateToolInput({ descriptor, value: input.candidate.input, semanticValidators: input.semanticValidators });
+  const validation = validateToolInput({ descriptor, value: input.candidate.input, semanticValidators: input.semanticValidators, observe: input.observeValidation });
   if (validation.status === "invalid") return reject(validation.failure.code, validation.message, validation.failure);
   return deepFreeze({
     ...base, status: "trusted" as const, binding: descriptor.binding,

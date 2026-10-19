@@ -3,6 +3,8 @@ import { ControllerResponseDelivery, type ControllerResponseDeliveryOptions } fr
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { MODEL_TURN_EXECUTION_FLOW } from "./ModelTurnExecutionFlow.js";
 import { MODEL_CONTEXT_EXECUTION_FLOW } from "./ModelContextExecutionFlow.js";
+import { createProviderInputDeliveryReceipt, snapshotInputDeliveryReceipt,
+  type ControllerInputDeliveryReceipt } from "./ControllerInputDelivery.js";
 import type {
   ModelCallRef,
   ModelAssistantContentBlock,
@@ -39,6 +41,9 @@ import {
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type { RetryAttemptContext, RetryClock } from "../retry/index.js";
 import { RetryExecutor } from "../retry/RetryExecutor.js";
+import { RetryCheckpointError, type RetryCheckpoint, type RetryCheckpointPort } from "../retry/RetryCheckpoint.js";
+import { ControllerCheckpointError } from "./ControllerCheckpoint.js";
+import { ProviderControllerCheckpoint } from "./ProviderControllerCheckpoint.js";
 import type { RetryClassification, RetryFailure } from "../retry/index.js";
 import type { RetryExhaustedEvent } from "../retry/index.js";
 import type { RetryOperation } from "../retry/index.js";
@@ -243,6 +248,13 @@ export class ProviderBackedController<TOutput = unknown>
     const flow = new ExecutionFlowPath(MODEL_TURN_EXECUTION_FLOW, callContext.executionFlow ?? {}, controllerInput.runId, []);
     try {
     throwIfCancelled(callContext);
+    await new ProviderControllerCheckpoint(callContext.checkpoints).bind({
+      target: this.input.provider.modelContext.target, requestedOutput: this.input.provider.modelContext.requestedOutput,
+      protocol: this.input.responseProtocol.kind === "native_tool_turn"
+        ? {kind: "native_tool_turn", maximumOutputRecoveryAttempts: this.input.responseProtocol.maximumOutputRecoveryAttempts ?? 2}
+        : this.input.responseProtocol,
+      controllerRequestId: controllerInput.toolExposure.controllerRequestId,
+    });
     const decision = this.input.responseProtocol.kind === "native_tool_turn"
       ? await this.executeNativeToolTurn(controllerInput, callContext, flow)
       : await this.executeStructuredOutput(controllerInput, callContext, flow);
@@ -251,6 +263,13 @@ export class ProviderBackedController<TOutput = unknown>
     flow.close("returned");
     return decision;
     } catch (error) { flow.close(callContext.cancellation.signal.aborted ? "cancelled" : error instanceof RetryInvocationInvalidatedError ? "interrupted" : "failed"); throw error; }
+  }
+
+  async recover(input: ControllerInput<TOutput>, context: ControllerCallContext): Promise<ControllerDecision<TOutput>> {
+    if (!context.checkpoints || this.input.provider.descriptor.capabilities.continuation.supported) {
+      throw new ControllerCheckpointError("provider_continuation_recovery_unavailable");
+    }
+    return this.next(input, context);
   }
 
   private async executeNativeToolTurn(
@@ -269,19 +288,20 @@ export class ProviderBackedController<TOutput = unknown>
         throwIfCancelled(callContext);
         const build = flow.advance("build", {controllerRequestId: controllerInput.toolExposure.controllerRequestId},
           [{owner: "runtime", kind: "request", id: controllerInput.toolExposure.controllerRequestId, revision: null}]);
-        const request = await this.buildRequest(controllerInput, Object.freeze({
+        const request = snapshotProviderRequest(await new ProviderControllerCheckpoint(callContext.checkpoints)
+          .once(`native-request:${recoveryAttempt}`, () => this.buildRequest(controllerInput, Object.freeze({
           executionFlow: flow.callContext,
           attemptNumber: recoveryAttempt + 1,
           correction: null,
           target: this.input.provider.modelContext.target,
           requestedOutput: this.input.provider.modelContext.requestedOutput,
           ...(outputRecovery ? { outputRecovery } : {}),
-        }));
+        }))));
         build.check("request_contract", "passed", {requestId: request.requestId, compositionId: request.composition.id});
         const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
         build.output(requestRef);
         const send = flow.advance("send", {requestId: request.requestId}, [requestRef]);
-        const response = await this.sendRequest(
+        const {response, inputDeliveryReceipt} = await this.sendRequest(
           request,
           controllerInput,
           {...callContext, executionFlow: flow.callContext},
@@ -305,7 +325,9 @@ export class ProviderBackedController<TOutput = unknown>
           parse.check("decision_contract", "not_evaluated", {reason: "output_limit"});
           if (recoveryAttempt >= maximumRecoveryAttempts) {
             throw createControllerError("model", "model_output_limit_exhausted",
-              `Model output was truncated at the configured ${request.modelContext.requestedOutput.maximum}-token limit ` +
+              (request.modelContext.requestedOutput.maximum === null
+                ? "The Provider reported that model output reached a length limit "
+                : `Model output was truncated at the configured ${request.modelContext.requestedOutput.maximum}-token limit `) +
               `after ${recoveryAttempt + 1} generation attempts. No calls from the truncated responses were executed.`,
               false, {
                 finishKind: "output_limit", requestId: response.turn.responseRef.requestId,
@@ -331,7 +353,7 @@ export class ProviderBackedController<TOutput = unknown>
         );
         throwIfCancelled(callContext);
         delivery.finish("validated", decision.modelItems);
-        return decision;
+        return Object.freeze({...decision, ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt})});
       }
     } catch (error) {
       delivery.finish(callContext.cancellation.signal.aborted ? "cancelled"
@@ -345,31 +367,26 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
     flow: ExecutionFlowPath,
   ): Promise<ControllerDecision<TOutput>> {
-    const operation = createStructuredOutputRetryOperation(
+    const records = new ProviderControllerCheckpoint(callContext.checkpoints);
+    const operation = await records.once("structured-operation", () => createStructuredOutputRetryOperation(
       controllerInput,
       this.requireStructuredOutputProtocol().contractId,
       callContext.retry.deadlineAt,
       this.input.retryClock,
-    );
+    ));
     const budgetId = `${operation.operationId}:budget:1`;
     let correction: ProviderRequestBuildContext["correction"] = null;
     let providerRequestNumber = 0;
     let result;
+    const retryKey = `retry:${operation.operationId}`;
+    const readRetry = () => decodeStructuredRetry<TOutput>(records.read(retryKey));
+    const saved = readRetry();
+    if (saved?.attemptResult?.kind === "failed" && saved.attemptResult.error.kind === "correction") {
+      correction = {previousAttemptNumber: saved.attempt!.attemptNumber, failure: saved.attemptResult.error.failure};
+    }
 
     try {
-      result = await this.input.retryExecutor.execute(
-        {
-          operation,
-          budgetId,
-          priorProgress: { completedAttempts: 0, totalRetryDelayMs: 0 },
-          policy: callContext.retry.structuredOutput,
-          classifier: { classify: classifyStructuredOutputAttemptFailure },
-          cancellation: callContext.cancellation,
-          events: callContext.retry.events,
-          waitControl: callContext.retry.waitControl,
-          executionFlow: callContext.executionFlow,
-        },
-        async (attempt) => {
+      const executeAttempt = async (attempt: RetryAttemptContext) => {
           const interruptedBeforeBuild = structuredOutputInterruption(
             attempt,
             callContext,
@@ -389,9 +406,11 @@ export class ProviderBackedController<TOutput = unknown>
           });
           let request: ProviderRequest;
           try {
-            request = await this.buildRequest(controllerInput, buildContext);
+            request = snapshotProviderRequest(await records.once(`structured-request:${attempt.attempt.attemptNumber}`,
+              () => this.buildRequest(controllerInput, buildContext)));
             build.check("request_contract", "passed", {requestId: request.requestId, compositionId: request.composition.id});
           } catch (error) {
+            assertControllerCheckpointConfirmed(error);
             return terminalStructuredOutputFailure(error);
           }
 
@@ -405,11 +424,12 @@ export class ProviderBackedController<TOutput = unknown>
           }
 
           let response: ProviderResponse;
+          let inputDeliveryReceipt: ControllerInputDeliveryReceipt | null;
           const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
           build.output(requestRef);
           try {
             flow.advance("send", {requestId: request.requestId}, [requestRef]);
-            response = await this.sendRequest(
+            ({response, inputDeliveryReceipt} = await this.sendRequest(
               request,
               controllerInput,
               {...callContext, executionFlow: flow.callContext},
@@ -417,8 +437,9 @@ export class ProviderBackedController<TOutput = unknown>
                 providerRequestNumber += 1;
                 return providerRequestNumber;
               },
-            );
+            ));
           } catch (error) {
+            assertControllerCheckpointConfirmed(error);
             if (matchesActiveCancellationError(error, callContext)) {
               return {
                 kind: "cancelled" as const,
@@ -460,7 +481,7 @@ export class ProviderBackedController<TOutput = unknown>
             );
             return interruptedAfterValidation ?? {
               kind: "succeeded" as const,
-              value: decision,
+              value: Object.freeze({...decision, ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt})}),
             };
           } catch (error) {
             if (error instanceof StructuredOutputError) {
@@ -487,9 +508,22 @@ export class ProviderBackedController<TOutput = unknown>
             }
             return terminalStructuredOutputFailure(error);
           }
-        },
+        };
+      result = await this.input.retryExecutor.execute(
+        {
+          operation, budgetId, priorProgress: {completedAttempts: 0, totalRetryDelayMs: 0},
+          policy: callContext.retry.structuredOutput, classifier: {classify: classifyStructuredOutputAttemptFailure},
+          cancellation: callContext.cancellation, events: callContext.retry.events,
+          waitControl: callContext.retry.waitControl, executionFlow: callContext.executionFlow,
+        }, executeAttempt,
+        callContext.checkpoints ? {
+          read: readRetry,
+          commit: checkpoint => records.save(retryKey, encodeStructuredRetry(checkpoint)),
+          reconcile: executeAttempt,
+        } : undefined,
       );
     } catch (error) {
+      assertControllerCheckpointConfirmed(error);
       if (error instanceof RetryInvocationInvalidatedError) throw error;
       throw createControllerError(
         "model",
@@ -591,19 +625,21 @@ export class ProviderBackedController<TOutput = unknown>
     nextProviderRequestNumber: () => number,
     modelInputRecoveryAttempt = 0,
     delivery?: ControllerResponseDelivery,
-  ): Promise<ProviderResponse> {
-    const assessedRequest = await this.prepareModelContextRequest(
+  ): Promise<{readonly response: ProviderResponse; readonly inputDeliveryReceipt: ControllerInputDeliveryReceipt | null}> {
+    const assessedRequest = snapshotProviderRequest(await new ProviderControllerCheckpoint(callContext.checkpoints)
+      .once(`assessed-request:${request.requestId}:${modelInputRecoveryAttempt}`, () => this.prepareModelContextRequest(
       request,
       callContext,
       modelInputRecoveryAttempt,
       controllerInput.runId,
-    );
+    )));
     request = assessedRequest;
     const preparation = await this.continuation.prepare({
       capability: this.input.provider.descriptor.capabilities.continuation,
       lineage: continuationLineage(request, controllerInput),
     });
     const preparedRequest = withContinuation(request, preparation.continuation);
+    const inputDeliveryReceipt = createProviderInputDeliveryReceipt(controllerInput.inputDelivery, preparedRequest);
     let settlement: ProviderRequestSettlement;
     try {
       settlement = await this.executeProviderRequest(
@@ -700,11 +736,11 @@ export class ProviderBackedController<TOutput = unknown>
         );
       }
       await this.advanceContinuation(resetPreparation, settlement.response);
-      return settlement.response;
+      return Object.freeze({response: settlement.response, inputDeliveryReceipt});
     }
 
     await this.advanceContinuation(preparation, settlement.response);
-    return settlement.response;
+    return Object.freeze({response: settlement.response, inputDeliveryReceipt});
   }
 
   private async prepareModelContextRequest(
@@ -895,12 +931,21 @@ export class ProviderBackedController<TOutput = unknown>
     providerRequestNumber: number,
     delivery?: ControllerResponseDelivery,
   ): Promise<ProviderRequestSettlement> {
-    const operation = createProviderRetryOperation(
-      controllerInput,
-      callContext.retry.deadlineAt,
-      providerRequestNumber,
-      this.input.retryClock,
-    );
+    const records = new ProviderControllerCheckpoint(callContext.checkpoints);
+    const requestKey = JSON.stringify([request.requestId, request.continuation]);
+    const operations = records.read<readonly {key: string; operation: RetryOperation}[]>("provider-operations") ?? [];
+    let operation = operations.find(entry => entry.key === requestKey)?.operation;
+    if (!operation) {
+      operation = createProviderRetryOperation(controllerInput, callContext.retry.deadlineAt,
+        callContext.checkpoints ? operations.length + 1 : providerRequestNumber, this.input.retryClock);
+      await records.save("provider-operations", [...operations, {key: requestKey, operation}]);
+    }
+    await records.once(`provider-request:${requestKey}`, () => request);
+    const retainedRequest = snapshotProviderRequest(records.read<ProviderRequest>(`provider-request:${requestKey}`) ?? request);
+    if (createProviderSemanticRequestDigest(retainedRequest) !== createProviderSemanticRequestDigest(request)) {
+      throw new ControllerCheckpointError(`provider-request:${requestKey}`);
+    }
+    request = retainedRequest;
     throwIfCancelled(callContext);
     if (Date.parse(operation.startedAt) >= Date.parse(callContext.retry.deadlineAt)) {
       throw operationDeadlineError(operation, operation.startedAt, 0, 0, null, this.input.provider.descriptor.id);
@@ -939,8 +984,17 @@ export class ProviderBackedController<TOutput = unknown>
             this.input.retryClock,
           );
         },
+        callContext.checkpoints ? {
+          read: () => records.read<RetryCheckpoint<ProviderRequestSettlement, ProviderAttemptFailure, string>>(`retry:${operation.operationId}`),
+          commit: checkpoint => records.save(`retry:${operation.operationId}`, checkpoint),
+          reconcile: async () => ({kind: "failed", error: {deadlineReason: null, failure: {
+            code: "provider_attempt_interrupted", category: "transport", message: "The interrupted Provider attempt has no retained complete response.",
+            retryable: true, metadata: {requestId: request.requestId, usage: "unknown"}, requestId: request.requestId,
+          }}}),
+        } : undefined,
       );
     } catch (error) {
+      assertControllerCheckpointConfirmed(error);
       if (error instanceof RetryInvocationInvalidatedError) throw error;
       if (callContext.cancellation.signal.aborted) {
         throw providerCancellationUnconfirmedError(
@@ -1157,6 +1211,11 @@ export function validateControllerDecision<TOutput>(
   }
 
   const modelItems = validateModelItems(candidate.modelItems);
+  const inputDeliveryReceipt = snapshotInputDeliveryReceipt(candidate.inputDeliveryReceipt, input.inputDelivery);
+  if (inputDeliveryReceipt?.via.kind === "controller" &&
+      inputDeliveryReceipt.via.controllerRequestId !== input.toolExposure.controllerRequestId) {
+    throw decisionContractError("controller_input_delivery_request_mismatch");
+  }
   const modelCalls = new Map(modelItems.flatMap((item) =>
     item.kind === "model_tool_call"
       ? [[modelCallRefKey(item.call.modelCallRef), item.call] as const]
@@ -1214,6 +1273,7 @@ export function validateControllerDecision<TOutput>(
 
       return Object.freeze({
         kind: "propose_completion",
+        ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
         candidates,
         completionSource,
         output: validation.output,
@@ -1225,6 +1285,7 @@ export function validateControllerDecision<TOutput>(
       const candidates = validateCandidates(candidate.candidates, modelCalls);
       return Object.freeze({
         kind: "advance",
+        ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
         candidates: candidates as readonly [ProgressionCandidate, ...ProgressionCandidate[]],
         modelItems,
       });
@@ -1236,6 +1297,7 @@ export function validateControllerDecision<TOutput>(
       }
       return Object.freeze({
         kind: "continue_with_feedback",
+        ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
         feedback: snapshotControllerFeedback(candidate.feedback),
         modelItems,
       });
@@ -2402,4 +2464,41 @@ function continuationRevision(
 
 function isRecord(candidate: unknown): candidate is Record<string, unknown> {
   return typeof candidate === "object" && candidate !== null && !Array.isArray(candidate);
+}
+
+function assertControllerCheckpointConfirmed(error: unknown): void {
+  if (error instanceof ControllerCheckpointError || error instanceof RetryCheckpointError) throw error;
+}
+
+type StructuredRetry<T> = RetryCheckpoint<ControllerDecision<T>, StructuredOutputAttemptFailure, string>;
+
+function encodeStructuredRetry<T>(checkpoint: StructuredRetry<T>): unknown {
+  const encode = (value: StructuredOutputAttemptFailure) => value.kind !== "terminal" ? value : {
+    kind: "terminal", error: value.error instanceof ControllerError
+      ? {kind: "controller", failure: value.error.failure, settlement: value.error.operationSettlement, deadline: value.error.deadline}
+      : {kind: "error", message: messageFrom(value.error, "Structured output failed.")},
+  };
+  return {...checkpoint,
+    attemptResult: checkpoint.attemptResult?.kind === "failed" ? {...checkpoint.attemptResult, error: encode(checkpoint.attemptResult.error)} : checkpoint.attemptResult,
+    outcome: checkpoint.outcome?.kind === "failed" ? {...checkpoint.outcome, error: encode(checkpoint.outcome.error)} : checkpoint.outcome,
+  };
+}
+
+function decodeStructuredRetry<T>(record: unknown): StructuredRetry<T> | null {
+  if (record === null) return null;
+  if (!isRecord(record)) throw new ControllerCheckpointError("structured_retry_invalid");
+  const checkpoint = record as unknown as StructuredRetry<T>;
+  const decode = (value: StructuredOutputAttemptFailure): StructuredOutputAttemptFailure => {
+    if (value.kind !== "terminal") return value;
+    const error = value.error;
+    if (!isRecord(error)) throw new ControllerCheckpointError("structured_retry_error_invalid");
+    if (error.kind === "controller") return {kind: "terminal", error: new ControllerError(error.failure as ControllerFailure,
+      error.settlement as ControllerError["operationSettlement"], error.deadline as ControllerError["deadline"])};
+    if (error.kind === "error" && typeof error.message === "string") return {kind: "terminal", error: new Error(error.message)};
+    throw new ControllerCheckpointError("structured_retry_error_invalid");
+  };
+  return {...checkpoint,
+    attemptResult: checkpoint.attemptResult?.kind === "failed" ? {...checkpoint.attemptResult, error: decode(checkpoint.attemptResult.error)} : checkpoint.attemptResult,
+    outcome: checkpoint.outcome?.kind === "failed" ? {...checkpoint.outcome, error: decode(checkpoint.outcome.error)} : checkpoint.outcome,
+  };
 }

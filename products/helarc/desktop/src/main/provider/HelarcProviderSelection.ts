@@ -25,7 +25,6 @@ export class HelarcProviderSelection {
     const catalog = await this.query(config, config.model);
     const facts = catalog.models.find(item => item.id === config.model);
     resolveModelThinkingSelection(settings.thinking, facts?.thinking ?? unknownThinking);
-    this.validateOutput(config, facts?.maximumOutputTokens);
   }
 
   async discover(query: HelarcModelDiscoveryQuery): Promise<HelarcModelDiscoveryResult> {
@@ -62,7 +61,6 @@ export class HelarcProviderSelection {
       selectionFacts: { requested, effective: thinking, capability: facts?.thinking ?? unknownThinking,
         source: catalog?.source ?? null, declarationRevision: catalog?.declarationRevision ?? null,
         contextWindowTokens: facts?.contextWindowTokens ?? null, maximumOutputTokens: facts?.maximumOutputTokens ?? null } };
-    this.validateOutput(config, facts?.maximumOutputTokens);
     const current = selection ? await this.store.resolveProfile(stored.profile.id, this.credentials)
       : await this.store.resolveActiveProfile(this.credentials);
     if (!current?.ok || current.profile.id !== stored.profile.id || current.profile.revision !== stored.profile.revision) {
@@ -78,12 +76,6 @@ export class HelarcProviderSelection {
     this.cache.set(key, { catalog, expiresAt: this.now() + 5 * 60_000 });
     while (this.cache.size > 128) this.cache.delete(this.cache.keys().next().value!);
     return catalog;
-  }
-  private validateOutput(config: HelarcProviderConfig, maximum?: number | null): void {
-    const settings = snapshotHelarcProviderModelSettings(config.modelSettings, config.providerKind);
-    if (maximum && config.providerKind !== "ollama" && settings.maximumOutputTokens > maximum) {
-      throw new Error("Maximum output exceeds the model's advertised limit.");
-    }
   }
   private async query(config: HelarcProviderConfig, model: string): Promise<ModelDiscovery> {
     const settings = snapshotHelarcProviderModelSettings(config.modelSettings, config.providerKind);

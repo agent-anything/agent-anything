@@ -15,6 +15,20 @@ const PROGRESS_AT = "2026-07-10T00:00:10.000Z";
 const COMPLETED_AT = "2026-07-10T00:00:20.000Z";
 
 describe("Helarc work context commit transitions", () => {
+  it("accepts a message-free normal ending only when terminal output contains no reply", async () => {
+    const aggregate = await startedAggregate();
+    const original = terminalCommit(1);
+    expect(await applyHelarcRunTerminalCommit(aggregate, { ...original, assistantMessage: null }))
+      .toMatchObject({ status: "rejected", code: "commit_invalid" });
+    const commit: HelarcRunTerminalCommit = { ...original, assistantMessage: null, artifacts: [],
+      terminal: { ...original.terminal, product: { ...original.terminal.product!,
+        output: { ...original.terminal.product!.output, agentSummary: "" } } } };
+    const result = await applyHelarcRunTerminalCommit(aggregate, commit);
+    expect(result.status).toBe("applied");
+    if (result.status === "rejected") throw new Error(result.message);
+    expect(result.aggregate.record.messages).toEqual(aggregate.record.messages);
+    expect(await applyHelarcRunTerminalCommit(result.aggregate, commit)).toMatchObject({ status: "idempotent" });
+  });
   it("atomically starts a Run and replays the exact commit idempotently", async () => {
     const commit = startCommit();
     const applied = await applyHelarcRunStartCommit(null, commit);

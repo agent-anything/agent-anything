@@ -31,6 +31,8 @@ export {
   projectModelInteraction,
 } from "./ModelInteractionProjection.js";
 export { createControllerModelItems } from "./ControllerModelItems.js";
+export type { ControllerInputDeliveryBatch, ControllerInputDeliveryReceipt } from "./ControllerInputDelivery.js";
+export { createInputDeliverySections, createControllerInputDeliveryReceipt } from "./ControllerInputDelivery.js";
 export type {
   ControllerResponseObservation, ControllerResponseObserver, ControllerResponseDeliveryOptions,
 } from "./ControllerResponseObservation.js";
@@ -41,3 +43,5 @@ export type {
   ModelInputRecoveryResult,
 } from "./ModelInputRecovery.js";
 export { unsupportedModelInputRecovery } from "./ModelInputRecovery.js";
+export type { ControllerCheckpointPort } from "./ControllerCheckpoint.js";
+export { ControllerCheckpointError } from "./ControllerCheckpoint.js";

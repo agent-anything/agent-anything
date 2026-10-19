@@ -45,7 +45,7 @@ describe("HostRunManager", () => {
       pendingInteractions: [{ phase: "pending", request: REQUEST }],
     });
 
-    const submission = active.submitInteraction({
+    const submission = await active.submitInteraction({
       request: REQUEST,
       submissionId: "submission-1",
       payload: { choice: "approve" },
@@ -77,12 +77,12 @@ describe("HostRunManager", () => {
     expect(manager.releaseRun("run-1")).toEqual({ status: "released", runId: "run-1" });
   });
 
-  it("keeps cancellation acceptance separate from terminal settlement", () => {
+  it("keeps cancellation acceptance separate from terminal settlement", async () => {
     const fixture = createFakeRunner();
     const manager = createHostRunManager({ runner: fixture.runner, now: () => NOW });
     const active = manager.start(startInput());
 
-    const receipt = active.cancel({ origin: "user", reasonCode: "user_requested" });
+    const receipt = await active.cancel({ origin: "user", reasonCode: "user_requested" });
 
     expect(receipt).toEqual({
       status: "accepted",
@@ -101,13 +101,13 @@ describe("HostRunManager", () => {
     expect(manager.releaseRun("run-1")).toEqual({ status: "run_active", runId: "run-1" });
   });
 
-  it("forwards steering with Host time and exposes the current status projection", () => {
+  it("forwards steering with Host time and exposes the current status projection", async () => {
     const fixture = createFakeRunner();
     const manager = createHostRunManager({ runner: fixture.runner, now: () => NOW });
     const active = manager.start(startInput());
     fixture.publishSnapshot({ sequence: 1, runRevision: 3, status: "running" });
 
-    const receipt = active.steer({
+    const receipt = await active.steer({
       commandId: "steering-1",
       expectedRunRevision: 3,
       instruction: "Inspect the failing tests first.",
@@ -126,7 +126,7 @@ describe("HostRunManager", () => {
     expect(active.getStatus().runRevision).toBe(3);
   });
 
-  it("routes exact descendant resume through the owned RunHandle", () => {
+  it("routes exact descendant resume through the owned RunHandle", async () => {
     const fixture = createFakeRunner();
     const manager = createHostRunManager({ runner: fixture.runner, now: () => NOW });
     const active = manager.start(startInput());
@@ -147,7 +147,7 @@ describe("HostRunManager", () => {
       },
     };
 
-    expect(active.resumeDescendant(route)).toMatchObject({
+    expect((await active.resumeDescendant(route))).toMatchObject({
       status: "routed",
       child: { id: "child-run-1" },
       resume: { status: "accepted" },

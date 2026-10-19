@@ -38,15 +38,15 @@ export function canonicalEncode(domain: string, value: unknown): Uint8Array {
     );
   }
 
-  const chunks: Uint8Array[] = [];
-  appendAscii(chunks, "C1");
-  appendString(chunks, domain);
+  const output = new EncodingBuffer();
+  output.appendAscii("C1");
+  output.appendString(domain);
   encodeValue(value, "$", 0, {
     nodes: 0,
     ancestors: new Set<object>(),
-    chunks,
+    output,
   });
-  return concatenate(chunks);
+  return output.finish();
 }
 
 export async function createCanonicalSha256Digest(
@@ -81,7 +81,7 @@ export async function createCanonicalSha256Digest(
 interface EncodingState {
   nodes: number;
   readonly ancestors: Set<object>;
-  readonly chunks: Uint8Array[];
+  readonly output: EncodingBuffer;
 }
 
 function encodeValue(
@@ -107,23 +107,23 @@ function encodeValue(
   }
 
   if (value === null) {
-    appendAscii(state.chunks, "Z");
+    state.output.appendAscii("Z");
     return;
   }
   if (typeof value === "boolean") {
-    appendAscii(state.chunks, value ? "T" : "F");
+    state.output.appendAscii(value ? "T" : "F");
     return;
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       throw unsupported("Canonical numbers must be finite.", path);
     }
-    appendAscii(state.chunks, "N");
-    appendAscii(state.chunks, `${Object.is(value, -0) ? "0" : value.toString()};`);
+    state.output.appendAscii("N");
+    state.output.appendAscii(`${Object.is(value, -0) ? "0" : value.toString()};`);
     return;
   }
   if (typeof value === "string") {
-    appendString(state.chunks, value);
+    state.output.appendString(value);
     return;
   }
   if (typeof value !== "object") {
@@ -141,9 +141,9 @@ function encodeValue(
   try {
     if (Array.isArray(value)) {
       assertDenseArray(value, path);
-      appendAscii(state.chunks, `A${value.length}[`);
+      state.output.appendAscii(`A${value.length}[`);
       value.forEach((entry, index) => encodeValue(entry, `${path}[${index}]`, depth + 1, state));
-      appendAscii(state.chunks, "]");
+      state.output.appendAscii("]");
       return;
     }
 
@@ -152,30 +152,65 @@ function encodeValue(
     if (Reflect.ownKeys(value).length !== keys.length) {
       throw unsupported("Canonical objects cannot contain symbol properties.", path);
     }
-    appendAscii(state.chunks, `O${keys.length}{`);
+    state.output.appendAscii(`O${keys.length}{`);
     for (const key of keys) {
       const childPath = `${path}.${key}`;
       if (FORBIDDEN_KEYS.has(key)) {
         throw unsupported("Canonical objects cannot contain prototype control keys.", childPath);
       }
       assertDataProperty(value, key, childPath);
-      appendString(state.chunks, key);
+      state.output.appendString(key);
       encodeValue((value as Record<string, unknown>)[key], childPath, depth + 1, state);
     }
-    appendAscii(state.chunks, "}");
+    state.output.appendAscii("}");
   } finally {
     state.ancestors.delete(value);
   }
 }
 
-function appendString(chunks: Uint8Array[], value: string): void {
-  const bytes = encoder.encode(value);
-  appendAscii(chunks, `S${bytes.byteLength}:`);
-  chunks.push(bytes);
-}
+class EncodingBuffer {
+  private buffer = new Uint8Array(1024);
+  private offset = 0;
+  private readonly chunks: Uint8Array[] = [];
 
-function appendAscii(chunks: Uint8Array[], value: string): void {
-  chunks.push(encoder.encode(value));
+  appendAscii(value: string): void {
+    this.ensureSpace(value.length);
+    const bytes = this.buffer.subarray(this.offset, this.offset + value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      bytes[index] = value.charCodeAt(index);
+    }
+    this.offset += value.length;
+    this.chunks.push(bytes);
+  }
+
+  appendString(value: string): void {
+    const body: Uint8Array[] = [];
+    let read = 0;
+    let byteLength = 0;
+    while (read < value.length) {
+      // Four free bytes let encodeInto consume any complete Unicode scalar.
+      this.ensureSpace(4);
+      const target = this.buffer.subarray(this.offset);
+      const encoded = encoder.encodeInto(value.slice(read), target);
+      body.push(target.subarray(0, encoded.written));
+      this.offset += encoded.written;
+      read += encoded.read;
+      byteLength += encoded.written;
+    }
+    // Logical chunk order is independent of allocation order: prefix first.
+    this.appendAscii(`S${byteLength}:`);
+    for (const bytes of body) this.chunks.push(bytes);
+  }
+
+  finish(): Uint8Array {
+    return concatenate(this.chunks);
+  }
+
+  private ensureSpace(length: number): void {
+    if (this.buffer.byteLength - this.offset >= length) return;
+    this.buffer = new Uint8Array(Math.max(length, Math.min(this.buffer.byteLength * 2, 64 * 1024)));
+    this.offset = 0;
+  }
 }
 
 function concatenate(chunks: readonly Uint8Array[]): Uint8Array {

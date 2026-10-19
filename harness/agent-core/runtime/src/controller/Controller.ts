@@ -71,6 +71,21 @@ export interface ModelInteractionProjection {
   readonly messages: readonly ModelMessage[];
   readonly unsettledCalls: readonly ModelToolCall[];
   readonly settledCallCount: number;
+  readonly latestTurn: LocalModelTurnProjection | null;
+  readonly notificationHistory?: readonly {readonly messageIndex: number; readonly batchId: string;
+    readonly batchRevision: string; readonly sequence: number}[];
+}
+
+export interface LocalModelTurnProjection {
+  readonly runId: string;
+  readonly runItemId: string;
+  readonly runItemSequence: number;
+  readonly turnId: string;
+  readonly textBlocks: readonly {
+    readonly modelItemId: string;
+    readonly ordinal: number;
+    readonly text: string;
+  }[];
 }
 
 interface ModelOriginCandidate {
@@ -141,6 +156,7 @@ export type ProgressionCandidate =
   | ModelCallRejectionCandidate;
 
 export interface ControllerInput<TOutput = unknown> {
+  readonly inputDelivery?: import("./ControllerInputDelivery.js").ControllerInputDeliveryBatch | null;
   readonly runId: string;
   readonly iteration: number;
   readonly agent: Agent<TOutput>;
@@ -171,6 +187,8 @@ export type ControllerPreProjectionInput<TOutput = unknown> = Omit<
 >;
 
 export interface ControllerCallContext {
+  readonly checkpoints?: import("./ControllerCheckpoint.js").ControllerCheckpointPort;
+  readonly runCheckpoints?: import("./ControllerCheckpoint.js").ControllerCheckpointPort;
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly cancellation: CancellationContext;
   readonly retry: ControllerRetryContext;
@@ -195,7 +213,10 @@ export interface ControllerFeedback {
   readonly message: string;
 }
 
-export type ControllerDecision<TOutput = unknown> =
+export type ControllerDecision<TOutput = unknown> = {
+  /** Absence does not acknowledge pending input. Set only by the trusted Controller. */
+  readonly inputDeliveryReceipt?: import("./ControllerInputDelivery.js").ControllerInputDeliveryReceipt | null;
+} & (
   | {
       readonly kind: "propose_completion";
       readonly candidates: readonly ProgressionCandidate[];
@@ -212,7 +233,7 @@ export type ControllerDecision<TOutput = unknown> =
       readonly kind: "continue_with_feedback";
       readonly feedback: ControllerFeedback;
       readonly modelItems: readonly ControllerModelItem[];
-    };
+    });
 
 export type CompletionSource =
   // The source call may also supply one Plan transition; it still settles once.
@@ -238,7 +259,15 @@ export interface Controller<TOutput = unknown> {
     input: ControllerInput<TOutput>,
     context: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>>;
+  recover?(
+    input: ControllerInput<TOutput>,
+    context: ControllerCallContext,
+  ): Promise<ControllerDecision<TOutput>>;
   beforeCompletion?(
+    input: ControllerCompletionInput<TOutput>,
+    context: ControllerCallContext,
+  ): Promise<ControllerCompletionDisposition>;
+  recoverBeforeCompletion?(
     input: ControllerCompletionInput<TOutput>,
     context: ControllerCallContext,
   ): Promise<ControllerCompletionDisposition>;

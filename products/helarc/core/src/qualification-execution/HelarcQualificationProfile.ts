@@ -13,6 +13,7 @@ import type { HelarcModelQualificationCatalog } from "../model-qualification/Hel
 import type { CodeFileActionAdapterIds } from "@agent-anything/helarc-code-agent/file-operation";
 
 export interface HelarcQualificationProfileInput {
+  readonly inputContract: import("../tools/HelarcCommandInputContract.js").HelarcCommandInputContract;
   readonly planLimits: import("@agent-anything/agent-runtime/plan").PlanLimits;
   readonly provider: Provider;
   readonly providerProfile: HelarcProviderProfile;
@@ -56,6 +57,8 @@ export function createHelarcQualificationProfile(input: HelarcQualificationProfi
   });
   const callables = protocol.createCallableCatalog(createToolExposureProof(exposure, "qualification"), input.planLimits, false);
   return { agent, protocol, qualification, callables, tools: exposure.catalog.tools, shellRuntime: input.shellRuntime,
+    semanticValidators: tools.toolInputSemanticValidators,
+    commandInputConstraints: Object.freeze({ref: input.inputContract.ref, values: input.inputContract.constraints}),
     planLimits: Object.freeze({ ...input.planLimits }) };
 }
 

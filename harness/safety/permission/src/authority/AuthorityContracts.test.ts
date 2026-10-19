@@ -2,6 +2,8 @@ import type { ManagedPermissionConstraints } from "@agent-anything/governance/ma
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { describe, expect, it } from "vitest";
 import { canonicalizeAdditionalPermissions } from "../approval/PermissionDelta.js";
+import { resolvePermissionProfile } from "../profile/resolvePermissionProfile.js";
+import { allowsRetainedFileRead } from "./ActionPermissionAssessment.js";
 import {
   createActionApprovalCoverage,
   type SessionAuthorityCommit,
@@ -19,6 +21,21 @@ import {
 } from "./validateAuthority.js";
 
 describe("authority contracts", () => {
+  it("checks retained file reads against current path grants rather than historical approval", () => {
+    const resolved = resolvePermissionProfile({profileId: ":workspace", profiles: [], environment: environment(), managedConstraints: noManagedConstraints()});
+    const profile = {...resolved, fileSystem: {...resolved.fileSystem, unrestricted: false, entries: []}};
+    const path = "/work/repo/src/file.ts";
+    expect(allowsRetainedFileRead({profile, path, grants: []})).toBe(false);
+    expect(allowsRetainedFileRead({profile, path, grants: [{fileSystem: {read: ["/work/repo/src"]}}]})).toBe(true);
+    expect(allowsRetainedFileRead({profile, path, grants: [{fileSystem: {write: ["/work/repo/src"]}}]})).toBe(true);
+    expect(allowsRetainedFileRead({profile, path, grants: [{fileSystem: {read: ["/work/repo/src-other"]}}]})).toBe(false);
+  });
+  it("does not let a retained read grant cross a current managed denial", () => {
+    const profile = resolvePermissionProfile({profileId: ":workspace", profiles: [], environment: environment(),
+      managedConstraints: {...noManagedConstraints(), fileSystem: [{target: {kind: "workspace_path", rootId: "repo", path: "private"}, maximumAccess: "none"}]}});
+    expect(allowsRetainedFileRead({profile, path: "/work/repo/private/key.txt", grants: [{fileSystem: {read: ["/work/repo"]}}]})).toBe(false);
+    expect(allowsRetainedFileRead({profile, path: "/work/repo/public.txt", grants: []})).toBe(true);
+  });
   it("loads all records for an exact Session context when category is null", () => {
     const record = validatedRecord();
     expect(isSessionAuthorityApplicable(record, {

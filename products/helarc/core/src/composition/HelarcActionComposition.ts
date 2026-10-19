@@ -16,6 +16,7 @@ import {
 } from "@agent-anything/operation-catalog/catalog";
 import {
   createCodeFileOperationContribution,
+  operationRefForCodeFileTool,
   type CodeFileActionAdapterIds,
 } from "@agent-anything/helarc-code-agent/file-operation";
 import {
@@ -26,13 +27,22 @@ import {
   createFixedLocalToolSelection,
   type ToolSelectionRevision,
 } from "@agent-anything/tools/selection";
-import { createHelarcCommandOperationContribution, HELARC_TASK_OUTPUT_BINDING } from "../tools/HelarcCommandOperation.js";
+import { createHelarcCommandOperationContribution, HELARC_TASK_OUTPUT_BINDING, HELARC_SHELL_OPERATION, HELARC_TASK_STOP_OPERATION } from "../tools/HelarcCommandOperation.js";
 import type {
   HelarcShellRuntimeProfile,
   HelarcShellToolName,
 } from "../tools/HelarcBaselineToolContracts.js";
 import type { OperationBindingRevisionRef } from "@agent-anything/operation-catalog/identity";
+import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import { commandInputValidator, type HelarcCommandInputContract } from "../tools/HelarcCommandInputContract.js";
 import type { OperationToolAvailabilityParticipant, InternalOperationHandler, CompositeOperationResolverPort } from "@agent-anything/agent-runtime/runner";
+import { createOperationResultContracts, type OperationResultContracts } from "@agent-anything/operation-catalog/result";
+import { commandResultContract } from "../tools/HelarcCommandResultContract.js";
+import { createHelarcToolResultPresenters, type HelarcCommandResultDelivery } from "../tools/HelarcToolResultPresenters.js";
+import { withHelarcCompensationInput, withoutHelarcCompensationInput } from "../tools/HelarcCompensationInput.js";
+import { createHelarcCompensationBindings } from "../tools/HelarcCompensationBindings.js";
+import { createHelarcExecutionDetailsContribution, createHelarcExecutionDetailsHandler, type HelarcExecutionMaterialReader } from "../tools/HelarcExecutionDetails.js";
+import { createHelarcFileRestorationContribution } from "../tools/HelarcFileRestoration.js";
 
 export interface HelarcPhysicalActionContribution {
   readonly registrations: ActionRegistrationSnapshot;
@@ -45,6 +55,9 @@ export interface HelarcFileActionContribution extends HelarcPhysicalActionContri
 }
 
 export interface HelarcCommandActionContribution extends HelarcPhysicalActionContribution {
+  readonly taskDelivery: HelarcCommandResultDelivery;
+  readonly inputContract: HelarcCommandInputContract;
+  readonly processManagerId: string;
   readonly internalHandlers: readonly InternalOperationHandler[];
   readonly shellTool: HelarcShellToolName;
   readonly shellRuntime: HelarcShellRuntimeProfile;
@@ -68,6 +81,11 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
 }
 
 export interface CreateHelarcActionCompositionInput {
+  readonly executionEvidenceAccess?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort;
+  readonly executionMaterials?: HelarcExecutionMaterialReader;
+  readonly executionCollections?: import("../tools/HelarcExecutionDetails.js").HelarcExecutionCollectionReader;
+  readonly executionCallable?: (runId: string, binding: import("@agent-anything/operation-catalog/identity").OperationBindingRevisionRef) => string | null;
+  readonly executionEvidence?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceRecordPort;
   readonly admittedAt: string;
   readonly file: HelarcFileActionContribution;
   readonly command: HelarcCommandActionContribution;
@@ -75,6 +93,9 @@ export interface CreateHelarcActionCompositionInput {
 }
 
 export interface HelarcActionComposition {
+  readonly resultPresenters: readonly import("@agent-anything/agent-runtime/runner").ToolResultPresenter[];
+  readonly resultContracts: OperationResultContracts;
+  readonly toolInputSemanticValidators: readonly import("@agent-anything/tools/validation").ToolInputSemanticValidator[];
   readonly internalHandlers: readonly InternalOperationHandler[];
   readonly composite: CompositeOperationResolverPort;
   readonly operationCatalog: OperationCatalogSnapshot;
@@ -89,7 +110,7 @@ export interface HelarcActionComposition {
 export function createHelarcActionComposition(
   input: CreateHelarcActionCompositionInput,
 ): HelarcActionComposition {
-  const { command, operationCatalog, operationBindings, toolSelection } = createHelarcToolProfile(input);
+  const { command, operationCatalog, operationBindings, toolSelection, toolInputSemanticValidators, resultContracts, toolRegistrations } = createHelarcToolProfile(input);
   const physical = [input.file, input.command];
   const registrations = createActionRegistrationSnapshot(
     physical.flatMap((contribution) =>
@@ -99,11 +120,16 @@ export function createHelarcActionComposition(
   assertActionRegistrationsBelongToCatalog(registrations, operationCatalog);
   const operationAvailability = createOperationAvailability(operationCatalog, input.command);
   return Object.freeze({
-    operationCatalog, operationBindings, toolSelection, registrations,
+    operationCatalog, operationBindings: createHelarcCompensationBindings({bindings: operationBindings,
+      tools: toolRegistrations.registrations, records: input.executionEvidence, access: input.executionEvidenceAccess}), toolSelection, registrations, resultContracts,
+    resultPresenters: createHelarcToolResultPresenters(toolRegistrations.registrations, input.command.taskDelivery, input.executionEvidence),
+    toolInputSemanticValidators: Object.freeze(toolInputSemanticValidators.map(validator => Object.freeze({...validator,
+      scope: Object.freeze({owner: "helarc-command", kind: "contribution", id: input.command.processManagerId, revision: "1"})}))),
     adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
     executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
     operationAvailability,
-    internalHandlers: input.command.internalHandlers,
+    internalHandlers: Object.freeze([...input.command.internalHandlers, createHelarcExecutionDetailsHandler({records: input.executionEvidence,
+      access: input.executionEvidenceAccess, materials: input.executionMaterials, collections: input.executionCollections, callable: input.executionCallable})]),
     composite: command.composite,
   });
 }
@@ -112,21 +138,26 @@ export function createHelarcActionComposition(
 export function createHelarcToolProfile(input: {
   readonly admittedAt: string;
   readonly file: Pick<HelarcFileActionContribution, "actionAdapterIds">;
-  readonly command: Pick<HelarcCommandActionContribution, "shellTool" | "shellActionAdapterId" | "taskStopActionAdapterId">;
+  readonly command: Pick<HelarcCommandActionContribution, "shellTool" | "shellActionAdapterId" | "taskStopActionAdapterId" | "inputContract">;
   readonly semanticTools: readonly ToolRegistrationInput[];
 }) {
   requireIsoDate(input.admittedAt);
+  const details = createHelarcExecutionDetailsContribution(input.admittedAt);
+  const restoration = createHelarcFileRestorationContribution(input.admittedAt);
   const file = createCodeFileOperationContribution({
     actionAdapterIds: input.file.actionAdapterIds,
     admittedAt: input.admittedAt,
   });
   const command = createHelarcCommandOperationContribution({
     shellTool: input.command.shellTool,
+    inputContract: input.command.inputContract,
     shellActionAdapterId: input.command.shellActionAdapterId,
     taskStopActionAdapterId: input.command.taskStopActionAdapterId,
     admittedAt: input.admittedAt,
   });
   const operationEntries = [
+    details.operation,
+    restoration.operation,
     ...file.operations,
     ...command.operations,
   ];
@@ -137,15 +168,27 @@ export function createHelarcToolProfile(input: {
   });
   const operationBindings = createOperationBindingResolverSnapshot(
     "helarc.operation-bindings.v1",
-    [...file.bindings, ...command.bindings],
+    [...file.bindings, ...command.bindings, details.resolver, restoration.resolver],
   );
+  const resultContracts = createOperationResultContracts(operationCatalog, [
+    ...file.resultContracts, ...command.operations.map(commandResultContract), details.contract, restoration.contract,
+  ]);
   const toolRegistrations = createToolRegistrationSnapshot(
     operationCatalog,
     [
       ...file.tools,
       ...command.tools,
       ...input.semanticTools,
-    ],
+      details.tool,
+      restoration.tool,
+    ].map(tool => {
+      const participant = tool.descriptor.binding.kind === "operation" && [
+        operationRefForCodeFileTool("Edit"), operationRefForCodeFileTool("Write"),
+        HELARC_SHELL_OPERATION, HELARC_TASK_STOP_OPERATION,
+      ].some(operation => tool.descriptor.binding.kind === "operation" &&
+        operationRevisionKey(operation) === operationRevisionKey(tool.descriptor.binding.operation));
+      return participant ? withHelarcCompensationInput(tool) : tool;
+    }),
   );
   const toolSelection = createFixedLocalToolSelection(
     toolRegistrations,
@@ -155,7 +198,12 @@ export function createHelarcToolProfile(input: {
       origins: registration.allowedOrigins,
     })),
   );
-  return Object.freeze({ command, operationCatalog, operationBindings, toolSelection });
+  const shell = toolRegistrations.registrations.find(registration => registration.descriptor.name === input.command.shellTool)!;
+  const commandValidator = commandInputValidator(input.command.inputContract, shell.descriptor.ref);
+  const toolInputSemanticValidators = Object.freeze([{...commandValidator,
+    validate(value: unknown) { return commandValidator.validate(withoutHelarcCompensationInput(value)); },
+  }]);
+  return Object.freeze({ command, operationCatalog, operationBindings, toolSelection, toolRegistrations, toolInputSemanticValidators, resultContracts });
 }
 
 function createOperationAvailability(

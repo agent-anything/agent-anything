@@ -1,7 +1,7 @@
 
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
-import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
+import { ControllerCheckpointError, type Controller, type ControllerCallContext, type ControllerDecision, type ControllerInput } from "@agent-anything/agent-runtime/controller";
 
 export interface HelarcControllerTraceProjection {
   readonly runId: string;
@@ -66,6 +66,15 @@ export class HelarcTracingController<TOutput = unknown> implements Controller<TO
     context: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>> {
     const decision = await this.inner.next(input, context);
+    return this.record(input, decision);
+  }
+
+  async recover(input: ControllerInput<TOutput>, context: ControllerCallContext): Promise<ControllerDecision<TOutput>> {
+    if (!this.inner.recover) throw new ControllerCheckpointError("controller_recovery_unavailable");
+    return this.record(input, await this.inner.recover(input, context));
+  }
+
+  private record(input: ControllerInput<TOutput>, decision: ControllerDecision<TOutput>): ControllerDecision<TOutput> {
     const metadata = decision.modelItems[0]?.metadata ?? {};
     const operationId = createControllerTurnTraceOperationId(input.iteration);
     this.traceByOperationId.set(

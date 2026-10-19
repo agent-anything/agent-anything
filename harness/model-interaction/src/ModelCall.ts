@@ -43,6 +43,7 @@ export type ModelCallSettlementKind =
   | "cancelled";
 
 export interface ModelCallSettlementSourceRef {
+  readonly runId?: string;
   readonly owner: string;
   readonly kind: string;
   readonly id: string;
@@ -54,8 +55,27 @@ export interface ModelToolResult {
   readonly providerCallRef: ProviderCallRef | null;
   readonly name: string;
   readonly settlement: ModelCallSettlementKind;
+  readonly presentation: ModelResultPresentation;
   readonly content: ModelJsonValue;
   readonly sourceRefs: readonly ModelCallSettlementSourceRef[];
+}
+
+export interface ModelResultPresentation {
+  readonly presenter: { readonly id: string; readonly revision: string };
+  readonly disposition: "complete" | "bounded" | "unavailable";
+  readonly failureCode: string | null;
+}
+
+export function snapshotModelResultPresentation(input: ModelResultPresentation): ModelResultPresentation {
+  strictRecord(input, "ModelResultPresentation", ["presenter", "disposition", "failureCode"]);
+  strictRecord(input.presenter, "ModelResultPresentation.presenter", ["id", "revision"]);
+  if (!["complete", "bounded", "unavailable"].includes(input.disposition) ||
+      (input.disposition === "unavailable" ? input.failureCode === null : input.failureCode !== null)) {
+    throw new TypeError("Model result presentation disposition and failure are inconsistent.");
+  }
+  return Object.freeze({presenter: Object.freeze({id: token(input.presenter.id, "ModelResultPresentation.presenter.id"),
+    revision: token(input.presenter.revision, "ModelResultPresentation.presenter.revision")}),
+    disposition: input.disposition, failureCode: nullableToken(input.failureCode, "ModelResultPresentation.failureCode")});
 }
 
 export function createModelCallRef(input: {
@@ -134,15 +154,12 @@ export function snapshotModelToolCall(input: ModelToolCall): ModelToolCall {
 
 export function snapshotModelToolResult(input: ModelToolResult): ModelToolResult {
   strictRecord(input, "ModelToolResult", [
-    "modelCallRef", "providerCallRef", "name", "settlement", "content", "sourceRefs",
+    "modelCallRef", "providerCallRef", "name", "settlement", "presentation", "content", "sourceRefs",
   ]);
   if (!isSettlement(input.settlement)) {
     throw new TypeError("ModelToolResult.settlement is unsupported.");
   }
-  const content = snapshotJsonValue(input.content, "ModelToolResult.content");
-  if (utf8Length(JSON.stringify(content)) > MAX_MODEL_RESULT_BYTES) {
-    throw new TypeError("ModelToolResult.content is too large.");
-  }
+  const content = snapshotModelToolResultContent(input.content);
   if (
     !Array.isArray(input.sourceRefs) ||
     input.sourceRefs.length === 0 ||
@@ -155,12 +172,14 @@ export function snapshotModelToolResult(input: ModelToolResult): ModelToolResult
     providerCallRef: snapshotProviderCallRef(input.providerCallRef),
     name: token(input.name, "ModelToolResult.name"),
     settlement: input.settlement,
+    presentation: snapshotModelResultPresentation(input.presentation),
     content,
     sourceRefs: Object.freeze(input.sourceRefs.map((source, index) => {
       strictRecord(source, `ModelToolResult.sourceRefs[${index}]`, [
-        "owner", "kind", "id", "revision",
+        "owner", "kind", "id", "revision", "runId",
       ]);
       return Object.freeze({
+        ...(source.runId === undefined ? {} : {runId: token(source.runId, `ModelToolResult.sourceRefs[${index}].runId`)}),
         owner: token(source.owner, `ModelToolResult.sourceRefs[${index}].owner`),
         kind: token(source.kind, `ModelToolResult.sourceRefs[${index}].kind`),
         id: token(source.id, `ModelToolResult.sourceRefs[${index}].id`),
@@ -171,6 +190,14 @@ export function snapshotModelToolResult(input: ModelToolResult): ModelToolResult
       });
     })),
   });
+}
+
+export function snapshotModelToolResultContent(input: unknown): ModelJsonValue {
+  const content = snapshotJsonValue(input, "ModelToolResult.content");
+  if (utf8Length(JSON.stringify(content)) > MAX_MODEL_RESULT_BYTES) {
+    throw new TypeError("ModelToolResult.content is too large.");
+  }
+  return content;
 }
 
 export function modelCallRefKey(input: ModelCallRef): string {

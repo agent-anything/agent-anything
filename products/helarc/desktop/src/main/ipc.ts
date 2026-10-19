@@ -425,13 +425,15 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   ipcMain.handle(HELARC_IPC_CHANNELS.startRun, (_event, command: unknown) => {
     return productCommands.dispatch(command, "run.start");
   });
+  ipcMain.handle("helarc:list-recoverable-work", () => input.controller.listRecoverableWork());
+  ipcMain.handle("helarc:recover-work", (_event, request) => input.controller.recoverWork(request));
 
   ipcMain.handle(HELARC_IPC_CHANNELS.openThread, (_event, command: unknown) => {
     return productCommands.dispatch(command, "thread.open");
   });
 
-  ipcMain.handle(HELARC_IPC_CHANNELS.cancelRun, (_event, command: unknown) => {
-    const receipt = input.controller.dispatchHostCommand(command, "run.cancel");
+  ipcMain.handle(HELARC_IPC_CHANNELS.cancelRun, async (_event, command: unknown) => {
+    const receipt = await input.controller.dispatchHostCommand(command, "run.cancel");
     return {
       receipt: projectHelarcHostCommandReceipt(receipt),
       snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()),
@@ -440,8 +442,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   ipcMain.handle(
     HELARC_IPC_CHANNELS.steerRun,
-    (_event, command: unknown) => {
-      const receipt = input.controller.dispatchHostCommand(
+    async (_event, command: unknown) => {
+      const receipt = await input.controller.dispatchHostCommand(
         command,
         "run.steer",
       );
@@ -454,8 +456,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   ipcMain.handle(
     HELARC_IPC_CHANNELS.resumeDescendant,
-    (_event, command: unknown) => {
-      const receipt = input.controller.dispatchHostCommand(
+    async (_event, command: unknown) => {
+      const receipt = await input.controller.dispatchHostCommand(
         command,
         "descendant.resume",
       );
@@ -468,8 +470,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   ipcMain.handle(
     HELARC_IPC_CHANNELS.submitInteraction,
-    (_event, command: unknown) => {
-      const receipt = input.controller.dispatchHostCommand(
+    async (_event, command: unknown) => {
+      const receipt = await input.controller.dispatchHostCommand(
         command,
         "interaction.submit",
       );

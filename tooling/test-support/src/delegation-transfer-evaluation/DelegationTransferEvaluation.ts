@@ -47,7 +47,7 @@ export interface DelegationTransferInvariantSummary {
 }
 
 export interface DelegationTransferEvaluationReport {
-  readonly revision: "delegation-transfer-deterministic-evaluation-v8";
+  readonly revision: "delegation-transfer-deterministic-evaluation-v9";
   readonly metrics: DelegationTransferMetrics;
   readonly invariants: DelegationTransferInvariantSummary;
   readonly descendantRunCount: number;
@@ -92,7 +92,7 @@ export async function runDelegationTransferDeterministicEvaluation(): Promise<
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
   const materialized = deepFreeze({
-    revision: "delegation-transfer-deterministic-evaluation-v8" as const,
+    revision: "delegation-transfer-deterministic-evaluation-v9" as const,
     metrics,
     invariants,
     descendantRunCount: started.length,

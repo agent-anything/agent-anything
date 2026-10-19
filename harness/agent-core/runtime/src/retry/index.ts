@@ -56,3 +56,5 @@ export { RetryExecutor } from "./RetryExecutor.js";
 export { createSystemRetryExecutor } from "./createSystemRetryExecutor.js";
 export type { RetryWaitControl, RetryWaitRequest, RetryWaitOutcome } from "./RetryWaitControl.js";
 export { RetryInvocationInvalidatedError } from "./RetryWaitControl.js";
+export type { RetryCheckpoint, RetryCheckpointPort } from "./RetryCheckpoint.js";
+export { RetryCheckpointError } from "./RetryCheckpoint.js";

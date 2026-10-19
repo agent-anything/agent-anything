@@ -1,6 +1,6 @@
 import type {ResolvedOperationBinding} from "@agent-anything/operation-catalog/binding";
 import type {OperationResult} from "@agent-anything/operation-catalog/result";
-import {createOperationResult} from "@agent-anything/operation-catalog/result";
+import {createOperationResult, OperationCommitError} from "@agent-anything/operation-catalog/result";
 import {RunProcessManager, ProcessManagerError} from "./RunProcessManager.js";
 import {readProcessWait} from "./CommandInput.js";
 import {interpretShellCommandOutcome} from "./ShellCommandOutcome.js";
@@ -14,6 +14,7 @@ export interface ProcessObservationHandler {
     readonly deadlineAt:string;
     readonly interruption:{readonly signal:AbortSignal};
   }):Promise<OperationResult>;
+  reconcile(context: Parameters<ProcessObservationHandler["execute"]>[0]): Promise<OperationResult>;
 }
 
 export function createProcessObservationHandlers(input:{
@@ -25,6 +26,7 @@ export function createProcessObservationHandlers(input:{
 }):readonly ProcessObservationHandler[] {
   const handler = (initial:boolean):ProcessObservationHandler => ({
     id:initial ? input.initialHandlerId : input.outputHandlerId,
+    async reconcile(context) { return this.execute(context); },
     async execute(context) {
       const startedAt = input.now();
       const request = context.binding.request;
@@ -45,7 +47,9 @@ export function createProcessObservationHandlers(input:{
         const output=projectProcessObservation(observed);
         let commandFailure:null|{code:string;message:string;retryable:false;metadata:Record<string,unknown>}=null;
         if(initial && observed.snapshot.outcome !== null) {
-          const semantics=input.semantics.get(executionId);
+          const display=input.manager.getDisplayDescriptor(context.runId, executionId);
+          const semantics=input.semantics.get(executionId) ??
+            (display.command !== null && (display.shell === "Bash" || display.shell === "PowerShell") ? {shell: display.shell, command: display.command} : null);
           if(!semantics) throw new TypeError("Command interpretation is unavailable.");
           const result=interpretShellCommandOutcome({...semantics,exitCode:observed.snapshot.rootExit?.code ?? null,
             signal:observed.snapshot.rootExit?.signal ?? null,stdout:{...observed.stdout,truncated:observed.hasMore||observed.stdout.omittedBytes>0},
@@ -59,6 +63,7 @@ export function createProcessObservationHandlers(input:{
           output:initial ? {observation:output,commandFailure} : output,
           lowerRefs:[{owner:"helarc-command",kind:"process_observation",id:observed.id,revision:"1"}],metadata:{execution:observed.execution}});
       } catch(error) {
+        if(error instanceof OperationCommitError) throw error;
         const snapshot=error instanceof ProcessManagerError ? error.snapshot:null;
         return createOperationResult({...base,finishedAt:input.now(),status:context.interruption.signal.aborted ? "cancelled":"failed",output:null,
           failure:{owner:"helarc-command",code:error instanceof ProcessManagerError ? error.code:"process_observation_failed",

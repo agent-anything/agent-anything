@@ -10,6 +10,24 @@ const record: InspectionRecord = {
 };
 
 describe("Local telemetry failure isolation", () => {
+  it("preserves open intervals across slices and reports only genuine closure omissions", async () => {
+    const telemetry = new InspectionTelemetry("source", "dataset");
+    const interval = (id: string, phase: "started" | "settled", clock: string): InspectionRecord => ({...record, id,
+      occurredAt: "2026-09-09T00:00:00Z", payload: {kind: "interval", activity: "run", phase, clock, status: phase === "settled" ? "completed" : "running"}});
+    const writes: unknown[] = [];
+    telemetry.accept(interval("start", "started", "one"));
+    await telemetry.flush(value => writes.push(value));
+    expect(telemetry.issues).toEqual([]);
+    telemetry.accept(interval("unmatched", "settled", "two"));
+    telemetry.accept(interval("end", "settled", "one"));
+    await telemetry.flush(value => writes.push(value));
+    expect(writes).toHaveLength(1);
+    expect(telemetry.issues).toMatchObject([{reason: "missing_start", count: 1, recordIds: ["unmatched"]}]);
+    telemetry.accept(interval("open", "started", "three"));
+    await telemetry.close(value => writes.push(value));
+    expect(telemetry.issues).toMatchObject([{reason: "missing_start"}, {reason: "open_at_closure", count: 1, recordIds: ["open"]}]);
+  });
+
   it("bounds ended export work and reports rejected writes without throwing into native recording", async () => {
     const telemetry = new InspectionTelemetry("source", "dataset");
     for (let i = 0; i < 2200; i++) telemetry.accept({ ...record, id: `record-${i}`, commitSequence: i + 1 });

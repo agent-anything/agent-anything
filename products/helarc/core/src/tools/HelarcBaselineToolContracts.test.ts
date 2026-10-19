@@ -9,6 +9,8 @@ import {
 describe("Helarc baseline Tool Contracts", () => {
   it("exposes the complete catalog with one Host-selected Shell", () => {
     expect(createHelarcBaselineToolContracts("PowerShell").map((item) => item.name)).toEqual([
+      "RestoreFile",
+      "ExecutionDetails",
       "Read",
       "Glob",
       "Grep",
@@ -23,7 +25,7 @@ describe("Helarc baseline Tool Contracts", () => {
     ]);
     expect(createHelarcBaselineToolContracts("Bash").map((item) => item.name)).toContain("Bash");
     expect(createHelarcBaselineToolContracts("Bash").map((item) => item.name)).not.toContain("PowerShell");
-    expect(HELARC_BASELINE_TOOL_CONTRACTS).toHaveLength(12);
+    expect(HELARC_BASELINE_TOOL_CONTRACTS).toHaveLength(14);
   });
 
   it("freezes exact input fields and settlement families", () => {

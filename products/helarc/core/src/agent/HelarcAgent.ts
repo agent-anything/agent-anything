@@ -4,6 +4,7 @@ import {
   type AgentInstructions,
 } from "@agent-anything/agent-core/agent";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
+import { validHelarcFinalReply } from "../controller/HelarcFinalReply.js";
 import { snapshotModelCallRef, type ModelCallRef } from "@agent-anything/model-interaction";
 import {
   HELARC_INSTRUCTION_CATALOG,
@@ -80,7 +81,7 @@ function createAgent(
 ): Agent<HelarcAgentOutput> {
   return snapshotAgent({
     id,
-    revision: `instructions-v1:${instructions.contentDigest.value}`,
+    revision: `instructions-v1:${instructions.contentDigest.value}:output-v2`,
     name,
     instructions,
     output: HELARC_OUTPUT_CONTRACT,
@@ -97,11 +98,15 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
       return { valid: false as const, message: "Helarc output kind is invalid." };
     }
     const source = candidate.source;
-    if (!isRecord(source) || !(source.kind === "product_status" ||
+    if (!isRecord(source) || !(source.kind === "product_status" || source.kind === "no_text" ||
       validControlSource(source) ||
       (source.kind === "model_finish" && typeof source.turnId === "string") ||
       (source.kind === "model_text" && typeof source.turnId === "string" && Array.isArray(source.modelItemIds) && source.modelItemIds.every(id => typeof id === "string")))) {
       return { valid: false as const, message: "Helarc output requires explicit provenance." };
+    }
+    if ((candidate.finalReply !== undefined || source.kind === "model_control" || source.kind === "no_text" || source.adopted !== undefined) &&
+        !validHelarcFinalReply(candidate.summary, source as HelarcAgentOutput["source"], candidate.finalReply)) {
+      return {valid: false as const, message: "Helarc final reply content and provenance are inconsistent."};
     }
     return {
       valid: true as const,
@@ -109,6 +114,7 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
         kind: "complete" as const,
         summary: candidate.summary,
         source: structuredClone(source) as HelarcAgentOutput["source"],
+        ...(candidate.finalReply === undefined ? {} : {finalReply: structuredClone(candidate.finalReply) as NonNullable<HelarcAgentOutput["finalReply"]>}),
       }),
     };
   },

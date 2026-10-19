@@ -64,14 +64,12 @@ export const HELARC_DEFAULT_PROVIDER_SETTINGS = Object.freeze({
 
 export interface HelarcOllamaRuntimeProfileSnapshot {
   contextWindowTokens: number;
-  maximumOutputTokens: number;
 }
 
 export const HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE: Readonly<
   HelarcOllamaRuntimeProfileSnapshot
 > = Object.freeze({
   contextWindowTokens: 163_840,
-  maximumOutputTokens: 2_048,
 });
 
 export interface HelarcProviderProfileSnapshot {
@@ -576,6 +574,8 @@ export interface HelarcThreadSummarySnapshot {
 }
 
 export interface HelarcMainSnapshot {
+  /** Live execution ownership, independent of the last retained Run projection. */
+  execution: "idle" | "starting" | "active";
   projects: readonly HelarcProjectSnapshot[];
   selectedProjectId: string | null;
   status: HelarcMainSnapshotStatus;
@@ -943,6 +943,8 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
+  listRecoverableWork(): Promise<readonly import("./HelarcExecutionRecovery.js").HelarcRecoverableWork[]>;
+  recoverWork(input: import("./HelarcExecutionRecovery.js").HelarcRecoverWorkInput): Promise<import("./HelarcExecutionRecovery.js").HelarcRecoverWorkResult>;
   readConversation(input: import("./HelarcWorkbench.js").ConversationQuery): Promise<import("./HelarcWorkbench.js").ConversationPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readConversationTurn(input: import("./HelarcWorkbench.js").ConversationTurnQuery): Promise<import("./HelarcWorkbench.js").ConversationTurnPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readCurrentWork(input: import("./HelarcWorkbench.js").CurrentWorkQuery): Promise<import("./HelarcWorkbench.js").CurrentWorkPage | import("./HelarcWorkbench.js").WorkbenchRejected>;

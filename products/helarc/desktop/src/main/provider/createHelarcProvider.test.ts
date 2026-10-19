@@ -10,9 +10,9 @@ const settings = {
 describe("Desktop Provider composition", () => {
   it.each(["https://api.deepseek.com", "https://api.deepseek.com/", "https://api.deepseek.com/v1/"])(
     "selects explicit non-thinking mode for %s", baseUrl => {
-      const provider = createHelarcProvider({ ...settings, baseUrl, modelSettings: { service: "deepseek", thinking: { mode: "disabled" }, maximumOutputTokens: 4096 } });
+      const provider = createHelarcProvider({ ...settings, baseUrl, modelSettings: { service: "deepseek", thinking: { mode: "disabled" } } });
       expect(provider.descriptor.metadata.generationConfiguration).toEqual({
-        maximumOutputTokens: 4096, thinking: { type: "disabled" }, service: "deepseek", reasoningEffort: null,
+        maximumOutputTokens: null, thinking: { type: "disabled" }, service: "deepseek", reasoningEffort: null,
       });
       expect(JSON.stringify(provider.descriptor)).not.toContain(settings.apiKey);
     },
@@ -25,11 +25,12 @@ describe("Desktop Provider composition", () => {
     },
   );
 
-  it("does not alter Ollama generation configuration", () => {
+  it("leaves Ollama output length unspecified while retaining the context window", () => {
     const provider = createHelarcProvider({ ...settings, providerKind: "ollama", baseUrl: "http://localhost:11435",
-      model: "gemma4:e4b", apiKey: "", ollamaRuntime: { contextWindowTokens: 163840, maximumOutputTokens: 2048 } });
+      model: "gemma4:e4b", apiKey: "", ollamaRuntime: { contextWindowTokens: 163840 } });
     expect(provider.descriptor.id).toBe("ollama.api");
-    expect(provider.descriptor.metadata.generationConfiguration).toEqual({ think: null, modelArtifact: null, maximumOutputTokens: 2048 });
-    expect(provider.modelContext.requestedOutput.maximum).toBe(2048);
+    expect(provider.descriptor.metadata.generationConfiguration).toEqual({ think: null, modelArtifact: null, maximumOutputTokens: null });
+    expect(provider.modelContext.requestedOutput).toMatchObject({ maximum: null, source: "unspecified" });
+    expect(provider.modelContext.capacity).toMatchObject({ maximum: 163840 });
   });
 });

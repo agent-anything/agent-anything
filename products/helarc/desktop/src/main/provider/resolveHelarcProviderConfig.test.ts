@@ -21,7 +21,7 @@ describe("resolveHelarcProviderConfig", () => {
         model: "model-a",
         timeoutMs: 1500,
         ollamaRuntime: null,
-        modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+        modelSettings: { service: "generic", thinking: { mode: "default" } },
       },
       profile: {
         id: "env-provider",
@@ -34,7 +34,7 @@ describe("resolveHelarcProviderConfig", () => {
         timeoutMs: 1500,
         ollamaRuntime: null,
         credentialStatus: "present",
-        modelSettings: { service: "generic", thinking: { mode: "default" }, maximumOutputTokens: 4096 },
+        modelSettings: { service: "generic", thinking: { mode: "default" } },
         qualificationPolicy: "require_qualified",
         isActive: true,
       },
@@ -93,7 +93,6 @@ describe("resolveHelarcProviderConfig", () => {
         timeoutMs: 300_000_000,
         ollamaRuntime: {
           contextWindowTokens: 163_840,
-          maximumOutputTokens: 2_048,
         },
       },
       profile: {
@@ -105,7 +104,6 @@ describe("resolveHelarcProviderConfig", () => {
         timeoutMs: 300_000_000,
         ollamaRuntime: {
           contextWindowTokens: 163_840,
-          maximumOutputTokens: 2_048,
         },
       },
     });
@@ -117,7 +115,6 @@ describe("resolveHelarcProviderConfig", () => {
       HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
       HELARC_PROVIDER_MODEL: "gemma4:e4b",
       HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS: "32768",
-      HELARC_OLLAMA_MAXIMUM_OUTPUT_TOKENS: "4096",
     });
 
     expect(result).toMatchObject({
@@ -126,7 +123,6 @@ describe("resolveHelarcProviderConfig", () => {
         baseUrl: "http://localhost:11434",
         ollamaRuntime: {
           contextWindowTokens: 32_768,
-          maximumOutputTokens: 4_096,
         },
       },
     });
@@ -137,8 +133,7 @@ describe("resolveHelarcProviderConfig", () => {
       HELARC_PROVIDER_KIND: "ollama",
       HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
       HELARC_PROVIDER_MODEL: "gemma4:e4b",
-      HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS: "4096",
-      HELARC_OLLAMA_MAXIMUM_OUTPUT_TOKENS: "4096",
+      HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS: "0",
     });
 
     expect(result).toEqual({

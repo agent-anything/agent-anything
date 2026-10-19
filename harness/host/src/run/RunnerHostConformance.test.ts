@@ -10,6 +10,7 @@ import {
 import {
   createOperationCatalogSnapshot,
 } from "@agent-anything/operation-catalog/catalog";
+import { createOperationResultContracts } from "@agent-anything/operation-catalog/result";
 import {
   createFixedLocalToolSelection,
 } from "@agent-anything/tools/selection";
@@ -74,7 +75,7 @@ describe("Runner and generic Host conformance", () => {
     const active = createManager(controller).start(startInput());
     await entered.promise;
 
-    const receipt = active.cancel({ origin: "user", reasonCode: "user_requested" });
+    const receipt = await active.cancel({ origin: "user", reasonCode: "user_requested" });
     release.resolve();
     const outcome = await active.wait();
 
@@ -132,6 +133,7 @@ function emptyOperations(): RunnerOperationComposition {
   });
   return Object.freeze({
     catalog,
+    resultContracts: createOperationResultContracts(catalog, []),
     bindings: createOperationBindingResolverSnapshot("operation-bindings-1", []),
     validateToolInput: () => true,
     internalHandlers: Object.freeze([]),

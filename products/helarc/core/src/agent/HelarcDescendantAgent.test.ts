@@ -166,7 +166,7 @@ function prepareDelegation(input: unknown) {
       toolCallId: "delegate-call",
       attempt: { id: "delegate-attempt", runAction: action, modelCall: null },
       parentRunAction: action,
-      toolRevision: { tool: { namespace: "helarc", name: "agent" }, revision: "2" },
+      toolRevision: { tool: { namespace: "helarc", name: "agent" }, revision: "3" },
       binding: {
         kind: "descendant_agent",
         agent: { id: agent.id, revision: agent.revision },

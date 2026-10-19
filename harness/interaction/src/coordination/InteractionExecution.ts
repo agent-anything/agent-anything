@@ -75,6 +75,41 @@ export class InteractionExecution {
     return new InteractionExecution(pending.request, pending.blockingScope);
   }
 
+  static restore(input: InteractionExecutionSnapshot): InteractionExecution {
+    const pending = snapshotPendingInteractionRef(input.pending);
+    const restored = InteractionExecution.create(pending);
+    const submissions = input.submissions.map(snapshotInteractionSubmissionRecordRef);
+    const receipts = input.receipts.map(snapshotInteractionTransportReceipt);
+    const terminal = input.terminal === null ? null : snapshotInteractionTerminalRecord(input.terminal);
+    if (!Number.isSafeInteger(input.revision) || input.revision !== submissions.length + (terminal === null ? 0 : 1) ||
+        pending.lifecycle !== (terminal?.kind ?? "pending")) {
+      throw new TypeError("Interaction checkpoint lifecycle is inconsistent.");
+    }
+    const receiptIds = new Set<string>();
+    for (const receipt of receipts) {
+      assertSameRequest(pending.request, receipt.request);
+      if (receiptIds.has(receipt.receiptId)) throw new TypeError("Interaction checkpoint contains duplicate receipts.");
+      receiptIds.add(receipt.receiptId);
+    }
+    for (const submission of submissions) {
+      assertSameRequest(pending.request, submission.request);
+      if (restored.submissions.has(submission.submissionId) ||
+          !receipts.some(receipt => receipt.submissionId === submission.submissionId && receipt.status === "accepted_for_resolution")) {
+        throw new TypeError("Interaction checkpoint submission has no unique acceptance.");
+      }
+      restored.submissions.set(submission.submissionId, submission);
+    }
+    if (receipts.some(receipt => receipt.status !== "rejected" && !restored.submissions.has(receipt.submissionId))) {
+      throw new TypeError("Interaction checkpoint receipt has no submission.");
+    }
+    if (terminal !== null) assertSameRequest(pending.request, terminal.request);
+    restored.receipts.push(...receipts);
+    restored.terminal = terminal;
+    restored.lifecycle = pending.lifecycle;
+    restored.revision = input.revision;
+    return restored;
+  }
+
   getSnapshot(): InteractionExecutionSnapshot {
     return Object.freeze({
       revision: this.revision,

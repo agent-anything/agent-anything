@@ -16,6 +16,8 @@ import {
 } from "../composition/index.js";
 import { AgentHookController } from "./AgentHookController.js";
 import { AgentHookExecutionStore } from "./AgentHookExecution.js";
+import { validateAgentHookCheckpoint, type AgentHookRecordPort, type AgentHookInvocationCheckpoint } from "./AgentHookRecordPort.js";
+import { ControllerCheckpointError, type ControllerCheckpointPort } from "@agent-anything/agent-runtime/controller";
 import type { ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 
 const NOW = "2026-09-04T00:00:00.000Z";
@@ -47,6 +49,65 @@ class FakeController implements Controller<TestOutput> {
 }
 
 describe("AgentHookController", () => {
+  it.each(["intent", "outcome", "aggregate"] as const)("recovers a Hook %s acknowledgement loss without replay or resetting feedback count", async stage => {
+    const values = new Map<string, unknown>();
+    let lose = true;
+    const port: ControllerCheckpointPort = {read: key => structuredClone(values.get(key) ?? null), commit: async (key, value) => {
+      values.set(key, structuredClone(value));
+      const record = value as {outcome?: unknown; completion?: unknown};
+      if (lose && (stage === "intent" && key.startsWith('["hook"') && record.outcome === null ||
+          stage === "outcome" && key.startsWith('["hook"') && record.outcome != null ||
+          stage === "aggregate" && key === "agent-hooks:state" && record.completion != null)) {
+        lose = false;
+        throw new ControllerCheckpointError(key);
+      }
+    }};
+    const execute = vi.fn(() => ({disposition: "continue" as const, code: "check", message: "Check one result."}));
+    const make = () => new AgentHookController({controller: new FakeController(() => complete("Done")),
+      composition: stopComposition([handler("stop", execute)]), rootRunId: "run-1", maxConsecutiveContinuations: 1, now: () => NOW});
+    const context = {...callContext(), checkpoints: port, runCheckpoints: port};
+    const notification = completionInput(controllerInput(), complete("Done"));
+    await expect(make().beforeCompletion(notification, context)).rejects.toBeInstanceOf(ControllerCheckpointError);
+    const resumed = make();
+    const disposition = await resumed.recoverBeforeCompletion(notification, context);
+    expect(execute).toHaveBeenCalledTimes(stage === "intent" ? 0 : 1);
+    expect(disposition.kind).toBe(stage === "intent" ? "allow" : "continue_with_feedback");
+    if (stage === "intent") expect(resumed.store.getProjection().recentInvocations[0]).toMatchObject({status: "failed", message: expect.stringContaining("not replayed")});
+    if (stage !== "intent") {
+      const nextContext = {...context, checkpoints: memoryCheckpoints()};
+      const next = completionInput(controllerInput(2), complete("Done"));
+      await expect(make().beforeCompletion({...next, turn: {...next.turn, id: "next-turn"}}, nextContext)).resolves.toEqual({kind: "allow"});
+      expect(execute).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("settles background observer records independently after the completion callback closes", async () => {
+    const records = hookRecords();
+    let release!: () => void;
+    const done = new Promise<void>(resolve => {release = resolve;});
+    const observe = vi.fn(() => done);
+    const port = memoryCheckpoints();
+    let invocationClosed = false;
+    const context = {...callContext(), runCheckpoints: port, checkpoints: {read: port.read,
+      commit: async (key: string, value: unknown) => {if (invocationClosed) throw new Error("Run is terminal"); await port.commit(key, value);}}};
+    const controller = new AgentHookController({controller: new FakeController(() => complete("Done")), rootRunId: "run-1",
+      composition: stopComposition([backgroundObserver("observe", observe)]), invocationRecords: records, now: () => NOW});
+    await expect(controller.beforeCompletion(completionInput(controllerInput(), complete("Done")), context)).resolves.toEqual({kind: "allow"});
+    invocationClosed = true;
+    expect([...records.values.values()][0]?.outcome).toBeNull();
+    release();
+    await vi.waitFor(() => expect([...records.values.values()][0]?.outcome?.status).toBe("completed"));
+    expect(controller.store.getProjection().recentInvocations[0]?.status).toBe("completed");
+  });
+
+  it("retains invalid Handler output as output_invalid rather than a serialization failure", async () => {
+    const records = hookRecords();
+    const controller = new AgentHookController({controller: new FakeController(() => complete("Done")), rootRunId: "run-1",
+      composition: stopComposition([handler("invalid", () => ({disposition: "allow", nested: () => {}}) as unknown as {disposition: "allow"})]),
+      invocationRecords: records, now: () => NOW});
+    await expect(controller.beforeCompletion(completionInput(controllerInput(), complete("Done")), callContext())).resolves.toEqual({kind: "allow"});
+    expect([...records.values.values()][0]?.outcome?.status).toBe("output_invalid");
+  });
   it("binds Stop and StopFailure to Controller requests rather than Context projection requests", async () => {
     const stop = vi.fn((_event: Parameters<AgentStopHandler["handle"]>[0]) => ({disposition: "allow" as const}));
     const failure = vi.fn();
@@ -246,6 +307,19 @@ describe("AgentHookController", () => {
   });
 });
 
+function memoryCheckpoints(): ControllerCheckpointPort {
+  const values = new Map<string, unknown>();
+  return {read: key => structuredClone(values.get(key) ?? null), commit: async (key, value) => {values.set(key, structuredClone(value));}};
+}
+
+function hookRecords(): AgentHookRecordPort & {values: Map<string, AgentHookInvocationCheckpoint>} {
+  const values = new Map<string, AgentHookInvocationCheckpoint>();
+  return {values, readHookInvocation: async id => structuredClone(values.get(id) ?? null), commitHookInvocation: async value => {
+    validateAgentHookCheckpoint(value, values.get(value.id) ?? null);
+    values.set(value.id, structuredClone(value));
+  }};
+}
+
 type StopTestBinding =
   | { readonly registration: AgentHookRegistration; readonly binding: AgentHookBinding };
 
@@ -372,6 +446,7 @@ function controllerInput(iteration = 1): ControllerInput<TestOutput> {
       messages: [],
       unsettledCalls: [],
       settledCallCount: 0,
+      latestTurn: null,
     },
     plan: null,
     pending: [],

@@ -122,6 +122,16 @@ interface MutableNodeAccount {
   settlement: RunTreeResourceSettlement | null;
 }
 
+export interface RunTreeResourceCheckpoint {
+  readonly envelope: RunTreeResourceEnvelope;
+  readonly rootRunId: string;
+  readonly nodes: readonly Readonly<MutableNodeAccount>[];
+  readonly measuredConsumed: RunTreeResourceAmounts;
+  readonly chargedUnknown: RunTreeResourceAmounts;
+  readonly cumulativeReleased: RunTreeResourceAmounts;
+  readonly observed: RunTreeResourceAmounts;
+}
+
 type MutableAmounts = Record<RunTreeResourceDimension, number>;
 type MutableMeasurementStatus = Record<
   RunTreeResourceDimension,
@@ -141,6 +151,97 @@ export class RunTreeResourceAccount {
     this.envelope = snapshotRunTreeResourceEnvelope(envelope);
     const requested = envelopeAmounts(this.envelope);
     this.nodes.set(rootRunId, createNode(rootRunId, null, requested, this.envelope));
+  }
+
+  checkpoint(): RunTreeResourceCheckpoint {
+    const root = [...this.nodes.values()].find(node => node.parentRunId === null)!;
+    return structuredClone({rootRunId: root.runId, envelope: this.envelope, nodes: [...this.nodes.values()],
+      measuredConsumed: this.measuredConsumed, chargedUnknown: this.chargedUnknown,
+      cumulativeReleased: this.cumulativeReleased, observed: this.observed});
+  }
+
+  static restore(input: RunTreeResourceCheckpoint): RunTreeResourceAccount {
+    const saved = structuredClone(input);
+    const account = new RunTreeResourceAccount(saved.rootRunId, saved.envelope);
+    account.nodes.clear();
+    for (const field of ["measuredConsumed", "chargedUnknown", "cumulativeReleased", "observed"] as const) {
+      Object.assign(account[field], snapshotRunTreeResourceAmounts(saved[field]));
+    }
+    for (const node of saved.nodes) {
+      token(node.runId, "runId");
+      if (node.parentRunId !== null) token(node.parentRunId, "parentRunId");
+      nonNegativeInteger(node.revision, "node.revision");
+      for (const field of ["requestedAllocation", "hardGrant", "hardAvailable", "observationalThresholds", "measured"] as const) {
+        snapshotRunTreeResourceAmounts(node[field]);
+      }
+      if (account.nodes.has(node.runId) || typeof node.settled !== "boolean" || typeof node.limitExceeded !== "boolean" ||
+          (node.settled !== (node.settlement !== null)) ||
+          (node.parentRunId === null) !== (node.runId === saved.rootRunId)) throw new TypeError("Invalid resource checkpoint node.");
+      for (const dimension of runTreeResourceDimensions) {
+        assertMeasurement(node.measurementStatus[dimension] === "measured" ? {status: "measured", value: node.measured[dimension]}
+          : {status: node.measurementStatus[dimension]}, dimension);
+        const hard = account.envelope[dimension].enforcement === "hard";
+        if (node.hardGrant[dimension] !== (hard ? node.requestedAllocation[dimension] : 0) ||
+            node.observationalThresholds[dimension] !== (hard ? 0 : node.requestedAllocation[dimension]) ||
+            node.hardAvailable[dimension] > node.hardGrant[dimension] ||
+            (node.settled && node.hardAvailable[dimension] !== 0)) throw new TypeError("Invalid retained resource allocation.");
+      }
+      let restoredSettlement = node.settlement;
+      if (node.settlement !== null) {
+        snapshotRunTreeResourceAmounts(node.settlement.released);
+        snapshotRunTreeResourceAmounts(node.settlement.chargedUnknown);
+        for (const dimension of runTreeResourceDimensions) assertMeasurement(node.settlement.usage[dimension], dimension);
+        if (!["settled", "limit_exceeded", "measurement_unavailable"].includes(node.settlement.status)) {
+          throw new TypeError("Invalid retained resource settlement.");
+        }
+        const unavailable = runTreeResourceDimensions.some(dimension => account.envelope[dimension].enforcement === "hard" &&
+          ["unavailable", "unknown"].includes(node.measurementStatus[dimension]));
+        if (node.settlement.status !== (node.limitExceeded ? "limit_exceeded" : unavailable ? "measurement_unavailable" : "settled")) {
+          throw new TypeError("Retained resource settlement status disagrees with usage.");
+        }
+        for (const dimension of runTreeResourceDimensions) {
+          const usage = node.settlement.usage[dimension];
+          const hard = account.envelope[dimension].enforcement === "hard";
+          const uncertain = ["unavailable", "unknown"].includes(node.measurementStatus[dimension]);
+          if (usage.status !== node.measurementStatus[dimension] ||
+              (usage.status === "measured" && usage.value !== node.measured[dimension]) ||
+              ((!hard || uncertain) && node.settlement.released[dimension] !== 0) ||
+              ((!hard || !uncertain) && node.settlement.chargedUnknown[dimension] !== 0)) {
+            throw new TypeError("Retained resource settlement disagrees with usage.");
+          }
+        }
+        restoredSettlement = Object.freeze({...node.settlement, usage: account.nodeUsage(node),
+          released: freezeAmounts({...node.settlement.released}), chargedUnknown: freezeAmounts({...node.settlement.chargedUnknown})});
+      }
+      account.nodes.set(node.runId, {...node, settlement: restoredSettlement});
+    }
+    if (!account.nodes.has(saved.rootRunId)) throw new TypeError("Resource checkpoint has no root.");
+    const allocation = envelopeAmounts(account.envelope);
+    if (runTreeResourceDimensions.some(dimension => account.nodes.get(saved.rootRunId)!.requestedAllocation[dimension] !== allocation[dimension])) {
+      throw new TypeError("Root resource allocation disagrees with its envelope.");
+    }
+    for (const node of account.nodes.values()) {
+      const visited = new Set<string>([node.runId]);
+      let parentId = node.parentRunId;
+      while (parentId !== null) {
+        const parent = account.requireNode(parentId);
+        if (visited.has(parentId) || (!node.settled && parent.settled)) throw new TypeError("Invalid resource checkpoint lineage.");
+        visited.add(parentId);
+        parentId = parent.parentRunId;
+      }
+    }
+    for (const dimension of runTreeResourceDimensions) {
+      const nodes = [...account.nodes.values()];
+      const measured = nodes.reduce((total, node) => safeSum(total, node.measured[dimension], dimension), 0);
+      const hard = account.envelope[dimension].enforcement === "hard";
+      if (account.measuredConsumed[dimension] !== (hard ? measured : 0) ||
+          account.observed[dimension] !== (hard ? 0 : measured) ||
+          account.chargedUnknown[dimension] !== nodes.reduce((sum, node) => sum + (node.settlement?.chargedUnknown[dimension] ?? 0), 0) ||
+          account.cumulativeReleased[dimension] !== nodes.reduce((sum, node) => sum + (node.settlement?.released[dimension] ?? 0), 0)) {
+        throw new TypeError("Resource checkpoint totals do not match retained usage.");
+      }
+    }
+    return account;
   }
 
   reserve(

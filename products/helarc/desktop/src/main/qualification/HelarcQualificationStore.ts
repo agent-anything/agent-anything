@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createCommandInputContract } from "@agent-anything/helarc-local-environment/command";
 import { snapshotModelMessages, snapshotModelCallableDefinitions, snapshotModelJsonValue, type ModelJsonValue } from "@agent-anything/model-interaction";
 import {
   HELARC_QUALIFICATION_CASES, HELARC_QUALIFICATION_REPETITIONS, HELARC_QUALIFICATION_SUITE_REVISION,
@@ -18,7 +19,7 @@ export interface QualificationCampaign {
   readonly id: string;
   readonly target: HelarcModelQualificationTarget;
   readonly suiteRevision: string;
-  readonly material: Pick<HelarcQualificationProfile, "callables" | "tools" | "shellRuntime" | "planLimits"> & {
+  readonly material: Pick<HelarcQualificationProfile, "callables" | "tools" | "shellRuntime" | "planLimits" | "commandInputConstraints"> & {
     readonly instructions: readonly ModelInputSectionCandidate[];
     readonly generationConfiguration: ModelJsonValue;
     readonly modelSelection: ModelJsonValue;
@@ -31,7 +32,7 @@ export interface QualificationCampaign {
   readonly publishedAt: string | null;
 }
 interface QualificationDocument {
-  readonly version: 3;
+  readonly version: 4;
   readonly campaigns: readonly QualificationCampaign[];
   readonly decisions: readonly HelarcModelQualificationDecision[];
 }
@@ -111,11 +112,11 @@ export class HelarcQualificationStore {
 }
 
 function parseDocument(text: string | null): QualificationDocument {
-  if (text === null) return { version: 3, campaigns: [], decisions: [] };
+  if (text === null) return { version: 4, campaigns: [], decisions: [] };
   if (Buffer.byteLength(text, "utf8") > MAX_DOCUMENT_BYTES) throw new Error("qualification_storage_full");
   try {
     const document = JSON.parse(text) as QualificationDocument;
-    if (document.version !== 3 || !Array.isArray(document.campaigns) || document.campaigns.length > MAX_CAMPAIGNS || !Array.isArray(document.decisions)) throw new Error();
+    if (document.version !== 4 || !Array.isArray(document.campaigns) || document.campaigns.length > MAX_CAMPAIGNS || !Array.isArray(document.decisions)) throw new Error();
     const ids = new Set<string>();
     const trials = new Map<string, { campaign: QualificationCampaign; trial: HelarcQualificationTrial }>();
     for (const c of document.campaigns) {
@@ -165,6 +166,16 @@ function parseDocument(text: string | null): QualificationDocument {
 }
 
 function validateTrial(trial: HelarcQualificationTrial, material: QualificationCampaign["material"]): void {
+  const values = material.commandInputConstraints.values;
+  const contract = createCommandInputContract({defaultTimeoutMs: values.timeout.defaultMs, maxTimeoutMs: values.timeout.maximumMs,
+    maxCommandBytes: values.command.maximumUtf8Bytes, maxDescriptionChars: values.description.maximumUtf16CodeUnits,
+    maxActiveTasks: values.capacity.maximumActive});
+  if (JSON.stringify(contract.ref) !== JSON.stringify(material.commandInputConstraints.ref) ||
+    JSON.stringify(contract.constraints) !== JSON.stringify(values)) throw new Error("qualification_constraints_invalid");
+  const command = material.tools.find(tool => tool.name === material.shellRuntime.toolName);
+  if (!command) throw new Error("qualification_command_missing");
+  const grading = {...material, semanticValidators: [{ref: contract.ref, tool: command.ref,
+    validate: contract.validate, issueHint: contract.issueHint}]};
   const { digest, ...data } = trial;
   const entry = HELARC_QUALIFICATION_CASES.find(c => c.id === trial.caseId);
   if (!entry || typeof trial.id !== "string" || !trial.id ||
@@ -184,7 +195,7 @@ function validateTrial(trial: HelarcQualificationTrial, material: QualificationC
     const calls = first?.role === "assistant" ? first.content.flatMap(b => b.kind === "model_tool_call" ? [b.call] : []) : [];
     const result = trial.messages[2];
     if (trial.scenario.callableName === null || toolResults.length !== 1 || calls.length !== 1 ||
-      checkQualificationCall(material, trial.scenario, calls[0]!) || result?.role !== "tool" || result.content.length !== 1 ||
+      checkQualificationCall(grading, trial.scenario, calls[0]!) || result?.role !== "tool" || result.content.length !== 1 ||
       result.content[0]!.result.modelCallRef.id !== calls[0]!.modelCallRef.id ||
       result.content[0]!.result.name !== calls[0]!.name ||
       result.content[0]!.result.settlement !== (trial.scenario.denied ? "denied" : "succeeded") ||
@@ -202,8 +213,10 @@ function validateTrial(trial: HelarcQualificationTrial, material: QualificationC
     if (last?.role !== "assistant") throw new Error();
     const calls = last.content.flatMap(b => b.kind === "model_tool_call" ? [b.call] : []);
     const failure = calls.length !== 1 ? { category: "case_requirement", reason: "expected_one_requested_call" }
-      : delivered ? checkQualificationFinal(material, calls[0]!, trial.scenario.expectedResponse)
-      : checkQualificationCall(material, trial.scenario, calls[0]!);
+      : delivered ? checkQualificationFinal(grading, calls[0]!, trial.scenario.expectedResponse, {
+        current: last.content, previous: trial.messages.slice(0, -1).filter(m => m.role === "assistant").at(-1)?.content ?? [],
+      })
+      : checkQualificationCall(grading, trial.scenario, calls[0]!);
     if (!failure || failure.category !== trial.failureCategory || failure.reason !== trial.reason) throw new Error();
   }
   if (trial.outcome !== "passed") return;
@@ -212,7 +225,8 @@ function validateTrial(trial: HelarcQualificationTrial, material: QualificationC
   if (trial.requests.length !== assistants.length) throw new Error();
   const final = assistants.at(-1)!;
   const finalCalls = final?.content.flatMap(b => b.kind === "model_tool_call" ? [b.call] : []) ?? [];
-  if (finalCalls.length !== 1 || checkQualificationFinal(material, finalCalls[0]!, trial.scenario.expectedResponse)) throw new Error();
+  if (finalCalls.length !== 1 || checkQualificationFinal(grading, finalCalls[0]!, trial.scenario.expectedResponse,
+    {current: final.content, previous: assistants.at(-2)?.content ?? []})) throw new Error();
   if (trial.scenario.callableName === null) { if (trial.messages.length !== 2) throw new Error(); return; }
   if (trial.messages.length !== 4 || assistants.length !== 2) throw new Error();
   if (toolResults.length !== 1) throw new Error();

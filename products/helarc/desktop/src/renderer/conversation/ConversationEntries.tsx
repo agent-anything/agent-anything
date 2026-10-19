@@ -2,6 +2,7 @@ import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import type { HelarcMainSnapshot } from "../../shared/HelarcDesktopApi.js";
+import { compareConversationPosition } from "../../shared/HelarcWorkbench.js";
 import type {
   ConversationBlock,
   ConversationEntry,
@@ -441,8 +442,7 @@ function ChildConversationContent(
         setHasNew(
           !!last &&
             !!latest &&
-            (last[0] < latest[0] ||
-              (last[0] === latest[0] && last[1] < latest[1])),
+            compareConversationPosition(last, latest) < 0,
         );
         const nextPage = { ...result, entries: bounded };
         if (props.reading) {

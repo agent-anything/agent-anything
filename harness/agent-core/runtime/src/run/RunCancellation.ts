@@ -106,6 +106,7 @@ export interface CreateRunCancellationControllerInput {
   readonly runId: string;
   readonly createRequestId?: (runId: string) => string;
   readonly now?: () => string;
+  readonly retainedRequest?: RunCancellationRequest;
 }
 
 const originReasonCodes: Readonly<Record<RunCancellationOrigin, readonly RunCancellationReasonCode[]>> = {
@@ -125,6 +126,22 @@ export function createRunCancellationController(
   const abortController = new AbortController();
   let request: RunCancellationRequest | null = null;
   let closed = false;
+  if (input.retainedRequest !== undefined) {
+    const retained = structuredClone(input.retainedRequest);
+    if (retained.runId !== input.runId) throw new TypeError("Cancellation recovery targets another Run.");
+    assertNonEmpty(retained.id, "retained cancellation id");
+    assertDateTime(retained.requestedAt, "retained cancellation requestedAt");
+    validateRequestInput({origin: retained.origin, reasonCode: retained.reasonCode,
+      ...(retained.approvalRequestId === null ? {} : {approvalRequestId: retained.approvalRequestId}),
+      ...(retained.parentRunId === null ? {} : {parentRunId: retained.parentRunId})});
+    if (normalizeReason(retained.reason ?? undefined) !== retained.reason ||
+        normalizeOptionalText(retained.approvalRequestId ?? undefined) !== retained.approvalRequestId ||
+        normalizeOptionalText(retained.parentRunId ?? undefined) !== retained.parentRunId) {
+      throw new TypeError("Retained cancellation request is not canonical.");
+    }
+    request = Object.freeze(retained);
+    abortController.abort(request);
+  }
   const context: CancellationContext = Object.freeze({
     runId: input.runId,
     signal: abortController.signal,

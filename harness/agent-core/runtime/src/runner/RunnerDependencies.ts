@@ -125,6 +125,8 @@ export interface InternalOperationExecutionContext {
 export interface InternalOperationHandler {
   readonly id: string;
   execute(context: InternalOperationExecutionContext): Promise<OperationResult>;
+  /** Observe/reconstruct prior work; never start a replacement operation. */
+  reconcile?(context: InternalOperationExecutionContext): Promise<OperationResult | null>;
 }
 
 export interface AgentResolution {
@@ -194,7 +196,7 @@ export interface DelegationResultProjectionPort {
   project(input: {
     readonly result: DelegationResult;
     readonly continuation: import("@agent-anything/agent-core/delegation").DescendantContinuationRef | null;
-  }): DescendantOperationOutcome;
+  }): DescendantOperationOutcome | Promise<DescendantOperationOutcome>;
 }
 
 export interface DelegationProgressProjectionPort {
@@ -247,6 +249,8 @@ export interface CompositeOperationResolverPort {
 
 export interface RunnerOperationComposition {
   readonly catalog: OperationCatalogSnapshot;
+  readonly resultPresenters?: readonly import("./ToolResultPresenter.js").ToolResultPresenter[];
+  readonly resultContracts: import("@agent-anything/operation-catalog/result").OperationResultContracts;
   readonly bindings: OperationBindingResolverSnapshot;
   readonly toolInputSemanticValidators: readonly ToolInputSemanticValidator[];
   readonly internalHandlers: readonly InternalOperationHandler[];
@@ -256,14 +260,27 @@ export interface RunnerOperationComposition {
     "approval" | "permission"
   >;
   readonly composite?: CompositeOperationResolverPort;
+  readonly actionRecovery?: {
+    readonly records: import("@agent-anything/action-execution/enforcement").ActionRecoveryRecordPort;
+    readonly attempts: import("@agent-anything/action-execution/enforcement").ActionAttemptReconciliationPort | null;
+  };
   readonly delegation?: RunnerDelegationComposition;
 }
 
 export interface RunResourceFinalizerPort {
+  readonly binding?: {readonly id: string; readonly revision: string};
   finalize(context: RunFinalizationContext): Promise<RunFailureCause | null>;
+  /** Reconcile original cleanup; absence does not authorize replay. */
+  reconcile?(context: RunFinalizationContext): Promise<RunFailureCause | null>;
 }
 
 export interface RunnerDependencies {
+  readonly runCommits?: import("./RunCommitPort.js").RunCommitPort;
+  readonly runTreeCommits?: import("./RunTreeCommitPort.js").RunTreeCommitPort;
+  readonly compositeCommits?: import("@agent-anything/operation-composition/execution").CompositeCommitPort;
+  readonly compositeRecovery?: {
+    readLatestComposite(compositeId: string): Promise<import("@agent-anything/operation-composition/execution").CompositeCommit | null>;
+  };
   readonly controller: import("../controller/index.js").Controller<unknown>;
   readonly contextProjection: RunnerContextProjection;
   readonly operations: RunnerOperationComposition;
@@ -287,6 +304,8 @@ export interface RunnerDependencies {
 }
 
 export interface RunInvocationOptions {
+  /** Recovery-only control, accepted durably before any restored member activates. */
+  readonly recoveryCancellation?: import("../run/index.js").RunCancellationRequestInput;
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly runtimeEventPublisher?: RuntimeEventPublisher;
   readonly runTraceObserver?: RunTraceObserver;

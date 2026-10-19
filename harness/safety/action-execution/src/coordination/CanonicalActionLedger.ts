@@ -48,6 +48,41 @@ export class CanonicalActionLedger<TPayload = unknown>
     requireToken(action.id, "action.id");
   }
 
+  /** Restore an acknowledged dispatch, without replaying transitions or claiming work. */
+  static restoreDispatch(input: CanonicalActionState): CanonicalActionLedger {
+    const saved = deepFreeze(structuredClone(input));
+    const ledger = new CanonicalActionLedger(saved.action, saved.parentRunAction);
+    if (!Number.isSafeInteger(saved.revision) || saved.revision < 1 || saved.lifecycle !== "attempting" ||
+        saved.settlement !== null || saved.activeDispatchClaim === null || saved.attempts.length === 0) {
+      throw new TypeError("An acknowledged Action dispatch checkpoint is required.");
+    }
+    for (const subject of saved.subjects) ledger.recordSubject(subject);
+    const last = saved.attempts.at(-1)!;
+    const ids = new Set<string>();
+    for (const [index, attempt] of saved.attempts.entries()) {
+      requireToken(attempt.id, "attempt.id");
+      if (attempt.action.id !== saved.action.id || attempt.ordinal !== index + 1 || ids.has(attempt.id)) {
+        throw new TypeError("Retained Action attempts are inconsistent.");
+      }
+      ids.add(attempt.id);
+    }
+    const claim = saved.activeDispatchClaim;
+    if (saved.currentSubject?.action.id !== saved.action.id ||
+        saved.currentSubject.revision !== saved.subjects.length ||
+        claim.subject.action.id !== saved.action.id || claim.subject.revision !== saved.currentSubject.revision ||
+        claim.attempt.id !== last.id || claim.attempt.ordinal !== last.ordinal || claim.attempt.action.id !== saved.action.id) {
+      throw new TypeError("Retained Action dispatch does not match its subject and attempts.");
+    }
+    requireToken(claim.id, "claim.id");
+    requireToken(claim.planFingerprint, "claim.planFingerprint");
+    requireDateTime(claim.claimedAt, "claim.claimedAt");
+    ledger.attempts.push(...saved.attempts);
+    ledger.revision = saved.revision;
+    ledger.lifecycle = saved.lifecycle;
+    ledger.activeDispatchClaim = claim;
+    return ledger;
+  }
+
   getSnapshot(): CanonicalActionState<TPayload> {
     return Object.freeze({
       revision: this.revision,
@@ -83,7 +118,7 @@ export class CanonicalActionLedger<TPayload = unknown>
         this.lifecycle = "prepared";
         break;
       case "begin_assessment":
-        this.requireLifecycle("prepared", "awaiting_approval");
+        this.requireLifecycle("prepared", "awaiting_approval", "retry_delay");
         this.lifecycle = "assessing";
         break;
       case "await_approval":

@@ -1,6 +1,6 @@
 import type { ExecutionFlowDefinition, ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 
-export const INSPECTION_FORMAT_VERSION = 3 as const;
+export const INSPECTION_FORMAT_VERSION = 4 as const;
 
 export type InspectionJson = null | boolean | number | string |
   readonly InspectionJson[] | { readonly [key: string]: InspectionJson };
@@ -145,6 +145,7 @@ export interface InspectionRecord {
 }
 
 export interface InspectionCoverage {
+  readonly recording?: import("./InspectionRecordingProgress.js").InspectionRecordingProgress;
   readonly status: "open" | "closed" | "unknown";
   readonly watermark: number;
   readonly captured: number;

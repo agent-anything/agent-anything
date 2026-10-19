@@ -28,7 +28,7 @@ export function createModelOutputRecoverySection(
         reason: "output_limit",
         attempt: recovery.attemptNumber,
         maximumOutputTokens: recovery.requestedOutput.maximum,
-      })}\nThe previous response reached the configured output limit and was rejected. ` +
+      })}\nThe Provider reported that the previous response reached a length limit and it was rejected. ` +
         "None of its function calls were executed. Generate a shorter, complete response using the same response protocol. " +
         "Do not repeat work already reflected in the supplied history.",
     }),

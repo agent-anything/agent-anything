@@ -76,7 +76,7 @@ export interface HelarcRunProjectionCommit extends HelarcCommitBase {
 export interface HelarcRunTerminalCommit extends HelarcCommitBase {
   readonly kind: "run_terminal";
   readonly terminal: HelarcRunTerminalRecord;
-  readonly assistantMessage: HelarcMessage;
+  readonly assistantMessage: HelarcMessage | null;
   readonly artifacts: readonly HelarcArtifact[];
 }
 
@@ -331,7 +331,9 @@ export async function applyHelarcRunTerminalCommit(
   ) {
     return reject(aggregate, "commit_invalid", "Terminal Artifact ownership is invalid.");
   }
-  if (!isValidAssistantMessage(
+  const noReply = commit.terminal.host.status === "completed" &&
+    commit.terminal.product?.status === "completed" && !commit.terminal.product.output.agentSummary?.trim();
+  if (commit.assistantMessage === null ? !noReply : !isValidAssistantMessage(
     commit.assistantMessage,
     commit,
     run,
@@ -348,7 +350,8 @@ export async function applyHelarcRunTerminalCommit(
     terminal: commit.terminal,
     artifactIds,
   };
-  const messages = [...aggregate.record.messages, commit.assistantMessage];
+  const messages = commit.assistantMessage === null
+    ? aggregate.record.messages : [...aggregate.record.messages, commit.assistantMessage];
   const record: HelarcThreadRecord = {
     ...aggregate.record,
     thread: {

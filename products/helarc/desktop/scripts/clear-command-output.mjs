@@ -8,6 +8,7 @@ export async function clearCommandOutput(userDataPath, { dryRun = false, log = c
   await assertDirectory(userDataPath);
   const lockPath = `${root}.cleaning`;
   let lock;
+  let executions;
   try { lock = await open(lockPath, "wx", 0o600); }
   catch (error) {
     if (error.code === "EEXIST") throw new Error("Command output cleanup is already locked. Check for an unfinished cleanup before removing its lock.");
@@ -17,6 +18,15 @@ export async function clearCommandOutput(userDataPath, { dryRun = false, log = c
     await lock.writeFile(JSON.stringify({ pid: process.pid }));
     if (!(await exists(root))) return;
     await assertDirectory(root);
+    const executionDirectory = resolve(userDataPath, "execution");
+    if (await exists(executionDirectory)) {
+      await assertDirectory(executionDirectory);
+      const { HelarcExecutionStore } = await import("../dist/main/execution-storage/HelarcExecutionStore.js");
+      executions = await HelarcExecutionStore.open(executionDirectory);
+      if ((await executions.listRetentionPins()).length > 0) {
+        throw new Error("Command output is retained by unfinished execution, result delivery or process reconciliation; cleanup refused.");
+      }
+    }
     const owners = join(root, "owners");
     if (await exists(owners)) {
       await assertDirectory(owners);
@@ -41,8 +51,8 @@ export async function clearCommandOutput(userDataPath, { dryRun = false, log = c
       log(`Deleted Helarc command output: ${root}`);
     }
   } finally {
-    await lock.close();
-    await rm(lockPath, { force: true });
+    try { await executions?.close(); }
+    finally { await lock.close(); await rm(lockPath, { force: true }); }
   }
 }
 

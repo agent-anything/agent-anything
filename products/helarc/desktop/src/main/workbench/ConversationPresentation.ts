@@ -70,6 +70,21 @@ export function presentConversationWork(
     (l) => l.parentRunId === runId,
   );
   const sourceRecords = [...records.values()];
+  // A final binding can retain exact text after the bounded activity page evicts it.
+  if (runId === p.host.runId) for (const message of thread.messages) {
+    if (message.correlation.runId !== productRunId || message.source.kind !== "agent_run") continue;
+    const source = message.metadata.outputSource as D.HelarcOutputSource | undefined;
+    if (source?.kind !== "model_text" || !source.adopted?.runItem || source.adopted.runId !== runId) continue;
+    const item = source.adopted.runItem;
+    for (const block of source.adopted.blocks) if (!sourceRecords.some(record => record.origin?.modelItemId === block.modelItemId)) {
+      sourceRecords.push({id: block.modelItemId, runId, sequence: item.sequence, revision: 0, observedAt: message.createdAt,
+        source: {owner: "runtime", kind: "run_item", id: item.id, sequence: item.sequence},
+        origin: {runId, turnId: source.turnId, turnSequence: item.sequence, modelItemId: block.modelItemId,
+          ordinal: block.ordinal, callId: null, source: item},
+        content: {kind: "assistant_text", turnId: source.turnId, modelItemId: block.modelItemId,
+          ordinal: block.ordinal, text: block.text, omittedBytes: 0}});
+    }
+  }
   const origins = new Map<string, HelarcModelItemOrigin>();
   for (const r of sourceRecords)
     if (r.origin) origins.set(r.origin.modelItemId, r.origin);
@@ -92,7 +107,7 @@ export function presentConversationWork(
           id: `turn:${productRunId}:${runId}:${o.turnId}`,
           title: null,
           role: "assistant",
-          position: [anchor, o.turnSequence],
+          position: [anchor, o.source.sequence],
           revision: p.product.sequence + p.host.sequence,
           content: "",
           omittedBytes: 0,
@@ -127,6 +142,7 @@ export function presentConversationWork(
       (label) => label.parentOrigin?.modelItemId === o.modelItemId,
     );
     if (c?.kind === "assistant_text" || c?.kind === "final_response" || c?.kind === "assistant_reasoning") {
+      if (c.kind === "final_response" && !c.text.trim()) continue;
       const message =
         runId === p.host.runId
           ? thread.messages.find(
@@ -138,15 +154,20 @@ export function presentConversationWork(
                 ).includes(o.modelItemId),
             )
           : undefined;
-      const text = textPage(message?.content ?? c.text, 0, 2048);
+      const outputSource = message?.metadata.outputSource as D.HelarcOutputSource | undefined;
+      const adoptedBlock = outputSource?.kind === "model_text"
+        ? outputSource.adopted?.blocks.find(block => block.modelItemId === o.modelItemId) : undefined;
+      const sourceText = adoptedBlock?.text ?? (outputSource?.kind === "model_control" ? message?.content : undefined);
+      const text = textPage(sourceText ?? c.text, 0, 2048);
       turnFor(o).blocks.push({
         id: o.modelItemId,
         modelItemId: o.modelItemId,
         ordinal: o.ordinal,
         kind: c.kind === "final_response" ? "final_response" : c.kind === "assistant_reasoning" ? "reasoning" : "text",
         text: text.text,
-        omittedBytes: text.omittedBytes + (message ? 0 : c.omittedBytes),
-        detail: detail(message ? `message:${message.id}` : r!.id),
+        omittedBytes: text.omittedBytes + (sourceText !== undefined ? 0 : c.omittedBytes),
+        detail: adoptedBlock ? {...detail(`message:${message!.id}`), section: o.modelItemId}
+          : detail(message ? `message:${message.id}` : r!.id),
         disposition:
           c.kind !== "final_response" ||
           message ||
@@ -294,7 +315,7 @@ export function presentConversationWork(
       role: incoming || interaction ? "product" : "user",
       title: incoming?.title ?? interaction?.title ?? null,
       revision: r.revision,
-      position: [anchor, r.sequence],
+      position: [anchor, r.source.sequence, r.sequence],
       content: text.text,
       omittedBytes: text.omittedBytes + (incoming?.omittedBytes ?? (c.kind === "steering" ? c.omittedBytes : 0)),
       productRunId,

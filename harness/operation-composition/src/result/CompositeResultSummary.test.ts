@@ -89,6 +89,7 @@ describe("CompositeResultSummary", () => {
 
 function composite(children: readonly CompositeNodeSettlement[], status: CompositeResult["status"] = "failed"): CompositeResult {
   return {compositeId: "composite-1", definition: {id: "definition", revision: "1"}, status, children,
+    reduction: {reducerId: "collect", aggregateStatus: status, status: "constructed", failure: null},
     output: null, failure: {code: "composite_failed", message: "Failed", retryable: false, metadata: {}},
     startedAt: "2026-09-30T00:00:00.000Z", finishedAt: "2026-09-30T00:00:01.000Z"};
 }

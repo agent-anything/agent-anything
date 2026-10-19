@@ -8,10 +8,11 @@ async function setup(
   terminal = false,
   childStreaming = false,
   withResult = false,
+  recovery = false,
 ) {
   const run = createWorkbenchTestRun(terminal ? { status: "completed" } : {});
   await page.addInitScript(
-    ({ run, pending, terminal, childStreaming, withResult }) => {
+    ({ run, pending, terminal, childStreaming, withResult, recovery }) => {
       const root = run.harnessRunId,
         child = "child-1";
       const rootNode = run.host.runTree.nodes[0]!;
@@ -116,7 +117,6 @@ async function setup(
             qualificationPolicy: "allow_experimental",
             ollamaRuntime: {
               contextWindowTokens: 163840,
-              maximumOutputTokens: 2048,
             },
           },
           profiles: [],
@@ -257,6 +257,11 @@ async function setup(
         listener(structuredClone(snapshot));
       };
       (window as any).helarc = {
+        listRecoverableWork: async () => recovery ? [
+          {id: "root-retained", threadId: "thread", title: "Inspect workspace", revision: 9, state: "interrupted"},
+          {id: "root-complete", threadId: "thread", title: "Summarize findings", revision: 12, state: "delivery_pending"},
+        ] : [],
+        recoverWork: async (query: any) => {(window as any).calls.push({method: "recoverWork", query}); return {ok: true};},
         chooseProjectFolder: async () => {
           const profile = { id: "extra", displayName: "Documentation", path: "D:/docs", trustState: "trusted", lastOpenedAt: "2026-09-18T08:00:00.000Z" };
           if (!snapshot.workspaceProfiles.some((item: any) => item.id === profile.id)) snapshot.workspaceProfiles.push(profile);
@@ -555,7 +560,7 @@ async function setup(
         openExternalLink: async () => ({ ok: true }),
       };
     },
-    { run, pending, terminal, childStreaming, withResult },
+    { run, pending, terminal, childStreaming, withResult, recovery },
   );
   await page.goto("/");
   await expect(page.locator(".wb-header")).toHaveCSS("display", "flex");
@@ -622,6 +627,28 @@ async function installActivity(page: Page, expanded = true) {
     await page.getByRole("region", {name:"Response activity",exact:true}).getByRole("button", {name:/dotnet build/}).click();
   }
 }
+
+test("retained work exposes explicit resume, cancel and result delivery without internal records", async ({page}, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await setup(page, false, true, false, false, true);
+  const recovery = page.getByRole("region", {name: "Interrupted work", exact: true});
+  await expect(recovery).toContainText("Inspect workspace");
+  await expect(recovery).toContainText("Result ready to restore");
+  await expect(recovery.getByRole("button", {name: "Cancel retained work"})).toHaveCount(1);
+  await page.screenshot({path: info.outputPath("execution-recovery-desktop.png")});
+  await page.setViewportSize({width: 800, height: 700});
+  await page.getByRole("button", {name: "Close work", exact: true}).click();
+  await expect(recovery.getByRole("button", {name: "Restore result"})).toBeVisible();
+  await page.screenshot({path: info.outputPath("execution-recovery-narrow.png")});
+  await recovery.getByRole("button", {name: "Restore result"}).click();
+  await recovery.getByRole("button", {name: "Cancel retained work"}).click();
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.method === "recoverWork"))).toEqual([
+    {method: "recoverWork", query: {id: "root-complete", revision: 12, intent: "continue"}},
+    {method: "recoverWork", query: {id: "root-retained", revision: 9, intent: "cancel"}},
+  ]);
+  expect(errors).toEqual([]);
+});
 
 test("delegated activity stays visible and attributed with closed Child conversations", async ({page}, info) => {
   await setup(page);

@@ -162,6 +162,9 @@ importers:
       '@agent-anything/observability':
         specifier: workspace:*
         version: link:../observability
+      '@agent-anything/operation-catalog':
+        specifier: workspace:*
+        version: link:../operation-catalog
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../tools
@@ -468,6 +471,9 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../../../harness/agent-core/contracts
+      '@agent-anything/agent-hooks':
+        specifier: workspace:*
+        version: link:../../../harness/agent-hooks
       '@agent-anything/agent-runtime':
         specifier: workspace:*
         version: link:../../../harness/agent-core/runtime
@@ -501,6 +507,12 @@ importers:
       '@agent-anything/observability':
         specifier: workspace:*
         version: link:../../../harness/observability
+      '@agent-anything/operation-catalog':
+        specifier: workspace:*
+        version: link:../../../harness/operation-catalog
+      '@agent-anything/operation-composition':
+        specifier: workspace:*
+        version: link:../../../harness/operation-composition
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../../harness/safety/permission
@@ -510,6 +522,9 @@ importers:
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
+      better-sqlite3:
+        specifier: 13.0.3
+        version: 13.0.3
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)
@@ -535,6 +550,9 @@ importers:
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
+      '@types/better-sqlite3':
+        specifier: 9.6.0
+        version: 9.6.0
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1

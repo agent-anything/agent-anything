@@ -41,8 +41,8 @@ export function ConversationPlan({ value }: { value: HelarcPresentationValue }) 
   if (!steps.length) return null;
   const ended = (value as {status?: string})?.status === "abandoned";
   const completed = steps.filter((step) => step.status === "completed").length;
-  const current = ended ? null : steps.find((step) => step.status === "in_progress");
-  const currentText = current?.step;
+  const current = ended ? [] : steps.filter((step) => step.status === "in_progress");
+  const currentText = current.length > 1 ? `${current.length} in progress` : current[0]?.step;
   return (
     <section className="wb-conversation-plan" aria-label="Plan">
       <div className="wb-plan-body">

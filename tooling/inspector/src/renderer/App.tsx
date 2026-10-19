@@ -10,6 +10,7 @@ import type { ContentTarget } from "./content/ContentLocation.js";
 import { InspectionDetailDrawer } from "./records/InspectionDetailDrawer.js";
 import { RunTree } from "./runs/RunTree.js";
 import { RunOverview } from "./runs/RunOverview.js";
+import { RecordingCoverage } from "./records/RecordingCoverage.js";
 import { ObjectSummaries } from "./records/ObjectSummaries.js";
 import { readContentTarget } from "./navigation/InspectionLocation.js";
 import { inspectionObjectHistoryLocation, inspectionObjectViewLocation, readInspectionDetailTarget, type InspectionDetailTarget } from "./navigation/InspectionDetailTarget.js";
@@ -72,7 +73,7 @@ export function App() {
       <Tooltip title="Back"><Button aria-label="Back" type="text" icon={<ArrowLeftOutlined />} onClick={() => history.back()} /></Tooltip>
       <Tooltip title="Forward"><Button aria-label="Forward" type="text" icon={<ArrowRightOutlined />} onClick={() => history.forward()} /></Tooltip>
     </Space>{coverage ? <><Tag>{coverage.status}</Tag><span>Snapshot {coverage.watermark}</span><span>{coverage.captured} records</span><span>Read {new Date(bundle!.snapshot.readAt).toLocaleTimeString()}</span>
-      {coverage.dropped + coverage.rejected + coverage.telemetryDropped > 0 && <Tag color="warning">Partial capture</Tag>}{loading && <Tag>Reading next view; previous snapshot retained</Tag>}
+      <RecordingCoverage coverage={coverage} onRecord={setFactId} onSubject={openHistory}/>{loading && <Tag>Reading next view; previous snapshot retained</Tag>}
     </> : <span>No recording selected</span>}</div>
     {error && <Alert className="query-alert" type="error" closable onClose={() => setError(null)} title={error} />}
     <nav className="area-tabs"><Tabs activeKey={area} onChange={(value) => navigate({ area: value })} items={areas.map((key) => ({ key, label: key }))} /></nav>

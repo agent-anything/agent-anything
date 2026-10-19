@@ -271,6 +271,7 @@ function snapshot(
   status: HelarcMainSnapshot["status"] = "idle",
 ): HelarcMainSnapshot {
   return {
+    execution: "idle",
     status,
     workspace: null,
     workspaceProfiles: [],

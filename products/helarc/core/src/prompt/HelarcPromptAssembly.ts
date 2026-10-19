@@ -2,6 +2,7 @@ import type {
   ControllerInput,
   ControllerPreProjectionInput,
 } from "@agent-anything/agent-runtime/controller";
+import { createInputDeliverySections } from "@agent-anything/agent-runtime/controller";
 import type {
   ContextProjection,
   ContextProjectionEstimationInput,
@@ -14,7 +15,7 @@ import {
 } from "../instructions/HelarcProtocolInstructions.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 
-export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v7";
+export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v8";
 export const HELARC_TOOL_EXPOSURE_VERSION = "trusted-tool-exposure-v1";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v2";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
@@ -26,7 +27,6 @@ export type HelarcPromptSectionId =
   | "task"
   | "run_input_items"
   | "context_projection"
-  | "current_plan"
   | "permission_context"
   | "pending_interactions"
   | "descendant_targets";
@@ -97,7 +97,6 @@ function assemble(
   ]);
   const currentStateSections = Object.freeze([
     promptSection("context_projection", "user", contextContent),
-    promptSection("current_plan", "user", `Current plan:\n${JSON.stringify(input.plan)}`),
     promptSection("permission_context", "user", `Permission context:\n${JSON.stringify(input.permission)}`),
     promptSection("pending_interactions", "user", `Pending interactions:\n${JSON.stringify(input.pending)}`),
     promptSection("descendant_targets", "user", `Descendant targets:\n${JSON.stringify(input.descendants)}`),
@@ -106,6 +105,7 @@ function assemble(
   const sections = Object.freeze([
     ...promptSections.map((section) => toModelInputSection(section, context)),
     ...interactionHistorySections(input),
+    ...createInputDeliverySections(input.inputDelivery),
     ...currentStateSections.map((section) => toModelInputSection(section, context)),
   ]);
   return Object.freeze({
@@ -142,19 +142,22 @@ function interactionHistorySections(
   input: ControllerPreProjectionInput | ControllerInput,
 ): readonly ModelInputSectionCandidate[] {
   if (!("interaction" in input)) return Object.freeze([]);
-  return Object.freeze(input.interaction.messages.map((message, index) => Object.freeze({
+  return Object.freeze(input.interaction.messages.map((message, index) => {
+    const notification = input.interaction.notificationHistory?.find(entry => entry.messageIndex === index);
+    return Object.freeze({
     id: `helarc:model-input:interaction-history:${index}`,
     source: Object.freeze({
       owner: "agent-runtime",
-      kind: "model_interaction_projection",
-      id: input.interaction.id,
-      revision: input.interaction.revision,
+      kind: notification ? "input_delivery" : "model_interaction_projection",
+      id: notification?.batchId ?? input.interaction.id,
+      revision: notification?.batchRevision ?? input.interaction.revision,
     }),
-    kind: "interaction_history",
+    kind: notification ? "input_notification_history" : "interaction_history",
     role: message.role,
     necessity: "mandatory",
     content: Object.freeze({ kind: "model_message", message }),
-  })));
+    });
+  }));
 }
 
 function buildAgentInstructionSections(
@@ -234,5 +237,7 @@ function readHelarcTaskPrompt(
   input: ControllerPreProjectionInput | ControllerInput,
 ): string {
   const taskInput = input.task.input as Partial<HelarcTaskInput>;
-  return typeof taskInput.prompt === "string" ? taskInput.prompt : "";
+  const prompt = typeof taskInput.prompt === "string" ? taskInput.prompt : "";
+  const refs = (taskInput as {execution_refs?: unknown}).execution_refs;
+  return Array.isArray(refs) && refs.length ? `${prompt}\n\nTransferred execution references (data):\n${JSON.stringify(refs)}` : prompt;
 }

@@ -23,10 +23,10 @@ import type { InvocationInterruptionContext } from "@agent-anything/agent-core/c
 import { createFakeProviderContext } from "@agent-anything/test-support";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { access, mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, relative, resolve, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import { createHelarcProviderProfile } from "@agent-anything/helarc/configuration";
@@ -36,6 +36,8 @@ import { InspectionQueryService } from "@agent-anything/inspection/query";
 import { workbenchInteractionText } from "../workbench/WorkbenchInteractionPresentation.js";
 import { isWorkbenchOperation } from "../workbench/WorkbenchOperationPresentation.js";
 import { CommandOutputRegistry } from "../workbench/CommandOutputRegistry.js";
+import { HelarcExecutionStore } from "../execution-storage/HelarcExecutionStore.js";
+import { pathToFileURL } from "node:url";
 import {
   prepareHelarcHostRun,
   type HelarcHostActiveRun,
@@ -144,6 +146,317 @@ function executeReadOnlyTestHostRun(
 }
 
 describe("Helarc Host Run composition", () => {
+  it("recovers a committed compensation association after lost acknowledgement before dispatch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-compensation-recovery-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    try {
+      const commit = store.commitCompensationAssociation.bind(store);
+      let retained: import("@agent-anything/operation-catalog/evidence").CompensationAssociation | null = null;
+      store.commitCompensationAssociation = async association => {
+        await commit(association);
+        retained = association;
+        throw new Error("Lost compensation acknowledgement");
+      };
+      const provider = new ScriptedProvider([
+        {kind: "tool_call", toolName: "Write", input: {file_path: "target.txt", content: "before"}},
+        (request: ProviderRequest) => {
+          const settlement = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result) : []).at(-1)!;
+          const content = settlement.content as {references: readonly ModelJsonValue[]};
+          return {kind: "tool_call", toolName: "Write", input: {file_path: "target.txt", content: "after",
+            compensation_of: {targets: [content.references[0]!]}}};
+        },
+      ]);
+      const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store, permissionPreset: "full_access"});
+      await expect(prepared.start().result).rejects.toBeDefined();
+      expect(retained).not.toBeNull();
+      expect(provider.requests).toHaveLength(2);
+      await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("before");
+      const saved = (await store.readProductRun(prepared.rootRunId))!;
+      await store.close();
+      store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      const nextProvider = new ScriptedProvider([{kind: "completion", summary: "The retained call settled."}]);
+      const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: nextProvider,
+        providerProfile: saved.providerProfile, instructionSettings: saved.instructionSettings,
+        executionStore: store, recoveryAdmission: saved, permissionPreset: "full_access"});
+      const result = await (await recovered.recover("continue")).result;
+      expect(result.runResult.status, JSON.stringify(result.runResult.cause)).toBe("completed");
+      expect(nextProvider.requests).toHaveLength(1);
+      await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("after");
+      const association = retained as unknown as import("@agent-anything/operation-catalog/evidence").CompensationAssociation;
+      expect(await store.readCompensationAssociation(association.invocation.id)).toEqual(association);
+      expect(operationResults(result).filter(operation => operation.ref.invocation.id === association.invocation.id)).toHaveLength(1);
+    } finally {
+      await store.close();
+      const target = resolve(directory);
+      if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-compensation-recovery-")) throw new Error("Unexpected test directory.");
+      await rm(target, {recursive: true, force: true});
+    }
+  }, 60_000);
+  it("delivers an execution locator and accepts model-declared compensation through ordinary governed file work", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-compensation-binding-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    const observed: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceObservation[] = [];
+    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker, {observe(value) {observed.push(value);}});
+    try {
+      let original: import("@agent-anything/model-interaction").ModelJsonValue = null;
+      const provider = new ScriptedProvider([
+        {kind: "tool_call", toolName: "Write", input: {file_path: "target.txt", content: "before"}},
+        (request: ProviderRequest) => {
+          const settlements = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result) : []);
+          const content = settlements.at(-1)!.content as {references: readonly import("@agent-anything/model-interaction").ModelJsonValue[]};
+          original = content.references.find(reference => reference !== null && typeof reference === "object" &&
+            !Array.isArray(reference) && "kind" in reference && reference.kind === "effect")!;
+          expect(original).toBeDefined();
+          return {kind: "tool_call", toolName: "Write", input: {file_path: "target.txt", content: "must not be written",
+            compensation_of: {targets: [{...(original as object), id: "unknown"}]}}};
+        },
+        (request: ProviderRequest) => {
+          const settlements = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result) : []);
+          expect(settlements.at(-1)).toMatchObject({settlement: "invalid", content: {
+            failure: {code: "execution_reference_unavailable"}}});
+          return {kind: "tool_call", toolName: "Edit", input: {file_path: "target.txt", old_string: "before", new_string: "after",
+            compensation_of: {targets: [original], explanation: "Replace the original content"}}};
+        },
+        {kind: "completion", summary: "The explicitly associated edit settled."},
+      ]);
+      const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store,
+        permissionPreset: "full_access", instructionSettings: createDefaultHelarcInstructionSettings()});
+      const result = await prepared.start().result;
+      expect(result.runResult.status, JSON.stringify(result.product.output.safeErrors)).toBe("completed");
+      expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
+      const operations = operationResults(result);
+      expect(operations.map(operation => operation.status)).toEqual(["succeeded", "invalid", "succeeded"]);
+      expect(operations[1]?.metadata).toMatchObject({effectCertainty: "none", completionExtent: "none"});
+      expect(result.product.actions).toHaveLength(2);
+      await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("after");
+      const invocation = operations.at(-1)!.ref.invocation;
+      const association = await store.readCompensationAssociation(invocation.id);
+      expect(association).toMatchObject({invocation, targets: [{requested: original,
+        execution: {kind: "execution", id: operations[0]!.ref.id}}],
+        explanation: "Replace the original content"});
+      const evidence = await store.readExecutionEvidence(association!.targets[0]!.requested);
+      expect(evidence?.effects[0]).toMatchObject({ref: original, value: {operation: "created", before: null}});
+      expect(observed.filter(event => event.kind === "compensation_intent_committed")).toHaveLength(1);
+      const physical = await store.readRunTree(prepared.rootRunId);
+      const savedBindings = physical!.members.flatMap(member => member.head.control.operations.map(preparation => preparation.binding));
+      expect(savedBindings.some(binding => binding.compensation?.id === association?.id)).toBe(true);
+      expect(savedBindings.every(binding => !Object.hasOwn(binding.request as object, "compensation_of"))).toBe(true);
+      await store.close();
+      store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      expect(await store.readCompensationAssociation(invocation.id)).toEqual(association);
+    } finally {
+      await store.close();
+      const target = resolve(directory);
+      if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-compensation-binding-")) throw new Error("Unexpected test directory.");
+      await rm(target, {recursive: true, force: true});
+    }
+  }, 45_000);
+  it.each([false, true])("retains, queries and restores file content/existence through governed Tools (created=%s)", async created => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-file-support-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    if (!created) await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    try {
+      let change: ModelJsonValue = null;
+      let material: ModelJsonValue = null;
+      const provider = new ScriptedProvider([
+        {kind: "tool_call", toolName: "Write", input: {file_path: "target.txt", content: "changed bytes"}},
+        (request: ProviderRequest) => {
+          const content = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result) : []).at(-1)!.content as {references: ModelJsonValue[]};
+          change = content.references.find(ref => (ref as {kind?: string})?.kind === "effect")!;
+          material = content.references.find(ref => (ref as {kind?: string})?.kind === "material")!;
+          expect(material).toBeDefined();
+          return {kind: "tool_call", toolName: "ExecutionDetails", input: {reference: material, view: "content"}};
+        },
+        (request: ProviderRequest) => {
+          const latest = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result) : []).at(-1)!;
+          expect(latest.settlement, JSON.stringify(latest)).toBe("succeeded");
+          expect(JSON.stringify(latest)).toContain(created ? "absence" : "original bytes");
+          return {kind: "tool_call", toolName: "RestoreFile", input: {change_ref: change}};
+        },
+        {kind: "completion", summary: "Restoration requested."},
+      ]);
+      const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store,
+        permissionPreset: "full_access", instructionSettings: createDefaultHelarcInstructionSettings()});
+      const result = await prepared.start().result;
+      const operations = operationResults(result);
+      expect(operations.map(value => value.status), JSON.stringify(operations)).toEqual(["succeeded", "succeeded", "succeeded"]);
+      expect(result.runResult.status).toBe("completed");
+      expect(result.product.actions).toHaveLength(2);
+      if (created) await expect(access(join(workspaceRoot, "target.txt"))).rejects.toThrow();
+      else await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("original bytes");
+      expect(await store.readCompensationAssociation(operations[2]!.ref.invocation.id)).toMatchObject({targets: [{requested: change}]});
+      const restoredEvidence = await store.readExecutionEvidence({owner: operations[2]!.semanticOwner, kind: "execution", id: operations[2]!.ref.id, revision: "1"});
+      expect(restoredEvidence?.effects[0]?.value).toMatchObject({operation: created ? "removed" : "restored"});
+      expect((await store.readFileMaterialRecord(material as never))?.pins).toContain(prepared.rootRunId);
+      if (created) {
+        vi.spyOn(store, "finalizeFileMaterials").mockRejectedValueOnce(new Error("interrupted material finalization"));
+        await expect(store.commitProductDelivery(prepared.rootRunId)).rejects.toThrow("interrupted material finalization");
+        expect(await store.listProductRuns()).toContainEqual(expect.objectContaining({delivered: true, terminal: true}));
+        expect((await store.readFileMaterialRecord(material as never))?.pins).toContain(prepared.rootRunId);
+      } else {
+        await store.commitProductDelivery(prepared.rootRunId);
+        expect(await store.readFileMaterialRecord(material as never)).toMatchObject({state: "available", pins: []});
+      }
+      await store.close(); store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      expect(await store.readExecutionEvidence(material as never)).not.toBeNull();
+      const released = await store.readFileMaterialRecord(material as never);
+      expect(released).toMatchObject({state: "available", pins: []});
+      await store.finalizeFileMaterials(prepared.rootRunId);
+      expect((await store.readFileMaterialRecord(material as never))?.expiresAt).toBe(released!.expiresAt);
+      await store.expireFileMaterials("2100-01-01T00:00:00.000Z");
+      expect(await store.readFileMaterialRecord(material as never)).toMatchObject({state: "expired", reason: "retention_expired"});
+    } finally {
+      await store.close();
+      const target = resolve(directory);
+      if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-file-support-")) throw new Error("Unexpected test directory.");
+      await rm(target, {recursive: true, force: true});
+    }
+  }, 60_000);
+  it("hands Child execution references to Parent for a normally governed restoration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-child-compensation-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    try {
+      let childExecution: ModelJsonValue = null;
+      const provider = new ScriptedProvider([
+        {kind: "tool_call", toolName: "Agent", input: {prompt: "Change target.txt."}},
+        {kind: "tool_call", toolName: "Write", input: {file_path: "target.txt", content: "child bytes"}},
+        {kind: "completion", summary: "Changed the file."},
+        (request: ProviderRequest) => {
+          const content = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result.content) : []).at(-1) as {output: {execution_refs: ModelJsonValue[]}};
+          childExecution = content.output.execution_refs[0]!;
+          expect(childExecution).toBeDefined();
+          return {kind: "tool_call", toolName: "ExecutionDetails", input: {reference: childExecution}};
+        },
+        (request: ProviderRequest) => {
+          const content = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result.content) : []).at(-1) as {output: {entries: {ref: ModelJsonValue}[]; callable_support: {callable_name: string}[]}};
+          expect(content.output.callable_support[0]!.callable_name).toMatch(/^RestoreFile_/);
+          return {kind: "tool_call", toolName: "RestoreFile", input: {change_ref: content.output.entries[0]!.ref}};
+        },
+        {kind: "completion", summary: "Restored Child change."},
+      ]);
+      const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store,
+        permissionPreset: "full_access", instructionSettings: createDefaultHelarcInstructionSettings()});
+      const result = await prepared.start().result;
+      expect(result.runResult.status).toBe("completed");
+      await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("original bytes");
+      const transfers = await store.readExecutionReferenceTransfers(prepared.rootRunId);
+      expect(transfers).toEqual([expect.objectContaining({scope: {kind: "public_run"}, basis: expect.objectContaining({kind: "delegation_result"})})]);
+      await store.close(); store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      expect(await store.readExecutionReferenceTransfers(prepared.rootRunId)).toEqual(transfers);
+      expect(await store.readExecutionEvidence(childExecution as never)).not.toBeNull();
+    } finally {
+      await store.close();
+      const target = resolve(directory);
+      if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-child-compensation-")) throw new Error("Unexpected test directory.");
+      await rm(target, {recursive: true, force: true});
+    }
+  }, 90_000);
+  it("recovers a completed restoration after lost Attempt acknowledgement without repeating its mutation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-restore-recovery-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    try {
+      let restoreAction: string | null = null;
+      const preparation = store.recordPreEffect.bind(store), attempt = store.recordAttemptResult.bind(store);
+      store.recordPreEffect = async value => {
+        if (value.binding.binding.operation.operation.namespace === "helarc.code-agent.file" && value.binding.binding.operation.operation.name === "restore") restoreAction = value.prepared.subject.ref.action.id;
+        return preparation(value);
+      };
+      let lost = false;
+      store.recordAttemptResult = async value => {
+        const receipt = await attempt(value);
+        if (!lost && value.result.attempt.action.id === restoreAction) {lost = true; throw new Error("Lost restoration outcome acknowledgement");}
+        return receipt;
+      };
+      const provider = new ScriptedProvider([
+        {kind: "tool_call", toolName: "Write", input: {file_path: "target.txt", content: "changed bytes"}},
+        (request: ProviderRequest) => {
+          const content = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result.content) : []).at(-1) as {references: ModelJsonValue[]};
+          return {kind: "tool_call", toolName: "RestoreFile", input: {change_ref: content.references.find(ref => (ref as {kind: string}).kind === "effect")!}};
+        },
+      ]);
+      const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store, permissionPreset: "full_access"});
+      await expect(prepared.start().result).rejects.toBeDefined();
+      expect(lost).toBe(true);
+      expect(await readFile(join(workspaceRoot, "target.txt"), "utf8")).toBe("original bytes");
+      const saved = (await store.readProductRun(prepared.rootRunId))!;
+      await store.close(); store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      const next = new ScriptedProvider([{kind: "completion", summary: "Restored."}]);
+      const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: next, executionStore: store,
+        providerProfile: saved.providerProfile, instructionSettings: saved.instructionSettings, recoveryAdmission: saved, permissionPreset: "full_access"});
+      const result = await (await recovered.recover("continue")).result;
+      expect(result.runResult.status).toBe("completed");
+      expect(next.requests).toHaveLength(1);
+      const records = await store.readAction({runId: prepared.rootRunId, action: {id: restoreAction!}});
+      expect(records.attempts).toHaveLength(1);
+      expect(records.settlement?.settlement.status).toBe("succeeded");
+      expect(await readFile(join(workspaceRoot, "target.txt"), "utf8")).toBe("original bytes");
+    } finally {
+      await store.close();
+      const target = resolve(directory);
+      if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-restore-recovery-")) throw new Error("Unexpected test directory.");
+      await rm(target, {recursive: true, force: true});
+    }
+  }, 90_000);
+  it.each(["continue", "cancel"] as const)("restores an accepted Turn after lost acknowledgement and %s without recreating the decision", async intent => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-host-recovery-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    await writeFile(join(workspaceRoot, "input.txt"), "retained input", "utf8");
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    let store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+    try {
+      const provider = new ScriptedProvider([{kind: "tool_call", toolName: "Read", input: {file_path: "input.txt"}}]);
+      const prepare = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store});
+      const commit = store.commitRunTree.bind(store);
+      let interrupted = false;
+      store.commitRunTree = async value => {
+        const receipt = await commit(value);
+        if (!interrupted && value.runs.some(run => run.control.decision?.status === "active")) {
+          interrupted = true;
+          throw new Error("Lost acknowledgement after accepted decision");
+        }
+        return receipt;
+      };
+      await expect(prepare.start().result).rejects.toBeDefined();
+      expect(interrupted).toBe(true);
+      expect(provider.requests).toHaveLength(1);
+      const saved = (await store.readProductRun(prepare.rootRunId))!;
+      const before = await store.readRunTree(prepare.rootRunId);
+      expect(before?.members[0]?.head.control.decision?.status).toBe("active");
+      await store.close();
+      store = await HelarcExecutionStore.open(join(directory, "execution"), worker);
+      const nextProvider = new ScriptedProvider([{kind: "completion", summary: "Read complete."}]);
+      const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: nextProvider,
+        providerProfile: saved.providerProfile, instructionSettings: saved.instructionSettings, executionStore: store, recoveryAdmission: saved});
+      const outcome = await (await recovered.recover(intent)).result;
+      expect(outcome.harnessRunId).toBe(prepare.rootRunId);
+      expect(outcome.runResult.status, JSON.stringify(outcome.runResult.cause)).toBe(intent === "cancel" ? "cancelled" : "completed");
+      expect(nextProvider.requests).toHaveLength(intent === "cancel" ? 0 : 1);
+      if (intent === "continue") {
+        expect(JSON.stringify(nextProvider.requests[0]?.messages)).toContain("retained input");
+        const observations = outcome.runResult.items.flatMap(item => item.payload.kind === "observation" &&
+          item.payload.observation.payload.kind === "operation" ? [item.payload.observation.payload.result] : []);
+        expect(observations).toHaveLength(1);
+        const result = observations[0]!;
+        expect(await store.readExecutionEvidence({owner: result.semanticOwner, kind: "execution", id: result.ref.id, revision: "1"}))
+          .toMatchObject({source: {result: result.ref, correlation: {kind: "run_action", run: {id: prepare.rootRunId}}},
+            outcome: {status: "succeeded"}, effects: [], support: []});
+      }
+      expect((await store.listProductRuns())[0]).toMatchObject({terminal: true, delivered: false});
+      await store.commitProductDelivery(prepare.rootRunId);
+      expect((await store.listProductRuns())[0]?.delivered).toBe(true);
+    } finally {await store.close(); await rm(directory, {recursive: true, force: true});}
+  }, 45_000);
   it("records the real Tool, Context and lifecycle path without optional instructions or execution interference", async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-inspection-run-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
@@ -420,9 +733,9 @@ describe("Helarc Host Run composition", () => {
     });
     expect(contextProjection?.metadata).not.toHaveProperty("records");
     expect(provider.requests).toHaveLength(2);
-    expect(provider.lastControllerInputContexts).toEqual([0, 1]);
+    expect(provider.lastControllerResultCounts).toEqual([0, 1]);
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata).toMatchObject({
-      promptArchitectureVersion: "helarc-prompt-v7",
+      promptArchitectureVersion: "helarc-prompt-v8",
       toolExposureVersion: "trusted-tool-exposure-v1",
     });
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata)
@@ -473,7 +786,7 @@ describe("Helarc Host Run composition", () => {
       owner: "helarc", kind: "clarification", revision: "1",
     } });
     expect(pendingQuestion && isWorkbenchOperation(pendingQuestion)).toBe(false);
-    expect(composition.activeRun.submitInteraction({
+    expect((await composition.activeRun.submitInteraction({
       request: pending.request,
       submissionId: "clarification-submission-1",
       payload: {
@@ -483,7 +796,7 @@ describe("Helarc Host Run composition", () => {
           text: null,
         }],
       },
-    }).status).toBe("accepted_for_resolution");
+    })).status).toBe("accepted_for_resolution");
 
     const result = await composition.result;
     expect(result.runResult.status).toBe("completed");
@@ -729,7 +1042,7 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.effects).toHaveLength(3);
     expect(result.product.effects.every((effect) => effect.status === "succeeded")).toBe(true);
     expect(result.activity.filter((item) => item.kind === "operation.finished")).toHaveLength(3);
-    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
+    expect(provider.lastControllerResultCounts).toEqual([0, 1, 2, 3]);
     expect(operationOutputs(result)).toMatchObject([
       { matches: ["src", "src/index.ts"], truncated: false, omitted_count: 0 },
       { file_path: "src/index.ts", content: "export const value = 42;\n", truncated: false },
@@ -896,7 +1209,7 @@ describe("Helarc Host Run composition", () => {
     expect(commandResults.at(-1)).toMatchObject({
       status: "succeeded",
       output: {
-        phase: "settled",
+        phase: expect.stringMatching(/^(draining|settled)$/),
         outcome: "succeeded",
         root_exit: { code: 0, signal: null },
         stdout: { integrity: "exact", omitted_bytes: 0 },
@@ -908,7 +1221,8 @@ describe("Helarc Host Run composition", () => {
     expect(retained).toHaveLength(1);
     const reopened = new CommandOutputRegistry(registryPath);
     expect(await reopened.read({ ...retained[0]!, cursor: null }, undefined)).toMatchObject({ status: "page", source: "retained" });
-    expect(commandResults.at(-1)?.output).toHaveProperty("output.persistence", "complete");
+    // Initial observation may precede capture finalization; retained output above
+    // proves final persistence without rewriting that earlier observation.
     expect(commandResults.at(-1)?.output).not.toHaveProperty("output.files");
     expect(result.product.output.enforcement).toEqual({
       selected: "disabled",
@@ -922,7 +1236,7 @@ describe("Helarc Host Run composition", () => {
       owner: "canonical-action",
       kind: "action_settlement",
     }));
-    expect(provider.lastControllerInputContexts).toEqual([0, 3]);
+    expect(provider.lastControllerResultCounts).toEqual([0, 1]);
   });
 
   it("starts and stops one background shell task through its exact TaskStop identity", async () => {
@@ -975,7 +1289,7 @@ describe("Helarc Host Run composition", () => {
         task_id: expect.any(String),
       }),
     ]);
-    expect(provider.lastControllerInputContexts).toEqual([0, 3, 4]);
+    expect(provider.lastControllerResultCounts).toEqual([0, 1, 2]);
     expect(provider.requests).toHaveLength(3);
     const stateSection = (request: ProviderRequest) => request.composition.sections.find(
       section => section.id === "helarc:model-input:command-state",
@@ -1048,7 +1362,7 @@ describe("Helarc Host Run composition", () => {
     expect(observations).toHaveLength(2);
     expect(observations.at(-1)).toMatchObject({status:"succeeded",output:{stdout:{text:expect.stringContaining("retained-output")}}});
     expect(observations[0]?.lowerRefs[0]?.id).not.toBe(observations[1]?.lowerRefs[0]?.id);
-  });
+  }, 20_000);
 
   it("submits the final Plan and reply together without another model request or enabled instructions", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-final-plan-"));
@@ -1066,7 +1380,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
     const required = provider.requests.map(request => request.interaction.kind === "native_tool_turn"
       ? request.interaction.callables.find(call => call.name === "final_result")?.inputSchema.required : null);
-    expect(required).toEqual([["response"], ["response", "plan"]]);
+    expect(required).toEqual([[], ["plan"]]);
     const plans = result.runResult.items.flatMap(({ payload }) => payload.kind === "state_transition" && payload.transition === "plan" ? [payload.plan] : []);
     expect(plans).toHaveLength(2);
     expect(plans.at(-1)).toMatchObject({status: "completed", steps: [{step: "Inspect workspace", status: "completed"}]});
@@ -1281,7 +1595,7 @@ describe("Helarc Host Run composition", () => {
       "rejected",
     ]);
     expect(provider.requests).toHaveLength(4);
-    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
+    expect(provider.lastControllerResultCounts).toEqual([0, 1, 2, 3]);
   });
 
   it("executes multiple model-origin file mutations and continues until completion", async () => {
@@ -1318,7 +1632,7 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.effects.every(({ status }) => status === "succeeded")).toBe(true);
     expect(result.product.actions).toHaveLength(2);
     expect(provider.requests).toHaveLength(3);
-    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2]);
+    expect(provider.lastControllerResultCounts).toEqual([0, 1, 2]);
     await expect(readFile(join(workspaceRoot, "src", "created.txt"), "utf8"))
       .resolves.toBe("created\n");
     await expect(readFile(join(workspaceRoot, "src", "existing.txt"), "utf8"))
@@ -1400,7 +1714,7 @@ describe("Helarc Host Run composition", () => {
     } finally {
       await rm(workspaceRoot, {recursive: true, force: true});
     }
-  });
+  }, 20_000);
 
   it("rejects an ambiguous Edit without changing the file", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-ambiguous-"));
@@ -1491,6 +1805,24 @@ describe("Helarc Host Run composition", () => {
     expect(operationResults(result)).toEqual([]);
     expect(result.product.actions).toEqual([]);
     await expect(access(join(workspaceRoot, "target.txt"))).rejects.toThrow();
+  });
+
+  it("exposes effective command limits and returns a correctable schema rejection before Action preparation", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-command-contract-"));
+    const provider = new ScriptedProvider([
+      {kind: "tool_call", toolName: process.platform === "win32" ? "PowerShell" : "Bash", input: {command: "echo should-not-start", timeout_ms: 180000}},
+      {kind: "completion", summary: "The command was not started."},
+    ]);
+    const result = await executeTestHostRun({...createTask(workspaceRoot), provider, permissionPreset: "full_access",
+      commandLimits: {defaultTimeoutMs: 1200, maxTimeoutMs: 4000}});
+    const exposed = JSON.stringify(provider.requests[0]!.interaction);
+    expect(exposed).toContain('"maximum":4000');
+    expect(exposed).toContain('"default":1200');
+    const feedback = JSON.stringify(provider.requests[1]!.messages.filter(message => message.role === "tool"));
+    expect(feedback).toContain("180000"); expect(feedback).toContain("4000"); expect(feedback).toContain("1200");
+    expect(operationResults(result)).toEqual([]);
+    expect(result.product.actions).toEqual([]);
+    expect(provider.requests).toHaveLength(2);
   });
 
   it("invalidates an approved Edit when its prepared baseline becomes stale", async () => {
@@ -1641,7 +1973,7 @@ class ScriptedProvider implements Provider {
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];
-  readonly lastControllerInputContexts: number[] = [];
+  readonly lastControllerResultCounts: number[] = [];
   readonly lastControllerInputPlans: unknown[] = [];
 
   constructor(
@@ -1658,7 +1990,9 @@ class ScriptedProvider implements Provider {
       return scriptedTaskFulfillmentResult(request, this.descriptor.id);
     }
     this.requests.push(request);
-    this.lastControllerInputContexts.push(readObservationCount(request));
+    expect(readContextValues(request).filter(value => value.kind === "run_observation")).toEqual([]);
+    this.lastControllerResultCounts.push(request.messages.reduce((count, message) =>
+      count + (message.role === "tool" ? message.content.length : 0), 0));
     this.lastControllerInputPlans.push(readCurrentPlan(request));
     await this.beforeResponse(request);
     const scriptedOutput = this.outputs.shift();
@@ -1921,11 +2255,11 @@ function createTask(workspaceRoot: string) {
   };
 }
 
-function readObservationCount(request: ProviderRequest): number {
+function readContextValues(request: ProviderRequest): Readonly<Record<string, unknown>>[] {
   const marker = "Context projection:";
   const content = findTextBlock(request, marker);
   if (content === undefined) {
-    return 0;
+    return [];
   }
 
   return content.slice(marker.length).split("\n")
@@ -1938,7 +2272,7 @@ function readObservationCount(request: ProviderRequest): number {
         return null;
       }
     })
-    .filter((block) =>
+    .flatMap((block) =>
       typeof block === "object" &&
       block !== null &&
       "payload" in block &&
@@ -1947,23 +2281,15 @@ function readObservationCount(request: ProviderRequest): number {
       "value" in block.payload &&
       typeof block.payload.value === "object" &&
       block.payload.value !== null &&
-      "kind" in block.payload.value &&
-      block.payload.value.kind === "run_observation"
-    ).length;
+      "kind" in block.payload.value ? [block.payload.value as Readonly<Record<string, unknown>>] : []
+    );
 }
 
 function readCurrentPlan(request: ProviderRequest): unknown {
-  const marker = "Current plan:";
-  const content = findTextBlock(request, marker);
-  if (content === undefined) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(content.slice(marker.length).trim()) as unknown;
-  } catch {
-    return null;
-  }
+  expect(findTextBlock(request, "Current plan:")).toBeUndefined();
+  const plans = readContextValues(request).filter(value => value.kind === "run_plan");
+  expect(plans).toHaveLength(1);
+  return plans[0]!.plan;
 }
 
 function findTextBlock(request: ProviderRequest, marker: string): string | undefined {

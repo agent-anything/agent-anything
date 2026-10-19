@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessModelContext,
   createUnknownModelInputMeasurement,
+  snapshotProviderRequestedOutput,
   type ModelContextCapacity,
   type ModelInputMeasurement,
 } from "./ModelContext.js";
@@ -30,6 +31,36 @@ const capacity: ModelContextCapacity = {
 };
 
 describe("Model Context assessment", () => {
+  it.each([
+    ["exact", 900, "unresolved"],
+    ["exact", 951, "proven_overflow"],
+    ["upper_bound", 951, "unresolved"],
+    ["estimated", 951, "estimated_overflow"],
+  ] as const)("does not invent output reservation for %s input %i", (accuracy, amount, disposition) => {
+    const result = assessModelContext({ compositionId: "composition-1", capacity,
+      measurement: measured(accuracy, amount),
+      requestedOutput: { unit: "tokens", maximum: null, source: "unspecified", revision: "omitted-1" },
+      headroom, assessedAt, revision: "assessment-1" });
+    expect(result).toMatchObject({ disposition, effectiveInputBudget: null,
+      requestedOutput: { maximum: null, source: "unspecified" } });
+  });
+
+  it("can still assess input-only capacity with unspecified output", () => {
+    expect(assessModelContext({ compositionId: "composition-1", capacity: { ...capacity, semantics: "input_only" },
+      measurement: measured("exact", 950),
+      requestedOutput: { unit: "tokens", maximum: null, source: "unspecified", revision: "omitted-1" },
+      headroom, assessedAt, revision: "assessment-1" }))
+      .toMatchObject({ disposition: "proven_fit", effectiveInputBudget: 950 });
+  });
+
+  it.each([
+    { maximum: 0, source: "unspecified" },
+    { maximum: null, source: "host_configured" },
+    { maximum: null, source: "invented" },
+  ])("rejects inconsistent output declarations: %j", value => {
+    expect(() => snapshotProviderRequestedOutput({ unit: "tokens", revision: "1", ...value } as never)).toThrow();
+  });
+
   it.each([
     ["exact", 850, "proven_fit"],
     ["exact", 851, "proven_overflow"],

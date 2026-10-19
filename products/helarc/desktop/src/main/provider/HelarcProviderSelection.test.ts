@@ -4,11 +4,13 @@ import type { FileHelarcProviderProfileStore } from "./HelarcProviderProfileStor
 import type { ProviderCredentialStore } from "./ProviderCredentialStore.js";
 import { HelarcProviderSelection } from "./HelarcProviderSelection.js";
 import { createHelarcProvider } from "./createHelarcProvider.js";
+import { restoreHelarcProvider } from "./restoreHelarcProvider.js";
+import { retainHelarcProviderBinding } from "../execution-storage/HelarcExecutionAdmission.js";
 
 function fixture() {
   const p = createHelarcProviderProfile({ id: "local", revision: "1", providerKind: "ollama", displayName: "Local",
     baseUrl: "http://localhost:11435", model: "model", timeoutMs: 1000, credentialStatus: "empty_allowed",
-    ollamaRuntime: { contextWindowTokens: 16384, maximumOutputTokens: 2048 } });
+    ollamaRuntime: { contextWindowTokens: 16384 } });
   if (!p.ok) throw Error("profile");
   const stored = { ok: true as const, profile: p.profile, config: { providerKind: "ollama" as const,
     baseUrl: p.profile.baseUrl, model: p.profile.model, apiKey: "", timeoutMs: 1000, ollamaRuntime: p.profile.ollamaRuntime,
@@ -22,6 +24,20 @@ function fixture() {
 }
 
 describe("Provider selection admission", () => {
+  it("restores the exact resolved thinking and artifact without serializing implementation or credentials", async () => {
+    const {selection} = fixture();
+    const resolved = (await selection.resolve())!;
+    const original = createHelarcProvider(resolved.config);
+    const saved = {providerProfile: resolved.profile, providerBinding: retainHelarcProviderBinding(original)};
+    const serialized = JSON.stringify(saved);
+    expect(serialized).not.toContain("apiKey");
+    expect(saved.providerBinding.modelContext).not.toHaveProperty("measure");
+    const restored = restoreHelarcProvider(JSON.parse(serialized), "rotated-secret");
+    expect(retainHelarcProviderBinding(restored)).toEqual(saved.providerBinding);
+    expect(restored.descriptor.metadata.generationConfiguration).toMatchObject({think: true, modelArtifact: "sha256:artifact"});
+    expect(() => restoreHelarcProvider({...saved, providerBinding: {...saved.providerBinding,
+      descriptor: {...saved.providerBinding.descriptor, id: "changed-adapter"}}}, "")).toThrow("original Provider");
+  });
   it("discovers from an incomplete connection but requires a model for generation", async () => {
     const { selection, stored, fetch } = fixture();
     stored.config.model = "";

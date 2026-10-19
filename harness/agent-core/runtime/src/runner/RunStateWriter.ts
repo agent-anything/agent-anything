@@ -7,15 +7,24 @@ export type RunStateTransition<TOutput> = (
   current: RunState<TOutput>,
 ) => RunStatePatch<TOutput>;
 
+type PreparedCommit<TOutput, T> = { readonly value: T; readonly bookkeepingInvocationId?: string | null } & (
+  | { readonly payloads: readonly RunItemPayload<TOutput>[]; readonly patch: RunStatePatch<TOutput> }
+  | { readonly payloads?: never; readonly patch?: never }
+);
+
 /** Invocation-local sole writer for one RunState revision chain. */
 export class RunStateWriter<TOutput> {
   private state: RunState<TOutput>;
+  private tail: Promise<unknown> = Promise.resolve();
+  private failure: unknown;
+  private failed = false;
 
   constructor(
     initial: RunState<TOutput>,
     private readonly now: () => string,
     private readonly createId: CreateRunnerIdentity,
-    private readonly onCommit: (state: RunState<TOutput>, previous: RunState<TOutput>) => void,
+    private readonly onCommit: (state: RunState<TOutput>, previous: RunState<TOutput>, bookkeepingInvocationId: string | null) => void,
+    private readonly persist?: (state: RunState<TOutput>, previous: RunState<TOutput>, accept: () => void, bookkeepingInvocationId: string | null) => Promise<void>,
   ) {
     this.state = deepFreeze(initial);
   }
@@ -24,58 +33,91 @@ export class RunStateWriter<TOutput> {
     return this.state;
   }
 
+  fail(error: unknown): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.failure = error;
+  }
+
   commit(
     payload: RunItemPayload<TOutput>,
     transition: RunStateTransition<TOutput> = () => Object.freeze({}),
-  ): RunState<TOutput> {
+  ): Promise<RunState<TOutput>> {
     return this.commitItems(Object.freeze([payload]), transition);
   }
 
   commitItems(
     payloads: readonly RunItemPayload<TOutput>[],
     transition: RunStateTransition<TOutput> = () => Object.freeze({}),
-  ): RunState<TOutput> {
+  ): Promise<RunState<TOutput>> {
     if (payloads.length === 0) {
       throw new TypeError("RunStateWriter.commitItems requires at least one RunItem payload.");
     }
-    const current = this.state;
-    this.assertWritable();
-    const revision = current.revision + 1;
-    const items = payloads.map((payload, index) => {
-      const sequence = current.items.length + index + 1;
-      return deepFreeze({
-        ref: {
-          run: current.run,
-          id: this.createId({ kind: "run_item", runId: current.run.id, sequence }),
-          sequence,
-        },
-        committedInRevision: revision,
-        createdAt: this.now(),
-        payload,
+    return this.mutate(current => ({ payloads, patch: transition(current), value: undefined }))
+      .then(result => result.state);
+  }
+
+  /** Prepare identities, counters and associated control facts within the same short commit. */
+  transaction<T>(prepare: (current: RunState<TOutput>) => PreparedCommit<TOutput, T>): Promise<T> {
+    return this.mutate(prepare).then(result => result.value);
+  }
+
+  private mutate<T>(
+    prepare: (current: RunState<TOutput>) => PreparedCommit<TOutput, T>,
+  ): Promise<{ state: RunState<TOutput>; value: T }> {
+    return this.serialize(async () => {
+      const current = this.state;
+      const { payloads, patch, value, bookkeepingInvocationId = null } = prepare(current);
+      if (patch === undefined) return { state: current, value };
+      this.assertWritable();
+      const revision = current.revision + 1;
+      const items = payloads.map((payload, index) => {
+        const sequence = current.items.length + index + 1;
+        return deepFreeze({
+          ref: {
+            run: current.run,
+            id: this.createId({ kind: "run_item", runId: current.run.id, sequence }),
+            sequence,
+          },
+          committedInRevision: revision,
+          createdAt: this.now(),
+          payload,
+        });
       });
+      const next = deepFreeze({
+        ...current,
+        ...patch,
+        revision,
+        items: [...current.items, ...items],
+      }) as RunState<TOutput>;
+      let accepted = false;
+      const accept = () => {
+        if (accepted) throw new TypeError("A Run state transition cannot be accepted twice.");
+        accepted = true;
+        this.state = next;
+        this.onCommit(next, current, bookkeepingInvocationId);
+      };
+      await this.persist?.(next, current, accept, bookkeepingInvocationId);
+      if (!accepted) accept();
+      return { state: next, value };
     });
-    this.state = deepFreeze({
-      ...current,
-      ...transition(current),
-      revision,
-      items: [...current.items, ...items],
-    }) as RunState<TOutput>;
-    this.onCommit(this.state, current);
-    return this.state;
   }
 
   commitState(
     transition: RunStateTransition<TOutput>,
-  ): RunState<TOutput> {
-    const current = this.state;
-    this.assertWritable();
-    this.state = deepFreeze({
-      ...current,
-      ...transition(current),
-      revision: current.revision + 1,
-    }) as RunState<TOutput>;
-    this.onCommit(this.state, current);
-    return this.state;
+    bookkeepingInvocationId: string | null = null,
+  ): Promise<RunState<TOutput>> {
+    return this.mutate(current => ({ payloads: [], patch: transition(current), value: undefined, bookkeepingInvocationId }))
+      .then(result => result.state);
+  }
+
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(() => {
+      if (this.failed) throw this.failure;
+      return operation();
+    });
+    this.tail = result.catch(error => { this.fail(error); });
+    return result;
   }
 
   private assertWritable(): void {

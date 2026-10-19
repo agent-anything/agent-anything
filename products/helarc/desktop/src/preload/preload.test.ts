@@ -193,7 +193,6 @@ describe("Helarc preload bridge", () => {
       timeoutMs: 30_000,
       ollamaRuntime: {
         contextWindowTokens: 16_384,
-        maximumOutputTokens: 2_048,
       },
       qualificationPolicy: "allow_experimental",
       apiKeyUpdate: "clear",
@@ -216,7 +215,6 @@ describe("Helarc preload bridge", () => {
         timeoutMs: 30_000,
         ollamaRuntime: {
           contextWindowTokens: 16_384,
-          maximumOutputTokens: 2_048,
         },
         qualificationPolicy: "allow_experimental",
         apiKeyUpdate: "clear",

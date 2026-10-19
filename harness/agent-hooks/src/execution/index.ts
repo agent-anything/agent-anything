@@ -2,6 +2,8 @@ export type {
   AgentHookControllerInput,
 } from "./AgentHookController.js";
 export { AgentHookController } from "./AgentHookController.js";
+export type { AgentHookInvocationCheckpoint, AgentHookInvocationOutcome, AgentHookRecordPort } from "./AgentHookRecordPort.js";
+export { validateAgentHookCheckpoint, interruptedAgentHook } from "./AgentHookRecordPort.js";
 export type {
   AgentHookInvocationRecord,
   AgentHookInvocationStatus,

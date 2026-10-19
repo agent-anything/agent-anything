@@ -11,6 +11,7 @@ import type {
 import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
 import type { ToolJsonObject } from "@agent-anything/tools/catalog";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
+import { codeFileResultContract } from "./CodeFileResultContract.js";
 
 export const CODE_AGENT_READ_TOOL = "Read";
 export const CODE_AGENT_GLOB_TOOL = "Glob";
@@ -67,6 +68,7 @@ export type CodeFileOperationRequest =
 
 export interface CodeFileOperationContribution {
   readonly operations: readonly RegisteredOperation[];
+  readonly resultContracts: readonly import("@agent-anything/operation-catalog/result").OperationResultContract[];
   readonly bindings: readonly OperationBindingResolverRegistration[];
   readonly tools: readonly ToolRegistrationInput[];
 }
@@ -113,8 +115,10 @@ export function createCodeFileOperationContribution(input: {
       },
     }),
   }]);
+  const operations = Object.freeze(SPECS.map((item) => operationRegistration(item, input.admittedAt)));
   return Object.freeze({
-    operations: Object.freeze(SPECS.map((item) => operationRegistration(item, input.admittedAt))),
+    operations,
+    resultContracts: Object.freeze(operations.map((entry, index) => codeFileResultContract(entry, SPECS[index]!.requestOperation))),
     bindings,
     tools: Object.freeze(SPECS.map((item) => toolRegistration(item, input.admittedAt))),
   });

@@ -1,6 +1,6 @@
 import type { CodeAgentCommandLimits } from "./ProcessContracts.js";
 
-export const defaultCodeAgentCommandLimits: CodeAgentCommandLimits = {
+export const defaultCodeAgentCommandLimits: CodeAgentCommandLimits = Object.freeze({
   defaultTimeoutMs: 30_000,
   maxTimeoutMs: 120_000,
   maxStdoutBytes: 100_000,
@@ -10,7 +10,9 @@ export const defaultCodeAgentCommandLimits: CodeAgentCommandLimits = {
   maxDescriptionChars: 1_000,
   maxActiveTasks: 8,
   maxSettledTasks: 64,
-};
+});
+
+export const PROCESS_WAIT_LIMITS = Object.freeze({defaultForegroundMs: 10_000, minimumPositiveMs: 1_000, maximumMs: 30_000});
 
 export function resolveCommandLimits(
   input: Partial<CodeAgentCommandLimits> | undefined,
@@ -34,5 +36,5 @@ export function resolveCommandLimits(
     );
   }
 
-  return limits;
+  return Object.freeze(limits);
 }

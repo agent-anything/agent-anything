@@ -1,5 +1,6 @@
 export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/inspection": [
+    "@agent-anything/operation-catalog",
     "@agent-anything/action-execution",
     "@agent-anything/observability",
     "@agent-anything/agent-core",
@@ -150,6 +151,9 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "chardet",
   ],
   "@agent-anything/helarc-desktop": [
+    "@agent-anything/operation-catalog",
+    "@agent-anything/agent-hooks",
+    "@agent-anything/operation-composition",
     "@agent-anything/inspection",
     "@agent-anything/action-execution",
     "@agent-anything/context",
@@ -166,6 +170,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/provider-integrations",
     "@agent-anything/agent-runtime",
     "@agent-anything/workspace",
+    "better-sqlite3",
     "lucide-react",
     "react",
     "react-dom",

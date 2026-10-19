@@ -7,6 +7,7 @@ import { join, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { InspectionDatabase } from "../dist/storage/index.js";
+import { INSPECTION_FORMAT_VERSION } from "../dist/records/index.js";
 import { datasetDirectory } from "../dist/sources/index.js";
 
 const require = createRequire(import.meta.url);
@@ -14,7 +15,7 @@ const root = fileURLToPath(new URL("../../../", import.meta.url));
 const directory = mkdtempSync(join(tmpdir(), "agent-inspection-storage-"));
 const sourceId = randomUUID();
 const datasetId = randomUUID();
-const manifest = { formatVersion: 1, sourceId, datasetId, producerInstanceId: randomUUID(), createdAt: new Date().toISOString(), status: "open" };
+const manifest = { formatVersion: INSPECTION_FORMAT_VERSION, sourceId, datasetId, producerInstanceId: randomUUID(), createdAt: new Date().toISOString(), status: "open" };
 const childCode = `import { parentPort, workerData } from 'node:worker_threads'; import { InspectionDatabase } from ${JSON.stringify(new URL("../dist/storage/index.js", import.meta.url).href)}; const db=new InspectionDatabase(workerData); parentPort.postMessage({engine:db.engineVersion(),snapshot:db.snapshot()});db.close();`;
 const readerCode = `const {Worker}=require('node:worker_threads'); const worker=new Worker(new URL('data:text/javascript,'+encodeURIComponent(${JSON.stringify(childCode)})),{workerData:${JSON.stringify(directory)}});worker.on('message',value=>process.stdout.write(JSON.stringify({runtime:process.versions,result:value})));worker.on('error',error=>{console.error(error);process.exitCode=1});`;
 let database;
@@ -63,13 +64,14 @@ try {
     const crashProgram = `(async()=>{const {InspectionDatabase}=await import(${JSON.stringify(new URL("../dist/storage/index.js", import.meta.url).href)});const db=new InspectionDatabase(${JSON.stringify(crashDirectory)},${JSON.stringify(manifest)});db.write(${JSON.stringify(record)},[]);db.db.transaction=fn=>()=>{db.db.exec('BEGIN IMMEDIATE');fn();process.exit(77);};db.write(${JSON.stringify({ ...record, id: "never-committed", contents: [descriptor] })},${JSON.stringify([{ descriptor, text: "proof" }])});})().catch(error=>{console.error(error);process.exit(1)});`;
     const crashed = spawnSync(executable, ["-e", crashProgram], { encoding: "utf8", timeout: 15000, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
     assert.equal(crashed.status, 77, crashed.stderr || String(crashed.error));
-    assert.equal(existsSync(join(crashDirectory, "content", descriptor.id)), true);
+    assert.equal(existsSync(join(crashDirectory, "content")), false);
     const reopened = new InspectionDatabase(crashDirectory);
     assert.equal(reopened.snapshot().captured, 1);
     assert.equal(reopened.record("never-committed", reopened.snapshot().watermark), null);
     assert.equal(reopened.content(descriptor.id, reopened.snapshot().watermark), null);
+    assert.deepEqual(reopened.db.prepare("SELECT COUNT(*) AS count FROM bodies").get(), {count: 0});
     reopened.close();
-    console.log(JSON.stringify({ producer: output.runtime.electron ? "electron" : "node", crashAfterContentBeforeCommit: true, orphanNotReadable: true }));
+    console.log(JSON.stringify({ producer: output.runtime.electron ? "electron" : "node", crashAfterBodyBeforeCommit: true, bodyAndDescriptorRolledBack: true }));
   }
   database.checkpoint();
   database.close();

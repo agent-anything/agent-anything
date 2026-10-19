@@ -117,7 +117,7 @@ export function createObservationContextContribution(input: { readonly id: strin
     sourceKind: "run_observation", sourceId: input.observation.id, sourceRevision: "1", observedAt: input.observation.createdAt,
     payload: toContextJsonValue({ kind: "run_observation", observation: input.observation }), payloadKind: "structured",
     retention: "history", replacementKey: null, instructionRole: "data", necessity: "optional",
-    precedence: 60, audiences: Object.freeze(["model", "product"]), provenanceKind: "run_action",
+    precedence: 60, audiences: Object.freeze(["product"]), provenanceKind: "run_action",
     provenanceId: input.observation.runAction.id, provenanceRevision: String(input.observation.runAction.sequence),
   });
 }
@@ -251,7 +251,7 @@ export function measureDelegationInitialContextBytes(input: {
 export function createCurrentRunContextAdmissionProfile(): ContextAdmissionProfile {
   return admissionProfile({
     owner: "agent-runtime",
-    sourceKinds: ["run_state", "run_plan", "input_notifications"],
+    sourceKinds: ["run_state", "run_plan"],
     audiences: ["model"],
     retention: ["current"],
     instructionRoles: ["data"],
@@ -266,7 +266,7 @@ export function createObservationContextAdmissionProfile(
   return admissionProfile({
     owner,
     sourceKinds: ["run_observation"],
-    audiences: ["model", "product"],
+    audiences: ["product"],
     retention: ["history"],
     instructionRoles: ["data"],
     necessities: ["optional"],

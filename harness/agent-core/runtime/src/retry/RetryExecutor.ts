@@ -36,6 +36,8 @@ import { snapshotRetryPolicy } from "./RetryPolicy.js";
 import { RetryInvocationInvalidatedError } from "./RetryWaitControl.js";
 import { ExecutionFlowPath } from "@agent-anything/observability/execution-flow";
 import { RETRY_EXECUTION_FLOW } from "./RetryExecutionFlow.js";
+import { canonicalEncode } from "@agent-anything/canonical-action/subject";
+import { RetryCheckpointError, type RetryCheckpoint, type RetryCheckpointPort } from "./RetryCheckpoint.js";
 
 export class RetryExecutor {
   constructor(private readonly dependencies: RetryExecutorDependencies) {
@@ -45,10 +47,46 @@ export class RetryExecutor {
   async execute<TResult, TError, TCategory extends string>(
     input: RetryExecutionInput<TError, TCategory>,
     executeAttempt: (context: RetryAttemptContext) => Promise<RetryAttemptExecutionResult<TResult, TError>>,
+    checkpoint?: RetryCheckpointPort<TResult, TError, TCategory>,
   ): Promise<RetryExecutionResult<TResult, RetryFailure<TCategory>, TError>> {
     const flow = new ExecutionFlowPath(RETRY_EXECUTION_FLOW, input.executionFlow ?? {}, input.operation.runId, []);
     try {
-      const result = await this.executeWithFlow(input, executeAttempt, flow);
+      let retained: RetryCheckpoint<TResult, TError, TCategory> | null;
+      try {
+        retained = checkpoint?.read() ?? null;
+        if (retained) validateCheckpoint(retained, input);
+      } catch (cause) { throw new RetryCheckpointError(input.operation.operationId, {cause}); }
+      for (const event of retained?.events ?? []) await input.events.emit(event);
+      if (retained?.outcome) {
+        flow.advance("settled", {outcome: retained.outcome.kind, restored: true});
+        flow.close(retained.outcome.kind === "succeeded" ? "returned" : retained.outcome.kind === "cancelled" ? "cancelled" : "failed");
+        return retained.outcome;
+      }
+      let current: RetryCheckpoint<TResult, TError, TCategory> = retained ?? {
+        operation: snapshotRetryOperation(input.operation), budgetId: input.budgetId,
+        policy: snapshotRetryPolicy(input.policy), priorProgress: snapshotProgress(input.priorProgress),
+        totalRetryDelayMs: input.priorProgress.totalRetryDelayMs,
+        attempt: null, attemptResult: null, attemptFinishedAt: null, deadlineObserved: false, events: [], delay: null, outcome: null,
+      };
+      const save = async (changes: Partial<typeof current>) => {
+        const next = {...current, ...changes};
+        try { await checkpoint?.commit(next); }
+        catch (cause) { throw new RetryCheckpointError(input.operation.operationId, {cause}); }
+        current = next;
+      };
+      if (checkpoint && !retained) await save({});
+      const durableInput = {...input, events: {emit: async (event: RetryEvent) => {
+        const key = retryEventIdentity(event);
+        let recorded = current.events.find(item => retryEventIdentity(item) === key);
+        if (!recorded) {
+          recorded = snapshotRetryEvent(event, input.operation.runId);
+          await save({events: [...current.events, recorded]});
+        }
+        await input.events.emit(recorded);
+      }}};
+      const result = await this.executeWithFlow(durableInput, executeAttempt, flow,
+        {retained, save, reconcile: checkpoint?.reconcile.bind(checkpoint)});
+      await save({outcome: result});
       flow.advance("settled", {outcome: result.kind}).output(flow.material("Retry execution result", "settled", result, input.operation.owner === "approvals_reviewer" ? "execution" : "provider"));
       flow.close(result.kind === "succeeded" ? "returned" : result.kind === "cancelled" ? "cancelled" : "failed");
       return result;
@@ -61,6 +99,11 @@ export class RetryExecutor {
       context: RetryAttemptContext,
     ) => Promise<RetryAttemptExecutionResult<TResult, TError>>,
     flow: ExecutionFlowPath,
+    persistence: {
+      readonly retained: RetryCheckpoint<TResult, TError, TCategory> | null;
+      readonly save: (changes: Partial<RetryCheckpoint<TResult, TError, TCategory>>) => Promise<void>;
+      readonly reconcile: RetryCheckpointPort<TResult, TError, TCategory>["reconcile"] | undefined;
+    },
   ): Promise<RetryExecutionResult<TResult, RetryFailure<TCategory>, TError>> {
     const operation = snapshotRetryOperation(input.operation);
     const policy = snapshotRetryPolicy(input.policy);
@@ -88,13 +131,14 @@ export class RetryExecutor {
     }
     const maximumAttempts = maxBudgetAttempts + (recovery?.maxAdditionalAttempts ?? 0);
     const attemptIds = new Set<string>();
-    let budgetAttemptNumber = 1;
-    let completedAttempts = progress.completedAttempts;
-    let totalRetryDelayMs = progress.totalRetryDelayMs;
+    let resumed = persistence.retained;
+    let budgetAttemptNumber = resumed?.attempt?.budgetAttemptNumber ?? 1;
+    let completedAttempts = resumed?.attempt ? resumed.attempt.attemptNumber - 1 : progress.completedAttempts;
+    let totalRetryDelayMs = resumed?.totalRetryDelayMs ?? progress.totalRetryDelayMs;
     let lastFailure: RetryFailure<TCategory> | null = null;
 
     while (true) {
-      if (input.cancellation.signal.aborted) {
+      if (!resumed?.attempt && input.cancellation.signal.aborted) {
         const attribution = cancellationAttribution(
           input.cancellation,
           this.dependencies.clock,
@@ -111,7 +155,7 @@ export class RetryExecutor {
         return { kind: "cancelled", attribution };
       }
 
-      if (deadlineElapsed(operation, this.dependencies)) {
+      if (!resumed?.attempt && deadlineElapsed(operation, this.dependencies)) {
         return this.deadlineExhausted(
           input,
           operation,
@@ -122,7 +166,7 @@ export class RetryExecutor {
       }
 
       const attemptNumber = progress.completedAttempts + budgetAttemptNumber;
-      const attempt = createAttempt(
+      const attempt = resumed?.attempt ?? createAttempt(
         operation,
         input.budgetId,
         attemptNumber,
@@ -144,8 +188,7 @@ export class RetryExecutor {
       );
       let attemptResult: RetryAttemptExecutionResult<TResult, TError>;
       try {
-        await emit(input, retryAttemptStartedEvent(operation, attempt));
-        attemptResult = await executeAttempt(Object.freeze({
+        const context = Object.freeze({
           executionFlow: flow.callContext,
           attempt,
           signal: interruption.signal,
@@ -153,7 +196,17 @@ export class RetryExecutor {
           get deadlineReason() {
             return interruption.deadlineReason;
           },
-        }));
+        });
+        if (resumed?.attempt) {
+          attemptResult = resumed.attemptResult ?? await persistence.reconcile!(context);
+        } else {
+          await persistence.save({attempt, attemptResult: null, attemptFinishedAt: null, deadlineObserved: false, delay: null, totalRetryDelayMs});
+          await emit(input, retryAttemptStartedEvent(operation, attempt));
+          attemptResult = await executeAttempt(context);
+        }
+        if (!resumed?.attemptResult) await persistence.save({attemptResult, attemptFinishedAt: nowIso(this.dependencies),
+          deadlineObserved: interruption.signal.aborted && interruption.deadlineReason?.operationId === operation.operationId &&
+            interruption.deadlineReason?.deadlineAt === operation.deadlineAt});
       } finally {
         interruption.dispose();
       }
@@ -161,7 +214,7 @@ export class RetryExecutor {
       completedAttempts = attemptNumber;
       const attemptResultRef = flow.material("Retry attempt result", "returned", attemptResult, materialClass);
       attemptStep.output(attemptResultRef);
-      const finishedAt = now(this.dependencies);
+      const finishedAt = resumed?.attemptFinishedAt ? new Date(resumed.attemptFinishedAt) : now(this.dependencies);
       const durationMs = Math.max(0, finishedAt.getTime() - Date.parse(attempt.startedAt));
 
       if (attemptResult.kind === "succeeded") {
@@ -208,10 +261,10 @@ export class RetryExecutor {
       if (classification.disposition === "deadline_exceeded") {
         const deadlineReason = interruption.deadlineReason;
         if (
-          !interruption.signal.aborted ||
+          !resumed?.deadlineObserved && (!interruption.signal.aborted ||
           deadlineReason === null ||
           deadlineReason.operationId !== operation.operationId ||
-          deadlineReason.deadlineAt !== operation.deadlineAt
+          deadlineReason.deadlineAt !== operation.deadlineAt)
         ) {
           throw new TypeError(
             "deadline_exceeded classification requires the active operation deadline.",
@@ -310,7 +363,8 @@ export class RetryExecutor {
         };
       }
 
-      const delay = recovery !== null && budgetAttemptNumber >= maxBudgetAttempts
+      const delay = resumed?.delay ? {kind: "delay" as const, value: resumed.delay}
+        : recovery !== null && budgetAttemptNumber >= maxBudgetAttempts
         ? { kind: "delay" as const, value: createDelay(recovery.delayMs, "delayed_recovery", now(this.dependencies)) }
         : resolveDelay(
         policy,
@@ -352,6 +406,7 @@ export class RetryExecutor {
         );
       }
 
+      await persistence.save({delay: delay.value});
       await emit(input, retryAttemptFinishedEvent(
         operation,
         attempt,
@@ -369,7 +424,8 @@ export class RetryExecutor {
         nowIso(this.dependencies),
       ));
 
-      const arm = (disposal?: AbortSignal) => this.dependencies.wait.wait(delay.value.delayMs, input.cancellation, disposal);
+      const remainingDelayMs = Math.max(0, Date.parse(delay.value.nextAttemptAt) - now(this.dependencies).getTime());
+      const arm = (disposal?: AbortSignal) => this.dependencies.wait.wait(remainingDelayMs, input.cancellation, disposal);
       flow.advance("wait", {delayMs: delay.value.delayMs, nextAttemptAt: delay.value.nextAttemptAt, controlled: input.waitControl !== undefined});
       const waitResult = input.waitControl === undefined
         ? await arm()
@@ -398,6 +454,7 @@ export class RetryExecutor {
         "Retry total delay",
       );
       budgetAttemptNumber += 1;
+      resumed = null;
     }
   }
 
@@ -427,6 +484,43 @@ export class RetryExecutor {
       exhaustion,
     ));
     return { kind: "deadline_exhausted", exhaustion };
+  }
+}
+
+function validateCheckpoint<TResult, TError, TCategory extends string>(
+  saved: RetryCheckpoint<TResult, TError, TCategory>, input: RetryExecutionInput<TError, TCategory>,
+): void {
+  const binding = (value: Pick<typeof saved, "operation" | "budgetId" | "policy" | "priorProgress">) =>
+    canonicalEncode("retry-checkpoint-binding.v1", {operation: value.operation, budgetId: value.budgetId,
+      policy: value.policy, priorProgress: value.priorProgress});
+  const left = binding(saved), right = binding(input);
+  if (left.length !== right.length || left.some((value, index) => value !== right[index])) {
+    throw new TypeError("Retained Retry binding does not match the original operation and budget.");
+  }
+  const attempt = saved.attempt;
+  const maximum = input.policy.maxRetries + 1 + (input.policy.exhaustion?.kind === "retry_after_delay"
+    ? input.policy.exhaustion.maxAdditionalAttempts : 0);
+  if (!Array.isArray(saved.events) || typeof saved.deadlineObserved !== "boolean" ||
+      (saved.attemptResult === null) !== (saved.attemptFinishedAt === null) ||
+      saved.attemptFinishedAt !== null && !Number.isFinite(Date.parse(saved.attemptFinishedAt))) {
+    throw new TypeError("Retained Retry result timing is invalid.");
+  }
+  const eventIds = new Set<string>();
+  for (const event of saved.events) {
+    snapshotRetryEvent(event, input.operation.runId);
+    const id = retryEventIdentity(event);
+    if (event.operationId !== input.operation.operationId || eventIds.has(id)) throw new TypeError("Retained Retry event identity is invalid.");
+    eventIds.add(id);
+  }
+  if (!Number.isSafeInteger(saved.totalRetryDelayMs) || saved.totalRetryDelayMs < saved.priorProgress.totalRetryDelayMs ||
+      (attempt === null && (saved.attemptResult !== null || saved.delay !== null)) ||
+      (attempt !== null && (attempt.operationId !== input.operation.operationId || attempt.budgetId !== input.budgetId ||
+        !Number.isSafeInteger(attempt.budgetAttemptNumber) || attempt.budgetAttemptNumber < 1 ||
+        attempt.budgetAttemptNumber > maximum || attempt.maxBudgetAttempts !== maximum ||
+        attempt.attemptNumber !== input.priorProgress.completedAttempts + attempt.budgetAttemptNumber)) ||
+      (saved.delay !== null && (saved.attemptResult?.kind !== "failed" ||
+        !Number.isFinite(Date.parse(saved.delay.nextAttemptAt))))) {
+    throw new TypeError("Retained Retry progress is inconsistent.");
   }
 }
 
@@ -743,6 +837,16 @@ async function emit<TError, TCategory extends string>(
   event: RetryEvent,
 ): Promise<void> {
   await input.events.emit(snapshotRetryEvent(event, event.runId));
+}
+
+function retryEventIdentity(event: RetryEvent): string {
+  switch (event.type) {
+    case "retry_attempt_started": case "retry_attempt_finished": return JSON.stringify([event.type, event.operationId, event.attemptId]);
+    case "retry_scheduled": return JSON.stringify([event.type, event.operationId, event.afterAttemptId]);
+    case "retry_cancelled": return JSON.stringify([event.type, event.operationId, event.budgetId, event.phase, event.attemptId]);
+    case "retry_exhausted": return JSON.stringify([event.type, event.operationId, event.finalBudgetId]);
+    case "retry_fallback_selected": return JSON.stringify([event.type, event.operationId, event.fallbackNumber]);
+  }
 }
 
 function validateDependencies(dependencies: RetryExecutorDependencies): void {

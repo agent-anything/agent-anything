@@ -55,6 +55,8 @@ import type {
 import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
 import {
   createOperationResult,
+  createOperationResultContracts,
+  OperationCommitError,
   type OperationResult,
 } from "@agent-anything/operation-catalog/result";
 import {
@@ -75,7 +77,11 @@ import {
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { RunTrace } from "@agent-anything/observability/tracing";
-import { createCanonicalWorkspaceIdentity } from "@agent-anything/canonical-action/subject";
+import { createCanonicalWorkspaceIdentity, canonicalEncode } from "@agent-anything/canonical-action/subject";
+import { RunCommitError, type RunCommit } from "./RunCommitPort.js";
+import { validateRunTreeCommit, type RunTreeCommit, type RunTreeCommitPort, type RetainedRunTreeMember } from "./RunTreeCommitPort.js";
+import { completionNotificationDisposition } from "./RunCompletionCheckpoint.js";
+import { restoreControllerOperation } from "./RunDecisionCheckpoint.js";
 import {
   createActionRegistrationSnapshot,
   type ActionAdapterDescriptor,
@@ -118,6 +124,7 @@ import { Runner } from "./Runner.js";
 import type { ActiveDelegationProjection, RunHandle } from "./RunHandle.js";
 import { createStaticOperationToolAvailabilityParticipant } from "./RunToolExposureCoordinator.js";
 import type { RunInputNotification } from "./RunInputNotifications.js";
+import { createControllerInputDeliveryReceipt } from "../controller/ControllerInputDelivery.js";
 
 function captureRunHandles(): Map<string, ActiveRunHandle<TestOutput>> {
   const handles = new Map<string, ActiveRunHandle<TestOutput>>();
@@ -129,9 +136,9 @@ function captureRunHandles(): Map<string, ActiveRunHandle<TestOutput>> {
   return handles;
 }
 
-function suspendHandle(handle: ActiveRunHandle<TestOutput>): void {
-  expect(handle.suspend({id: `pause-${handle.getSnapshot().runRevision}`,
-    expectedRunRevision: handle.getSnapshot().runRevision, origin: "host", reason: "Host awaits updated direction."})).toMatchObject({status: "accepted"});
+async function suspendHandle(handle: ActiveRunHandle<TestOutput>): Promise<void> {
+  expect((await handle.suspend({id: `pause-${handle.getSnapshot().runRevision}`,
+    expectedRunRevision: handle.getSnapshot().runRevision, origin: "host", reason: "Host awaits updated direction."}))).toMatchObject({status: "accepted"});
 }
 
 interface TestOutput {
@@ -167,11 +174,793 @@ class ScriptedController implements Controller<TestOutput> {
     this.calls.push(input);
     const step = this.steps.shift();
     if (step === undefined) throw new Error("ScriptedController has no remaining decision.");
-    return typeof step === "function" ? step(input, context) : step;
+    const decision = await (typeof step === "function" ? step(input, context) : step);
+    return {...decision, ...(input.inputDelivery ? {inputDeliveryReceipt:
+      createControllerInputDeliveryReceipt(input.inputDelivery, input.toolExposure.controllerRequestId)} : {})};
   }
 }
 
 describe("Runner semantic integration", () => {
+  it("joins a live suspended Child's final transfer before committing Parent cancellation", async () => {
+    const handles = captureRunHandles();
+    const child = createAgent("child", "1", "Child");
+    const operations = createOperationFixture([], [], {delegation: createTestDelegation(child)});
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent", agent: {id: child.id, revision: child.revision}, revision: "child-binding-1",
+    });
+    const parentContinued = deferred<void>(), finishResponse = deferred<void>();
+    const cleaningChild = deferred<void>(), finishCleanup = deferred<void>();
+    const controller = new ScriptedController([
+      input => advance([toolCandidate("Agent", {prompt: "Inspect"}, input.toolExposure.controllerRequestId)], "delegate"),
+      async input => {await suspendHandle(handles.get(input.runId)!); return complete("Await direction");},
+      async () => {parentContinued.resolve(); await finishResponse.promise; return complete("Late response");},
+    ]);
+    const root = createRunner(controller, operations, {resourceFinalizers: [{binding: {id: "cleanup", revision: "1"},
+      async finalize(context) {
+        if (context.runId === "run_002") {cleaningChild.resolve(); await finishCleanup.promise;}
+        return null;
+      },
+    }]}).start(createAgent(), createRunInput(), createRunConfig(operations, {tools}));
+    await parentContinued.promise;
+    await root.cancel({origin: "user", reasonCode: "user_requested"});
+    finishResponse.resolve();
+    await cleaningChild.promise;
+    expect(root.getResult()).toBeNull();
+    finishCleanup.resolve();
+    const result = await root.wait();
+    expect(result.status).toBe("cancelled");
+    expect(root.getSnapshot().runTree.settlement.complete).toBe(true);
+    expect(observations(result).filter(value => value.payload.kind === "descendant_result_transfer")).toHaveLength(1);
+    expect(controller.calls).toHaveLength(3);
+  });
+
+  it.each([
+    {depth: 1, suspended: false, failTransfer: false},
+    {depth: 2, suspended: false, failTransfer: false},
+    {depth: 1, suspended: true, failTransfer: false},
+    {depth: 2, suspended: true, failTransfer: false},
+    {depth: 1, suspended: false, failTransfer: true},
+  ])("joins retained cancellation bottom-up ($depth levels, suspended=$suspended, failTransfer=$failTransfer)", async ({depth, suspended, failTransfer}) => {
+    const handles = captureRunHandles();
+    const agent = createAgent();
+    const child = createAgent("child", "1", "Child");
+    const operations = createOperationFixture([], [], {delegation: createTestDelegation(child)});
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent", agent: {id: child.id, revision: child.revision}, revision: "child-binding-1",
+    });
+    const config = createRunConfig(operations, {tools});
+    const store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree;
+    const leafId = `run_${String(depth + 1).padStart(3, "0")}`;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      if (value.runs.some(run => run.state.run.id === leafId && (suspended
+        ? run.state.status === "suspended" : run.control.controllerInvocation?.status === "pending"))) {
+        throw new Error("interrupted before leaf Controller dispatch");
+      }
+      return receipt;
+    };
+    const steps: ControllerStep[] = Array.from({length: depth}, (_, index) => input =>
+      advance([toolCandidate("Agent", {prompt: "Inspect"}, input.toolExposure.controllerRequestId)], `delegate-${index}`));
+    if (suspended) steps.push(async input => {await suspendHandle(handles.get(input.runId)!); return complete("Paused");});
+    const controller = new ScriptedController(steps);
+    const recoverController = vi.fn(async () => {throw new Error("Cancellation must not invoke the Controller");});
+    Object.assign(controller, {recover: recoverController});
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const finalized: string[] = [];
+    const resourceFinalizers: RunnerDependencies["resourceFinalizers"] = [{binding: {id: "cleanup", revision: "1"},
+      async finalize(context) {
+        if (context.runId === leafId) {entered.resolve(); await release.promise;}
+        finalized.push(context.runId);
+        return null;
+      },
+    }];
+    const first = createRunner(controller, operations, {runTreeCommits: store.port, resourceFinalizers})
+      .start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toMatchObject({name: "RunCommitError"});
+    const callsBeforeRecovery = controller.calls.length;
+    store.port.commitRunTree = async value => {
+      if (failTransfer && value.runs.some(run => run.state.run.id === first.runId && run.control.descendantTransfers.length > 0)) {
+        throw new Error("Child transfer acknowledgement unavailable");
+      }
+      return commit(value);
+    };
+    const recovered = await createRunner(controller, operations, {runTreeCommits: store.port, resourceFinalizers})
+      .recover(first.runId, {async resolve(member) {
+        return {agent: member.admission.lineage.kind === "root" ? agent : child,
+          config: {...member.admission.config, permissions: {...member.admission.config.permissions,
+            reviewer: null, sessionAuthority: null, persistentPolicyAmendments: null}}};
+      }}, {recoveryCancellation: {origin: "user", reasonCode: "user_requested"}});
+    await entered.promise;
+    expect(recovered.getResult()).toBeNull();
+    expect(recovered.getSnapshot().status).toBe("cancelling");
+    expect(store.records.some(record => record.runs.some(run => run.state.settlement !== null))).toBe(false);
+    release.resolve();
+    if (failTransfer) {
+      await expect(recovered.wait()).rejects.toMatchObject({name: "RunCommitError"});
+      expect(recovered.getResult()).toBeNull();
+      const retained = (await store.port.readRunTree(first.runId))!;
+      expect(retained.members.find(member => member.head.state.run.id === first.runId)!.head.state.status).toBe("cancelling");
+      expect(controller.calls).toHaveLength(callsBeforeRecovery);
+      expect(recoverController).not.toHaveBeenCalled();
+      return;
+    }
+    const result = await recovered.wait();
+    expect(result.status).toBe("cancelled");
+    expect(finalized).toHaveLength(depth + 1);
+    const terminalOrder = store.records.flatMap(record => record.runs.filter(run => run.state.settlement !== null).map(run => run.state.run.id));
+    expect(terminalOrder).toEqual(Array.from({length: depth + 1}, (_, index) => `run_${String(depth + 1 - index).padStart(3, "0")}`));
+    expect(controller.calls).toHaveLength(callsBeforeRecovery);
+    expect(recoverController).not.toHaveBeenCalled();
+    expect(recovered.getSnapshot().runTree.settlement.complete).toBe(true);
+    const retained = (await store.port.readRunTree(first.runId))!;
+    for (const member of retained.members) {
+      expect(member.head.state.status).toBe("cancelled");
+      if (member.head.state.run.id === leafId) continue;
+      expect(member.head.control.descendantTransfers).toHaveLength(1);
+      expect(member.head.state.pending).toEqual([]);
+      expect(member.head.state.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(1);
+      expect(member.head.state.items.filter(item => item.payload.kind === "observation" && item.payload.observation.kind === "descendant_run")).toHaveLength(1);
+    }
+  });
+
+  it("returns an invalid binding request to the model without executing or failing the Run", async () => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("handler.read-file", "code-workspace", {content: "must not execute"});
+    const base = createOperationFixture([operationSpec(operation, "internal", {requestOrigins: ["tool_request"], handlerId: handler.id})], [handler]);
+    const operations = {...base, bindings: {...base.bindings, async resolve() {
+      return {status: "invalid" as const, owner: "files", code: "execution_reference_unavailable", message: "Use an exact reference disclosed to this Run."};
+    }}};
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const controller = new ScriptedController([(input) => advance([{
+      kind: "tool_request", tool: {name: "codeAgent.readFile", revision: "1", input: {path: "README.md"},
+        origin: "model", controllerRequestId: input.toolExposure.controllerRequestId},
+    }], "model_tool_1"), complete("No accessible reference", "model_complete_2")]);
+    const run = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations, {tools}));
+    expect(run.status).toBe("completed");
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(controller.calls).toHaveLength(2);
+    expect(run.items.find(item => item.payload.kind === "model_call_settlement")).toMatchObject({payload: {result: {
+      settlement: "invalid", content: {failure: {code: "execution_reference_unavailable", message: "Use an exact reference disclosed to this Run."}},
+    }}});
+    expect(run.items.find(item => item.payload.kind === "observation" && item.payload.observation.payload.kind === "operation")).toMatchObject({payload: {observation: {payload: {result: {
+      status: "invalid", metadata: {effectCertainty: "none", completionExtent: "none"},
+    }}}}});
+  });
+
+  it.each(["before_owner", "owner_acknowledgement", "after_owner"] as const)(
+    "recovers result delivery at %s without replaying the Tool or its presentation", async position => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("handler.read-file", "code-workspace", {content: "executed"});
+    const base = createOperationFixture([operationSpec(operation, "internal", {requestOrigins: ["tool_request"], handlerId: handler.id})], [handler]);
+    const tools = createToolSelection(base, operation, "codeAgent.readFile");
+    const store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree.bind(store.port);
+    let interrupted = false;
+    let sawPending = false;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      const pending = value.runs.some(run => run.control.resultDeliveries.length > 0);
+      const trigger = position === "before_owner" ? pending : position === "after_owner" && sawPending && !pending && value.runs.length > 0;
+      sawPending ||= pending;
+      if (!interrupted && trigger) {interrupted = true; throw new Error("lost delivery acknowledgement");}
+      return receipt;
+    };
+    const consumed = new Set<string>();
+    let consumption = 0;
+    const committed = vi.fn((input: Parameters<NonNullable<import("./ToolResultPresenter.js").ToolResultPresenter["committed"]>>[0]) => {
+      const id = input.presentation.modelCallRef.id;
+      expect(input.correlation).toMatchObject({kind: "run_action", run: {id: input.runId},
+        runAction: input.call.parentRunAction, provenance: {kind: "controller"}});
+      expect(input.resultRevision).toBe("result-1");
+      if (!consumed.has(id)) {consumed.add(id); consumption++;}
+      if (!interrupted && position === "owner_acknowledgement") {interrupted = true; throw new Error("lost owner acknowledgement");}
+    });
+    const present = vi.fn(() => ({output: {content: "presented"}, disposition: "complete" as const}));
+    const operations = {...base, resultPresenters: [{tool: {tool: {namespace: "code-agent", name: "read-file"}, revision: "1"},
+      ref: {id: "test.presenter", revision: "1"}, present, committed}]};
+    const controller = new ScriptedController([(input) => advance([{
+      kind: "tool_request", tool: {name: "codeAgent.readFile", revision: "1", input: {path: "README.md"},
+        origin: "model", controllerRequestId: input.toolExposure.controllerRequestId},
+    }], "model_tool_1"), complete("Done", "model_complete_2")]);
+    const agent = createAgent(), config = createRunConfig(operations, {tools});
+    const first = createRunner(controller, operations, {runTreeCommits: store.port}).start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toMatchObject({name: "RunCommitError"});
+    expect(interrupted).toBe(true);
+    const basis = await store.port.readRunTree(first.runId);
+    const observe = vi.fn();
+    const resumed = await createRunner(controller, operations, {runTreeCommits: store.port, executionObserver: {observe}}).recover(first.runId, {
+      async resolve() {return {agent, config};},
+    });
+    const result = await resumed.wait();
+    expect(result.status).toBe("completed");
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(present).toHaveBeenCalledTimes(1);
+    expect(consumption).toBe(1);
+    expect(committed).toHaveBeenCalledTimes(position === "owner_acknowledgement" ? 2 : 1);
+    if (position === "owner_acknowledgement") expect(committed.mock.calls[1]?.[0]).toEqual(committed.mock.calls[0]?.[0]);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(1);
+    expect(controller.calls).toHaveLength(2);
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({kind: "execution_recovery", stage: "activated",
+      checkpointId: basis!.commit.id, revision: basis!.commit.revision}));
+  });
+  it.each(["candidate", "pending", "settled"] as const)("restores accepted ending at %s without another Controller call or cleanup replay", async position => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree.bind(store.port);
+    let lost = false;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      if (!lost && value.runs.some(run => {
+        const checkpoint = run.control.finalization;
+        return checkpoint && (position === "candidate" ? checkpoint.finalizers[0]?.status === "not_started"
+          : checkpoint.finalizers[0]?.status === position);
+      })) {lost = true; throw new Error("lost ending acknowledgement");}
+      return receipt;
+    };
+    const finalize = vi.fn(async () => null);
+    const reconcile = vi.fn(async () => null);
+    const controller = new ScriptedController([complete("Done")]);
+    const dependencies = {runTreeCommits: store.port, resourceFinalizers: [{binding: {id: "resources", revision: "1"}, finalize, reconcile}]};
+    const agent = createAgent(), config = createRunConfig(operations);
+    const first = createRunner(controller, operations, dependencies).start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toMatchObject({name: "RunCommitError"});
+    const resumed = await createRunner(controller, operations, dependencies).recover(first.runId, {async resolve() {return {agent, config};}});
+    expect((await resumed.wait()).status).toBe("completed");
+    expect(controller.calls).toHaveLength(1);
+    expect(finalize).toHaveBeenCalledTimes(position === "pending" ? 0 : 1);
+    expect(reconcile).toHaveBeenCalledTimes(position === "pending" ? 1 : 0);
+  });
+  it("restores an interrupted Controller against its exact prepared input and consumes its receipt once", async () => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree.bind(store.port);
+    let lost = false;
+    store.port.commitRunTree = async value => {
+      const result = await commit(value);
+      if (!lost && value.runs.some(run => run.control.controllerCheckpoints.length > 0)) {
+        lost = true; throw new Error("lost owner progress acknowledgement");
+      }
+      return result;
+    };
+    let original: ControllerInput<TestOutput> | null = null;
+    let initialCalls = 0;
+    let recoveryCalls = 0;
+    const controller: Controller<TestOutput> = {
+      resourceMetering: new ScriptedController([]).resourceMetering,
+      async next(input, context) {
+        initialCalls++;
+        original = structuredClone({...input, agent: {...input.agent, output: undefined}}) as ControllerInput<TestOutput>;
+        await context.checkpoints!.commit("response", {summary: "Retained"});
+        throw new Error("must interrupt before acceptance");
+      },
+      async recover(input, context) {
+        recoveryCalls++;
+        expect({...input, agent: {...input.agent, output: undefined}}).toEqual(original);
+        expect(context.checkpoints!.read("response")).toEqual({summary: "Retained"});
+        return {...complete("Retained"), inputDeliveryReceipt: createControllerInputDeliveryReceipt(
+          input.inputDelivery!, input.toolExposure.controllerRequestId)};
+      },
+    };
+    const fact = {runId: "run_001", sequence: 1, occurredAt: NOW,
+      source: {owner: "test", kind: "result", id: "fact", revision: "1"}, data: {status: "done"}};
+    const runner = createRunner(controller, operations, {runTreeCommits: store.port,
+      inputNotifications: {read: (_run, cursor) => cursor < 1 ? [fact] : []}});
+    const agent = createAgent(), config = createRunConfig(operations);
+    const first = runner.start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toMatchObject({name: "ControllerCheckpointError"});
+    const resumed = await runner.recover(first.runId, {async resolve() {return {agent, config};}});
+    const result = await resumed.wait();
+    expect(result.status, JSON.stringify(result.cause)).toBe("completed");
+    expect(initialCalls).toBe(1);
+    expect(recoveryCalls).toBe(1);
+    expect(result.items.filter(item => item.payload.kind === "input_delivery")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "controller_turn" && item.payload.status === "decided")).toHaveLength(1);
+  });
+  it.each(["admitted", "active", "child_result", "terminal"] as const)(
+    "restores the original Composite at %s without repeating a settled child", async position => {
+    const outer = operationRef("composite-recovery");
+    const inner = operationRef("composite-child");
+    const handler = internalHandler("child-handler", "test", {value: 42});
+    const definition = snapshotCompositeDefinition({ref: {id: "recovery-graph", revision: "1"}, inputSchemaRevision: "1",
+      resultSchemaRevision: "1", graphRevision: "1", nodes: [{id: "child", operation: inner, allowedBindings: ["internal"],
+        dependencies: [], transformId: "input", conditionId: null, resourceClaims: [], required: true}],
+      join: {kind: "all_required_succeeded"}, reducerId: "result", conflictPolicyRevision: "1", limits: {maxNodes: 1, maxParallel: 1},
+      cancellationPolicy: "cancel_unstarted_and_signal_active", sensitivity: "internal", retiredAt: null});
+    const operations = createOperationFixture([
+      operationSpec(outer, "composite", {requestOrigins: ["controller_protocol"], compositeDefinitionRef: "recovery-graph"}),
+      operationSpec(inner, "internal", {requestOrigins: ["trusted_workflow"], handlerId: handler.id}),
+    ], [handler], {composite: {resolve: () => ({definition, execution: {
+      transforms: [{id: "input", transform: ({compositeInput}) => compositeInput}], conditions: [], conflicts: null,
+      reducer: {id: "result", reduce: ({children}) => ({status: "succeeded", output: children[0]!.result!.output, failure: null})},
+    }})}});
+    const store = createTreeCommitFixture();
+    const composites: import("@agent-anything/operation-composition/execution").CompositeCommit[] = [];
+    let lost = false;
+    const compositeCommits: NonNullable<RunnerDependencies["compositeCommits"]> = {
+      async commitComposite(value) {
+        composites.push(structuredClone(value));
+        const hit = position === "active" ? value.state.nodes.some(node => node.lifecycle === "active")
+          : position === "terminal" && value.state.terminal !== null;
+        if (hit && !lost) {lost = true; throw new Error("lost Composite acknowledgement");}
+        return {recordId: value.id, revision: value.state.revision};
+      },
+      async readCompositeCommit(id) {return composites.find(value => value.id === id) ?? null;},
+    };
+    const commit = store.port.commitRunTree;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      const hit = position === "admitted" ? value.runs.some(run => run.control.operationExecutions.some(([, execution]) => execution.kind === "composite"))
+        : position === "child_result" && value.runs.some(run => run.control.operationResults.some(result => result.ref.invocation.operation.operation.name === inner.operation.name));
+      if (hit && !lost) {lost = true; throw new Error("lost Runtime acknowledgement");}
+      return receipt;
+    };
+    const overrides = {runTreeCommits: store.port, compositeCommits, compositeRecovery: {
+      async readLatestComposite(id: string) {return composites.findLast(value => value.state.compositeId === id) ?? null;},
+    }};
+    const controller = new ScriptedController([advance([operationCandidate(outer, {path: "."})], "composite"), complete("Done")]);
+    const agent = createAgent();
+    const config = createRunConfig(operations);
+    const first = createRunner(controller, operations, overrides).start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toThrow(/commit was not confirmed/);
+    store.port.commitRunTree = commit;
+    const recovered = await createRunner(controller, operations, overrides).recover(first.runId, {async resolve() {return {agent, config};}});
+    const result = await recovered.wait();
+    expect(result.status, JSON.stringify(result.cause)).toBe("completed");
+    expect(handler.execute).toHaveBeenCalledOnce();
+    expect(controller.calls).toHaveLength(2);
+    expect(new Set(composites.map(value => value.state.compositeId)).size).toBe(1);
+    expect(result.items.filter(item => item.payload.kind === "run_action")).toHaveLength(2);
+  });
+
+  it.each(["admission", "child_terminal", "projection", "transfer", "observation"] as const)(
+    "restores the original Child route after interruption at %s", async position => {
+    const child = createAgent("child", "1", "Child");
+    const agent = createAgent();
+    const delegation = createTestDelegation(child);
+    let projectionLost = false;
+    const prepare = vi.fn(delegation.preparation.prepare);
+    const operations = createOperationFixture([], [], {delegation: {...delegation,
+      preparation: {...delegation.preparation, prepare}, resultProjection: {async project(input) {
+        await Promise.resolve();
+        if (position === "projection" && !projectionLost) {
+          projectionLost = true;
+          throw new OperationCommitError("child-handoff", input.result.ref.id);
+        }
+        return delegation.resultProjection.project(input);
+      }}}});
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent", agent: {id: child.id, revision: child.revision}, revision: "child-binding-1",
+    });
+    const config = createRunConfig(operations, {tools});
+    let rootCalls = 0;
+    let childCalls = 0;
+    const controller: Controller<TestOutput> = {
+      resourceMetering: {modelInputTokens: "not_applicable", modelOutputTokens: "not_applicable", costUnits: "not_applicable"},
+      async next(input) {
+        if (input.runId !== "run_001") {childCalls++; return complete("Retained Child answer", "child-end");}
+        if (++rootCalls === 1) return advance([toolCandidate("Agent", {prompt: "Inspect"}, input.toolExposure.controllerRequestId)], "delegate");
+        expect(deliveredResults(input).filter(value => value.kind === "descendant_run")).toHaveLength(1);
+        return complete("Parent answer", "parent-end");
+      },
+    };
+    const store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree;
+    let lost = false;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      const hit = position === "admission" ? value.runs.some(run => run.admission?.lineage.kind === "descendant")
+        : position === "child_terminal" ? value.runs.some(run => run.state.run.id !== "run_001" && run.state.status === "completed")
+        : position === "transfer" ? value.runs.some(run => run.control.descendantTransfers.length > 0)
+        : position === "observation" && value.runs.some(run => run.state.run.id === "run_001" && run.state.items.some(item =>
+          item.payload.kind === "observation" && item.payload.observation.payload.kind === "descendant_run"));
+      if (hit && !lost) {lost = true; throw new Error("lost Child-route acknowledgement");}
+      return receipt;
+    };
+    const overrides = {runTreeCommits: store.port, executionFlow: {}};
+    const first = createRunner(controller, operations, overrides).start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toBeInstanceOf(position === "projection" ? OperationCommitError : RunCommitError);
+    store.port.commitRunTree = commit;
+    const recovered = await createRunner(controller, operations, overrides).recover(first.runId, {
+      async resolve(member) {
+        return {agent: member.admission.lineage.kind === "root" ? agent : child,
+          config: {...member.admission.config, permissions: {...member.admission.config.permissions,
+            reviewer: null, sessionAuthority: null, persistentPolicyAmendments: null}}};
+      },
+    });
+    const result = await recovered.wait();
+    expect(result.status, JSON.stringify({cause: result.cause, tree: recovered.getSnapshot().runTree})).toBe("completed");
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(childCalls).toBe(1);
+    expect(rootCalls).toBe(2);
+    expect(recovered.getSnapshot().runTree.nodes.map(node => node.runId)).toEqual(["run_001", "run_002"]);
+    expect(recovered.getSnapshot().runTree.settlement.complete).toBe(true);
+    const records = (await store.port.readRunTree(first.runId))!;
+    const root = records.members.find(value => value.head.state.run.id === first.runId)!.head;
+    expect(root.control.descendantTransfers).toHaveLength(1);
+    expect(root.control.descendantContinuations).toHaveLength(1);
+    expect(root.state.items.filter(item => item.payload.kind === "observation" && item.payload.observation.kind === "descendant_run")).toHaveLength(1);
+  });
+
+  it.each(["decision", "action", "observation", "state_result", "acceptance"] as const)(
+    "continues the accepted ending after acknowledgement loss at %s without another model request", async position => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const config = createRunConfig(operations);
+    const agent = createAgent();
+    const controller = new ScriptedController([completionWithPlan([{step: "Inspect", status: "completed"}], "Done", "end")]);
+    const original = store.port.commitRunTree;
+    let lost = false;
+    store.port.commitRunTree = async value => {
+      const receipt = await original(value);
+      const head = value.runs[0]!;
+      const hit = position === "decision" ? head.control.decision !== null
+        : position === "action" ? head.state.items.some(item => item.payload.kind === "run_action")
+        : position === "observation" ? head.state.items.some(item => item.payload.kind === "observation")
+        : position === "state_result" ? head.control.pendingCompletion?.stateResult !== null && head.control.pendingCompletion !== null
+        : head.state.items.some(item => item.payload.kind === "completion_acceptance");
+      if (hit && !lost) {lost = true; throw new Error("acknowledgement lost");}
+      return receipt;
+    };
+    const first = createRunner(controller, operations, {runTreeCommits: store.port}).start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toBeInstanceOf(RunCommitError);
+    store.port.commitRunTree = original;
+    const recovered = await createRunner(controller, operations, {runTreeCommits: store.port}).recover(first.runId, {
+      async resolve() {return {agent, config};},
+    });
+    const result = await recovered.wait();
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.runId).toBe(first.runId);
+    expect(result.finalOutput).toEqual({summary: "Done"});
+    expect(controller.calls).toHaveLength(1);
+    const head = store.records.at(-1)!.runs[0]!;
+    expect(head.state.items.filter(item => item.payload.kind === "observation" && item.payload.observation.kind === "plan_update")).toHaveLength(1);
+    expect(head.state.items.filter(item => item.payload.kind === "completion_acceptance")).toHaveLength(1);
+    expect(head.state.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(1);
+    expect(head.state.counters.controllerTurns).toBe(1);
+    expect(head.state.counters.runActions).toBe(1);
+  });
+
+  it("recovers a retained Operation result before model delivery without executing it again", async () => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("handler.read-file", "code-workspace", {content: "retained output"});
+    const operations = createOperationFixture([operationSpec(operation, "internal", {requestOrigins: ["tool_request"], handlerId: handler.id})], [handler]);
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const config = createRunConfig(operations, {tools});
+    const agent = createAgent();
+    const controller = new ScriptedController([input => advance([toolCandidate("codeAgent.readFile",
+      {path: "README.md"}, input.toolExposure.controllerRequestId)], "read"), complete("Done")]);
+    const store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      if (value.runs.some(run => run.control.operationResults.length > 0)) throw new Error("lost result acknowledgement");
+      return receipt;
+    };
+    const first = createRunner(controller, operations, {runTreeCommits: store.port}).start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toBeInstanceOf(RunCommitError);
+    expect(handler.execute).toHaveBeenCalledOnce();
+    store.port.commitRunTree = commit;
+    const recovered = await createRunner(controller, operations, {runTreeCommits: store.port})
+      .recover(first.runId, {async resolve() {return {agent, config};}});
+    const result = await recovered.wait();
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(handler.execute).toHaveBeenCalledOnce();
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(item => item.payload.kind === "observation" && item.payload.observation.kind === "operation")).toHaveLength(1);
+  });
+
+  it("reuses the confirmed completion notification after restart without invoking it again", async () => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const config = createRunConfig(operations);
+    const agent = createAgent();
+    const controller = new ScriptedController([complete("Done")]);
+    const beforeCompletion = vi.fn(async () => ({kind: "allow" as const}));
+    Object.assign(controller, {beforeCompletion});
+    const commit = store.port.commitRunTree;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      if (value.runs.some(run => run.control.completionNotification?.outcome.status === "returned")) throw new Error("lost callback acknowledgement");
+      return receipt;
+    };
+    const first = createRunner(controller, operations, {runTreeCommits: store.port}).start(agent, createRunInput(), config);
+    await expect(first.wait()).rejects.toBeInstanceOf(RunCommitError);
+    store.port.commitRunTree = commit;
+    const recovered = await createRunner(controller, operations, {runTreeCommits: store.port})
+      .recover(first.runId, {async resolve() {return {agent, config};}});
+    expect((await recovered.wait()).status).toBe("completed");
+    expect(controller.calls).toHaveLength(1);
+    expect(beforeCompletion).toHaveBeenCalledOnce();
+  });
+
+  it.each(["steering", "cancellation"] as const)("acknowledges %s only after its coordinated commit", async kind => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const requested = deferred<void>();
+    const releaseRequest = deferred<void>();
+    const entered = deferred<void>();
+    const releaseCommit = deferred<void>();
+    const controller = new ScriptedController([async () => {
+      requested.resolve();
+      await releaseRequest.promise;
+      return complete("Old response");
+    }, complete("Updated response")]);
+    const commit = store.port.commitRunTree;
+    store.port.commitRunTree = async value => {
+      if (value.runs.some(run => kind === "steering"
+        ? run.control.steering.ledger.length > 0 : run.control.cancellation !== null)) {
+        entered.resolve();
+        await releaseCommit.promise;
+      }
+      return commit(value);
+    };
+    const handle = createRunner(controller, operations, {runTreeCommits: store.port})
+      .start(createAgent(), createRunInput(), createRunConfig(operations));
+    await requested.promise;
+    const revision = handle.getSnapshot().runRevision;
+    let acknowledged = false;
+    const receipt = kind === "steering"
+      ? handle.steer({commandId: "durable-steering", expectedRunRevision: revision,
+          instruction: "Use the new information.", attribution: {origin: "user", actorId: "user"}, submittedAt: NOW})
+      : handle.cancel({origin: "user", reasonCode: "user_requested"});
+    void receipt.then(() => {acknowledged = true;});
+    await entered.promise;
+    expect(acknowledged).toBe(false);
+    expect(handle.getSnapshot().runRevision).toBe(revision);
+    expect(store.records.at(-1)!.runs[0]!.control.steering.ledger).toEqual([]);
+    expect(store.records.at(-1)!.runs[0]!.control.cancellation).toBeNull();
+    releaseCommit.resolve();
+    await receipt;
+    releaseRequest.resolve();
+    expect((await handle.wait()).status).toBe(kind === "steering" ? "completed" : "cancelled");
+    const saved = store.records.at(-1)!.runs[0]!;
+    if (kind === "steering") {
+      expect(saved.control.steering.ledger).toHaveLength(1);
+      expect(saved.control.steering.pending).toEqual([]);
+      expect(saved.state.items.filter(item => item.payload.kind === "state_transition" &&
+        item.payload.transition === "steering")).toHaveLength(1);
+    } else expect(saved.control.cancellation?.reasonCode).toBe("user_requested");
+  });
+
+  it.each(["allow", "continue_with_feedback"] as const)("retains completion notification and %s before consuming the callback", async kind => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const controller = new ScriptedController([complete("First"), complete("Final")]);
+    const disposition = kind === "allow" ? {kind} : {kind, feedback: {
+      source: {owner: "test", kind: "completion", id: "check", revision: "1"}, code: "check_again", message: "Check again.",
+    }};
+    let count = 0;
+    Object.assign(controller, {beforeCompletion: async () => {
+      const saved = store.records.at(-1)!.runs[0]!.control.completionNotification!;
+      expect(saved.outcome.status).toBe("pending");
+      expect(saved.prepared.input.agent).not.toHaveProperty("output");
+      expect(() => completionNotificationDisposition(saved, saved.turn, saved.basisRevision)).toThrow("no confirmed");
+      return ++count === 1 ? disposition : {kind: "allow"};
+    }});
+    const result = await createRunner(controller, operations, {runTreeCommits: store.port})
+      .run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("completed");
+    const returned = store.records.flatMap(record => record.runs).find(run =>
+      run.control.completionNotification?.outcome.status === "returned")!;
+    const checkpoint = returned.control.completionNotification!;
+    expect(completionNotificationDisposition(checkpoint, checkpoint.turn, checkpoint.basisRevision)).toEqual(disposition);
+    expect(() => completionNotificationDisposition(checkpoint, checkpoint.turn, checkpoint.basisRevision + 1)).toThrow("basis");
+    expect(returned.state.items.some(item => item.payload.kind === "completion_acceptance" ||
+      item.payload.kind === "controller_feedback")).toBe(false);
+    expect(count).toBe(kind === "allow" ? 1 : 2);
+  });
+
+  it("does not turn a lost completion-disposition commit into an allow or Controller failure", async () => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const controller = new ScriptedController([complete("Done")]);
+    const beforeCompletion = vi.fn(async () => ({kind: "allow" as const}));
+    Object.assign(controller, {beforeCompletion});
+    const commit = store.port.commitRunTree;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      if (value.runs.some(run => run.control.completionNotification?.outcome.status === "returned")) {
+        throw new Error("acknowledgement lost");
+      }
+      return receipt;
+    };
+    const handle = createRunner(controller, operations, {runTreeCommits: store.port})
+      .start(createAgent(), createRunInput(), createRunConfig(operations));
+    await expect(handle.wait()).rejects.toBeInstanceOf(RunCommitError);
+    expect(beforeCompletion).toHaveBeenCalledTimes(1);
+    expect(handle.getResult()).toBeNull();
+    const saved = store.records.at(-1)!.runs[0]!;
+    expect(saved.control.completionNotification?.outcome.status).toBe("returned");
+    expect(saved.state.items.some(item => item.payload.kind === "completion_acceptance")).toBe(false);
+  });
+
+  it("publishes Run lifecycle and resource usage only after their coordinated acknowledgement", async () => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const pending = deferred<void>();
+    const release = deferred<void>();
+    const controller = new ScriptedController([complete("Done")]);
+    const commit = store.port.commitRunTree;
+    store.port.commitRunTree = async value => {
+      if (value.runs.some(run => run.state.items.some(item => item.payload.kind === "controller_turn"))) {
+        pending.resolve();
+        await release.promise;
+      }
+      return commit(value);
+    };
+    const handle = createRunner(controller, operations, {runTreeCommits: store.port})
+      .start(createAgent(), createRunInput(), createRunConfig(operations));
+    await pending.promise;
+    const before = handle.getSnapshot();
+    expect(before.runTree.nodes[0]?.resources.usage.controllerTurns).toMatchObject({value: 0});
+    expect(store.records.at(-1)!.checkpoint.resources.nodes[0]!.measured.controllerTurns).toBe(0);
+    expect(before.runTree.nodes[0]?.status).toBe(before.status);
+    release.resolve();
+    expect((await handle.wait()).status).toBe("completed");
+    const saved = store.records.at(-1)!;
+    expect(saved.runs[0]!.state.status).toBe("completed");
+    expect(saved.checkpoint.nodes[0]!.status).toBe("completed");
+    expect(saved.checkpoint.resources.nodes[0]!.measured.controllerTurns).toBe(1);
+    expect(saved.checkpoint.resources.nodes[0]!.settled).toBe(true);
+  });
+
+  it("persists accepted delivery and decision atomically before execution and publication", async () => {
+    const operations = createOperationFixture([]);
+    const commits: RunCommit[] = [];
+    const publishedWithoutCommit: number[] = [];
+    const controller = new ScriptedController([complete("Done")]);
+    const notifications: RunInputNotification[] = [{runId: "run_001", sequence: 1, occurredAt: NOW,
+      source: {owner: "test", kind: "settlement", id: "fact-1", revision: "1"}, data: {status: "settled"}}];
+    const runner = createRunner(controller, operations, {
+      inputNotifications: {read: (_run, cursor) => notifications.filter(value => value.sequence > cursor)},
+      runCommits: {
+        async commitRun(commit) {
+          canonicalEncode("test.run-commit", commit);
+          expect(commit.expectedRevision).toBe(commits.at(-1)?.state.revision ?? null);
+          commits.push(structuredClone(commit));
+          return {recordId: commit.id, revision: commit.state.revision};
+        },
+        async readRunCommit(id) { return commits.find(value => value.id === id) ?? null; },
+      },
+      runObserver: {observe(observation) {
+        if (observation.snapshot.runRevision > 0 && !commits.some(value => value.state.revision === observation.snapshot.runRevision)) {
+          publishedWithoutCommit.push(observation.snapshot.runRevision);
+        }
+      }},
+    });
+    const result = await runner.run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(commits[0]?.state.status).toBe("initializing");
+    expect(commits[0]?.admission?.config.limits).toEqual(createRunConfig(operations).limits);
+    const accepted = commits.find(value => value.state.items.some(item => item.payload.kind === "input_delivery"))!;
+    expect(accepted.control.inputNotifications.pending).toEqual([]);
+    expect(accepted.control.inputNotifications.cursor).toBe(1);
+    expect(accepted.control.decision?.value.kind).toBe("propose_completion");
+    const retainedOperation = accepted.control.decision!.prepared;
+    expect(retainedOperation.input.agent).not.toHaveProperty("output");
+    expect(retainedOperation.input.toolExposure).toEqual(controller.calls[0]!.toolExposure);
+    expect(retainedOperation.input.context).toEqual(controller.calls[0]!.context);
+    expect(restoreControllerOperation(retainedOperation, controller.calls[0]!.agent).input).toEqual(controller.calls[0]);
+    expect(() => restoreControllerOperation(retainedOperation, {...createAgent(), revision: "other"})).toThrow("unavailable");
+    expect(() => restoreControllerOperation({...retainedOperation,
+      manifest: {...retainedOperation.manifest, id: "other"}}, createAgent())).toThrow("inconsistent");
+    expect(accepted.state.items.at(-1)?.payload.kind).toBe("controller_turn");
+    expect(commits.at(-1)?.state.status).toBe("completed");
+    expect(publishedWithoutCommit).toEqual([]);
+  });
+
+  it("restores exact Controller Context beyond 100,000 nodes and still rejects changed retained content", async () => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const agent = createAgent();
+    const controller = new ScriptedController([complete("Done")]);
+    const result = await createRunner(controller, operations, {runTreeCommits: store.port})
+      .run(agent, createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("completed");
+    const prepared = store.records.flatMap(record => record.runs)
+      .find(run => run.control.decision !== null)!.control.decision!.prepared;
+    const source = prepared.context.blocks[0]!;
+    expect(source).toBeDefined();
+    const history = Array.from({length: 25_000}, (_, sequence) => ({sequence, content: {text: "retained", status: "settled"}}));
+    const blocks = [{...source, payload: {kind: "structured" as const, value: history}}];
+    const context = {...prepared.context, blocks};
+    expect(() => canonicalEncode("test.retained-context.v1", context)).toThrowError(
+      expect.objectContaining({code: "canonical_encoding_too_large"}),
+    );
+    const {blocks: _blocks, ...basis} = context;
+    const retained = {...prepared, context, input: {...prepared.input, context: {blocks: structuredClone(blocks), ...basis}}};
+    const restored = restoreControllerOperation(retained, agent);
+    expect(restored.context).toEqual(context);
+    expect(restored.input).toEqual({...retained.input, agent: {...retained.input.agent, output: agent.output}});
+    expect(restored.input.agent.output).toBe(agent.output);
+    expect(controller.calls).toHaveLength(1);
+    retained.input.context.blocks[0]!.payload.value[24_000]!.content.text = "changed";
+    expect(() => restoreControllerOperation(retained, agent)).toThrow("inconsistent");
+    expect(restored.context).toEqual(context);
+  });
+
+  it("does not materialize calls when acceptance of their Controller Turn is unconfirmed", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([updateState({plan: [{step: "Inspect", status: "in_progress"}]}, "plan-1")]);
+    const retained: RunCommit[] = [];
+    const handle = createRunner(controller, operations, {runCommits: {
+      async commitRun(commit) {
+        retained.push(structuredClone(commit));
+        if (commit.control.decision) throw new Error("lost acknowledgement after write");
+        return {recordId: commit.id, revision: commit.state.revision};
+      }, async readRunCommit(id) {return retained.find(value => value.id === id) ?? null;},
+    }}).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await expect(handle.wait()).rejects.toBeInstanceOf(RunCommitError);
+    expect(handle.getSnapshot().result).toBeNull();
+    expect(retained.at(-1)?.state.items.some(item => item.payload.kind === "run_action")).toBe(false);
+    expect(retained.at(-1)?.control.decision?.value.kind).toBe("advance");
+    expect(controller.calls).toHaveLength(1);
+  });
+
+  it("commits Plan progress and its observation together and retains the exact ending decision", async () => {
+    const operations = createOperationFixture([]);
+    const commits: RunCommit[] = [];
+    const decision = completionWithPlan([{step: "Inspect", status: "completed"}], "Exact final reply", "ending");
+    const result = await createRunner(new ScriptedController([decision]), operations, {runCommits: {
+      async commitRun(commit) {
+        canonicalEncode("test.run-commit", commit);
+        commits.push(structuredClone(commit));
+        return {recordId: commit.id, revision: commit.state.revision};
+      }, async readRunCommit(id) {return commits.find(value => value.id === id) ?? null;},
+    }}).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("completed");
+    const planCommit = commits.find(commit => commit.state.plan !== null)!;
+    const items = planCommit.state.items.filter(item => item.committedInRevision === planCommit.state.revision);
+    expect(items.map(item => item.payload.kind)).toEqual(["state_transition", "observation"]);
+    expect(planCommit.state.context.items.some(item => "contribution" in item && item.contribution.source.kind === "run_observation")).toBe(true);
+    const accepted = commits.find(commit => commit.control.decision !== null)!;
+    expect(accepted.control.decision?.value).toMatchObject(decision);
+    expect(accepted.control.decision?.calls).toEqual([expect.objectContaining({candidateIndex: 0,
+      action: null, observationIds: [], settlementItemId: null})]);
+    expect(planCommit.control.decision?.calls[0]).toMatchObject({action: {run: {id: result.runId}},
+      observationIds: [expect.any(String)], settlementItemId: null});
+    expect(commits.at(-1)?.control.decision?.calls[0]?.settlementItemId).toEqual(expect.any(String));
+    expect(accepted.control.pendingCompletion?.call.input).toEqual({response: "Exact final reply", plan: [{step: "Inspect", status: "completed"}]});
+    expect(commits.at(-1)?.state.finalOutput).toEqual({summary: "Exact final reply"});
+  });
+
+  it("does not publish an unconfirmed state or invent a terminal result on commit failure", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([complete("Done")]);
+    const handle = createRunner(controller, operations, {runCommits: {
+      async commitRun(commit) {
+        if (commit.state.revision === 1) throw new Error("acknowledgement lost");
+        return {recordId: commit.id, revision: commit.state.revision};
+      }, async readRunCommit() { return null; },
+    }}).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await expect(handle.wait()).rejects.toBeInstanceOf(RunCommitError);
+    expect(handle.getSnapshot()).toMatchObject({status: "initializing", runRevision: 0, result: null});
+    expect(controller.calls).toHaveLength(0);
+  });
+
+  it("propagates Child persistence failure without manufacturing a failed Child Tool result", async () => {
+    const child = createAgent("child", "1", "Child");
+    const operations = createOperationFixture([], [], {delegation: createTestDelegation(child)});
+    const tools = createSemanticToolSelection(operations, "Agent", {kind: "descendant_agent",
+      agent: {id: child.id, revision: child.revision}, revision: "descendant-binding-1"});
+    const controller = new ScriptedController([input => advance([
+      toolCandidate("Agent", {prompt: "Inspect"}, input.toolExposure.controllerRequestId),
+    ], "delegate")]);
+    const commits: RunCommit[] = [];
+    const handle = createRunner(controller, operations, {runCommits: {
+      async commitRun(commit) {
+        if (commit.state.run.id !== "run_001") throw new Error("Child storage acknowledgement lost");
+        commits.push(structuredClone(commit));
+        return {recordId: commit.id, revision: commit.state.revision};
+      }, async readRunCommit(id) {return commits.find(value => value.id === id) ?? null;},
+    }}).start(createAgent(), createRunInput(), {...createRunConfig(operations), tools});
+    await expect(handle.wait()).rejects.toBeInstanceOf(RunCommitError);
+    expect(handle.getResult()).toBeNull();
+    expect(commits.at(-1)?.state.items.some(item => item.payload.kind === "model_call_settlement")).toBe(false);
+    expect(controller.calls).toHaveLength(1);
+  });
   it.each(["provider_request", "structured_output"] as const)("attributes an elapsed Run deadline during %s and retains its original cause", async owner => {
     const operations = createOperationFixture([]);
     let now = NOW;
@@ -496,6 +1285,70 @@ describe("Runner semantic integration", () => {
       code: null,
     });
     expect(persisted).not.toHaveProperty("records");
+  });
+
+  it.each(["bounded", "throws", "overflow"] as const)("keeps execution independent of %s presentation and commits before owner acknowledgement", async mode => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("handler.read-file", "code-workspace", {content: "executed"});
+    const base = createOperationFixture([operationSpec(operation, "internal", {requestOrigins: ["tool_request"], handlerId: handler.id})], [handler]);
+    const tools = createToolSelection(base, operation, "codeAgent.readFile");
+    const published: import("../run/RunItem.js").RunItem[] = [];
+    const committed = vi.fn((input: Parameters<NonNullable<import("./ToolResultPresenter.js").ToolResultPresenter["committed"]>>[0]) => {
+      expect(published.some(item => item.payload.kind === "model_call_settlement" &&
+        item.payload.result.modelCallRef.id === input.presentation.modelCallRef.id)).toBe(true);
+      expect(input.result.status).toBe("succeeded");
+    });
+    const operations = {...base, resultPresenters: [{
+      tool: {tool: {namespace: "code-agent", name: "read-file"}, revision: "1"},
+      ref: {id: "test.presenter", revision: "2"},
+      references() { return [{owner: "test", kind: "execution", id: "execution-1", revision: "1"}]; },
+      present() {
+        if (mode === "throws") throw new Error("not model-visible");
+        return {output: {content: mode === "overflow" ? "x".repeat(200_000) : "bounded output"}, disposition: "bounded" as const};
+      }, committed,
+    }]};
+    const controller = new ScriptedController([(input) => advance([{
+      kind: "tool_request", tool: {name: "codeAgent.readFile", revision: "1", input: {path: "README.md"},
+        origin: "model", controllerRequestId: input.toolExposure.controllerRequestId},
+    }], "model_tool_1"), complete("Done", "model_complete_2")]);
+    const run = await createRunner(controller, operations, {runTranscriptObserver: {observe(record) {published.push(record.item);}}})
+      .run(createAgent(), createRunInput(), createRunConfig(operations, {tools}));
+    expect(run.status).toBe("completed");
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(1);
+    expect(run.items.find(item => item.payload.kind === "model_call_settlement")).toMatchObject({payload: {result: {
+      settlement: "succeeded", presentation: {presenter: {id: "test.presenter", revision: "2"},
+        disposition: mode === "bounded" ? "bounded" : "unavailable"},
+      content: {references: [{owner: "test", kind: "execution", id: "execution-1", revision: "1"}]},
+      sourceRefs: expect.arrayContaining([{owner: "test", kind: "execution", id: "execution-1", revision: "1"}]),
+    }}});
+  });
+
+  it("rejects invalid public output without replaying execution or erasing the original facts", async () => {
+    const operation = operationRef("read-file");
+    const handler = internalHandler("handler.read-file", "code-workspace", {content: "invalid by contract"});
+    const base = createOperationFixture([operationSpec(operation, "internal", {requestOrigins: ["tool_request"], handlerId: handler.id})], [handler]);
+    const operations = {...base, resultContracts: createOperationResultContracts(base.catalog, [{
+      operation, revision: "result-1", validateOutput: () => false,
+    }])};
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const facts: import("./RunExecutionObserver.js").RunExecutionObservation[] = [];
+    const controller = new ScriptedController([(input) => advance([{
+      kind: "tool_request", tool: {name: "codeAgent.readFile", revision: "1", input: {path: "README.md"},
+        origin: "model", controllerRequestId: input.toolExposure.controllerRequestId},
+    }], "model_tool_1"), complete("Done", "model_complete_2")]);
+    const run = await createRunner(controller, operations, {executionObserver: {observe(value) {facts.push(value);}}})
+      .run(createAgent(), createRunInput(), createRunConfig(operations, {tools}));
+    expect(run.status).toBe("completed");
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(facts.filter(fact => fact.kind === "operation_result").map(fact => fact.result)).toEqual([
+      expect.objectContaining({status: "succeeded", output: {content: "invalid by contract"}}),
+      expect.objectContaining({status: "failed", output: null, metadata: expect.objectContaining({executionStatus: "succeeded"})}),
+    ]);
+    expect(facts.find(fact => fact.kind === "operation_result_validation")).toMatchObject({validation: {status: "invalid"}});
+    expect(run.items.find(item => item.payload.kind === "model_call_settlement")).toMatchObject({
+      payload: {result: {settlement: "failed", content: {failure: {code: "operation_result_output_invalid"}}}},
+    });
   });
 
   it("keeps Tool execution and model input unchanged under throwing diagnostic observers", async () => {
@@ -1044,8 +1897,8 @@ describe("Runner semantic integration", () => {
       );
       if (mode === "interaction") {
         const pending = await waitForPendingInteraction(handle);
-        expect(handle.submitInteraction({request: pending.envelope.request, submissionId: "answer",
-          contentDigest: "sha256:answer", payload: {accepted: true}, receivedAt: NOW}).status).toBe("accepted_for_resolution");
+        expect((await handle.submitInteraction({request: pending.envelope.request, submissionId: "answer",
+          contentDigest: "sha256:answer", payload: {accepted: true}, receivedAt: NOW})).status).toBe("accepted_for_resolution");
       }
       const result = await handle.wait();
       expect(result.cause).toMatchObject({kind: "failure", failure: {kind: "runtime", failure: {code: "runtime_limit_exceeded"}}});
@@ -1130,14 +1983,10 @@ describe("Runner semantic integration", () => {
         input.toolExposure.controllerRequestId,
       )], "model_tool_1"),
       (input) => {
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+        expect(deliveredResults(input).at(-1)).toMatchObject({
           kind: "interaction",
           status: "resolved",
           value: { accepted: true },
-          toolResult: {
-            status: "succeeded",
-            output: { accepted: true },
-          },
         });
         return complete("Clarification complete", "model_complete_2");
       },
@@ -1152,13 +2001,13 @@ describe("Runner semantic integration", () => {
     const pending = await waitForPendingInteraction(handle);
 
     expect(pending.envelope.presentation).toEqual({ question: "Continue?" });
-    expect(handle.submitInteraction({
+    expect((await handle.submitInteraction({
       request: pending.envelope.request,
       submissionId: "submission_1",
       contentDigest: "sha256:accepted",
       payload: { accepted: true },
       receivedAt: NOW,
-    }).status).toBe("accepted_for_resolution");
+    })).status).toBe("accepted_for_resolution");
 
     const result = await handle.wait();
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
@@ -1191,14 +2040,10 @@ describe("Runner semantic integration", () => {
         return complete(childSummary, "model_child_complete");
       },
       (input) => {
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+        expect(deliveredResults(input).at(-1)).toMatchObject({
           kind: "descendant_run",
           status: "succeeded",
           output: { summary: childSummary },
-          toolResult: {
-            status: "succeeded",
-            output: { summary: childSummary },
-          },
         });
         return complete("Parent complete", "model_parent_complete");
       },
@@ -1268,7 +2113,7 @@ describe("Runner semantic integration", () => {
         if (input.runId === "run_002") {
           childTurn += 1;
           if (childTurn === 1) {
-            suspendHandle(handles.get(input.runId)!);
+            await suspendHandle(handles.get(input.runId)!);
             return Object.freeze({ candidates: [], completionSource: {kind: "controller" as const},
               kind: "propose_completion" as const,
               output: { summary: "The Child needs Parent direction." },
@@ -1310,14 +2155,11 @@ describe("Runner semantic integration", () => {
             relationKind: "delegation",
             status: "suspended",
           });
-          expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+          expect(deliveredResults(input).at(-1)).toMatchObject({
             kind: "descendant_progress",
-            progress: {
-              childRun: { id: "run_002" },
-              suspension: { code: "run_suspension_requested" },
-            },
+            childRunId: "run_002",
+            suspension: { code: "run_suspension_requested" },
             output: { agent_id: "run_002", status: "suspended" },
-            toolResult: { status: "succeeded" },
           });
           return advance([toolCandidate(
             "SendMessage",
@@ -1334,12 +2176,13 @@ describe("Runner semantic integration", () => {
           return complete("Parent attempted completion before transfer", "model_parent_stale");
         }
         expect(input.descendants.active).toEqual([]);
-        expect(projectedObservations(input.context).some(({ payload }) =>
+        expect(deliveredResults(input).some(payload =>
           payload.kind === "descendant_result_transfer" &&
           payload.childRunId === "run_002" &&
           payload.status === "succeeded"
         )).toBe(true);
-        return complete("Parent consumed the transferred Child result", "model_parent_complete");
+        return {...complete("Parent consumed the transferred Child result", "model_parent_complete"),
+          inputDeliveryReceipt: input.inputDelivery ? createControllerInputDeliveryReceipt(input.inputDelivery, input.toolExposure.controllerRequestId) : null};
       },
     };
     const operations = createOperationFixture([], [], {
@@ -1429,7 +2272,7 @@ describe("Runner semantic integration", () => {
         if (input.runId === "run_002") {
           childTurn += 1;
           if (childTurn <= 2) {
-            suspendHandle(handles.get(input.runId)!);
+            await suspendHandle(handles.get(input.runId)!);
             return Object.freeze({ candidates: [], completionSource: {kind: "controller" as const},
               kind: "propose_completion" as const,
               output: { summary: `Child suspension ${childTurn}.` },
@@ -1455,7 +2298,10 @@ describe("Runner semantic integration", () => {
           return complete("Parent decision computed while Child progressed", "model_parent_stale");
         }
         expect(input.descendants.active).toEqual([]);
-        return complete("Parent consumed the final Child transfer", "model_parent_complete");
+        expect(input.inputDelivery?.entries.some(entry => isRecord(entry.data) &&
+          isRecord(entry.data.content) && entry.data.content.kind === "descendant_result_transfer")).toBe(true);
+        return {...complete("Parent consumed the final Child transfer", "model_parent_complete"),
+          inputDeliveryReceipt: createControllerInputDeliveryReceipt(input.inputDelivery!, input.toolExposure.controllerRequestId)};
       },
     };
     const operations = createOperationFixture([], [], {
@@ -1493,12 +2339,12 @@ describe("Runner semantic integration", () => {
     const first = await firstSuspension.promise;
     await parentControllerEntered.promise;
     const currentFirst = handle.getSnapshot().activeDelegations.find(active => active.child.id === first.child.id)!;
-    const firstReceipt = handle.resumeDescendant(hostResumeRoute(currentFirst, "host-resume-1"));
+    const firstReceipt = (await handle.resumeDescendant(hostResumeRoute(currentFirst, "host-resume-1")));
     expect(firstReceipt, JSON.stringify(firstReceipt)).toMatchObject({
       status: "routed",
       resume: { status: "accepted" },
     });
-    expect(handle.resumeDescendant(hostResumeRoute(first, "host-resume-duplicate"))).toMatchObject({
+    expect((await handle.resumeDescendant(hostResumeRoute(first, "host-resume-duplicate")))).toMatchObject({
       status: "routed",
       resume: { status: "rejected" },
     });
@@ -1507,7 +2353,7 @@ describe("Runner semantic integration", () => {
     expect(second.suspension?.ref.id).not.toBe(first.suspension?.ref.id);
     await Promise.resolve();
     const currentSecond = handle.getSnapshot().activeDelegations.find(active => active.child.id === second.child.id)!;
-    expect(handle.resumeDescendant(hostResumeRoute(currentSecond, "host-resume-2"))).toMatchObject({
+    expect((await handle.resumeDescendant(hostResumeRoute(currentSecond, "host-resume-2")))).toMatchObject({
       status: "routed",
       resume: { status: "accepted" },
     });
@@ -1526,7 +2372,7 @@ describe("Runner semantic integration", () => {
       .toHaveLength(1);
     expect(handle.getSnapshot().runTree.nodes.map(({ runId }) => runId))
       .toEqual(["run_001", "run_002"]);
-    expect(handle.resumeDescendant(hostResumeRoute(second, "host-resume-terminal"))).toMatchObject({
+    expect((await handle.resumeDescendant(hostResumeRoute(second, "host-resume-terminal")))).toMatchObject({
       status: "rejected",
       code: "delegation_child_settled",
     });
@@ -1579,9 +2425,9 @@ describe("Runner semantic integration", () => {
             ),
           ], ["model_agent_1", "model_agent_2"]);
         }
-        const descendantObservations = projectedObservations(input.context)
-          .filter(({ payload }) => payload.kind === "descendant_run");
-        expect(descendantObservations.map(({ payload }) =>
+        const descendantObservations = deliveredResults(input)
+          .filter(payload => payload.kind === "descendant_run");
+        expect(descendantObservations.map(payload =>
           isRecord(payload.output) ? payload.output.summary : null
         )).toEqual(["Child one", "Child two"]);
         return complete("Parent complete", "model_parent_complete");
@@ -1681,9 +2527,9 @@ describe("Runner semantic integration", () => {
             ),
           ], ["model_agent_1", "model_agent_2"]);
         }
-        expect(projectedObservations(input.context)
-          .filter(({ payload }) => payload.kind === "descendant_run")
-          .map(({ payload }) => payload.status)).toEqual(["succeeded", "failed"]);
+        expect(deliveredResults(input)
+          .filter(payload => payload.kind === "descendant_run")
+          .map(payload => payload.status)).toEqual(["succeeded", "failed"]);
         return complete("Parent incorporated the available result", "model_parent_complete");
       },
     };
@@ -1830,9 +2676,9 @@ describe("Runner semantic integration", () => {
       ], ["model_agent_1", "model_agent_2"]),
       complete("Second branch completed", "model_child_complete"),
       (input) => {
-        expect(projectedObservations(input.context)
-          .filter(({ payload }) => payload.kind === "descendant_run")
-          .map(({ payload }) => payload.status)).toEqual(["unavailable", "succeeded"]);
+        expect(deliveredResults(input)
+          .filter(payload => payload.kind === "descendant_run")
+          .map(payload => payload.status)).toEqual(["unavailable", "succeeded"]);
         return complete("Parent accepted independent outcomes", "model_parent_complete");
       },
     ]);
@@ -1897,6 +2743,7 @@ describe("Runner semantic integration", () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     const events: RuntimeEvent[] = [];
     let cancelOnReservation: (() => void) | null = null;
+    let cancellationReceipt: ReturnType<RunHandle["cancel"]> | null = null;
     const controller = new ScriptedController([
       (input) => advance([
         toolCandidate(
@@ -1937,12 +2784,12 @@ describe("Runner semantic integration", () => {
       createRunConfig(operations, { tools }),
     );
     cancelOnReservation = () => {
-      expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
-        .toBe("accepted");
+      cancellationReceipt = handle.cancel({ origin: "user", reasonCode: "user_requested" });
     };
 
     const result = await handle.wait();
 
+    expect(await cancellationReceipt).toMatchObject({status: "accepted"});
     expect(result.status).toBe("cancelled");
     expect(controller.calls.map(({ runId }) => runId)).toEqual(["run_001"]);
     expect(events.filter(({ name }) => name === "run.descendant.started")).toHaveLength(0);
@@ -1978,7 +2825,7 @@ describe("Runner semantic integration", () => {
           agent: { id: childAgent.id, revision: childAgent.revision },
         });
         expect(JSON.stringify(target)).not.toContain("Child context retained");
-        expect(projectedObservations(input.context).at(-1)?.payload.output).toMatchObject({
+        expect(deliveredResults(input).at(-1)?.output).toMatchObject({
           summary: "Child context retained",
           agent_id: continuationTargetId,
         });
@@ -2015,10 +2862,10 @@ describe("Runner semantic integration", () => {
         return complete("Continuation complete", "model_continuation_complete");
       },
       (input) => {
-        const continuation = projectedObservations(input.context).find(({ payload }) =>
+        const continuation = deliveredResults(input).find(payload =>
           payload.kind === "descendant_run" && payload.childRunId === "run_003"
         );
-        expect(continuation?.payload).toMatchObject({
+        expect(continuation).toMatchObject({
           kind: "descendant_run",
           status: "succeeded",
           output: { summary: "Continuation complete" },
@@ -2036,12 +2883,12 @@ describe("Runner semantic integration", () => {
         )], "model_send_message_2");
       },
       (input) => {
-        const staleTarget = projectedObservations(input.context).find(({ payload }) =>
+        const staleTarget = deliveredResults(input).find(payload =>
           payload.kind === "descendant_run" &&
           payload.status === "unavailable" &&
-          payload.failure?.code === "agent_target_stale"
+          isRecord(payload.failure) && payload.failure.code === "agent_target_stale"
         );
-        expect(staleTarget?.payload).toMatchObject({
+        expect(staleTarget).toMatchObject({
           kind: "descendant_run",
           status: "unavailable",
           failure: { code: "agent_target_stale" },
@@ -2258,15 +3105,15 @@ describe("Runner semantic integration", () => {
         submittedAt: NOW,
       },
     };
-    expect(handle.steerDescendant({
+    expect(await handle.steerDescendant({
       ...route,
       relation: { id: "relation-unknown" },
     })).toMatchObject({ status: "rejected", code: "delegation_relation_unknown" });
-    expect(handle.steerDescendant({
+    expect(await handle.steerDescendant({
       ...route,
       request: { ...route.request, id: "request-wrong" },
     })).toMatchObject({ status: "rejected", code: "delegation_route_mismatch" });
-    const routed = handle.steerDescendant(route);
+    const routed = await handle.steerDescendant(route);
     expect(routed).toMatchObject({
       status: "routed",
       submission: { status: "accepted_for_application" },
@@ -2277,7 +3124,7 @@ describe("Runner semantic integration", () => {
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
     expect(handle.getSnapshot().activeDelegations).toEqual([]);
-    expect(handle.steerDescendant(route)).toMatchObject({
+    expect(await handle.steerDescendant(route)).toMatchObject({
       status: "rejected",
       code: "delegation_child_settled",
     });
@@ -2517,14 +3364,10 @@ describe("Runner semantic integration", () => {
         input.toolExposure.controllerRequestId,
       )], "model_tool_1"),
       (input) => {
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+        expect(deliveredResults(input).at(-1)).toMatchObject({
           kind: "descendant_run",
           status: "invalid",
           failure: { code: "delegation_context_invalid" },
-          toolResult: {
-            status: "failed",
-            error: { code: "delegation_context_invalid" },
-          },
         });
         return complete("Parent recovered", "model_parent_complete");
       },
@@ -2725,7 +3568,8 @@ describe("Runner semantic integration", () => {
     expect(settlements).toHaveLength(1);
     expect(settlements[0]).toMatchObject({name: "final_result", settlement: "succeeded",
       content: {code: "completion_candidate_accepted", stateUpdate: {settlement: "succeeded", content: {kind: "plan_update"}}}});
-    expect(settlements[0]?.sourceRefs.map(ref => ref.kind)).toEqual(["run_action", "run_observation", "run_completion_acceptance"]);
+    expect(settlements[0]?.sourceRefs.map(ref => ref.kind)).toEqual(["run_action", "run_observation", "model_call", "run_completion_acceptance"]);
+    expect(settlements[0]?.sourceRefs.find(ref => ref.kind === "model_call")).toMatchObject({runId: result.runId});
     const plans = result.items.flatMap(item => item.payload.kind === "state_transition" && item.payload.transition === "plan" ? [item.payload.plan] : []);
     expect(plans.at(-1)).toMatchObject({status: status === "completed" ? "completed" : "abandoned", steps: [{step: "Inspect", status}]});
   });
@@ -2734,7 +3578,6 @@ describe("Runner semantic integration", () => {
     {plan: []},
     {plan: [{step: "", status: "completed"}]},
     {plan: [{step: "Inspect", status: "unknown"}]},
-    {plan: [{step: "A", status: "in_progress"}, {step: "B", status: "in_progress"}]},
   ])("returns invalid embedded Plan facts before accepting a corrected final: $plan", async ({plan}) => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([
@@ -2753,6 +3596,20 @@ describe("Runner semantic integration", () => {
     expect(result.finalOutput).toEqual({summary: "Cannot finish"});
     expect(result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result.settlement] : []))
       .toEqual(["invalidated", "succeeded"]);
+  });
+
+  it("accepts concurrent Plan progress before normal completion without inventing step success", async () => {
+    const operations = createOperationFixture([]);
+    const plan = [{step: "A", status: "in_progress"}, {step: "B", status: "in_progress"}];
+    const controller = new ScriptedController([completionWithPlan(plan, "Reported progress", "concurrent-embedded")]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("completed");
+    expect(controller.calls).toHaveLength(1);
+    expect(result.finalOutput).toEqual({summary: "Reported progress"});
+    const plans = result.items.flatMap(item => item.payload.kind === "state_transition" && item.payload.transition === "plan" ? [item.payload.plan] : []);
+    expect(plans.at(-1)).toMatchObject({status: "abandoned", steps: plan});
+    expect(result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result.settlement] : []))
+      .toEqual(["succeeded"]);
   });
 
   it("retains the embedded Plan when completion feedback requests another turn, without replay", async () => {
@@ -2784,7 +3641,7 @@ describe("Runner semantic integration", () => {
     Object.assign(controller, {beforeCompletion: async () => {entered.resolve(); await release.promise; return {kind: "allow"};}});
     const handle = createRunner(controller, operations).start(createAgent(), createRunInput(), createRunConfig(operations));
     await entered.promise;
-    handle.cancel({origin: "user", reasonCode: "user_requested"});
+    await handle.cancel({origin: "user", reasonCode: "user_requested"});
     release.resolve();
     const result = await handle.wait();
     expect(result.status).toBe("cancelled");
@@ -2854,7 +3711,7 @@ describe("Runner semantic integration", () => {
     Object.assign(controller, {beforeCompletion});
     const handle = createRunner(controller, operations).start(createAgent(), createRunInput(), createRunConfig(operations));
     await entered.promise;
-    handle.cancel({origin: "user", reasonCode: "user_requested"});
+    await handle.cancel({origin: "user", reasonCode: "user_requested"});
     release.resolve();
     const result = await handle.wait();
     expect(result).toMatchObject({status: "cancelled", finalOutput: null});
@@ -2898,7 +3755,8 @@ describe("Runner semantic integration", () => {
         return completionWithPlan([{step: "Inspect", status: "completed"}], "Stale result", "stale-async-final");
       },
       input => {
-        expect(JSON.stringify(input.context)).toContain("Build failed.");
+        expect(JSON.stringify(input.inputDelivery)).toContain("Build failed.");
+        expect(JSON.stringify(input.context)).not.toContain("Build failed.");
         expect(input.interaction.unsettledCalls).toEqual([]);
         expect(input.plan?.version).toBe(1);
         return completionWithCalls([], "Command failure acknowledged", "fresh-async-final");
@@ -2933,7 +3791,7 @@ describe("Runner semantic integration", () => {
           origin: "model", controllerRequestId: input.toolExposure.controllerRequestId}}], "read-while-notified");
       },
       input => {
-        expect(JSON.stringify(input.context)).toContain("command_completed");
+        expect(JSON.stringify(input.inputDelivery)).toContain("command_completed");
         return completionWithCalls([], "Both results consumed", "read-and-background-final");
       },
     ]);
@@ -2952,7 +3810,7 @@ describe("Runner semantic integration", () => {
     const controller = new ScriptedController([
       completionWithCalls([], "Before asynchronous check", "before-check-final"),
       input => {
-        expect(JSON.stringify(input.context)).toContain("resource cleanup failed");
+        expect(JSON.stringify(input.inputDelivery)).toContain("resource cleanup failed");
         return completionWithCalls([], "New fact acknowledged", "after-check-final");
       },
     ]);
@@ -2979,7 +3837,7 @@ describe("Runner semantic integration", () => {
     const fact: RunInputNotification = {runId: "run_001", sequence: 3, occurredAt: NOW,
       source: {owner: "execution", kind: "command_completed", id: "command-1", revision: "9"}, data: {exitCode: 0}};
     const controller = new ScriptedController([input => {
-      expect(JSON.stringify(input.context)).toContain("command_completed");
+      expect(JSON.stringify(input.inputDelivery)).toContain("command_completed");
       return completionWithCalls([], "Already current", "current-final");
     }]);
     const result = await createRunner(controller, operations, {
@@ -2988,6 +3846,31 @@ describe("Runner semantic integration", () => {
     expect(result.status, JSON.stringify(result)).toBe("completed");
     expect(controller.calls).toHaveLength(1);
     expect(result.items.filter(item => item.payload.kind === "input_notification")).toHaveLength(1);
+    const index = result.items.findIndex(item => item.payload.kind === "input_delivery");
+    expect(index).toBeGreaterThan(-1);
+    expect(result.items[index + 1]!.payload).toMatchObject({kind: "controller_turn", status: "decided"});
+    expect(result.items[index + 1]!.committedInRevision).toBe(result.items[index]!.committedInRevision);
+  });
+
+  it("does not consume a batch on a missing receipt or transport failure", async () => {
+    const operations = createOperationFixture([]);
+    const fact: RunInputNotification = {runId: "run_001", sequence: 1, occurredAt: NOW,
+      source: {owner: "execution", kind: "command_completed", id: "command", revision: "2"}, data: {exitCode: 0}};
+    let calls = 0;
+    const batches: unknown[] = [];
+    const controller: Controller<TestOutput> = {resourceMetering: {modelInputTokens: "not_applicable", modelOutputTokens: "not_applicable", costUnits: "not_applicable"},
+      async next(input) {
+        batches.push(input.inputDelivery?.entries);
+        if (++calls === 1) return completionWithCalls([], "Unacknowledged", "no-receipt");
+        throw new Error("Provider unavailable");
+      }};
+    const result = await createRunner(controller, operations, {inputNotifications: {read: (_run, after) => after < 1 ? [fact] : []}})
+      .run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status).toBe("failed");
+    expect(batches).toEqual([[{...fact, sourceSequence: 1}], [{...fact, sourceSequence: 1}]]);
+    expect(result.items.filter(item => item.payload.kind === "input_delivery")).toHaveLength(0);
+    expect(result.items.find(item => item.payload.kind === "input_delivery_closed")?.payload)
+      .toMatchObject({reason: "failed", entries: [fact]});
   });
 
   it("fails rather than accepting an ending proposal when its notification source is unavailable", async () => {
@@ -3227,7 +4110,7 @@ describe("Runner semantic integration", () => {
       advance([interactionCandidate("run")], "model_interaction_1"),
       (input) => {
         expect(input.pending).toEqual([]);
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+        expect(deliveredResults(input).at(-1)).toMatchObject({
           kind: "interaction",
           status: "resolved",
           value: { accepted: true },
@@ -3246,13 +4129,13 @@ describe("Runner semantic integration", () => {
     const pending = await waitForPendingInteraction(handle);
 
     expect(handle.getSnapshot().status).toBe("waiting");
-    expect(handle.submitInteraction({
+    expect((await handle.submitInteraction({
       request: pending.envelope.request,
       submissionId: "submission_1",
       contentDigest: "sha256:accepted",
       payload: { accepted: true },
       receivedAt: NOW,
-    }).status).toBe("accepted_for_resolution");
+    })).status).toBe("accepted_for_resolution");
 
     const result = await handle.wait();
     expect(result.status, JSON.stringify(result, null, 2)).toBe("completed");
@@ -3279,7 +4162,7 @@ describe("Runner semantic integration", () => {
       await waitUntil(() => handle.getSnapshot().pendingInteractions.some((entry) => entry.envelope.request.id !== previous));
       const pending = handle.getSnapshot().pendingInteractions.find((entry) => entry.envelope.request.id !== previous)!;
       previous = pending.envelope.request.id;
-      handle.submitInteraction({ request: pending.envelope.request, submissionId: `answer-${index}`,
+      await handle.submitInteraction({ request: pending.envelope.request, submissionId: `answer-${index}`,
         contentDigest: `sha256:answer-${index}`, payload: { accepted: true }, receivedAt: NOW });
     }
     const result = await handle.wait();
@@ -3300,7 +4183,7 @@ describe("Runner semantic integration", () => {
     }).start(createAgent(), createRunInput(), createRunConfig(operations));
     await waitForPendingInteraction(handle);
 
-    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+    expect((await handle.cancel({ origin: "user", reasonCode: "user_requested" })).status)
       .toBe("accepted");
     const result = await handle.wait();
 
@@ -3323,10 +4206,12 @@ describe("Runner semantic integration", () => {
     const controller = new ScriptedController([
       advance([interactionCandidate("none")], "model_interaction_1"),
       (input) => {
-        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+        expect(deliveredResults(input).at(-1)).toMatchObject({
           kind: "interaction",
           status: "resolved",
         });
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        expect(input.inputDelivery).toBeNull();
         return complete("Fresh decision", "model_complete_3");
       },
     ]);
@@ -3336,7 +4221,7 @@ describe("Runner semantic integration", () => {
     const pending = await waitForPendingInteraction(handle);
     expect(controller.calls).toHaveLength(1);
 
-    handle.submitInteraction({
+    await handle.submitInteraction({
       request: pending.envelope.request,
       submissionId: "submission_1",
       contentDigest: "sha256:accepted",
@@ -3384,16 +4269,16 @@ describe("Runner semantic integration", () => {
       submittedAt: NOW,
     };
 
-    expect(handle.steer(command)).toMatchObject({ status: "accepted_for_application" });
-    expect(handle.steer(command)).toMatchObject({ status: "duplicate_identical" });
-    expect(handle.steer({ ...command, instruction: "Conflicting instruction." })).toMatchObject({
+    expect(await handle.steer(command)).toMatchObject({ status: "accepted_for_application" });
+    expect(await handle.steer(command)).toMatchObject({ status: "duplicate_identical" });
+    expect(await handle.steer({ ...command, instruction: "Conflicting instruction." })).toMatchObject({
       status: "rejected",
       code: "steering_command_conflict",
     });
-    expect(handle.steer({
+    expect(await handle.steer({
       ...command,
       commandId: "steering-stale",
-      expectedRunRevision: expectedRunRevision + 1,
+      expectedRunRevision,
     })).toMatchObject({
       status: "rejected",
       code: "steering_revision_stale",
@@ -3463,7 +4348,13 @@ describe("Runner semantic integration", () => {
       },
     ]);
 
-    const result = await createRunner(controller, operations, { agents: resolver }).run(
+    const commits: RunCommit[] = [];
+    const result = await createRunner(controller, operations, { agents: resolver, runCommits: {
+      async commitRun(commit) {
+        commits.push(structuredClone(commit));
+        return {recordId: commit.id, revision: commit.state.revision};
+      }, async readRunCommit(id) {return commits.find(value => value.id === id) ?? null;},
+    } }).run(
       createAgent(),
       createRunInput(),
       createRunConfig(operations),
@@ -3478,6 +4369,11 @@ describe("Runner semantic integration", () => {
       status: "completed",
     });
     expect(result.finalInstructionBinding).not.toEqual(result.startingInstructionBinding);
+    for (const commit of commits) {
+      expect(commit.control.instructionBinding.ref).toEqual(commit.state.activeInstructionBinding);
+      expect(commit.control.instructionBinding.agent).toEqual(commit.state.activeAgent);
+      expect(commit.control.instructionBinding.instructions).toEqual(commit.control.instructions.ref);
+    }
     expect(result.items).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({
         kind: "state_transition",
@@ -3890,7 +4786,7 @@ describe("Runner semantic integration", () => {
     );
     await started.promise;
 
-    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+    expect((await handle.cancel({ origin: "user", reasonCode: "user_requested" })).status)
       .toBe("accepted");
     const result = await handle.wait();
 
@@ -3930,7 +4826,7 @@ describe("Runner semantic integration", () => {
     expect(result.items.filter(({ payload }) => payload.kind === "suspension_transition")).toHaveLength(0);
     expect(events.filter(({ name }) => name === "run.completed")).toHaveLength(1);
     expect(events.filter(({ name }) => name === "run.failed")).toHaveLength(0);
-    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status).toBe("run_settled");
+    expect((await handle.cancel({ origin: "user", reasonCode: "user_requested" })).status).toBe("run_settled");
     expect(handle.getResult()).toBe(result);
   });
 
@@ -3943,14 +4839,14 @@ describe("Runner semantic integration", () => {
       resourceFinalizers: [{ async finalize() { entered.resolve(); await release.promise; return null; } }],
     }).start(createAgent(), createRunInput(), createRunConfig(operations));
     await entered.promise;
-    expect(handle.steer({
+    expect(await handle.steer({
       commandId: "late-steering",
       expectedRunRevision: handle.getSnapshot().runRevision,
       instruction: "Reopen progression",
       attribution: { origin: "user", actorId: null },
       submittedAt: NOW,
     })).toMatchObject({ status: "rejected", code: "run_settling" });
-    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status).toBe("accepted");
+    expect((await handle.cancel({ origin: "user", reasonCode: "user_requested" })).status).toBe("accepted");
     release.resolve();
     const result = await handle.wait();
     expect(result.status).toBe("cancelled");
@@ -4235,6 +5131,10 @@ function createOperationFixture(
     catalog,
     bindings,
     toolInputSemanticValidators: Object.freeze([]),
+    resultContracts: createOperationResultContracts(catalog, catalog.entries.map(entry => ({
+      operation: entry.operation.ref, revision: entry.operation.resultSchemaRevision,
+      validateOutput: () => true,
+    }))),
     internalHandlers: Object.freeze([...internalHandlers]),
     availability: extensions.availability ?? Object.freeze(
       catalog.entries.map((entry) =>
@@ -4596,8 +5496,30 @@ function createRunner(
     now: () => NOW,
     createRunId: () => `run_${String(++runSequence).padStart(3, "0")}`,
     executionFlow: {observer:{observe:fact=>{recordedFlows.push(fact);}}},
+    ...(overrides.runCommits ? {} : {runTreeCommits: createTreeCommitFixture().port}),
     ...overrides,
   });
+}
+
+function createTreeCommitFixture() {
+  const records: RunTreeCommit[] = [];
+  const members = new Map<string, RetainedRunTreeMember>();
+  const port: RunTreeCommitPort = {
+    async commitRunTree(commit) {
+      const next = new Map(members);
+      for (const head of commit.runs) next.set(head.state.run.id, {head,
+        admission: next.get(head.state.run.id)?.admission ?? head.admission!});
+      validateRunTreeCommit(commit, records.at(-1) ?? null, [...next.values()]);
+      members.clear();
+      for (const [key, value] of next) members.set(key, structuredClone(value));
+      records.push(structuredClone(commit));
+      return {recordId: commit.id, revision: commit.revision,
+        runs: commit.runs.map(run => ({recordId: run.id, revision: run.state.revision}))};
+    },
+    async readRunTreeCommit(id) {return records.find(value => value.id === id) ?? null;},
+    async readRunTree() {return records.length ? {commit: records.at(-1)!, members: [...members.values()]} : null;},
+  };
+  return {port, records};
 }
 
 function createAgent(
@@ -5120,17 +6042,14 @@ function snapshotUnknown<T>(value: T): T {
   return deepFreeze(structuredClone(value));
 }
 
-function projectedObservations(
-  projection: ControllerInput["context"],
-): readonly RunObservation[] {
-  return projection.blocks.flatMap((block) => {
-    if (block.payload.kind !== "structured") return [];
-    const value = block.payload.value;
-    if (!isRecord(value) || value.kind !== "run_observation" || !isRecord(value.observation)) {
-      return [];
-    }
-    return [value.observation as unknown as RunObservation];
-  });
+function deliveredResults(input: ControllerInput): readonly Readonly<Record<string, unknown>>[] {
+  expect(input.context.blocks.some(block => block.payload.kind === "structured" &&
+    isRecord(block.payload.value) && block.payload.value.kind === "run_observation")).toBe(false);
+  return [
+    ...input.interaction.messages.flatMap(message => message.content.flatMap(block =>
+      block.kind === "model_tool_result" && isRecord(block.result.content) ? [block.result.content] : [])),
+    ...(input.inputDelivery?.entries.flatMap(entry => isRecord(entry.data) && isRecord(entry.data.content) ? [entry.data.content] : []) ?? []),
+  ];
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -5320,6 +6239,13 @@ function createDirectActionExecutionFixture(
       async recordPreEffect() {
         return { recordId: "verification-pre-effect-1" };
       },
+      async recordDispatchIntent() {
+        return { recordId: "verification-dispatch-intent-1" };
+      },
+      async recordAttemptResult() {
+        return { recordId: "verification-attempt-result-1" };
+      },
+      async recordRetry() {return {recordId: "verification-retry-1"};},
       async recordPostEffect() {
         return { recordId: "verification-post-effect-1" };
       },

@@ -8,6 +8,48 @@ const STARTED_AT = "2026-08-23T00:00:00.000Z";
 const DEADLINE_AT = "2026-08-23T00:01:00.000Z";
 
 describe("RunTreeExecution", () => {
+  it("restores the same tree with pending Child delivery and original authority and deadlines", () => {
+    const tree = createTree({maxTotalDescendantRuns: 2, maxActiveDescendantRuns: 2, maxDescendantDepth: 2});
+    reserve(tree, tree.rootLineage, "run-root", "child-a", 1);
+    reserve(tree, tree.rootLineage, "run-root", "child-b", 2);
+    tree.advanceAuthorityRevision("child-b");
+    tree.recordResources("child-b", {controllerTurns: {status: "measured", value: 2}});
+    tree.updateLifecycle("child-b", "suspended");
+    tree.settleResources("child-a");
+    tree.settleRun("child-a", "completed", terminal("completed"), STARTED_AT);
+    const saved = tree.checkpoint();
+    const restored = RunTreeExecution.restore(saved, () => STARTED_AT);
+    expect(restored.getSnapshot()).toEqual(tree.getSnapshot());
+    expect(restored.captureAuthorityBasis("child-b")).toEqual(tree.captureAuthorityBasis("child-b"));
+    expect(restored.getSnapshot().settlement.pendingResultTransfers).toBe(2);
+    restored.settleDescendantTransfer("child-a", "settled");
+    expect(restored.getSnapshot().settlement.pendingResultTransfers).toBe(1);
+    expect(() => restored.settleDescendantTransfer("child-a", "settled")).toThrow(/more than once/);
+    expect(reserve(restored, restored.rootLineage, "run-root", "child-c", 3)).toMatchObject({code: "descendant_run_total_limit_exceeded"});
+    const expired = RunTreeExecution.restore(saved, () => DEADLINE_AT);
+    expect(reserve(expired, expired.rootLineage, "run-root", "child-c", 3)).toMatchObject({code: "descendant_run_deadline_exceeded"});
+  });
+
+  it("retains cancellation facts and rejects broken tree membership", () => {
+    const tree = createTree({maxTotalDescendantRuns: 2, maxActiveDescendantRuns: 2, maxDescendantDepth: 2});
+    const controller = cancellation("run-root");
+    tree.registerCancellation("run-root", controller);
+    controller.requestCancellation({origin: "user", reasonCode: "user_requested"});
+    const saved = tree.checkpoint();
+    const restored = RunTreeExecution.restore(saved, () => STARTED_AT);
+    expect(restored.getSnapshot()).toEqual(tree.getSnapshot());
+    expect(reserve(restored, restored.rootLineage, "run-root", "child", 1)).toMatchObject({code: "descendant_run_start_cancelled"});
+    expect(() => RunTreeExecution.restore({...saved, nodes: []}, () => STARTED_AT)).toThrow(/membership/);
+    expect(() => RunTreeExecution.restore({...saved, input: {...saved.input,
+      approvals: {...saved.input.approvals, maxActiveReviews: 50}}}, () => STARTED_AT)).toThrow(/limits changed/);
+    expect(() => RunTreeExecution.restore({...saved, input: {...saved.input,
+      resources: {...saved.input.resources, controllerTurns: {enforcement: "hard", maximum: 5000, minimumChildGrant: 1}}}},
+      () => STARTED_AT)).toThrow(/envelope changed/);
+    expect(() => restored.registerCancellation("run-root", cancellation("run-root"))).toThrow(/restore the retained/);
+    restored.registerCancellation("run-root", createRunCancellationController({runId: "run-root", now: () => STARTED_AT,
+      createRequestId: () => {throw new Error("Do not allocate another cancellation.");}, retainedRequest: controller.context.request!}));
+    expect(restored.checkpoint()).toEqual(saved);
+  });
   it("accounts total and active reservations across the complete tree", () => {
     const tree = createTree({
       maxTotalDescendantRuns: 2,

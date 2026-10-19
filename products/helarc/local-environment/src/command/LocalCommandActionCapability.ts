@@ -40,7 +40,9 @@ import {
 import type { CanonicalActionSettlement } from "@agent-anything/canonical-action/settlement";
 import type { OperationBindingRevisionRef, OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
-import { parseCommandInput } from "./CommandInput.js";
+import { CommandInputError, parseCommandInput } from "./CommandInput.js";
+import { createCommandInputContract, type CommandInputContract } from "./CommandInputContract.js";
+import { publishCommandConstraint, type CommandConstraintObserver } from "./CommandConstraintObservation.js";
 import { resolveCommandLimits } from "./CommandLimits.js";
 import {
   createCommandEnvironmentPolicy,
@@ -52,6 +54,8 @@ import {
   type NativeShellRuntimeProfile,
 } from "./CommandActionIdentity.js";
 import { RunProcessManager, ProcessManagerError } from "./RunProcessManager.js";
+import type { ProcessRecordPort } from "./ProcessCheckpoint.js";
+import { OperationCommitError } from "@agent-anything/operation-catalog/result";
 import { ProcessOutputRepository } from "./ProcessOutputRepository.js";
 import type { ProcessOutputPaths } from "./ProcessOutputStore.js";
 import { WindowsJobProcessBackend, resolveWindowsProcessHelper } from "./WindowsJobProcessBackend.js";
@@ -63,6 +67,7 @@ import type { CodeAgentCommandLimits } from "./ProcessContracts.js";
 
 import {
   ShellExecutionSession,
+  type ShellSessionRecordPort,
 } from "./ShellExecutionSession.js";
 import {
   inspectPreparedFileSystemTarget,
@@ -83,6 +88,9 @@ const MAX_CWD_CONTROL_BYTES = 32_768;
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 export interface CreateHelarcLocalCommandActionCapabilityInput {
+  readonly processManagerId?: string;
+  readonly processRecords?: ProcessRecordPort;
+  readonly shellSessionRecords?: ShellSessionRecordPort;
   readonly commandOutputDirectory: string;
   readonly retainCommandOutput?: (runId: string, executionId: string, paths: ProcessOutputPaths) => Promise<void>;
   readonly workspace: WorkspaceSelection;
@@ -96,11 +104,14 @@ export interface CreateHelarcLocalCommandActionCapabilityInput {
   readonly environmentPolicyId?: string;
   readonly now?: () => string;
   readonly processObserver?: ProcessExecutionObserver;
+  readonly constraintObserver?: CommandConstraintObserver;
   readonly initialObservationHandlerId: string;
   readonly taskOutputHandlerId: string;
 }
 
 export interface HelarcLocalCommandActionCapability {
+  readonly inputContract: CommandInputContract;
+  readonly processManagerId: string;
   readonly shellTool: "Bash" | "PowerShell";
   readonly shellRuntime: NativeShellRuntimeProfile;
   readonly shellActionAdapterId: string;
@@ -114,7 +125,9 @@ export interface HelarcLocalCommandActionCapability {
   readonly taskStopBinding: OperationBindingRevisionRef;
   readonly taskAvailability: Pick<RunProcessManager, "getRunAvailability">;
   readonly taskState: Pick<RunProcessManager, "getRunSnapshots">;
+  readonly taskDelivery: Pick<RunProcessManager, "commitInitialDelivery">;
   readonly shellSession: (runId:string) => ReturnType<ShellExecutionSession["snapshot"]>;
+  restoreRun(runId: string): Promise<void>;
 }
 
 interface ShellPayload {
@@ -159,19 +172,27 @@ interface StopBasis { readonly taskId: string; readonly cwdDisplay: string; }
 
 export async function createHelarcLocalCommandActionCapability(input: CreateHelarcLocalCommandActionCapabilityInput): Promise<HelarcLocalCommandActionCapability> {
   const limits = resolveCommandLimits(input.limits);
+  const inputContract = createCommandInputContract(limits);
   const now = input.now ?? (() => new Date().toISOString());
   const environment = await createCommandEnvironmentPolicy({ id: input.environmentPolicyId ?? "helarc.local.shell.environment.default", overrides: input.environment });
   const backend = input.platform === "win32"
     ? new WindowsJobProcessBackend(await resolveWindowsProcessHelper()) : new PosixProcessBackend();
   const processTasks = new RunProcessManager({backend, maximumActive:limits.maxActiveTasks,
-    maximumSettled:limits.maxSettledTasks, observer:input.processObserver, retainOutput:input.retainCommandOutput, now});
+    records: input.processRecords,
+    scopeId: input.processManagerId,
+    maximumSettled:limits.maxSettledTasks, observer:input.processObserver, retainOutput:input.retainCommandOutput, now,
+    constraints: {ref: inputContract.ref, observer: input.constraintObserver}});
   const outputs = new ProcessOutputRepository(input.commandOutputDirectory);
   const commandSemantics = new Map<string, {shell:"Bash"|"PowerShell";command:string}>();
   const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
   const sessions = new Map<string,ShellExecutionSession>();
   const sessionFor = (runId:string) => {
     let session = sessions.get(runId);
-    if(!session) {session=shellSession.forkInitial();sessions.set(runId,session);}
+    if(!session) {
+      session=shellSession.forkInitial(input.shellSessionRecords
+        ? value => input.shellSessionRecords!.commitShellSession({...value, runId}) : undefined);
+      sessions.set(runId,session);
+    }
     return session;
   };
   const shell = await selectNativeShell({
@@ -186,13 +207,15 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
 
   return Object.freeze({
     shellTool: shell.toolName,
+    inputContract,
+    processManagerId: processTasks.scopeId,
     shellRuntime: projectNativeShellRuntimeProfile(shell),
     shellActionAdapterId: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID,
     taskStopActionAdapterId: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID,
     environment: Object.freeze({ id: environment.id, revision: environment.digest }),
     registrations,
     adapters: Object.freeze([
-      Object.freeze({ adapter: createShellAdapter(input.workspace, sessionFor, shell, limits, environment) }),
+      Object.freeze({ adapter: createShellAdapter(input.workspace, sessionFor, shell, limits, environment, inputContract, processTasks.scopeId, input.constraintObserver) }),
       Object.freeze({ adapter: createTaskStopAdapter(processTasks) }),
     ]),
     executors: Object.freeze([
@@ -205,7 +228,13 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     taskStopBinding: input.taskStopBinding,
     taskAvailability: processTasks,
     taskState: processTasks,
+    taskDelivery: processTasks,
     shellSession:(runId:string)=>sessionFor(runId).snapshot(),
+    async restoreRun(runId: string) {
+      const saved = await input.shellSessionRecords?.readShellSession(runId);
+      if (saved) await sessionFor(runId).restore(saved);
+      await processTasks.restoreRun(runId);
+    },
   });
 }
 
@@ -230,13 +259,31 @@ function createShellAdapter(
   shell: Awaited<ReturnType<typeof selectNativeShell>>,
   limits: CodeAgentCommandLimits,
   environment: CommandEnvironmentPolicySnapshot,
+  inputContract: CommandInputContract,
+  managerId: string,
+  observer?: CommandConstraintObserver,
 ): OperationActionAdapter<unknown, ShellBasis> {
   const adapter: OperationActionAdapter<unknown, ShellBasis> = {
     descriptor: SHELL_ADAPTER,
     async prepare(binding, context) {
       if (context.interruption.signal.aborted) return interruptedPreparation("shell_action_interrupted");
       try {
-        const parsed = parseCommandInput(binding.request, limits);
+        let parsed: ReturnType<typeof parseCommandInput>;
+        const base = {runId: context.parentRunAction?.run.id ?? "", actionId: context.action.id, invocationId: binding.invocation.id,
+          executionId: null, managerId, configuration: inputContract.ref, occurredAt: context.now(), stage: "preparation" as const};
+        try { parsed = parseCommandInput(binding.request, limits); }
+        catch (error) {
+          if (error instanceof CommandInputError) publishCommandConstraint(observer, {...base, status: "not_satisfied",
+            basis: {code: error.code, path: error.path, correction: error.message, dispatched: false}});
+          throw error;
+        }
+        const original = binding.request as Record<string, unknown>;
+        publishCommandConstraint(observer, {...base, status: "passed", basis: {
+          timeoutMs: parsed.timeoutMs, timeoutSource: original.timeout_ms === undefined ? "default" : "explicit",
+          waitMs: parsed.waitMs, waitSource: original.wait_ms === undefined ? "default" : "explicit",
+          runInBackground: parsed.runInBackground, commandUtf8Bytes: Buffer.byteLength(parsed.command, "utf8"),
+          descriptionUtf16CodeUnits: parsed.description?.length ?? null, dispatched: false,
+        }});
         const runId = context.parentRunAction?.run.id;
         if (runId === undefined) return invalidPreparation("shell_run_required", "Shell execution requires an owning RunAction.");
         if (context.workspace === null) return invalidPreparation("workspace_required", "Shell execution requires a Run Workspace.");
@@ -279,7 +326,7 @@ function createShellAdapter(
         const data = await shellPreparedData(parsed.description, shell.toolName, payload, cwd, executable.identity, context.environment, context.now());
         return Object.freeze({ status: "prepared" as const, prepared: await createPreparedAction(binding, context, data) });
       } catch (error) {
-        return invalidPreparation("shell_action_invalid", safeMessage(error, "Shell request or target is invalid."));
+        return invalidPreparation(error instanceof CommandInputError ? error.code : "shell_action_invalid", safeMessage(error, "Shell request or target is invalid."));
       }
     },
     async revalidate(prepared, assertions, context) {
@@ -381,15 +428,19 @@ function createShellExecutor(
           runSignal:context.interruption.signal,maximumOutputBytes:payload.maxOutputFileBytes,background:payload.runInBackground,
           paths:allocation.paths,
           consumeFinalCwd:()=>consumeFinalWorkingDirectory(payload.cwdControlPath),
-          commitFinalCwd:async path=>(await sessionFor(payload.runId).commitFinalWorkingDirectory({expectedRevision:payload.sessionRevision,path}))?.canonicalPath ?? null,
+          commitFinalCwd:async path=>(await sessionFor(payload.runId).commitFinalWorkingDirectory({expectedRevision:payload.sessionRevision,path,executionId}))?.canonicalPath ?? null,
         });
-        return completed({task_id:executionId,run_id:payload.runId,snapshot,action_id:context.attempt.action.id,attempt_id:context.attempt.id},startedAt,now());
+        return completed({task_id:executionId,run_id:payload.runId,snapshot,action_id:context.attempt.action.id,attempt_id:context.attempt.id,
+          execution_descriptor: {command: payload.command, shell: semantics.get(executionId)!.shell,
+            executable: {path: payload.executablePath, baseline: payload.executableBaseline},
+            cwd: payload.cwd, cwd_baseline: payload.cwdBaseline, environment_digest: payload.environmentDigest}},startedAt,now());
       } catch(error) {
+        if (error instanceof OperationCommitError) throw error;
         const snapshot = error instanceof ProcessManagerError ? error.snapshot : null;
         if (snapshot === null) await allocation?.discard();
         return {status:"failed" as const,effectState:snapshot === null ? "none" as const : snapshot.containment.disposition === "empty" ? "settled" as const : "unknown" as const,
           failure:{code:error instanceof ProcessManagerError ? error.code : "shell_start_failed",
-            message:safeMessage(error,"Command startup failed."),retryable:false,metadata:{process:snapshot}}};
+            message:safeMessage(error,"Command startup failed."),retryable:false,metadata:{process:snapshot, admission:error instanceof ProcessManagerError ? error.admission : null}}};
       }
     },
   } satisfies ActionExecutor);
@@ -443,6 +494,7 @@ function createTaskStopExecutor(tasks: RunProcessManager, now: () => string): Ac
         return completed({task_id:result.ref.executionId,snapshot:result,
           effect_certainty:result.termination !== null && result.termination.method !== "none" ? "known_applied":"known_not_applied"},startedAt,now());
       } catch (error) {
+        if (error instanceof OperationCommitError) throw error;
         return failed("none", error instanceof ProcessManagerError ? error.code : "task_stop_failed", safeMessage(error, "Run-owned command could not be stopped."));
       }
     },

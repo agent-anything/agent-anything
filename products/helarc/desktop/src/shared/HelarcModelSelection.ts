@@ -24,7 +24,6 @@ export interface ModelDiscovery {
 export interface HelarcProviderModelSettings {
   readonly service: "generic" | "deepseek" | "ollama";
   readonly thinking: ModelThinkingSelection;
-  readonly maximumOutputTokens: number;
 }
 
 export interface HelarcModelSelection {

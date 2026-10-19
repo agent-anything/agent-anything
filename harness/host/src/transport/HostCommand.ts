@@ -163,12 +163,12 @@ export interface CreateHostCommandDispatcherInput {
 }
 
 export interface HostCommandDispatcher {
-  dispatch(candidate: unknown, expectedKind: HostCommandKind): HostCommandReceipt;
+  dispatch(candidate: unknown, expectedKind: HostCommandKind): Promise<HostCommandReceipt>;
 }
 
 interface HostCommandLedgerEntry {
   readonly fingerprint: string;
-  readonly receipt: HostCommandReceipt;
+  readonly receipt: Promise<HostCommandReceipt>;
 }
 
 export function createHostCommandDispatcher(
@@ -185,7 +185,7 @@ export function createHostCommandDispatcher(
   }
   const ledger = new Map<string, HostCommandLedgerEntry>();
   return Object.freeze({
-    dispatch(candidate: unknown, expectedKind: HostCommandKind): HostCommandReceipt {
+    async dispatch(candidate: unknown, expectedKind: HostCommandKind): Promise<HostCommandReceipt> {
       assertHostCommandKind(expectedKind, "expected Host command kind");
       let command: HostCommand;
       try {
@@ -205,7 +205,7 @@ export function createHostCommandDispatcher(
       }
       const receipt = command.kind === expectedKind
         ? dispatchValidatedCommand(input, command)
-        : rejectedReceipt(command, "host_command_kind_mismatch");
+        : Promise.resolve(rejectedReceipt(command, "host_command_kind_mismatch"));
       ledger.set(command.commandId, Object.freeze({ fingerprint, receipt }));
       return receipt;
     },
@@ -260,10 +260,10 @@ export function snapshotHostCommand(candidate: unknown): HostCommand {
   });
 }
 
-function dispatchValidatedCommand(
+async function dispatchValidatedCommand(
   input: CreateHostCommandDispatcherInput,
   command: HostCommand,
-): HostCommandReceipt {
+): Promise<HostCommandReceipt> {
   let activeRun: HostActiveRun | null;
   try {
     activeRun = input.resolveActiveRun(command.runId);
@@ -285,7 +285,7 @@ function dispatchValidatedCommand(
         runId: command.runId,
         kind: command.kind,
         status: "handled",
-        result: activeRun.cancel(cancellation),
+        result: await activeRun.cancel(cancellation),
         projection: activeRun.getProjection(),
       });
     }
@@ -296,7 +296,7 @@ function dispatchValidatedCommand(
         runId: command.runId,
         kind: command.kind,
         status: "handled",
-        result: activeRun.steer({
+        result: await activeRun.steer({
           commandId: command.commandId,
           expectedRunRevision: command.payload.expectedRunRevision,
           instruction: command.payload.instruction,
@@ -312,7 +312,7 @@ function dispatchValidatedCommand(
         runId: command.runId,
         kind: command.kind,
         status: "handled",
-        result: activeRun.resumeDescendant({
+        result: await activeRun.resumeDescendant({
           request: command.payload.request,
           relation: command.payload.relation,
           child: command.payload.child,
@@ -334,7 +334,7 @@ function dispatchValidatedCommand(
       runId: command.runId,
       kind: command.kind,
       status: "handled",
-      result: activeRun.submitInteraction(submission),
+      result: await activeRun.submitInteraction(submission),
       projection: activeRun.getProjection(),
     });
   } catch {

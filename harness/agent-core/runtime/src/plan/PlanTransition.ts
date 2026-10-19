@@ -323,7 +323,6 @@ function normalizePlanUpdate(
   }
 
   const steps: PlanStep[] = [];
-  let inProgressCount = 0;
 
   for (const candidateStep of candidate.plan) {
     if (!isRecord(candidateStep)) {
@@ -342,13 +341,6 @@ function normalizePlanUpdate(
     }
     if (!isPlanStepStatus(candidateStep.status)) {
       return invalid("plan_invalid", "Plan step status is not supported.");
-    }
-
-    if (candidateStep.status === "in_progress") {
-      inProgressCount += 1;
-      if (inProgressCount > 1) {
-        return invalid("plan_invalid", "At most one Plan step may be in progress.");
-      }
     }
 
     steps.push(Object.freeze({

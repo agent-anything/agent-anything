@@ -67,6 +67,28 @@ function context(): InvocationInterruptionContext {
 }
 afterEach(() => vi.useRealTimers());
 
+it.each(["ollama", "openai"] as const)("omits unspecified output limits and preserves length termination in %s streaming", async format => {
+  let limited = false;
+  const fetch = vi.fn(async () => response(body(limited
+    ? format === "ollama" ? ndjson({ message: { role: "assistant", content: "partial" }, done: true, done_reason: "length" })
+      : sse({ role: "assistant", content: "partial" }, "length") + "data: [DONE]\n\n"
+    : frames(format).join(""))));
+  const common = { model: "test-model", timeoutMs: 1000,
+    nativeToolInteraction: { supported: true }, requestBodyTransportLimit: limit };
+  const provider = format === "ollama"
+    ? new OllamaProvider({ ...common, baseUrl: "http://localhost:11434", runtime: { contextWindowTokens: 16384 } }, fetch)
+    : new OpenAICompatibleProvider({ ...common, baseUrl: "https://provider.local/v1", apiKey: "" }, fetch);
+  const result = await provider.send(createNativeProviderRequest(provider), context(), { mode: "streaming", invocationId: "uncapped" });
+  expect(result.kind).toBe("succeeded");
+  const sent = JSON.parse(fetch.mock.calls[0]![1].body);
+  expect(sent.stream).toBe(true);
+  expect(sent).not.toHaveProperty("max_tokens");
+  if (format === "ollama") expect(sent.options).toEqual({ num_ctx: 16384 });
+  limited = true;
+  expect(await provider.send(createNativeProviderRequest(provider), context(), { mode: "streaming", invocationId: "length-limited" }))
+    .toMatchObject({ kind: "succeeded", response: { turn: { finish: { kind: "output_limit" } } } });
+});
+
 it("preserves explicit non-thinking mode in streamed OpenAI-compatible requests", async () => {
   const fetch = vi.fn(async () => response(body(frames("openai").join(""))));
   const provider = new OpenAICompatibleProvider({
