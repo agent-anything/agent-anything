@@ -5,6 +5,7 @@ import {
   type ModelCallableDefinition,
   type ModelJsonSchema,
 } from "@agent-anything/model-interaction";
+import { HELARC_FINAL_REPLY_CONTENT_GUIDANCE, HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE } from "./HelarcFinalReply.js";
 
 export type HelarcControllerControlName = "update_plan" | "final_result";
 
@@ -36,10 +37,12 @@ const ENTRIES = Object.freeze([
   Object.freeze({
     name: "final_result" as const,
     modelDescription: [
-      "Propose ending this Run normally, optionally supplying a final user-facing reply.",
+      "Propose ending this Run normally, optionally supplying a final reply to its caller.",
       "The response may be an answer, partial result, limitation, or refusal; ending does not assert that the user's objective was achieved.",
       "Use this control when no further model turn is needed. Ordinary assistant text alone is not an ending signal.",
-      "Call final_result at most once per turn. Supply response for a new final reply. Omit response to adopt ordinary assistant text from this turn, or otherwise the immediately preceding Model Turn of this Run. If neither has text, no final reply is supplied. Adoption does not redisplay existing text. Supply an empty string to explicitly provide no reply and prevent adoption.",
+      "Call final_result at most once per turn.",
+      HELARC_FINAL_REPLY_CONTENT_GUIDANCE,
+      HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE,
       "If a Plan already exists, include its complete final snapshot in plan, even when unchanged. Report actual step progress; pending or in_progress steps do not prevent ending. Never mark unfinished work completed merely to end the Run.",
       "Without an existing Plan, omit plan or use an empty array to make no Plan update; do not create one solely to end. An existing Plan requires its complete nonempty snapshot. Do not call update_plan in the same turn as final_result; put the final snapshot in this call instead.",
       "Other Tool calls may accompany it. Their requests and the embedded Plan update are processed before ending; failed or unresolved work may return feedback instead of accepting the ending proposal.",
@@ -67,7 +70,7 @@ export function createHelarcControllerControlDefinitions(
       inputSchema: {
         type: "object",
         properties: {
-          response: {type: "string", description: "Optional new final reply. Omit to adopt ordinary assistant text from this turn or the immediately preceding local Model Turn. Empty string explicitly supplies no reply and prevents adoption."},
+          response: {type: "string", description: HELARC_FINAL_REPLY_CONTENT_GUIDANCE},
           plan: createPlanSchema(limits, !hasPlan),
         },
         required: hasPlan ? ["plan"] : [],

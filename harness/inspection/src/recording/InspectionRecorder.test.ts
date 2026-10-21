@@ -188,6 +188,32 @@ describe("Inspection recording", () => {
     expect(recorder.health().rejected).toBe(0);
   });
 
+  it("links a committed feedback occurrence to its Call result without a duplicate Context source", async () => {
+    const {recorder, query, selection} = await setup(true);
+    const transcript = new RunTranscriptInspectionAdapter(recorder);
+    const now = "2026-10-20T00:00:00Z";
+    const turn = {id: "turn-1", run: {id: "run-1"}, sequence: 1};
+    const feedback = {source: {owner: "agent-hooks", kind: "stop", id: "handler-1", revision: "1"},
+      code: "continue", message: "Consider the outstanding results."};
+    transcript.observe({runId: "run-1", sequence: 1, item: {ref: {id: "feedback-item", sequence: 1}, createdAt: now,
+      payload: {kind: "controller_feedback", feedback, turn}}} as never);
+    transcript.observe({runId: "run-1", sequence: 2, item: {ref: {id: "settlement-item", sequence: 2}, createdAt: now,
+      payload: {kind: "model_call_settlement", result: {
+        modelCallRef: {id: "call-1", contentBlockOrdinal: 0}, content: feedback, name: "final_result", settlement: "invalidated",
+        presentation: {disposition: "complete", failureCode: null, presenter: {id: "runtime", revision: "1"}},
+        sourceRefs: [{owner: "agent-runtime", kind: "controller_feedback", id: "turn-1:feedback", revision: "1"}],
+      }}}} as never);
+    await recorder.flush();
+    const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
+    const graph = (await query.query({...scope, kind: "get_data_flow"})).graph!;
+    expect(graph.links).toContainEqual(expect.objectContaining({kind: "delivers", operation: "call_feedback_delivery",
+      from: expect.objectContaining({id: "turn-1:feedback", revision: "1"}),
+      to: expect.objectContaining({id: "call-1:presentation"})}));
+    const records = (await query.query({...scope, kind: "list_records", limit: 100})).records;
+    expect(records.filter(record => record.payload.kind === "event" && record.payload.name === "controller_feedback.committed")).toHaveLength(1);
+    expect(recorder.health().rejected).toBe(0);
+  });
+
   it("links a replayed result to its actual request location without relabeling its source Run", async () => {
     const {recorder, query, selection} = await setup(true);
     const provider = new ProviderInspectionAdapter(recorder);

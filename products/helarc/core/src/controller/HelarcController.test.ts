@@ -183,7 +183,7 @@ describe("Helarc native Tool controller", () => {
     expect(request.interaction.callables.some(({ name }) => name === "Read")).toBe(false);
     expect(request.metadata).toMatchObject({
       runId: "run-1",
-      promptArchitectureVersion: "helarc-prompt-v8",
+      promptArchitectureVersion: "helarc-prompt-v9",
       toolExposureVersion: "trusted-tool-exposure-v1",
       exposedToolCount: FILE_TOOLS.length,
       interactionMessageCount: 0,
@@ -452,6 +452,24 @@ describe("Helarc native Tool controller", () => {
     expect(settledRequest.interaction).toEqual(request.interaction);
     expect(settledRequest.composition.sections.find(section => section.id === "helarc:model-input:command-state"))
       .toMatchObject({ role: "user", necessity: "mandatory", source: { owner: "helarc", id: input.runId } });
+    const deliveryInput: ControllerInput<HelarcAgentOutput> = {...input, inputDelivery: {
+      id: "feedback-batch", revision: "1", runId: input.runId, entries: [{
+        runId: input.runId, sequence: 1, occurredAt: "2026-10-20T00:00:00Z",
+        source: {owner: "agent-runtime", kind: "controller_feedback", id: "turn-1:feedback", revision: "1"},
+        interpretation: {kind: "controller_feedback", turn: {id: "turn-1", run: {id: input.runId}, sequence: 1}},
+        data: {source: {owner: "helarc", kind: "protocol", id: "protocol-1", revision: "1"},
+          code: "ending_required", message: "Submit an ending proposal."},
+      }],
+    }};
+    const deliveredRequest = buildProviderRequest(deliveryInput, requestBuildContext(), protocol,
+      createTestQualification(input, protocol), [running]);
+    expect(deliveredRequest.composition.sections.at(-1)?.kind).toBe("input_notification");
+    expect(deliveredRequest.composition.sections.at(-2)?.id).toBe("helarc:model-input:command-state");
+    expect(deliveredRequest.messages.at(-1)?.role).toBe("user");
+    expect(deliveredRequest.messages.at(-1)?.content.at(-1)).toMatchObject({
+      text: expect.stringContaining("Host Controller feedback:"),
+    });
+    expect(deliveredRequest.instructions.content).toEqual([]);
     expect(JSON.stringify(input)).not.toContain("process-1");
     const customProtocol = createHelarcControllerProtocolComposition({
       toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance,

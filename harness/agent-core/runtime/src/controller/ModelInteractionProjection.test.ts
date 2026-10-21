@@ -8,13 +8,37 @@ import {
 } from "@agent-anything/model-interaction";
 import type { RunItem } from "../run/RunItem.js";
 import { createControllerModelItems } from "./ControllerModelItems.js";
-import { createControllerInputDeliveryReceipt, createInputDeliverySections } from "./ControllerInputDelivery.js";
+import { createControllerInputDeliveryReceipt, createInputDeliverySections, inputNotificationMessage } from "./ControllerInputDelivery.js";
 import {
   ModelInteractionProjectionError,
   projectModelInteraction,
 } from "./ModelInteractionProjection.js";
 
 describe("ModelInteractionProjection", () => {
+  it("keeps each delivered feedback occurrence at its consuming response, not at the current tail", () => {
+    const feedback = {source: {owner: "controller", kind: "protocol", id: "protocol", revision: "1"},
+      code: "ending_required", message: "Submit an ending proposal."};
+    const history: RunItem[] = [runItem(1, controllerTurn(modelTurn([])))];
+    for (let sequence = 1; sequence <= 2; sequence++) {
+      const turn = {id: `controller-turn-${sequence}`, run: {id: "run-1"}, sequence};
+      const entry = {runId: "run-1", sequence, source: {owner: "agent-runtime", kind: "controller_feedback",
+        id: `${turn.id}:feedback`, revision: String(sequence)}, occurredAt: "2026-10-20T00:00:00.000Z",
+        data: feedback, interpretation: {kind: "controller_feedback" as const, turn}};
+      const batch = {id: `batch-${sequence}`, revision: "1", runId: "run-1", entries: [entry]};
+      const receipt = {...createControllerInputDeliveryReceipt(batch, `request-${sequence + 1}`),
+        via: {kind: "provider" as const, requestId: `request-${sequence + 1}`, compositionId: `composition-${sequence}`,
+          sectionIds: createInputDeliverySections(batch).map(section => section.id)}};
+      const next = controllerTurn(modelTurn([], `turn-${sequence + 1}`, `request-${sequence + 1}`));
+      if (next.kind !== "controller_turn") throw new Error("Invalid fixture");
+      const delivery = runItem(history.length + 1, {kind: "input_delivery", batch, receipt, turn: next.turn});
+      history.push(delivery, {...runItem(history.length + 2, next), committedInRevision: delivery.committedInRevision});
+      const projected = projectModelInteraction({runId: "run-1", runRevision: history.length, items: history});
+      expect(projected.messages[sequence * 2 - 1]).toEqual(inputNotificationMessage(entry));
+    }
+    const projected = projectModelInteraction({runId: "run-1", runRevision: history.length, items: history});
+    expect(projected.messages.map(message => message.role)).toEqual(["assistant", "user", "assistant", "user", "assistant"]);
+    expect(projected.notificationHistory?.map(entry => entry.sequence)).toEqual([1, 2]);
+  });
   it("replays accepted notifications after the complete result group and before their consuming Turn", () => {
     const call = modelCall("read", 0);
     const batch = {id: "batch-1", revision: "1", runId: "run-1", entries: [{runId: "run-1", sequence: 1,

@@ -120,6 +120,9 @@ it("retains a representative 25000-record burst with repeated bounded bodies and
     const coverage = db.snapshot();
     expect(coverage.captured).toBe(25000);
     expect(coverage.telemetryDropped).toBe(0);
+    expect(coverage.recording?.timings?.projectionConversion.count).toBeGreaterThan(0);
+    expect(coverage.recording?.timings?.projectionWrite.count).toBeGreaterThan(0);
+    expect(coverage.recording!.projection.sliceMaxMs).toBeGreaterThanOrEqual(coverage.recording!.timings!.projectionWrite.maxMs);
     expect(raw.prepare("SELECT COUNT(*) n FROM contents WHERE body_id IS NULL").get()).toEqual({n: 0});
     expect(raw.prepare("SELECT COUNT(*) n FROM batch_receipts").get()).toEqual({n: 250});
     expect(readdirSync(directory).some(name => name === "content" || name === "staging")).toBe(false);

@@ -108,6 +108,7 @@ export interface RunCommitReceipt {
 
 /** One atomic state/control/delivery commit. A rejected acknowledgement never publishes. */
 export interface RunCommitPort {
+  /** Immutable owner snapshot; unchanged payloads may be shared across revisions. */
   commitRun(commit: RunCommit): Promise<RunCommitReceipt>;
   readRunCommit(id: string): Promise<RunCommit | null>;
 }

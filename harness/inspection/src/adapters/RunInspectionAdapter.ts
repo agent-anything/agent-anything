@@ -52,6 +52,22 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
         links: [inspectionLink("trigger", subject, action), ...(provenance.kind === "controller" ? [inspectionLink("materializes", ref("runtime", "call", provenance.modelCallRef.id), action)] : [])],
         contents: [{ name: "Run Action", class: "agent", stage: "materialized", mediaType: "application/json", value: payload.action as unknown as InspectionJson }],
       });
+    } else if (payload.kind === "controller_feedback") {
+      const feedback = ref("agent-runtime", "contribution", `${payload.turn.id}:feedback`, String(payload.turn.sequence));
+      r.offer({subject: feedback, occurredAt: item.createdAt,
+        payload: {kind: "event", name: "controller_feedback.committed", sequence: item.ref.sequence, code: payload.feedback.code},
+        links: [inspectionLink("produces", subject, feedback),
+          inspectionLink("trigger", ref("runtime", "turn", payload.turn.id), feedback)],
+        contents: [{name: "Controller feedback", class: "agent", stage: "committed", mediaType: "application/json",
+          value: payload as unknown as InspectionJson}]});
+    } else if (payload.kind === "state_transition" && payload.transition === "steering" && payload.steering.status === "applied") {
+      const command = payload.steering.command;
+      const steering = ref("agent-runtime", "contribution", `${record.runId}:steering:${command.commandId}`, String(command.acceptedRunRevision));
+      r.offer({subject: steering, occurredAt: item.createdAt,
+        payload: {kind: "event", name: "steering.applied", sequence: item.ref.sequence, code: null},
+        links: [inspectionLink("produces", subject, steering)],
+        contents: [{name: "Applied steering", class: "agent", stage: "applied", mediaType: "application/json",
+          value: payload.steering as unknown as InspectionJson}]});
     } else if (payload.kind === "model_call_settlement") {
       const call = ref("runtime", "call", payload.result.modelCallRef.id);
       const presentation = ref("runtime", "contribution", `${call.id}:presentation`, "1");
@@ -62,6 +78,9 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
           ...payload.result.sourceRefs.filter(source => source.kind === "operation_result").map(source =>
             inspectionLink("transforms", ref("operations", "contribution", source.id), presentation,
               {operation: `${payload.result.presentation.presenter.id}@${payload.result.presentation.presenter.revision}`})),
+          ...payload.result.sourceRefs.filter(source => source.kind === "controller_feedback").map(source =>
+            inspectionLink("delivers", ref(source.owner, "contribution", source.id, source.revision), presentation,
+              {operation: "call_feedback_delivery"})),
           ...payload.result.sourceRefs.filter(source => ["execution", "effect", "support", "material"].includes(source.kind)).map(source =>
             inspectionLink("delivers", ref(source.owner, "contribution", `${source.kind}:${source.id}`, source.revision), presentation,
               {operation: "execution_reference_delivery"}))],

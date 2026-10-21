@@ -15,7 +15,7 @@ import {
 } from "../instructions/HelarcProtocolInstructions.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 
-export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v8";
+export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v9";
 export const HELARC_TOOL_EXPOSURE_VERSION = "trusted-tool-exposure-v1";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v2";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
@@ -63,12 +63,14 @@ export function buildHelarcBasePromptAssembly(
 export function buildHelarcPromptAssembly(input: {
   readonly controllerInput: ControllerInput;
   readonly protocolInstructions?: readonly HelarcInstructionSectionSetting[];
+  readonly currentStateSections?: readonly ModelInputSectionCandidate[];
 }): HelarcPromptAssemblyResult {
   return assemble(
     input.controllerInput,
     renderHelarcContextProjection(input.controllerInput.context),
     input.controllerInput.context,
     input.protocolInstructions ?? HELARC_DEFAULT_PROTOCOL_INSTRUCTIONS,
+    input.currentStateSections,
   );
 }
 
@@ -87,6 +89,7 @@ function assemble(
   contextContent: string,
   context: ContextProjection | null,
   protocolInstructions: readonly HelarcInstructionSectionSetting[],
+  additionalCurrentStateSections: readonly ModelInputSectionCandidate[] = [],
 ): HelarcPromptAssemblyResult {
   const exposedToolNames = Object.freeze(input.toolExposure.catalog.tools.map((tool) => tool.name));
   const promptSections = Object.freeze([
@@ -105,8 +108,9 @@ function assemble(
   const sections = Object.freeze([
     ...promptSections.map((section) => toModelInputSection(section, context)),
     ...interactionHistorySections(input),
-    ...createInputDeliverySections(input.inputDelivery),
     ...currentStateSections.map((section) => toModelInputSection(section, context)),
+    ...additionalCurrentStateSections,
+    ...createInputDeliverySections(input.inputDelivery),
   ]);
   return Object.freeze({
     sections,

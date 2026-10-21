@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inspectionSubjectKey, INSPECTION_FORMAT_VERSION, type InspectionRecord, type InspectionCoverage, type InspectionContentDescriptor } from "../records/index.js";
 import { containedInspectionPath, validateOpaqueId, type InspectionDatasetManifest } from "../sources/index.js";
-import { initialInspectionProgress, type InspectionBatchReceipt, type InspectionIngressHealth, type InspectionRecordingProgress } from "../records/index.js";
+import { initialInspectionProgress, initialInspectionTimings, type InspectionTimingStage, type InspectionBatchReceipt, type InspectionIngressHealth, type InspectionRecordingProgress } from "../records/index.js";
 
 export interface InspectionContentWrite { readonly descriptor: InspectionContentDescriptor; readonly text: string | null }
 export interface InspectionNativeOffer { readonly record: InspectionRecord; readonly contents: readonly InspectionContentWrite[]; readonly bytes: number }
@@ -49,6 +49,7 @@ export class InspectionDatabase {
   private readonly statements = new Map<string, Database.Statement>();
   private nativeBatch = false;
   private nativeTransactionMaxMs = 0;
+  private timings = initialInspectionTimings();
   readonly directory: string;
 
   constructor(directory: string, manifest?: InspectionDatasetManifest) {
@@ -163,6 +164,7 @@ export class InspectionDatabase {
   }
 
   writeNativeBatch(id: string, digest: string, offers: readonly InspectionNativeOffer[], health: InspectionIngressHealth): InspectionBatchReceipt {
+    const started = performance.now();
     if (!offers.length || offers.length > 100 || createHash("sha256").update(JSON.stringify(offers)).digest("hex") !== digest)
       throw new Error("inspection_batch_invalid");
     const prior = this.receipt(id);
@@ -199,21 +201,34 @@ export class InspectionDatabase {
       return receipt;
     })();
     this.nativeTransactionMaxMs = Math.max(this.nativeTransactionMaxMs, performance.now() - transactionStarted);
+    this.recordTiming("nativeBatch", performance.now() - started);
     return receipt;
   }
 
   updateIngress(health: InspectionIngressHealth): void {
     const progress = this.snapshot().recording!;
     if (health.revision < progress.ingress.revision) return;
+    if (health.revision === progress.ingress.revision &&
+        JSON.stringify(health) === JSON.stringify(progress.ingress) &&
+        progress.native.transactionMaxMs === this.nativeTransactionMaxMs &&
+        JSON.stringify(progress.timings) === JSON.stringify(this.timings)) return;
     this.updateCoverage({dropped: health.dropped, rejected: health.rejected + progress.native.rejected,
       recording: {...progress, ingress: health, native: {...progress.native, transactionMaxMs: this.nativeTransactionMaxMs}}});
   }
 
   writeProjection(records: readonly InspectionTelemetryWrite[], projection: InspectionRecordingProgress["projection"], dropped: number): void {
-    this.writeBatch(() => {
-      for (const record of records) this.writeTelemetry(record);
-      this.updateCoverage({recording: {...this.snapshot().recording!, projection}, telemetryDropped: dropped});
-    });
+    const started = performance.now();
+    try {
+      this.writeBatch(() => {
+        for (const record of records) this.writeTelemetry(record);
+        this.updateCoverage({recording: {...this.snapshot().recording!, projection}, telemetryDropped: dropped});
+      });
+    } finally { this.recordTiming("projectionWrite", performance.now() - started); }
+  }
+
+  recordTiming(stage: InspectionTimingStage, ms: number): void {
+    const previous = this.timings[stage];
+    this.timings = {...this.timings, [stage]: {count: previous.count + 1, totalMs: previous.totalMs + ms, maxMs: Math.max(previous.maxMs, ms)}};
   }
 
   private validateFlow(record: InspectionRecord): void {
@@ -295,6 +310,9 @@ export class InspectionDatabase {
     this.db.transaction(() => {
       const previous = this.snapshot();
       const next = { ...previous, ...change, watermark: nextSequence(previous.watermark), heartbeat: new Date().toISOString() };
+      if (next.recording) next.recording = {...next.recording, timings: this.timings,
+        native: {...next.recording.native, transactionMaxMs: Math.max(next.recording.native.transactionMaxMs, this.nativeTransactionMaxMs)},
+        projection: {...next.recording.projection, sliceMaxMs: Math.max(next.recording.projection.sliceMaxMs, this.timings.projectionSlice.maxMs)}};
       this.db.prepare("INSERT INTO capture_issues VALUES (?, ?)").run(next.watermark, JSON.stringify(next));
       this.db.prepare("UPDATE dataset SET watermark=?, coverage=? WHERE id=1").run(next.watermark, JSON.stringify(next));
     })();

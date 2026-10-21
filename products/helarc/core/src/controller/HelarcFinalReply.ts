@@ -3,7 +3,23 @@ import { snapshotModelCallRef, type ModelToolCall } from "@agent-anything/model-
 import type { HelarcOutputSource } from "../run/presentation/HelarcRunPresentation.js";
 
 export const HELARC_FINAL_REPLY_REVISION = "helarc.final-reply.v1";
-export const HELARC_ENDING_SIGNAL_FEEDBACK = "To end this Run, call final_result. Omit response to adopt ordinary assistant text from that turn or, if absent, the immediately preceding Model Turn of this Run. Supply response for a new final reply, or an empty string for no final reply. Include the complete final Plan snapshot when a Plan exists. To continue work, use the functions supplied in the request. Ordinary text alone does not end the Run.";
+export const HELARC_FINAL_REPLY_CONTENT_GUIDANCE = [
+  "Optional response is the complete final reply: supplying it replaces, not appends to, earlier assistant text.",
+  "To return an already-written report, omit response to adopt ordinary assistant text from this turn or, if absent, the immediately preceding Model Turn of this Run; no confirmation sentence or repeated report is needed.",
+  "If neither turn has text, no final reply is supplied. Adoption does not redisplay existing text.",
+  "Supply an empty string to explicitly provide no reply and prevent adoption.",
+].join(" ");
+export const HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE = [
+  "The final reply is delivered to the caller: the user for root work, or the Parent Agent for delegated work.",
+  "The Parent receives the resolved final reply, not the Child's conversation history. Do not assume the Parent has read earlier Child messages.",
+].join(" ");
+export const HELARC_ENDING_SIGNAL_FEEDBACK = [
+  "To end this Run, call final_result.",
+  HELARC_FINAL_REPLY_CONTENT_GUIDANCE,
+  HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE,
+  "Include the complete final Plan snapshot when a Plan exists.",
+  "To continue work, use the functions supplied in the request. Ordinary text alone does not end the Run.",
+].join(" ");
 
 export interface HelarcFinalReplyResolution {
   readonly protocolRevision: typeof HELARC_FINAL_REPLY_REVISION;

@@ -1,4 +1,5 @@
 import { ProviderBackedController } from "@agent-anything/agent-runtime/controller";
+import { HelarcProtocolRecoveryController } from "../controller/HelarcProtocolRecoveryController.js";
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
@@ -270,7 +271,7 @@ export async function createHelarcProductComposition(
     }),
   });
   const tracedController = new HelarcTracingController(
-    new ProviderBackedController<HelarcAgentOutput>({
+    new HelarcProtocolRecoveryController(new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
       delivery: {mode:input.responseDelivery ?? "buffered", observer:{observe:event => previews.observe(event)}},
       buildRequest: (controllerInput, context) => {
@@ -299,7 +300,7 @@ export async function createHelarcProductComposition(
       retryExecutor: createSystemRetryExecutor(retryClock),
       retryClock,
       continuation,
-    }),
+    })),
     controllerTraceByOperationId,
   );
   const providerController = new AgentHookController<HelarcAgentOutput>({

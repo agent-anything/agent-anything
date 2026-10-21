@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import {packExecutionContent, unpackExecutionContent, verifyExecutionContentBlock, EXECUTION_CONTENT_LIMITS,
+import {unpackExecutionContent, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentScope, ExecutionContentStatistics, snapshotEncodedExecutionContent, EXECUTION_CONTENT_LIMITS,
   type ExecutionContentBlock, type ExecutionContentRoot} from "./ExecutionContent.js";
 import { FileMaterialDatabase, FILE_MATERIAL_SCHEMA } from "./FileMaterialDatabase.js";
 import {snapshotExecutionReferenceTransfer, type ExecutionReferenceTransfer, type ExecutionReferencePage} from "@agent-anything/operation-catalog/evidence";
@@ -84,8 +84,24 @@ export class ExecutionDatabase {
   private readonly data: Database.Database;
   private readonly fileMaterials: FileMaterialDatabase;
   private closed = false;
+  private readonly statements = new Map<string, Database.Statement>();
+  private readonly contentStatistics: ExecutionContentStatistics;
+  private readonly contentCache: ExecutionContentCache;
+  private readonly contentEncoder: ExecutionContentEncoder;
+  private contentScope: ExecutionContentScope | undefined;
+  private readonly timings = new Map<string, {count: number; totalMs: number; maxMs: number}>();
+  private readContext: {
+    ownerConfirmed: boolean;
+    blocks: Map<string, ExecutionContentBlock>;
+    checkpoints: Map<string, unknown>;
+    owners: Map<string, ExecutionOwnerCommit>;
+    trees: Map<string, RunTreeCommit>;
+  } | null = null;
 
-  constructor(directory: string) {
+  constructor(directory: string, private readonly performanceDiagnostics = false) {
+    this.contentStatistics = new ExecutionContentStatistics(performanceDiagnostics);
+    this.contentCache = new ExecutionContentCache(undefined, undefined, this.contentStatistics);
+    this.contentEncoder = new ExecutionContentEncoder(undefined, this.contentStatistics);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const root = realpathSync(directory);
     this.ownership = new Database(join(root, "ownership.sqlite"), { timeout: 0 });
@@ -561,6 +577,7 @@ export class ExecutionDatabase {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.contentCache.clear(); this.contentEncoder.clear(); this.statements.clear(); this.readContext = null;
     try { this.data.close(); } finally { this.ownership.close(); }
   }
 
@@ -573,12 +590,16 @@ export class ExecutionDatabase {
   }
 
   commitRunTree(generation: number, input: RunTreeCommit): RunTreeCommitReceipt {
+    return this.withContentScope(() => this.commitRunTreeRecord(generation, input));
+  }
+
+  private commitRunTreeRecord(generation: number, input: RunTreeCommit): RunTreeCommitReceipt {
     this.assertOwner(generation);
     const encoded = this.encodeCheckpoint(input);
     const commit = encoded.value;
     const rootRunId = commit.checkpoint.input.rootRunId;
     token(rootRunId); token(commit.id);
-    return this.data.transaction(() => {
+    return this.checkpointTransaction(() => {
       this.assertOwner(generation);
       const recorded = this.readRunTreeCommit(commit.id);
       if (recorded) {
@@ -587,55 +608,66 @@ export class ExecutionDatabase {
       }
       const previous = this.readLatestRunTree(rootRunId);
       if ((previous?.revision ?? null) !== commit.expectedRevision) throw new ExecutionStoreError("execution_commit_revision_stale");
-      const memberIds = new Set((this.data.prepare("SELECT run_id FROM run_tree_members WHERE root_run_id=?").all(rootRunId) as {run_id: string}[]).map(row => row.run_id));
+      const memberIds = new Set((this.statement("SELECT run_id FROM run_tree_members WHERE root_run_id=?").all(rootRunId) as {run_id: string}[]).map(row => row.run_id));
       for (const run of commit.runs) {
         const runId = run.state.run.id;
-        const membership = this.data.prepare("SELECT root_run_id FROM run_tree_members WHERE run_id=?").get(runId) as {root_run_id: string} | undefined;
+        const membership = this.statement("SELECT root_run_id FROM run_tree_members WHERE run_id=?").get(runId) as {root_run_id: string} | undefined;
         if (membership && membership.root_run_id !== rootRunId) invalidReference();
         if (this.readOwnerCommit(run.id)) throw new ExecutionStoreError("execution_partial_tree_commit");
         this.commitOwnerRecord(generation, {kind: "run", value: run});
         memberIds.add(runId);
       }
-      const members = this.readTreeMembers([...memberIds]);
+      const changes = new Map(commit.runs.map(run => [run.state.run.id, run]));
+      const members = [...memberIds].map(runId => {
+        const changed = changes.get(runId);
+        if (!changed) return this.readTreeMembers([runId])[0]!;
+        const initial = changed.admission === null ? this.readOwnerCommit(`${runId}:commit:0`) : null;
+        const admission = changed.admission ?? (initial?.kind === "run" ? initial.value.admission : null);
+        if (!admission) invalidReference();
+        return {admission, head: changed};
+      });
       validateRunTreeCommit(commit, previous, members);
       // Publication must not create a recovery basis that the bounded reader
       // cannot hydrate, even when each individual member fits on its own.
-      packExecutionContent({commit, members});
-      this.data.prepare("INSERT INTO run_tree_commits VALUES(?,?,?,?,?,?)").run(commit.id, rootRunId,
+      this.contentEncoder.pack({commit, members}, this.contentScope);
+      this.statement("INSERT INTO run_tree_commits VALUES(?,?,?,?,?,?)").run(commit.id, rootRunId,
         commit.revision, generation, encoded.digest, encoded.text);
-      for (const runId of memberIds) this.data.prepare("INSERT OR IGNORE INTO run_tree_members VALUES(?,?)").run(runId, rootRunId);
+      for (const runId of memberIds) this.statement("INSERT OR IGNORE INTO run_tree_members VALUES(?,?)").run(runId, rootRunId);
       return treeReceipt(commit);
-    })();
+    });
   }
 
   readRunTreeCommit(id: string): RunTreeCommit | null {
     this.assertOwner(this.generation);
-    const row = this.data.prepare("SELECT root_run_id,revision,digest,value FROM run_tree_commits WHERE record_id=?").get(id) as
+    const retained = this.readContext?.trees.get(id);
+    if (retained) return retained;
+    const row = this.statement("SELECT root_run_id,revision,digest,value FROM run_tree_commits WHERE record_id=?").get(id) as
       {root_run_id: string; revision: number; digest: string; value: string} | undefined;
     if (!row) return null;
     const value = this.readCheckpoint(row) as RunTreeCommit;
     if (value.id !== id || value.revision !== row.revision ||
         value.checkpoint.input.rootRunId !== row.root_run_id) throw new ExecutionStoreError("execution_records_corrupt");
+    this.readContext?.trees.set(id, value);
     return value;
   }
 
   readLatestRunTree(rootRunId: string): RunTreeCommit | null {
     this.assertOwner(this.generation);
-    const row = this.data.prepare("SELECT record_id FROM run_tree_commits WHERE root_run_id=? ORDER BY revision DESC LIMIT 1").get(rootRunId) as {record_id: string} | undefined;
+    const row = this.statement("SELECT record_id FROM run_tree_commits WHERE root_run_id=? ORDER BY revision DESC LIMIT 1").get(rootRunId) as {record_id: string} | undefined;
     return row ? this.readRunTreeCommit(row.record_id) : null;
   }
 
   readRunTree(rootRunId: string): RunTreeRecoveryRecords | null {
     this.assertOwner(this.generation);
-    return this.data.transaction(() => {
+    return this.checkpointTransaction(() => {
       const commit = this.readLatestRunTree(rootRunId);
       if (!commit) return null;
       const previous = commit.expectedRevision === null ? null : this.readRunTreeCommit(`${rootRunId}:tree_commit:${commit.expectedRevision}`);
-      const rows = this.data.prepare("SELECT run_id FROM run_tree_members WHERE root_run_id=? ORDER BY run_id").all(rootRunId) as {run_id: string}[];
+      const rows = this.statement("SELECT run_id FROM run_tree_members WHERE root_run_id=? ORDER BY run_id").all(rootRunId) as {run_id: string}[];
       const members = this.readTreeMembers(rows.map(row => row.run_id));
       validateRunTreeCommit(commit, previous, members);
       return {commit, members};
-    })();
+    });
   }
 
   private readTreeMembers(runIds: readonly string[]): RetainedRunTreeMember[] {
@@ -658,7 +690,7 @@ export class ExecutionDatabase {
         (expectedRevision === null ? state.revision !== 0 : state.revision !== expectedRevision + 1)) {
       throw new ExecutionStoreError("execution_commit_revision_invalid");
     }
-    return this.data.transaction(() => {
+    return this.checkpointTransaction(() => {
       this.assertOwner(generation);
       const existing = this.readOwnerCommit(id);
       if (existing) {
@@ -700,24 +732,27 @@ export class ExecutionDatabase {
           if (!retained || !equal(retained, node)) invalidReference();
         }
       }
-      this.data.prepare("INSERT INTO execution_commits VALUES(?,?,?,?,?,?,?)").run(id, value.kind, ownerId,
+      this.statement("INSERT INTO execution_commits VALUES(?,?,?,?,?,?,?)").run(id, value.kind, ownerId,
         state.revision, generation, encoded.digest, encoded.text);
       return {recordId: id, revision: state.revision};
-    })();
+    });
   }
 
   readOwnerCommit(id: string): ExecutionOwnerCommit | null {
     this.assertOwner(this.generation);
-    const row = this.data.prepare("SELECT digest,value FROM execution_commits WHERE record_id=?").get(id) as {digest: string; value: string} | undefined;
+    const retained = this.readContext?.owners.get(id);
+    if (retained) return retained;
+    const row = this.statement("SELECT digest,value FROM execution_commits WHERE record_id=?").get(id) as {digest: string; value: string} | undefined;
     if (!row) return null;
     const value = this.readCheckpoint(row) as ExecutionOwnerCommit;
     if (value.value.id !== id) throw new ExecutionStoreError("execution_records_corrupt");
+    this.readContext?.owners.set(id, value);
     return value;
   }
 
   readLatestOwner(owner: "run" | "composite", ownerId: string): ExecutionOwnerCommit | null {
     this.assertOwner(this.generation);
-    const row = this.data.prepare("SELECT record_id FROM execution_commits WHERE owner=? AND owner_id=? ORDER BY revision DESC LIMIT 1").get(owner, ownerId) as {record_id: string} | undefined;
+    const row = this.statement("SELECT record_id FROM execution_commits WHERE owner=? AND owner_id=? ORDER BY revision DESC LIMIT 1").get(owner, ownerId) as {record_id: string} | undefined;
     return row ? this.readOwnerCommit(row.record_id) : null;
   }
 
@@ -849,36 +884,51 @@ export class ExecutionDatabase {
   }
   private assertOwner(generation: number): void {
     if (this.closed) throw new ExecutionStoreError("execution_store_closed");
-    const row = this.data.prepare("SELECT generation FROM store WHERE id=1").get() as { generation: number };
+    if (generation !== this.generation) throw new ExecutionStoreError("execution_owner_stale");
+    if (this.readContext?.ownerConfirmed) return;
+    const row = this.statement("SELECT generation FROM store WHERE id=1").get() as { generation: number };
     if (generation !== this.generation || row.generation !== generation) throw new ExecutionStoreError("execution_owner_stale");
+    if (this.readContext) this.readContext.ownerConfirmed = true;
   }
   stageContent(generation: number, blocks: readonly ExecutionContentBlock[]): void {
     this.assertOwner(generation);
     if (blocks.reduce((size, block) => size + Buffer.byteLength(JSON.stringify(block)), 0) > EXECUTION_CONTENT_LIMITS.transferBytes) throw new ExecutionStoreError("execution_content_transfer_too_large");
-    for (const block of blocks) verifyExecutionContentBlock(block);
+    for (const block of blocks) this.contentCache.parse(block);
     this.data.transaction(() => {
       this.assertOwner(generation);
-      const insert = this.data.prepare("INSERT OR IGNORE INTO execution_content VALUES(?,?)");
-      const read = this.data.prepare("SELECT value FROM execution_content WHERE id=?");
+      const insert = this.statement("INSERT OR IGNORE INTO execution_content VALUES(?,?)");
+      const read = this.statement("SELECT value FROM execution_content WHERE id=?");
       for (const block of blocks) {
+        const checked = this.readContext?.blocks.get(block.id);
+        if (checked) {
+          if (checked.text !== block.text) throw new ExecutionStoreError("execution_content_corrupt");
+          this.contentStatistics.add("content.readReuses");
+          continue;
+        }
         const previous = read.get(block.id) as {value: string} | undefined;
         if (previous && previous.value !== block.text) throw new ExecutionStoreError("execution_content_corrupt");
         insert.run(block.id, block.text);
+        this.readContext?.blocks.set(block.id, Object.freeze({...block}));
       }
     })();
   }
 
   readContentBlock(id: string): ExecutionContentBlock {
     this.assertOwner(this.generation);
-    const row = this.data.prepare("SELECT value FROM execution_content WHERE id=?").get(id) as {value: string} | undefined;
+    const retained = this.readContext?.blocks.get(id);
+    if (retained) {this.contentStatistics.add("content.readReuses"); return retained;}
+    this.contentStatistics.add("content.reads");
+    const row = this.statement("SELECT value FROM execution_content WHERE id=?").get(id) as {value: string} | undefined;
     if (!row) throw new ExecutionStoreError("execution_content_missing");
-    const block = {id, text: row.value};
-    verifyExecutionContentBlock(block);
+    const block = Object.freeze({id, text: row.value});
+    this.contentStatistics.add("content.readBytes", Buffer.byteLength(block.text));
+    this.contentCache.parse(block);
+    this.readContext?.blocks.set(id, block);
     return block;
   }
 
   retainContent(value: unknown): ExecutionContentRoot {
-    const packed = packExecutionContent(value);
+    const packed = this.timed("content.encode", () => this.contentEncoder.pack(value, this.contentScope));
     let batch: ExecutionContentBlock[] = [], bytes = 0;
     for (const block of packed.blocks) {
       const size = Buffer.byteLength(JSON.stringify(block));
@@ -890,22 +940,86 @@ export class ExecutionDatabase {
   }
 
   hydrateContent(root: ExecutionContentRoot): unknown {
-    return unpackExecutionContent(root, id => this.readContentBlock(id));
+    return this.timed("content.expand", () => unpackExecutionContent(root, id => this.readContentBlock(id), this.contentCache, true, this.contentScope));
   }
+
+  /** Synchronous command lifetime, independent of SQLite transaction/ACK scope. */
+  withContentScope<T>(body: () => T): T {
+    if (this.contentScope) return body();
+    this.contentScope = new ExecutionContentScope();
+    try {return body();} finally {this.contentScope = undefined;}
+  }
+
+  takeContentStatistics(): Readonly<Record<string, number>> {return this.contentStatistics.take();}
 
   private encodeCheckpoint<T>(value: T): {text: string; digest: string; value: T} {
     const root = this.retainContent(value);
     // Validation and staging are synchronous; do not rehydrate the entire input
     // merely to validate owner relationships in the same transaction.
-    return {text: JSON.stringify(root), digest: root.root, value: JSON.parse(JSON.stringify(value)) as T};
+    return {text: JSON.stringify(root), digest: root.root, value: snapshotEncodedExecutionContent(value)};
   }
 
   private readCheckpoint(row: {value: string; digest: string}): unknown {
     try {
       const root = JSON.parse(row.value) as ExecutionContentRoot;
       if (root.root !== row.digest) throw new ExecutionStoreError("execution_records_corrupt");
-      return this.hydrateContent(root);
+      // The exact envelope, not a mutable latest-head selector, identifies a read.
+      if (this.readContext?.checkpoints.has(row.value)) return this.readContext.checkpoints.get(row.value);
+      const value = this.hydrateContent(root);
+      this.readContext?.checkpoints.set(row.value, value);
+      return value;
     } catch (cause) { throw new ExecutionStoreError("execution_records_corrupt", {cause}); }
+  }
+
+  private statement(sql: string): Database.Statement {
+    let value = this.statements.get(sql);
+    if (!value) {value = this.data.prepare(sql); this.statements.set(sql, value);}
+    return value;
+  }
+
+  private checkpointTransaction<T>(body: () => T): T {
+    if (this.readContext) return body();
+    if (!this.contentScope) return this.withContentScope(() => this.checkpointTransaction(body));
+    const started = this.performanceDiagnostics ? performance.now() : 0;
+    let bodyMs = 0;
+    try {return this.data.transaction(() => {
+      const bodyStarted = this.performanceDiagnostics ? performance.now() : 0;
+      try {
+        this.readContext = {ownerConfirmed: false, blocks: new Map(), checkpoints: new Map(), owners: new Map(), trees: new Map()};
+        try {return body();} finally {this.readContext = null;}
+      } finally {
+        if (this.performanceDiagnostics) {
+          bodyMs = performance.now() - bodyStarted;
+          this.recordTiming("checkpoint.body", bodyMs);
+        }
+      }
+    })();} finally {
+      if (this.performanceDiagnostics) {
+        const totalMs = performance.now() - started;
+        this.recordTiming("checkpoint.transaction", totalMs);
+        this.recordTiming("checkpoint.boundary", Math.max(0, totalMs - bodyMs));
+      }
+    }
+  }
+
+  takePerformance(): readonly {stage: string; count: number; totalMs: number; maxMs: number}[] {
+    const result = [...this.timings].map(([stage, value]) => ({stage, ...value}));
+    this.timings.clear();
+    return result;
+  }
+
+  private timed<T>(stage: string, work: () => T): T {
+    if (!this.performanceDiagnostics) return work();
+    const started = performance.now();
+    try {return work();} finally {
+      this.recordTiming(stage, performance.now() - started);
+    }
+  }
+
+  private recordTiming(stage: string, ms: number): void {
+    const value = this.timings.get(stage) ?? {count: 0, totalMs: 0, maxMs: 0};
+    value.count++; value.totalMs += ms; value.maxMs = Math.max(value.maxMs, ms);
+    this.timings.set(stage, value);
   }
 
   private validateSchema(): void {

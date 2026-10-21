@@ -4,6 +4,7 @@ import { modelInputSectionLocations } from "@agent-anything/model-interaction/in
 import { RunInputNotifications, type RunInputNotification } from "../runner/RunInputNotifications.js";
 import { createControllerInputDeliveryReceipt, createInputDeliverySections,
   createProviderInputDeliveryReceipt, snapshotInputDeliveryReceipt } from "./ControllerInputDelivery.js";
+import { inputNotificationMessage } from "./ControllerInputDelivery.js";
 
 const fact = (sequence: number): RunInputNotification => ({runId: "run-1", sequence,
   source: {owner: "process", kind: "scope_closed", id: `process-${sequence}`, revision: "3"},
@@ -17,6 +18,28 @@ function setup() {
   return {queue, source, facts, batch};
 }
 describe("Controller input delivery", () => {
+  it("retains typed feedback/steering through restart and rejects changed interpretation in a receipt", () => {
+    const queue = new RunInputNotifications();
+    const turn = {id: "turn-1", run: {id: "run-1"}, sequence: 1};
+    const feedback = {source: {owner: "controller", kind: "protocol", id: "protocol-1", revision: "1"},
+      code: "ending_required", message: "Choose the next call or submit an ending proposal."};
+    const first = queue.admitOwned("run-1", {...fact(1), data: feedback, interpretation: {kind: "controller_feedback", turn}}, 8192);
+    const second = queue.admitOwned("run-1", {...fact(2), data: {instruction: "Use the latest requirement."},
+      interpretation: {kind: "steering", commandId: "steer-1"}}, 8192);
+    const restored = RunInputNotifications.restore("run-1", {cursor: 0, admissionSequence: 2, pending: [first, second]});
+    const batch = restored.prepare("run-1", "turn-2")!;
+    expect(batch.entries).toEqual([first, second]);
+    expect(inputNotificationMessage(first)).toMatchObject({role: "user", content: [{text: expect.stringContaining("Host Controller feedback:")}]});
+    expect(inputNotificationMessage(second)).toMatchObject({role: "user", content: [{text: expect.stringContaining("Applied steering instruction:")}]});
+    expect(JSON.stringify(inputNotificationMessage(first))).not.toContain('"instructionRole":"data"');
+    const receipt = createControllerInputDeliveryReceipt(batch, "turn-2");
+    expect(() => snapshotInputDeliveryReceipt(receipt, {...batch, entries: [{...first, interpretation: undefined}, second]}))
+      .toThrow("prepared batch");
+    expect(() => queue.admitOwned("run-1", {...fact(1), interpretation: {
+      kind: "controller_feedback", turn: {...turn, run: {id: "another-run"}},
+    }}, 8192)).toThrow("target Run");
+    expect(Object.isFrozen(first.interpretation)).toBe(true);
+  });
   it("separates immutable prepared content from source intake and retirement", () => {
     const {queue, source, facts, batch} = setup();
     facts.push(fact(2));

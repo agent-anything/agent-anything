@@ -2,6 +2,15 @@
 
 ## Highest-Priority Engineering Method
 
+For model requests and context, also apply
+`../agent-anything-design/standards/model-request-correctness.md` when available.
+Every request must faithfully represent the objective, applicable constraints
+and capabilities, accepted interaction in causal order, correlated Call outcomes
+and current state. Do not erase feedback, duplicate delivery, invent effects,
+or repeat completed work on recovery. Protocol validity alone is insufficient:
+verify actual encoded requests against independent expected facts. Keep source,
+authority, transformations and missing information explicit.
+
 This is the highest-priority project method for analyzing problems and changing
 this repository. The full human-maintained standard is
 `../agent-anything-design/standards/problem-analysis-and-change-method.md` when
@@ -27,6 +36,14 @@ For every problem or related set of symptoms:
 Before proposing a remedy or editing files, give the current layer verdict and
 say whether lower-layer observations remain trustworthy. If the verdict is
 uncertain, investigate before changing the system.
+
+If investigation is noticeably harder than expected, first reassess gaps in
+Inspector/log evidence and program structure. Identify the concrete missing
+facts or unclear ownership/control flow. When necessary, improve reusable
+diagnostics or address the structural obstacle before continuing costly
+tracing; do not substitute speculation or repeated throwaway instrumentation.
+Keep changes proportional and preserve active Runs, execution/recovery
+semantics, sensitive-data policy and resource bounds.
 
 When testing the core loop, preserve the deliberate ablation baseline when it
 is relevant: zero built-in Agent Instructions, optional Hooks, Skills, and MCP;

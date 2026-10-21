@@ -41,7 +41,16 @@ export interface InspectionProjectionIssue {
   readonly recordIds: readonly string[];
   readonly coalesced: boolean;
 }
+export interface InspectionDurationTotals { readonly count: number; readonly totalMs: number; readonly maxMs: number }
+export type InspectionTimingStage = "nativeBatch" | "projectionConversion" | "projectionWrite" | "projectionSlice";
+export type InspectionRecordingTimings = Readonly<Record<InspectionTimingStage, InspectionDurationTotals>>;
+export function initialInspectionTimings(): InspectionRecordingTimings {
+  return {nativeBatch: {count: 0, totalMs: 0, maxMs: 0}, projectionConversion: {count: 0, totalMs: 0, maxMs: 0},
+    projectionWrite: {count: 0, totalMs: 0, maxMs: 0}, projectionSlice: {count: 0, totalMs: 0, maxMs: 0}};
+}
 export interface InspectionRecordingProgress {
+  /** Completed timings become durable in the next existing coverage update. */
+  readonly timings?: InspectionRecordingTimings;
   readonly ingress: InspectionIngressHealth;
   readonly native: {readonly persisted: number; readonly duplicates: number; readonly rejected: number;
     readonly lastReceipt: InspectionBatchReceipt | null; readonly target: number; readonly transactionMaxMs: number};
@@ -61,7 +70,7 @@ export interface InspectionFlushResult {
   readonly code: string | null;
 }
 export function initialInspectionProgress(): InspectionRecordingProgress {
-  return {ingress: {revision: 0, accepted: 0, dropped: 0, rejected: 0, issues: [],
+  return {timings: initialInspectionTimings(), ingress: {revision: 0, accepted: 0, dropped: 0, rejected: 0, issues: [],
     highWater: {records: 0, structureBytes: 0, contentBytes: 0}, timings: {admissionMaxMs: 0, queueMaxMs: 0, acknowledgementMaxMs: 0}},
     native: {persisted: 0, duplicates: 0, rejected: 0, lastReceipt: null, target: 0, transactionMaxMs: 0},
     projection: {cursor: 0, status: "active", code: null, issues: [], sliceMaxMs: 0}};

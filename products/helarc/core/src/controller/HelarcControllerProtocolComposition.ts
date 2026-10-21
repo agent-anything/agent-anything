@@ -25,6 +25,12 @@ import {
   type HelarcModelCallableCatalog,
 } from "./HelarcModelCallableCatalog.js";
 
+export const HELARC_PROTOCOL_RECOVERY_POLICY = Object.freeze({
+  id: "helarc.ending-signal-recovery",
+  revision: "3",
+  maximumConsecutiveMissing: 3,
+});
+
 export interface HelarcControllerProtocolComposition {
   readonly protocolInstructions: readonly HelarcInstructionSectionSetting[];
   readonly id: "helarc.controller-protocol-composition";
@@ -74,6 +80,7 @@ export function createHelarcControllerProtocolComposition(input: {
     toolGuidanceId: input.toolGuidance.id,
     toolGuidanceContentDigest: input.toolGuidance.contentDigest,
     controlGuidanceRevision: input.controlGuidance.revision,
+    protocolRecovery: HELARC_PROTOCOL_RECOVERY_POLICY,
   });
   const revision = `sha256:${createHash("sha256")
     .update(JSON.stringify(material), "utf8")

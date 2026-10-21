@@ -82,6 +82,7 @@ export type ControllerFailureCode =
   | "model_request_failed"
   | "model_output_invalid"
   | "model_output_limit_exhausted"
+  | "model_protocol_recovery_exhausted"
   | "model_structured_output_retry_exhausted"
   | "model_context_capacity_exceeded"
   | "model_input_recovery_failed"

@@ -1,4 +1,4 @@
-import {afterEach, expect, it} from "vitest";
+import {afterEach, expect, it, vi} from "vitest";
 import Database from "better-sqlite3";
 import {createHash} from "node:crypto";
 import {mkdtempSync, readdirSync, rmSync} from "node:fs";
@@ -77,4 +77,43 @@ it("commits projection output and cursor together, with no native-record recursi
   db.writeProjection([output], {...db.snapshot().recording!.projection, cursor: receipt.nativeWatermark}, 0);
   expect(db.records({watermark: db.snapshot().watermark})).toHaveLength(1);
   expect(db.telemetry(db.snapshot().watermark, null)).toHaveLength(1);
+});
+
+it("skips unchanged health while preserving newly measured costs at the same health revision", () => {
+  const {db, raw} = setup(), offers = [offer("first")];
+  db.writeNativeBatch("batch", digest(offers), offers, health(1));
+  db.updateIngress(health(1));
+  const before = db.snapshot();
+  db.updateIngress(health(1));
+  expect(db.snapshot()).toEqual(before);
+  db.recordTiming("projectionSlice", 37);
+  db.updateIngress(health(1));
+  expect(db.snapshot().recording?.projection.sliceMaxMs).toBe(37);
+  expect(db.snapshot().recording?.timings?.projectionSlice).toEqual({count: 1, totalMs: 37, maxMs: 37});
+  expect(db.snapshot().watermark).toBe(before.watermark + 1);
+  db.updateIngress(health(1));
+  expect(db.snapshot().watermark).toBe(before.watermark + 1);
+  expect(raw.prepare("SELECT COUNT(*) n FROM records").get()).toEqual({n: 1});
+});
+
+it("measures projection through the completed write, without a recursive metrics transaction", () => {
+  const {db} = setup();
+  const original = db.writeBatch.bind(db);
+  const write = vi.spyOn(db, "writeBatch").mockImplementation(work => {
+    const result = original(work);
+    // Simulate expensive transaction completion, after projection conversion.
+    const until = performance.now() + 20;
+    while (performance.now() < until) { /* Deliberate synchronous test cost. */ }
+    return result;
+  });
+  try {
+    db.writeProjection([], db.snapshot().recording!.projection, 0);
+    const before = db.snapshot().watermark;
+    db.updateIngress(health(0));
+    expect(db.snapshot().recording?.timings?.projectionWrite.maxMs).toBeGreaterThanOrEqual(20);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(db.snapshot().watermark).toBe(before + 1);
+    db.updateIngress(health(0));
+    expect(db.snapshot().watermark).toBe(before + 1);
+  } finally {write.mockRestore();}
 });

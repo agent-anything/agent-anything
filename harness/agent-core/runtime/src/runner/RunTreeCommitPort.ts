@@ -19,6 +19,7 @@ export interface RunTreeCommitReceipt {
 }
 
 export interface RunTreeCommitPort {
+  /** Immutable owner snapshot; publication still requires the exact durable receipt. */
   commitRunTree(commit: RunTreeCommit): Promise<RunTreeCommitReceipt>;
   readRunTreeCommit(id: string): Promise<RunTreeCommit | null>;
   readRunTree(rootRunId: string): Promise<RunTreeRecoveryRecords | null>;

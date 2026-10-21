@@ -3,6 +3,11 @@ import {
   createHelarcControllerControlDefinitions,
   HELARC_CONTROLLER_CONTROL_GUIDANCE,
 } from "./HelarcControllerControlGuidance.js";
+import {
+  HELARC_ENDING_SIGNAL_FEEDBACK,
+  HELARC_FINAL_REPLY_CONTENT_GUIDANCE,
+  HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE,
+} from "./HelarcFinalReply.js";
 
 describe("Helarc Controller Control Guidance", () => {
   it("defines the complete non-Tool controls", () => {
@@ -50,6 +55,25 @@ describe("Helarc Controller Control Guidance", () => {
     expect(HELARC_CONTROLLER_CONTROL_GUIDANCE.revision)
       .toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(Object.isFrozen(HELARC_CONTROLLER_CONTROL_GUIDANCE.entries)).toBe(true);
+  });
+
+  it("explains reply replacement and caller visibility consistently in the callable and feedback", () => {
+    const [definition] = createHelarcControllerControlDefinitions(
+      HELARC_CONTROLLER_CONTROL_GUIDANCE,
+      { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 },
+      false,
+    );
+    expect(HELARC_FINAL_REPLY_CONTENT_GUIDANCE).toContain("replaces, not appends to, earlier assistant text");
+    expect(HELARC_FINAL_REPLY_CONTENT_GUIDANCE).toContain("To return an already-written report, omit response");
+    expect(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE).toContain("not the Child's conversation history");
+    expect(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE).toContain("Do not assume the Parent has read earlier Child messages");
+    expect(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE).not.toContain("self-contained");
+    for (const text of [definition!.description, HELARC_ENDING_SIGNAL_FEEDBACK]) {
+      expect(text).toContain(HELARC_FINAL_REPLY_CONTENT_GUIDANCE);
+      expect(text).toContain(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE);
+    }
+    expect(definition!.inputSchema.properties?.response?.description).toBe(HELARC_FINAL_REPLY_CONTENT_GUIDANCE);
+    expect(definition!.inputSchema.required).toEqual([]);
   });
 
   it("requires a final snapshot only when a Plan exists", () => {

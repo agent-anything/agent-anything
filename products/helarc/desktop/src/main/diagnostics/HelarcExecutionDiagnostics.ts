@@ -1,8 +1,11 @@
 import { SerializedAtomicFile } from "../persistence/SerializedAtomicFile.js";
 import { captureExecutionError, diagnosticText } from "./ExecutionErrorDetails.js";
+import {dirname, join} from "node:path";
+import {HelarcPerformanceDiagnostics} from "./HelarcPerformanceDiagnostics.js";
+import type {ExecutionPerformanceEvent, ExecutionPerformanceSink} from "./ExecutionPerformance.js";
 
 export type ExecutionDiagnosticContext = Readonly<Record<string, string | number | boolean | null>>;
-export interface ExecutionDiagnosticSink {
+export interface ExecutionDiagnosticSink extends ExecutionPerformanceSink {
   record(stage: string, context: ExecutionDiagnosticContext, error: unknown): void;
 }
 
@@ -15,10 +18,17 @@ export class HelarcExecutionDiagnostics implements ExecutionDiagnosticSink {
   private readonly file: SerializedAtomicFile;
   private pending = 0;
   private tail: Promise<void> = Promise.resolve();
+  private readonly timings: HelarcPerformanceDiagnostics;
 
-  constructor(path: string) { this.file = new SerializedAtomicFile(path); }
+  constructor(path: string) {
+    this.file = new SerializedAtomicFile(path);
+    this.timings = new HelarcPerformanceDiagnostics(join(dirname(path), "execution-performance.json"));
+  }
+
+  performance(event: ExecutionPerformanceEvent): void {this.timings.record(event);}
 
   record(stage: string, context: ExecutionDiagnosticContext, error: unknown): void {
+    void this.timings.flush();
     try {
       const record = {occurredAt: new Date().toISOString(), processId: process.pid, stage: diagnosticText(stage, 256),
         context: Object.fromEntries(Object.entries(context).slice(0, 32).map(([key, value]) =>
@@ -42,5 +52,5 @@ export class HelarcExecutionDiagnostics implements ExecutionDiagnosticSink {
     } catch { /* Do not obscure the original exception. */ }
   }
 
-  async flush(): Promise<void> { await this.tail; }
+  async flush(): Promise<void> { await this.tail; await this.timings.flush(); }
 }

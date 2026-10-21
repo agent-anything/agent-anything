@@ -17,6 +17,7 @@
     "test": "vitest run --passWithNoTests",
     "test:ui": "playwright test",
     "test:recovery:electron": "node scripts/verify-execution-recovery.mjs",
+    "test:recovery:timeout": "node scripts/verify-execution-timeout.mjs",
     "dev": "vite --host 127.0.0.1",
     "dev:electron": "node ../../../scripts/run-pnpm.mjs run build:main && node ../../../scripts/run-pnpm.mjs run copy:preload && node scripts/dev-electron.mjs",
     "debug:main": "node scripts/run-electron.mjs --inspect=9229 .",

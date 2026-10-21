@@ -273,6 +273,7 @@ import { RunCommitError, type RunCommit, type RunControlCheckpoint } from "./Run
 import { ControllerCheckpointError, type ControllerCheckpointPort } from "../controller/ControllerCheckpoint.js";
 import { RetryCheckpointError } from "../retry/RetryCheckpoint.js";
 import { RunTreeCommitWriter } from "./RunTreeCommitWriter.js";
+import {retainControllerCheckpoint, snapshotRunCommit} from "./RunCommitSnapshot.js";
 import { retainRunConfiguration } from "./RunConfigurationCheckpoint.js";
 import { projectRunTreeTerminal, RunTreeExecution } from "./RunTreeExecution.js";
 import { retainControllerOperation, retainDecisionCallProgress, restoreControllerOperation, validateDecisionCheckpoint } from "./RunDecisionCheckpoint.js";
@@ -280,7 +281,7 @@ import { RunRecoveryError } from "./RunRecovery.js";
 import { ActionRecordCommitError, ActionRecoveryError, type ActionExecutionRequest } from "@agent-anything/action-execution/enforcement";
 import { CompositeCommitError, CompositeRecoveryError } from "@agent-anything/operation-composition/execution";
 
-import { createCurrentRunContextAdmissionProfile, createCurrentRunContextContributions, createDelegationSelectedContextAdmissionProfile, createDelegationSelectedContextContribution, createObservationContextAdmissionProfile, createObservationContextContribution, createControllerFeedbackContextAdmissionProfile, createControllerFeedbackContextContribution, createSteeringContextAdmissionProfile, createSteeringContextContribution, createTaskContextAdmissionProfile, createTaskContextContribution } from "../context-contribution/index.js";
+import { createCurrentRunContextAdmissionProfile, createCurrentRunContextContributions, createDelegationSelectedContextAdmissionProfile, createDelegationSelectedContextContribution, createObservationContextAdmissionProfile, createObservationContextContribution, createTaskContextAdmissionProfile, createTaskContextContribution } from "../context-contribution/index.js";
 import type {
   DescendantDispatchProvenance,
   DescendantRunReservationFailureCode,
@@ -761,7 +762,7 @@ export class RunExecution<TOutput> {
       for (const entry of control.descendantContinuations) this.continuationRecords.set(entry.correlation.ref.id, {...entry});
       this.acceptedDecision = control.decision;
       this.controllerInvocation = control.controllerInvocation;
-      for (const [key, value] of control.controllerCheckpoints) this.controllerCheckpoints.set(key, value);
+      for (const [key, value] of control.controllerCheckpoints) this.controllerCheckpoints.set(key, retainControllerCheckpoint(value));
       this.completionNotification = control.completionNotification;
       this.pendingCompletionCall = control.pendingCompletion === null ? null : {...control.pendingCompletion};
       this.retainedRetryEvents.push(...control.retryEvents);
@@ -1622,36 +1623,47 @@ export class RunExecution<TOutput> {
 
   private async commitControllerFeedback(
     feedback: import("../controller/index.js").ControllerFeedback,
-    retire?: ControllerTurnRef,
+    turn: ControllerTurnRef,
   ): Promise<void> {
-    const current = this.writer.getSnapshot();
-    const contribution = createControllerFeedbackContextContribution({
-      id: this.currentContextContributionId(
-        current.context,
-        feedback.source.owner,
-        "controller_feedback",
-      ) ?? this.id("context_contribution"),
-      revision: feedback.source.revision,
-      runId: this.runId,
-      feedback,
-      createdAt: this.now(),
+    const pending = this.pendingCompletionCall;
+    await this.writer.transaction(state => {
+      const recorded = state.items.find(item => item.payload.kind === "controller_feedback" && item.payload.turn.id === turn.id);
+      if (recorded?.payload.kind === "controller_feedback") {
+        const previous = recorded.payload;
+        if (previous.turn.run.id !== turn.run.id || previous.turn.sequence !== turn.sequence ||
+            previous.feedback.code !== feedback.code || previous.feedback.message !== feedback.message ||
+            (["owner", "kind", "id", "revision"] as const).some(key => previous.feedback.source[key] !== feedback.source[key])) {
+          throw new TypeError("Retained Controller feedback conflicts with the replayed occurrence.");
+        }
+        return {value: null};
+      }
+      const payloads: RunItemPayload<TOutput>[] = [{kind: "controller_feedback", feedback, turn}];
+      let entry: import("./RunInputNotifications.js").RunInputNotification | null = null;
+      // Call-bound feedback is the Call's result, not an additional user message.
+      if (pending !== null && !this.hasModelCallSettlement(pending.call)) {
+        payloads.push(this.localModelCallResult(pending.call, "invalidated", {
+          status: "invalidated", code: feedback.code, message: feedback.message, source: feedback.source,
+          ...(pending.stateResult === null ? {} : {stateUpdate: {
+            settlement: pending.stateResult.settlement, content: pending.stateResult.content,
+          }}),
+        }, [...(pending.stateResult?.sourceRefs ?? []), feedback.source,
+          {owner: "agent-runtime", kind: "controller_feedback", id: `${turn.id}:feedback`, revision: String(turn.sequence)}]));
+      } else {
+        entry = this.inputNotifications.admitOwned(this.runId, {
+          source: {owner: "agent-runtime", kind: "controller_feedback", id: `${turn.id}:feedback`, revision: String(turn.sequence)},
+          occurredAt: this.now(), data: feedback, interpretation: {kind: "controller_feedback", turn},
+        }, this.dependencies.contextProjection.maxContributionPayloadBytes);
+        payloads.push({kind: "input_notification", notification: entry});
+      }
+      this.markDecisionRetired(turn);
+      this.pendingCompletionCall = null;
+      return {value: entry, payloads, patch: {}};
     });
-    publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "context_source", runId: this.runId,
-      occurredAt: contribution.source.observedAt, source: contribution.source, value: feedback});
-    (await this.writer.commit(
-      { kind: "controller_feedback", feedback },
-      (state) => {
-        if (retire) this.markDecisionRetired(retire);
-        return Object.freeze({
-        context: this.applyContextContributions(
-          state.context,
-          Object.freeze([contribution]),
-          createControllerFeedbackContextAdmissionProfile(feedback.source.owner),
-          "controller_feedback",
-          feedback.source.id,
-        ),
-      }); },
-    ));
+    if (pending !== null) {
+      const actionRef = pending.stateResult?.sourceRefs.find(ref => ref.kind === "run_action");
+      if (actionRef !== undefined) this.closeModelCallFlow(actionRef.id, pending.call.modelCallRef.id, "invalidated");
+      this.pendingCompletionCall = null;
+    }
   }
 
   private markDecisionRetired(turn: ControllerTurnRef): void {
@@ -1666,7 +1678,7 @@ export class RunExecution<TOutput> {
     await this.writer.commitState(() => {this.markDecisionRetired(turn); return {};});
   }
 
-  private async hasUnsettledDescendantObligations(): Promise<boolean> {
+  private async hasUnsettledDescendantObligations(turn: ControllerTurnRef): Promise<boolean> {
     const state = this.writer.getSnapshot();
     if (!state.pending.some((pending) => pending.kind === "descendant_run")) return false;
     (await this.commitControllerFeedback(Object.freeze({
@@ -1678,7 +1690,7 @@ export class RunExecution<TOutput> {
       }),
       code: "active_descendant_result_pending",
       message: "The Run cannot end while descendant work remains unsettled. Continue other work, steer or resume the exact active Child, or cancel it before stopping.",
-    })));
+    }), turn));
     return true;
   }
 
@@ -1730,10 +1742,9 @@ export class RunExecution<TOutput> {
       }
       return null;
     }
-    const outstanding = (await this.hasUnsettledDescendantObligations());
+    const outstanding = (await this.hasUnsettledDescendantObligations(turn));
     step.check("descendant_obligations", outstanding ? "not_satisfied" : "passed", {pendingDescendants: current.pending.filter(pending => pending.kind === "descendant_run").length});
     if (outstanding) {
-      (await this.settleCompletionCall("invalidated", "active_descendant_result_pending"));
       return null;
     }
     const controller = this.dependencies.controller;
@@ -1756,12 +1767,7 @@ export class RunExecution<TOutput> {
       }
       const disposition = retainedNotification.outcome.status === "returned" ? retainedNotification.outcome.disposition : null;
       if (disposition?.kind === "continue_with_feedback") {
-        const recorded = this.writer.getSnapshot().items.some(item => item.payload.kind === "controller_feedback" &&
-          item.payload.feedback.source.id === disposition.feedback.source.id &&
-          item.payload.feedback.source.revision === disposition.feedback.source.revision &&
-          item.payload.feedback.code === disposition.feedback.code);
-        if (!recorded) await this.commitControllerFeedback(disposition.feedback);
-        await this.settleCompletionCall("invalidated", disposition.feedback.code, disposition.feedback.source);
+        await this.commitControllerFeedback(disposition.feedback, turn);
         this.decisionBasis.release(turn.id);
         return null;
       }
@@ -1826,8 +1832,7 @@ export class RunExecution<TOutput> {
         }
         if (disposition?.kind === "continue_with_feedback") {
           const feedback = snapshotControllerFeedback(disposition.feedback);
-          (await this.commitControllerFeedback(feedback));
-          (await this.settleCompletionCall("invalidated", feedback.code, feedback.source));
+          (await this.commitControllerFeedback(feedback, turn));
           return null;
         }
         if (disposition?.kind !== "allow") throw new TypeError("Controller completion disposition is invalid.");
@@ -1898,8 +1903,7 @@ export class RunExecution<TOutput> {
   }
 
   private async declineCompletion(turn: ControllerTurnRef, code: string, message: string): Promise<void> {
-    (await this.commitControllerFeedback({source: {owner: "agent-runtime", kind: "completion", id: turn.id, revision: String(turn.sequence)}, code, message}));
-    (await this.settleCompletionCall("invalidated", code));
+    (await this.commitControllerFeedback({source: {owner: "agent-runtime", kind: "completion", id: turn.id, revision: String(turn.sequence)}, code, message}, turn));
   }
 
   private async settleCompletionCall(settlement: ModelCallSettlementKind, code: string, source?: ModelToolResult["sourceRefs"][number]): Promise<void> {
@@ -2182,8 +2186,17 @@ export class RunExecution<TOutput> {
     content: unknown,
     sourceRefs: ModelToolResult["sourceRefs"],
   ): Promise<void> {
+    await this.writer.commit(this.localModelCallResult(call, settlement, content, sourceRefs));
+  }
+
+  private localModelCallResult(
+    call: ModelToolCall,
+    settlement: ModelCallSettlementKind,
+    content: unknown,
+    sourceRefs: ModelToolResult["sourceRefs"],
+  ): RunItemPayload<TOutput> {
     const projected = modelSettlement(settlement, content);
-    (await this.writer.commit({
+    return {
       kind: "model_call_settlement",
       result: snapshotModelToolResult({
         modelCallRef: call.modelCallRef,
@@ -2197,7 +2210,7 @@ export class RunExecution<TOutput> {
           [...sourceRefs, {owner: "agent-runtime", kind: "model_call", id: call.modelCallRef.id,
             revision: null, runId: this.runId}],
       }),
-    }));
+    };
   }
 
   private findModelToolCall(ref: import("@agent-anything/model-interaction").ModelCallRef): ModelToolCall | null {
@@ -2543,7 +2556,7 @@ export class RunExecution<TOutput> {
     return {
       read: key => structuredClone(this.controllerCheckpoints.get(identity(key)) ?? null),
       commit: async (key, value) => {
-        const snapshot = structuredClone(value);
+        const snapshot = retainControllerCheckpoint(value);
         try {
           await this.writer.commitState(() => {
             this.controllerCheckpoints.set(identity(key), snapshot);
@@ -5832,37 +5845,23 @@ export class RunExecution<TOutput> {
             ? "run_settled_before_application"
             : null,
       });
-      const contribution = status === "applied"
-        ? createSteeringContextContribution({
-            id: this.id("context_contribution"),
-            revision: String(command.acceptedRunRevision),
-            runId: this.runId,
-            commandId: command.commandId,
-            instruction: command.instruction,
-            createdAt: command.submittedAt,
-          })
-        : null;
-      (await this.writer.transaction(state => {
+      await this.writer.transaction(state => {
       const position = this.steeringQueue.findIndex(item => item.commandId === command.commandId);
-      if (position < 0) return {value: undefined};
+      if (position < 0) return {value: null};
+      const entry = status === "applied" ? this.inputNotifications.admitOwned(this.runId, {
+        source: {owner: "agent-runtime", kind: "steering", id: `${this.runId}:steering:${command.commandId}`, revision: String(command.acceptedRunRevision)},
+        occurredAt: command.submittedAt, data: command,
+        interpretation: {kind: "steering", commandId: command.commandId},
+      }, this.dependencies.contextProjection.maxContributionPayloadBytes) : null;
       this.steeringQueue.splice(position, 1);
-      return {value: undefined, payloads: [{
+      return {value: entry, payloads: [{
         kind: "state_transition",
         transition: "steering",
         steering: {...application, appliedInRunRevision: state.revision + 1},
-      }], patch: status === "applied"
-        ? Object.freeze({
-            context: this.applyContextContributions(
-              state.context,
-              Object.freeze([contribution!]),
-              createSteeringContextAdmissionProfile(),
-              "steering_applied",
-              command.commandId,
-            ),
-            plan: null,
-          })
+      }, ...(entry === null ? [] : [{kind: "input_notification" as const, notification: entry}])], patch: status === "applied"
+        ? Object.freeze({plan: null})
         : Object.freeze({})};
-      }));
+      });
     }
     return queued.length;
   }
@@ -6927,7 +6926,7 @@ export class RunExecution<TOutput> {
           accept?.();
         });
       } else {
-        const receipt = await port!.commitRun(structuredClone(commit));
+        const receipt = await port!.commitRun(snapshotRunCommit(commit));
         if (receipt.recordId !== commit.id || receipt.revision !== state.revision) throw new TypeError("Run commit receipt mismatch.");
         this.persistenceStarted = true;
       }
@@ -6996,7 +6995,7 @@ export class RunExecution<TOutput> {
         lineage: this.lineage, rootTask: this.rootTask, rootConfig: retainRunConfiguration(this.rootConfig),
         delegationRequest: this.delegationRequest, delegationContextMaterials: this.delegationContextMaterials},
     };
-    return structuredClone(commit);
+    return snapshotRunCommit(commit);
   }
 
   private accountCommittedResources(state: RunState<TOutput>): void {

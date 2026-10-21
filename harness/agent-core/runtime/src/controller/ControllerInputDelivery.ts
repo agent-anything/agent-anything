@@ -24,6 +24,15 @@ export function inputNotificationDigest(entry: RunInputNotification): string {
 }
 
 export function inputNotificationMessage(entry: RunInputNotification): ModelMessage {
+  if (entry.interpretation !== undefined) {
+    const feedback = entry.interpretation.kind === "controller_feedback";
+    return snapshotModelMessage({role: "user", content: [{kind: "text", text:
+      `${feedback ? "Host Controller feedback" : "Applied steering instruction"}:\n${JSON.stringify({
+        kind: entry.interpretation.kind, source: entry.source,
+        interaction: entry.interpretation, payload: entry.data,
+      })}`,
+    }]});
+  }
   return snapshotModelMessage({role: "user", content: [{kind: "text", text: JSON.stringify({
     kind: "host_notification", instructionRole: "data", notification: entry,
   })}]});

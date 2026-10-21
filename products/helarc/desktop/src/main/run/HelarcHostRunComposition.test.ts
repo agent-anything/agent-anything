@@ -37,7 +37,9 @@ import { workbenchInteractionText } from "../workbench/WorkbenchInteractionPrese
 import { isWorkbenchOperation } from "../workbench/WorkbenchOperationPresentation.js";
 import { CommandOutputRegistry } from "../workbench/CommandOutputRegistry.js";
 import { HelarcExecutionStore } from "../execution-storage/HelarcExecutionStore.js";
-import {openExecutionStoreFixture} from "../execution-storage/fixtures/ExecutionEnvironmentFixture.js";
+import {openExecutionStoreFixture as openUnmanagedExecutionStoreFixture} from "../execution-storage/fixtures/ExecutionEnvironmentFixture.js";
+import {ExecutionFixtureScope} from "./fixtures/ExecutionFixtureScope.js";
+import {withExecutionScope} from "./fixtures/ManagedExecutionTest.js";
 import { pathToFileURL } from "node:url";
 import {
   prepareHelarcHostRun,
@@ -78,6 +80,11 @@ async function executeTestHostRun(input: RunHelarcTestInput) {
   return composition.result;
 }
 
+function openExecutionStoreFixture(...args: Parameters<typeof openUnmanagedExecutionStoreFixture>) {
+  const create = () => openUnmanagedExecutionStoreFixture(...args);
+  return ExecutionFixtureScope.current()?.open(create) ?? create();
+}
+
 const commandOutputDirectory = mkdtempSync(join(tmpdir(), "helarc-host-output-"));
 afterAll(() => rm(commandOutputDirectory, { recursive: true, force: true }));
 
@@ -95,7 +102,7 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     providerProfile,
     ...hostInput
   } = input;
-  return prepareHelarcHostRun({
+  const create = () => prepareHelarcHostRun({
     ...hostInput,
     commandOutputDirectory: input.commandOutputDirectory ?? commandOutputDirectory,
     workspaceResolver: workspaceResolver ??
@@ -118,6 +125,7 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     permissionPreset,
     providerProfile: providerProfile ?? createTestProviderProfile(input.provider),
   });
+  return ExecutionFixtureScope.current()?.prepare(create) ?? create();
 }
 
 function createTestProviderProfile(
@@ -147,7 +155,7 @@ function executeReadOnlyTestHostRun(
 }
 
 describe("Helarc Host Run composition", () => {
-  it("reconstructs admission before the first command without adopting the new Host environment", async () => {
+  it("reconstructs admission before the first command without adopting the new Host environment", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-admission-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
@@ -178,8 +186,8 @@ describe("Helarc Host Run composition", () => {
       if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith("helarc-admission-recovery-")) throw new Error("Unexpected test path");
       await rm(directory, {recursive: true, force: true});
     }
-  }, 20_000);
-  it("recovers a committed compensation association after lost acknowledgement before dispatch", async () => {
+  }), 20_000);
+  it("recovers a committed compensation association after lost acknowledgement before dispatch", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-compensation-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
@@ -226,8 +234,8 @@ describe("Helarc Host Run composition", () => {
       if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-compensation-recovery-")) throw new Error("Unexpected test directory.");
       await rm(target, {recursive: true, force: true});
     }
-  }, 60_000);
-  it("delivers an execution locator and accepts model-declared compensation through ordinary governed file work", async () => {
+  }), 60_000);
+  it("delivers an execution locator and accepts model-declared compensation through ordinary governed file work", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-compensation-binding-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
@@ -286,8 +294,8 @@ describe("Helarc Host Run composition", () => {
       if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-compensation-binding-")) throw new Error("Unexpected test directory.");
       await rm(target, {recursive: true, force: true});
     }
-  }, 45_000);
-  it.each([false, true])("retains, queries and restores file content/existence through governed Tools (created=%s)", async created => {
+  }), 45_000);
+  it.each([false, true])("retains, queries and restores file content/existence through governed Tools (created=%s)", withExecutionScope(async created => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-file-support-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     if (!created) await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
@@ -349,8 +357,8 @@ describe("Helarc Host Run composition", () => {
       if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-file-support-")) throw new Error("Unexpected test directory.");
       await rm(target, {recursive: true, force: true});
     }
-  }, 60_000);
-  it("hands Child execution references to Parent for a normally governed restoration", async () => {
+  }), 60_000);
+  it("hands Child execution references to Parent for a normally governed restoration", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-child-compensation-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
@@ -391,8 +399,8 @@ describe("Helarc Host Run composition", () => {
       if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-child-compensation-")) throw new Error("Unexpected test directory.");
       await rm(target, {recursive: true, force: true});
     }
-  }, 90_000);
-  it("recovers a completed restoration after lost Attempt acknowledgement without repeating its mutation", async () => {
+  }), 90_000);
+  it("recovers a completed restoration after lost Attempt acknowledgement without repeating its mutation", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-restore-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     await writeFile(join(workspaceRoot, "target.txt"), "original bytes");
@@ -440,8 +448,8 @@ describe("Helarc Host Run composition", () => {
       if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-restore-recovery-")) throw new Error("Unexpected test directory.");
       await rm(target, {recursive: true, force: true});
     }
-  }, 90_000);
-  it.each(["continue", "cancel"] as const)("restores an accepted Turn after lost acknowledgement and %s without recreating the decision", async intent => {
+  }), 90_000);
+  it.each(["continue", "cancel"] as const)("restores an accepted Turn after lost acknowledgement and %s without recreating the decision", withExecutionScope(async (intent: "continue" | "cancel") => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-host-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     await writeFile(join(workspaceRoot, "input.txt"), "retained input", "utf8");
@@ -489,8 +497,8 @@ describe("Helarc Host Run composition", () => {
       await store.commitProductDelivery(prepare.rootRunId);
       expect((await store.listProductRuns())[0]?.delivered).toBe(true);
     } finally {await store.close(); await rm(directory, {recursive: true, force: true});}
-  }, 45_000);
-  it("records the real Tool, Context and lifecycle path without optional instructions or execution interference", async () => {
+  }), 45_000);
+  it("records the real Tool, Context and lifecycle path without optional instructions or execution interference", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-inspection-run-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
     await writeFile(join(workspaceRoot, "input.txt"), "existing work", "utf8");
@@ -598,8 +606,8 @@ describe("Helarc Host Run composition", () => {
       if (!relative(tmpdir(), directory).startsWith("helarc-inspection-run-")) throw new Error("Invalid test cleanup target");
       await rm(directory, { recursive: true });
     }
-  }, 90_000);
-  it("binds instruction settings before asynchronous preparation and allows a Run with no system instructions", async () => {
+  }), 90_000);
+  it("binds instruction settings before asynchronous preparation and allows a Run with no system instructions", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-instructions-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);
     const defaults = createDefaultHelarcInstructionSettings();
@@ -619,8 +627,8 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests[0]?.instructions.content).toEqual([]);
     expect(provider.requests[0]?.interaction).toMatchObject({ kind: "native_tool_turn" });
     expect(provider.stopRequests).toHaveLength(0);
-  });
-  it("passes custom Stop text through Host and Product composition without adding it to the main loop", async () => {
+  }));
+  it("passes custom Stop text through Host and Product composition without adding it to the main loop", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-stop-instructions-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Completed." }]);
     const defaults = createDefaultHelarcInstructionSettings();
@@ -631,8 +639,8 @@ describe("Helarc Host Run composition", () => {
       { kind: "text", text: "Check only the supplied completion evidence." },
     ]);
     expect(JSON.stringify(provider.requests[0]?.instructions)).not.toContain("Check only the supplied completion evidence.");
-  });
-  it("prepares without invoking Runner and permits exactly one start", async () => {
+  }));
+  it("prepares without invoking Runner and permits exactly one start", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-prepared-run-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Prepared." }]);
     const prepared = await prepareTestHostRun({
@@ -651,9 +659,9 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]?.instructions.content).toEqual([]);
     expect(provider.stopRequests).toHaveLength(0);
-  });
+  }));
 
-  it("keeps the complete Run deadline separate from one Provider request window", async () => {
+  it("keeps the complete Run deadline separate from one Provider request window", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-run-deadline-"));
     const startedAt = Date.parse("2026-08-20T00:00:00.000Z");
     let elapsedMs = 0;
@@ -672,9 +680,9 @@ describe("Helarc Host Run composition", () => {
 
     expect(result.runResult).toMatchObject({ status: "completed" });
     expect(result.product).toMatchObject({ status: "completed" });
-  });
+  }));
 
-  it("fails Host Workspace acquisition before a Runner can start", async () => {
+  it("fails Host Workspace acquisition before a Runner can start", withExecutionScope(async () => {
     const provider = new ScriptedProvider([
       { kind: "completion", summary: "Must not run." },
     ]);
@@ -691,9 +699,9 @@ describe("Helarc Host Run composition", () => {
       code: "host_workspace_resolution_failed",
     });
     expect(provider.requests).toHaveLength(0);
-  });
+  }));
 
-  it("runs one read-only tool call and completes with ordered activity", async () => {
+  it("runs one read-only tool call and completes with ordered activity", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-session-"));
     await mkdir(join(workspaceRoot, "src"));
     await writeFile(join(workspaceRoot, "src", "index.ts"), "export const value = 1;\n");
@@ -768,7 +776,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(2);
     expect(provider.lastControllerResultCounts).toEqual([0, 1]);
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata).toMatchObject({
-      promptArchitectureVersion: "helarc-prompt-v8",
+      promptArchitectureVersion: "helarc-prompt-v9",
       toolExposureVersion: "trusted-tool-exposure-v1",
     });
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata)
@@ -780,9 +788,9 @@ describe("Helarc Host Run composition", () => {
         result: expect.objectContaining({ settlement: "succeeded" }),
       })],
     }));
-  });
+  }));
 
-  it("asks one correlated clarification and resumes the same Run", async () => {
+  it("asks one correlated clarification and resumes the same Run", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-clarification-"));
     const provider = new ScriptedProvider([
       {
@@ -853,9 +861,9 @@ describe("Helarc Host Run composition", () => {
       }),
     }));
     expect(provider.requests).toHaveLength(2);
-  });
+  }));
 
-  it("delegates one Agent Tool call to an isolated descendant Run", async () => {
+  it("delegates one Agent Tool call to an isolated descendant Run", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-descendant-"));
     const provider = new ScriptedProvider([
       {
@@ -893,9 +901,9 @@ describe("Helarc Host Run composition", () => {
     }));
     expect(operationResults(result)).toEqual([]);
     expect(provider.requests).toHaveLength(3);
-  });
+  }));
 
-  it("preserves whitespace-bearing Agent prompts through nested delegation", async () => {
+  it("preserves whitespace-bearing Agent prompts through nested delegation", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-delegation-text-"));
     const childPrompt = "\r\n Inspect and delegate the detail.\n  ";
     const nestedPrompt = "\tInspect this example:\n    return 1;\r\n";
@@ -912,9 +920,9 @@ describe("Helarc Host Run composition", () => {
     expect(findTextBlock(provider.requests[1]!, "Task:")).toBe(`Task:\n${childPrompt}`);
     expect(findTextBlock(provider.requests[2]!, "Task:")).toBe(`Task:\n${nestedPrompt}`);
     expect(operationResults(result)).toEqual([]);
-  });
+  }));
 
-  it("accepts a whitespace-bearing SendMessage prompt for a settled Child", async () => {
+  it("accepts a whitespace-bearing SendMessage prompt for a settled Child", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-continuation-text-"));
     const message = "\r\n  Explain the second finding.\n\t";
     const provider = new ScriptedProvider([
@@ -940,9 +948,9 @@ describe("Helarc Host Run composition", () => {
       content: expect.arrayContaining([expect.objectContaining({ kind: "text", text: message })]),
     }));
     expect(operationResults(result)).toEqual([]);
-  });
+  }));
 
-  it.each([true, false])("delivers a Child's final text with limitations to the Parent (report: %s)", async (hasReport) => {
+  it.each([true, false])("delivers a Child's final text with limitations to the Parent (report: %s)", withExecutionScope(async (hasReport) => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-child-report-"));
     const report = "SDK inspection findings.\n\nBuild and run commands.";
     const finalText = `${hasReport ? `${report}\n\n` : ""}No further work is available.`;
@@ -993,9 +1001,9 @@ describe("Helarc Host Run composition", () => {
       })]),
     }));
     expect(operationResults(result)).toEqual([]);
-  });
+  }));
 
-  it("projects Provider request retry history through Runner activity", async () => {
+  it("projects Provider request retry history through Runner activity", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-provider-retry-"));
     const provider = new RetryThenCompleteProvider();
 
@@ -1032,9 +1040,9 @@ describe("Helarc Host Run composition", () => {
     });
     expect(retryActivity?.every(Object.isFrozen)).toBe(true);
     expect(JSON.stringify(retryActivity)).not.toContain("Provider is temporarily unavailable.");
-  });
+  }));
 
-  it("runs Glob, Read, and Grep inside the Workspace scope", async () => {
+  it("runs Glob, Read, and Grep inside the Workspace scope", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-read-only-tools-"));
     await mkdir(join(workspaceRoot, "src"));
     await writeFile(join(workspaceRoot, "src", "index.ts"), "export const value = 42;\n");
@@ -1085,9 +1093,9 @@ describe("Helarc Host Run composition", () => {
         truncated: false,
       },
     ]);
-  });
+  }));
 
-  it("rejects selected managed enforcement without a matching provider", async () => {
+  it("rejects selected managed enforcement without a matching provider", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-managed-unavailable-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Must not run." }]);
 
@@ -1097,9 +1105,9 @@ describe("Helarc Host Run composition", () => {
       enforcement: "managed",
     })).rejects.toThrow("requires a matching SandboxProvider");
     expect(provider.requests).toHaveLength(0);
-  });
+  }));
 
-  it("fails malformed native output without structured-output correction", async () => {
+  it("fails malformed native output without structured-output correction", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-output-exhausted-"));
     const firstInvalidOutput = "PRIVATE_INVALID_OUTPUT_1";
     const provider = new ScriptedProvider([
@@ -1128,9 +1136,9 @@ describe("Helarc Host Run composition", () => {
     )).toBe(false);
     expect(provider.requests).toHaveLength(1);
     expect(JSON.stringify(provider.requests[0])).not.toContain(firstInvalidOutput);
-  });
+  }));
 
-  it("keeps command execution behind approval even when enforcement is disabled", async () => {
+  it("keeps command execution behind approval even when enforcement is disabled", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-denied-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const provider = new ScriptedProvider([
@@ -1161,9 +1169,9 @@ describe("Helarc Host Run composition", () => {
     )).toBe(true);
     expect(result.product.output.enforcement.status).toBe("denied");
     await expect(access(markerPath)).rejects.toThrow();
-  });
+  }));
 
-  it("does not weaken approval when the automatic reviewer is unavailable", async () => {
+  it("does not weaken approval when the automatic reviewer is unavailable", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-reviewer-unavailable-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const provider = new ScriptedProvider([
@@ -1196,9 +1204,9 @@ describe("Helarc Host Run composition", () => {
     expect(JSON.stringify(result.runResult.items)).toContain("approval_reviewer_unavailable");
     expect(result.product.output.enforcement.status).toBe("failed");
     await expect(access(markerPath)).rejects.toThrow();
-  });
+  }));
 
-  it("executes Full access commands through the explicit unisolated gateway", async () => {
+  it("executes Full access commands through the explicit unisolated gateway", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-granted-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const registryPath = join(commandOutputDirectory, "locators.json");
@@ -1270,9 +1278,9 @@ describe("Helarc Host Run composition", () => {
       kind: "action_settlement",
     }));
     expect(provider.lastControllerResultCounts).toEqual([0, 1]);
-  });
+  }));
 
-  it("starts and stops one background shell task through its exact TaskStop identity", async () => {
+  it("starts and stops one background shell task through its exact TaskStop identity", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-background-shell-"));
     const provider = new ScriptedProvider([
       {
@@ -1338,9 +1346,9 @@ describe("Helarc Host Run composition", () => {
     const subsequentResults = provider.requests[2]!.messages.filter(message => message.role === "tool");
     expect(subsequentResults.slice(0, priorResults.length)).toEqual(priorResults);
     expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
-  });
+  }));
 
-  it("delivers asynchronous timeout facts without TaskOutput or discarding a concurrent model response", async () => {
+  it("delivers asynchronous timeout facts without TaskOutput or discarding a concurrent model response", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-late-command-state-"));
     let active: HelarcHostActiveRun;
     const provider = new ScriptedProvider([
@@ -1374,9 +1382,9 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests[2]!.messages.filter(message => message.role === "tool").slice(0, oldResults.length)).toEqual(oldResults);
     expect(operationResults(result).some(operation => operation.binding.operation.operation.name === "task-output")).toBe(false);
     expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
-  });
+  }));
 
-  it("retrieves a retained command through TaskOutput without launching it again", async () => {
+  it("retrieves a retained command through TaskOutput without launching it again", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-command-observation-"));
     const provider = new ScriptedProvider([
       {kind:"tool_call",toolName:nativeShellTool(),input:{
@@ -1395,9 +1403,9 @@ describe("Helarc Host Run composition", () => {
     expect(observations).toHaveLength(2);
     expect(observations.at(-1)).toMatchObject({status:"succeeded",output:{stdout:{text:expect.stringContaining("retained-output")}}});
     expect(observations[0]?.lowerRefs[0]?.id).not.toBe(observations[1]?.lowerRefs[0]?.id);
-  }, 20_000);
+  }), 20_000);
 
-  it("submits the final Plan and reply together without another model request or enabled instructions", async () => {
+  it("submits the final Plan and reply together without another model request or enabled instructions", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-final-plan-"));
     const provider = new ScriptedProvider([
       { kind: "plan_update", plan: [{ step: "Inspect workspace", status: "in_progress" }] },
@@ -1421,9 +1429,9 @@ describe("Helarc Host Run composition", () => {
     expect(endingCalls).toHaveLength(1);
     expect(endingCalls[0]).toMatchObject({settlement: "succeeded", content: {stateUpdate: {settlement: "succeeded"}}});
     expect(result.product.output.agentSummary).toBe("Inspection is complete.");
-  });
+  }));
 
-  it.each([false, true])("ends a no-Plan Run in one request with no optional instructions (empty final Plan: %s)", async emptyPlan => {
+  it.each([false, true])("ends a no-Plan Run in one request with no optional instructions (empty final Plan: %s)", withExecutionScope(async emptyPlan => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-no-plan-ending-"));
     const provider = new ScriptedProvider([
       {kind: "completion", summary: "Finished without a Plan.", ...(emptyPlan ? {plan: []} : {})},
@@ -1441,9 +1449,9 @@ describe("Helarc Host Run composition", () => {
     expect(settlements).toHaveLength(1);
     expect(settlements[0]).toMatchObject({name: "final_result", settlement: "succeeded"});
     expect(result.product.output.agentSummary).toBe("Finished without a Plan.");
-  });
+  }));
 
-  it("corrects an omitted final Plan without replaying a successful accompanying call", async () => {
+  it("corrects an omitted final Plan without replaying a successful accompanying call", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-final-plan-correction-"));
     await writeFile(join(workspaceRoot, "finding.txt"), "Retained finding.", "utf8");
     const provider = new ScriptedProvider([
@@ -1470,9 +1478,9 @@ describe("Helarc Host Run composition", () => {
     expect(operationResults(result)).toHaveLength(1);
     expect(result.product.output.agentSummary).toBe("Inspection is complete.");
     expect(result.runResult.items.filter(({payload}) => payload.kind === "completion_acceptance")).toHaveLength(1);
-  });
+  }));
 
-  it("ends with an explicitly unchanged unfinished Plan without an extra model request or completion feedback", async () => {
+  it("ends with an explicitly unchanged unfinished Plan without an extra model request or completion feedback", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-update-"));
     const provider = new ScriptedProvider([
       {
@@ -1516,9 +1524,9 @@ describe("Helarc Host Run composition", () => {
     expect(updates).toHaveLength(2);
     expect(updates.at(-1)).toMatchObject({ status: "abandoned", steps: recordedPlan.steps });
     expect(result.product.output.agentSummary).toBe("Plan was recorded.");
-  });
+  }));
 
-  it.each(["completed", "pending"] as const)("preserves ordinary model Plan updates to %s without completion-time synchronization", async (status) => {
+  it.each(["completed", "pending"] as const)("preserves ordinary model Plan updates to %s without completion-time synchronization", withExecutionScope(async (status) => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-sync-"));
     const provider = new ScriptedProvider([
       { kind: "plan_update", plan: [{ step: "Inspect workspace", status: "in_progress" }] },
@@ -1536,9 +1544,9 @@ describe("Helarc Host Run composition", () => {
     expect(updates.at(-1)?.steps).toEqual([{ step: "Inspect workspace", status }]);
     expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(0);
     expect(result.runResult.items.some(({ payload }) => payload.kind === "suspension_transition")).toBe(false);
-  });
+  }));
 
-  it("delivers exact-name correction in Tool Results without system instructions or replaying valid siblings", async () => {
+  it("delivers exact-name correction in Tool Results without system instructions or replaying valid siblings", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-call-feedback-"));
     await writeFile(join(workspaceRoot, "first.txt"), "first result", "utf8");
     await writeFile(join(workspaceRoot, "second.txt"), "second result", "utf8");
@@ -1590,9 +1598,9 @@ describe("Helarc Host Run composition", () => {
     expect(JSON.stringify(finalResults[2]!.content)).toContain("first result");
     expect(operationResults(result)).toHaveLength(2);
     expect(operationResults(result).every(operation => operation.status === "succeeded")).toBe(true);
-  });
+  }));
 
-  it("allows bounded Controller correction after three rejected Actions", async () => {
+  it("allows bounded Controller correction after three rejected Actions", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-action-correction-"));
     const provider = new ScriptedProvider([
       {
@@ -1629,9 +1637,9 @@ describe("Helarc Host Run composition", () => {
     ]);
     expect(provider.requests).toHaveLength(4);
     expect(provider.lastControllerResultCounts).toEqual([0, 1, 2, 3]);
-  });
+  }));
 
-  it("executes multiple model-origin file mutations and continues until completion", async () => {
+  it("executes multiple model-origin file mutations and continues until completion", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-file-mutations-"));
     await mkdir(join(workspaceRoot, "src"));
     await writeFile(join(workspaceRoot, "src", "existing.txt"), "before\n");
@@ -1670,9 +1678,9 @@ describe("Helarc Host Run composition", () => {
       .resolves.toBe("created\n");
     await expect(readFile(join(workspaceRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("after\n");
-  });
+  }));
 
-  it("derives generic approval review from the exact prepared Write action", async () => {
+  it("derives generic approval review from the exact prepared Write action", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-write-approved-"));
     const targetPath = join(workspaceRoot, "approved.txt");
     const reviewedInputs: ApprovalReviewInput[] = [];
@@ -1700,9 +1708,9 @@ describe("Helarc Host Run composition", () => {
       changes: [{ operation: "create", displayPath: "approved.txt" }],
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("approved\n");
-  });
+  }));
 
-  it("does not execute a Write when generic approval is declined", async () => {
+  it("does not execute a Write when generic approval is declined", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-write-declined-"));
     const targetPath = join(workspaceRoot, "declined.txt");
     const provider = new ScriptedProvider([
@@ -1724,9 +1732,9 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.status).toBe("completed");
     expect(result.product.output.enforcement.status).toBe("denied");
     await expect(access(targetPath)).rejects.toThrow();
-  });
+  }));
 
-  it("keeps approval review and statistics after the former cumulative request limit", async () => {
+  it("keeps approval review and statistics after the former cumulative request limit", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-unbounded-approvals-"));
     let reviewCount = 0;
     const provider = new ScriptedProvider([
@@ -1747,9 +1755,9 @@ describe("Helarc Host Run composition", () => {
     } finally {
       await rm(workspaceRoot, {recursive: true, force: true});
     }
-  }, 20_000);
+  }), 20_000);
 
-  it("rejects an ambiguous Edit without changing the file", async () => {
+  it("rejects an ambiguous Edit without changing the file", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-ambiguous-"));
     const targetPath = join(workspaceRoot, "duplicate.txt");
     await writeFile(targetPath, "same same\n");
@@ -1777,9 +1785,9 @@ describe("Helarc Host Run composition", () => {
       code: "file_edit_ambiguous",
     }));
     await expect(readFile(targetPath, "utf8")).resolves.toBe("same same\n");
-  });
+  }));
 
-  it("returns the unchanged-file failure facts before accepting a corrected Edit", async () => {
+  it("returns the unchanged-file failure facts before accepting a corrected Edit", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-feedback-"));
     const targetPath = join(workspaceRoot, "target.txt");
     await writeFile(targetPath, "before\n");
@@ -1815,9 +1823,9 @@ describe("Helarc Host Run composition", () => {
       { settlement: "succeeded", content: { effectCertainty: "confirmed", completionExtent: "complete" } },
     ]);
     await expect(readFile(targetPath, "utf8")).resolves.toBe("after\n");
-  });
+  }));
 
-  it("reports a rejected Write as not executed without producing an Action or file", async () => {
+  it("reports a rejected Write as not executed without producing an Action or file", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-write-rejected-"));
     const provider = new ScriptedProvider([
       { kind: "tool_call", toolName: "Write", input: {
@@ -1838,9 +1846,9 @@ describe("Helarc Host Run composition", () => {
     expect(operationResults(result)).toEqual([]);
     expect(result.product.actions).toEqual([]);
     await expect(access(join(workspaceRoot, "target.txt"))).rejects.toThrow();
-  });
+  }));
 
-  it("exposes effective command limits and returns a correctable schema rejection before Action preparation", async () => {
+  it("exposes effective command limits and returns a correctable schema rejection before Action preparation", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-command-contract-"));
     const provider = new ScriptedProvider([
       {kind: "tool_call", toolName: process.platform === "win32" ? "PowerShell" : "Bash", input: {command: "echo should-not-start", timeout_ms: 180000}},
@@ -1856,9 +1864,9 @@ describe("Helarc Host Run composition", () => {
     expect(operationResults(result)).toEqual([]);
     expect(result.product.actions).toEqual([]);
     expect(provider.requests).toHaveLength(2);
-  });
+  }));
 
-  it("invalidates an approved Edit when its prepared baseline becomes stale", async () => {
+  it("invalidates an approved Edit when its prepared baseline becomes stale", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-stale-"));
     const targetPath = join(workspaceRoot, "stale.txt");
     await writeFile(targetPath, "before\n");
@@ -1889,7 +1897,7 @@ describe("Helarc Host Run composition", () => {
       code: "file_target_changed",
     }));
     await expect(readFile(targetPath, "utf8")).resolves.toBe("changed externally\n");
-  });
+  }));
 });
 
 function operationOutputs(result: Awaited<ReturnType<typeof executeTestHostRun>>): unknown[] {

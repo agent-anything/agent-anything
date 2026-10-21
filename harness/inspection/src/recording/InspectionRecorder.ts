@@ -52,9 +52,14 @@ export class InspectionRecorder {
       if (reply.kind === "failed") this.fail(reply.code);
       if (reply.kind === "ack") {
         this.coverage = reply.coverage;
-        this.acceptReceipt(reply.receipt); this.dispatch();
+        if (this.acceptReceipt(reply.receipt)) this.healthRevision = Math.max(this.healthRevision, reply.coverage.recording?.ingress.revision ?? 0);
+        this.dispatch();
       }
-      if (reply.kind === "receipt") { this.coverage = reply.coverage; if (reply.receipt) this.acceptReceipt(reply.receipt); this.dispatch(); }
+      if (reply.kind === "receipt") {
+        this.coverage = reply.coverage;
+        if (reply.receipt && this.acceptReceipt(reply.receipt)) this.healthRevision = Math.max(this.healthRevision, reply.coverage.recording?.ingress.revision ?? 0);
+        this.dispatch();
+      }
       if (reply.kind === "health_ack") { this.coverage = reply.coverage; this.healthRevision = Math.max(this.healthRevision, reply.revision); this.healthFlight = false; this.scheduleHealth(); }
       if (reply.kind === "flushed") { this.coverage = reply.coverage; this.completions.get(reply.id)?.(reply.coverage); this.completions.delete(reply.id); }
       if (reply.kind === "flush_rejected") { this.completions.get(reply.id)?.(null, reply.code); this.completions.delete(reply.id); }
@@ -164,23 +169,25 @@ export class InspectionRecorder {
     this.batch = {id: randomUUID(), digest: createHash("sha256").update(JSON.stringify(offers)).digest("hex"), sentAt};
     this.post({kind: "batch", ...this.batch, offers, health: this.accounting.snapshot()});
   }
-  private acceptReceipt(receipt: InspectionBatchReceipt): void {
-    if (receipt.id !== this.batch?.id) return;
+  private acceptReceipt(receipt: InspectionBatchReceipt): boolean {
+    if (receipt.id !== this.batch?.id) return false;
     if (receipt.digest !== this.batch.digest || receipt.persisted + receipt.duplicates + receipt.rejected !== this.flight.length ||
         receipt.firstSequence !== this.flight[0]?.record.captureSequence || receipt.lastSequence !== this.flight.at(-1)?.record.captureSequence) {
-      this.fail("inspection_receipt_invalid"); return;
+      this.fail("inspection_receipt_invalid"); return false;
     }
     this.accounting.timing("acknowledgementMaxMs", performance.now() - this.batch.sentAt);
     for (const offer of this.flight) { this.queueBytes -= offer.bytes; this.pendingContentBytes -= contentBytes(offer); }
     this.acknowledged += this.flight.length;
     this.flight = []; this.inFlight = false; this.batch = null;
     this.scheduleHealth();
+    return true;
   }
   private scheduleHealth(): void {
     if (this.closed || this.failure || this.healthFlight || this.healthTimer || this.accounting.snapshot().revision <= this.healthRevision) return;
     this.healthTimer = setTimeout(() => {
       this.healthTimer = null;
       if (this.closed || this.failure) return;
+      if (this.accounting.snapshot().revision <= this.healthRevision) return;
       this.healthFlight = true;
       this.post({kind: "health", health: this.accounting.snapshot()});
     }, 50);

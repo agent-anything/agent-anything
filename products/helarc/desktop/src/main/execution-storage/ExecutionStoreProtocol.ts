@@ -13,6 +13,7 @@ import type {ExecutionReferenceTransfer, ExecutionReferencePage} from "@agent-an
 import type { FileMaterialPreparation, FileMaterialRecord, FileMaterialReservation, FileMaterialRead } from "@agent-anything/helarc-local-environment/filesystem";
 import type { ExecutionErrorDetails } from "../diagnostics/ExecutionErrorDetails.js";
 import type {ExecutionContentBlock, ExecutionContentRoot} from "./ExecutionContent.js";
+import type {ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
 
 export type ExecutionOwnerCommit =
   | {readonly kind: "run"; readonly value: RunCommit}
@@ -99,6 +100,7 @@ export type ExecutionStoreWireCommand = ExecutionStoreCommand
 export type FileMaterialFinalizationPage = {readonly records: readonly FileMaterialRecord[]; readonly next: string | null};
 export type ExecutionStoreValue = readonly ExecutionReferenceTransfer[] | ExecutionReferencePage | FileMaterialFinalizationPage | FileMaterialStoreValue | ExecutionEvidenceRecord | CompensationAssociation | ExecutionRecordReceipt | ActionRecoveryRecords | ExecutionOwnerCommit | RunCommitReceipt | RunTreeCommit | RunTreeCommitReceipt | RunTreeRecoveryRecords | AgentHookInvocationCheckpoint | readonly AgentHookInvocationCheckpoint[] | readonly ProcessCheckpoint[] | ShellSessionCommit | HelarcExecutionAdmission | readonly HelarcExecutionDiscovery[] | readonly ExecutionRetentionPin[] | null;
 export type ExecutionStoreReply =
+  | {readonly kind: "performance"; readonly event: ExecutionPerformanceEvent}
   | {readonly kind: "content_staged"; readonly id: number}
   | {readonly kind: "content_result"; readonly id: number; readonly root: ExecutionContentRoot}
   | {readonly kind: "content_blocks"; readonly id: number; readonly blocks: readonly ExecutionContentBlock[]}

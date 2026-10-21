@@ -56,6 +56,21 @@ it("releases native ingress credit without waiting for projection or flush", asy
   expect(t.recorder.health().coverage?.recording?.projection.cursor).toBe(0);
   expect(t.worker.commands.some(command => command.kind === "flush")).toBe(false);
 });
+it("rechecks a scheduled health send after a matching native receipt acknowledged that snapshot", async () => {
+  const t = await setup();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  try {
+    t.offer("one");
+    await vi.advanceTimersByTimeAsync(60);
+    const batch = t.worker.commands.find((command): command is Extract<RecorderCommand, {kind: "batch"}> => command.kind === "batch")!;
+    expect(batch).toBeDefined();
+    t.worker.emit("message", {kind: "ack", receipt: t.receipt(batch),
+      coverage: {...t.coverage, recording: {...t.coverage.recording!, ingress: batch.health}}});
+    await vi.advanceTimersByTimeAsync(60);
+    expect(t.worker.commands.filter(command => command.kind === "health")).toHaveLength(0);
+    expect(t.recorder.health().queued).toBe(0);
+  } finally {clock.mockRestore();}
+});
 it("separates an unknown in-flight tail from never-sent queued records on Worker failure", async () => {
   const t = await setup(); t.offer("sent"); await vi.advanceTimersByTimeAsync(60); t.offer("unsent");
   t.worker.emit("error", new Error("worker failure"));

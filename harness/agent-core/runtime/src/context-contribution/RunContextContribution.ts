@@ -4,7 +4,6 @@ import type { ContextContribution, ContextInstructionRole } from "@agent-anythin
 import { measureContextPayload } from "@agent-anything/context/contribution";
 import type { ContextAdmissionProfile } from "@agent-anything/context/active-context";
 import type { PlanProjection } from "../plan/index.js";
-import type { ControllerFeedback } from "../controller/index.js";
 import type { RunObservation, RunState } from "../run/index.js";
 import type {
   DelegationContextMaterial,
@@ -122,51 +121,6 @@ export function createObservationContextContribution(input: { readonly id: strin
   });
 }
 
-export function createSteeringContextContribution(input: { readonly id: string; readonly revision: string; readonly runId: string; readonly commandId: string; readonly instruction: string; readonly createdAt: string }): ContextContribution {
-  return createRunContextContribution({
-    id: input.id, revision: input.revision, runId: input.runId, owner: "run-steering",
-    sourceKind: "steering_instruction", sourceId: input.commandId, sourceRevision: input.revision, observedAt: input.createdAt,
-    payload: input.instruction, payloadKind: "text", retention: "history", replacementKey: null,
-    instructionRole: "user", necessity: "mandatory", precedence: 90, audiences: Object.freeze(["model"]),
-    provenanceKind: "steering_command", provenanceId: input.commandId, provenanceRevision: input.revision,
-  });
-}
-
-export function createControllerFeedbackContextContribution(input: {
-  readonly id: string;
-  readonly revision: string;
-  readonly runId: string;
-  readonly feedback: ControllerFeedback;
-  readonly createdAt: string;
-}): ContextContribution {
-  return createRunContextContribution({
-    id: input.id,
-    revision: input.revision,
-    runId: input.runId,
-    owner: input.feedback.source.owner,
-    sourceKind: "controller_feedback",
-    sourceId: input.feedback.source.id,
-    sourceRevision: input.revision,
-    observedAt: input.createdAt,
-    payload: toContextJsonValue({
-      kind: "controller_feedback",
-      source: input.feedback.source,
-      code: input.feedback.code,
-      message: input.feedback.message,
-    }),
-    payloadKind: "structured",
-    retention: "current",
-    replacementKey: "controller_feedback",
-    instructionRole: "data",
-    necessity: "mandatory",
-    precedence: 92,
-    audiences: Object.freeze(["model"]),
-    provenanceKind: "controller_feedback",
-    provenanceId: input.feedback.source.id,
-    provenanceRevision: input.revision,
-  });
-}
-
 export function createCurrentRunContextContributions(input: {
   readonly runStateId: string;
   readonly planId: string;
@@ -271,30 +225,6 @@ export function createObservationContextAdmissionProfile(
     instructionRoles: ["data"],
     necessities: ["optional"],
     maximumPrecedence: 60,
-  });
-}
-
-export function createSteeringContextAdmissionProfile(): ContextAdmissionProfile {
-  return admissionProfile({
-    owner: "run-steering",
-    sourceKinds: ["steering_instruction"],
-    audiences: ["model"],
-    retention: ["history"],
-    instructionRoles: ["user"],
-    necessities: ["mandatory"],
-    maximumPrecedence: 90,
-  });
-}
-
-export function createControllerFeedbackContextAdmissionProfile(owner: string): ContextAdmissionProfile {
-  return admissionProfile({
-    owner,
-    sourceKinds: ["controller_feedback"],
-    audiences: ["model"],
-    retention: ["current"],
-    instructionRoles: ["data"],
-    necessities: ["mandatory"],
-    maximumPrecedence: 92,
   });
 }
 

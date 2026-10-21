@@ -98,18 +98,19 @@ function buildRequest(
   );
   const toolGuidanceBinding = protocol.bindRun(input.runId);
   const interaction = createNativeToolTurnInteraction(callableCatalog.definitions);
+  const commandSection = createHelarcCommandStateSection(input.runId, commandState);
   const promptAssembly = buildHelarcPromptAssembly({
     controllerInput: input,
     protocolInstructions: protocol.protocolInstructions,
+    currentStateSections: commandSection ? [commandSection] : [],
   });
-  const commandSection = createHelarcCommandStateSection(input.runId, commandState);
   const recoverySection = createModelOutputRecoverySection(context.outputRecovery);
   const composition = composeModelInput({
     id: `${input.runId}:model-input:${input.iteration}:${context.attemptNumber}`,
     providerId: context.target.providerId,
     model: context.target.model,
     interaction,
-    sections: [...promptAssembly.sections, ...(commandSection ? [commandSection] : []), ...(recoverySection ? [recoverySection] : [])],
+    sections: [...promptAssembly.sections, ...(recoverySection ? [recoverySection] : [])],
     lineage: Object.freeze({
       instructionBinding: source("agent-runtime", "agent_instruction_binding", input.instructionBinding.ref.id, input.instructionBinding.ref.revision),
       agent: source("agent-core", "agent_revision", input.agent.id, input.agent.revision),

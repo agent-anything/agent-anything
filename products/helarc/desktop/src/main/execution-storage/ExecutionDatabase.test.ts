@@ -16,7 +16,7 @@ import { ExecutionDatabase } from "./ExecutionDatabase.js";
 import { HelarcExecutionStore } from "./HelarcExecutionStore.js";
 import { ActionExecutionCoordinator } from "@agent-anything/action-execution/enforcement";
 import { EXECUTION_STORE_LIMITS } from "./ExecutionStoreProtocol.js";
-import {packExecutionContent, EXECUTION_CONTENT_LIMITS} from "./ExecutionContent.js";
+import {packExecutionContent, executionContentReferences, EXECUTION_CONTENT_LIMITS} from "./ExecutionContent.js";
 import type { RunCommit, RunTreeCommit } from "@agent-anything/agent-runtime/runner";
 import { RunTreeCommitWriter } from "@agent-anything/agent-runtime/runner";
 import { CompositeExecution, type CompositeCommit } from "@agent-anything/operation-composition/execution";
@@ -68,6 +68,98 @@ it("retains exact reference transfers and stable bounded public-execution pages 
 
 // Real Worker restarts and FULL durable commits are not five-second unit tests.
 describe("execution owner persistence", {timeout: 20_000}, () => {
+  it.each([false, true])("observes real Worker costs without changing commits or recovery (observer throws=%s)", async throws => {
+    const events: import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent[] = [];
+    const diagnostics = {record() {}, performance(event: import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent) {
+      events.push(event);
+      if (throws) throw new Error("diagnostics unavailable");
+    }};
+    const root = directory(), commit = treeCommit(0);
+    const store = await HelarcExecutionStore.open(root, compiledWorker, undefined, undefined, diagnostics);
+    stores.push(store);
+    await store.commitRunTree(commit);
+    expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);
+    await store.close();
+    const reopened = await HelarcExecutionStore.open(root, compiledWorker, undefined, undefined, diagnostics);
+    stores.push(reopened);
+    expect(await reopened.readLatestRunTree("run-1")).toEqual(commit);
+    await reopened.close();
+    const finished = events.filter(event => event.kind === "finished");
+    for (const stage of ["storage.host.encode", "storage.host.queue", "storage.host.round_trip", "storage.host.worker_start_wait",
+      "storage.worker.dispatch", "storage.worker.encode_reply", "storage.worker.checkpoint.transaction", "storage.worker.checkpoint.boundary"]) {
+      expect(finished.some(event => event.stage === stage && event.durationMs >= 0)).toBe(true);
+    }
+    expect(events.filter(event => event.kind === "started").every(event => finished.some(end => end.id === event.id))).toBe(true);
+    const host = finished.find(event => event.stage === "storage.host.request" && event.context.command === "commit_run_tree")!;
+    expect(finished.some(event => event.stage === "storage.worker.dispatch" &&
+      event.context.requestId === host.context.requestId && event.context.workerThreadId === host.context.workerThreadId)).toBe(true);
+    expect(finished.some(event => (event.counters?.["encode.nodes"] ?? 0) > 0)).toBe(true);
+    expect(finished.some(event => (event.counters?.["content.reads"] ?? 0) > 0)).toBe(true);
+  });
+
+  it.each(["replace", "delete"])("rechecks %s between transactions even within a command reuse scope", mode => {
+    const root = directory(), database = open(root), commit = treeCommit(0);
+    database.commitRunTree(database.generation, commit);
+    const raw = new Database(join(root, "execution.sqlite"));
+    try {
+      database.withContentScope(() => {
+        expect(database.readRunTree("run-1")?.commit).toEqual(commit);
+        const row = raw.prepare("SELECT value FROM run_tree_commits WHERE record_id=?").get(commit.id) as {value: string};
+        const child = executionContentReferences(database.readContentBlock(JSON.parse(row.value).root))[0]!;
+        if (mode === "delete") raw.prepare("DELETE FROM execution_content WHERE id=?").run(child);
+        else raw.prepare("UPDATE execution_content SET value=? WHERE id=?").run('["value",null]', child);
+        expect(() => database.readRunTree("run-1")).toThrow("execution_records_corrupt");
+      });
+    } finally {raw.close();}
+  });
+
+  it("discards command-local representations after failure without publishing staged content", () => {
+    const database = open(directory());
+    const root = database.retainContent({text: "large history ".repeat(60000)});
+    let first: unknown;
+    expect(() => database.withContentScope(() => {
+      first = database.hydrateContent(root);
+      expect(database.hydrateContent(root)).toBe(first);
+      throw new Error("abort command");
+    })).toThrow("abort command");
+    const second = database.withContentScope(() => database.hydrateContent(root));
+    expect(second).toEqual(first); expect(second).not.toBe(first);
+    expect(database.readRunTree("run-1")).toBeNull();
+  });
+
+  it.each(["replace", "delete"])("does not hide a %s of a referenced descendant behind warm parsed-content caches", mode => {
+    const root = directory(), database = open(root), first = treeCommit(0);
+    database.commitRunTree(database.generation, first);
+    expect(database.readRunTree("run-1")?.commit).toEqual(first);
+    const raw = new Database(join(root, "execution.sqlite"));
+    try {
+      const row = raw.prepare("SELECT value FROM run_tree_commits WHERE record_id=?").get(first.id) as {value: string};
+      const rootId = JSON.parse(row.value).root;
+      const rootBlock = database.readContentBlock(rootId);
+      const child = executionContentReferences(rootBlock)[0]!;
+      expect(child).toBeDefined(); expect(child).not.toBe(rootId);
+      if (mode === "replace") raw.prepare("UPDATE execution_content SET value=? WHERE id=?").run('["value",null]', child);
+      else raw.prepare("DELETE FROM execution_content WHERE id=?").run(child);
+      expect(() => database.readRunTree("run-1")).toThrow("execution_records_corrupt");
+      if (mode === "replace") expect(() => database.commitRunTree(database.generation, treeCommit(1))).toThrow();
+      expect(raw.prepare("SELECT 1 FROM run_tree_commits WHERE revision=1").get()).toBeUndefined();
+    } finally {raw.close();}
+  });
+
+  it("hydrates each exact checkpoint once per transaction with immutable views and fresh latest selectors", () => {
+    const root = directory(), database = open(root);
+    database.commitRunTree(database.generation, treeCommit(0));
+    const hydrate = vi.spyOn(database, "hydrateContent");
+    const first = database.readRunTree("run-1")!;
+    const roots = hydrate.mock.calls.map(([value]) => value.root);
+    expect(roots.length).toBe(new Set(roots).size);
+    expect(() => {(first.members[0]!.head.state as {taskId: string}).taskId = "caller mutation";}).toThrow();
+    expect(database.readRunTree("run-1")!.members[0]!.head.state.taskId).not.toBe("caller mutation");
+    database.commitRunTree(database.generation, treeCommit(1));
+    expect(database.readRunTree("run-1")?.commit.revision).toBe(1);
+    expect(database.readOwnerCommit("run-1:commit:0")?.value.state.revision).toBe(0);
+  });
+
   it("keeps large checkpoints, staged-but-unpublished content and historical roots across actual Worker reopen", async () => {
     const root = directory();
     const first = treeCommit(0);
@@ -98,14 +190,33 @@ describe("execution owner persistence", {timeout: 20_000}, () => {
     raw.prepare("DELETE FROM execution_content WHERE id=?").run(JSON.parse(row.value).root); raw.close();
     expect(() => open(root).readRunTreeCommit(large.id)).toThrow("execution_records_corrupt");
   }, 60000);
-  it("records the unacknowledged commit and queued requests on the existing timeout", async () => {
+  it("owns a large queued request without retaining its mutable source", async () => {
+    const root = directory(), payload = {text: "retained".repeat(10000)};
+    const initial = treeCommit(0);
+    const commit = {...initial, runs: initial.runs.map(run => ({...run,
+      control: {...run.control, controllerCheckpoints: [["response", payload]]}}))} as RunTreeCommit;
+    const expected = structuredClone(commit);
+    const store = await HelarcExecutionStore.open(root, compiledWorker);
+    stores.push(store);
+    const pending = store.commitRunTree(commit);
+    payload.text = "caller changed the request";
+    await pending;
+    expect(await store.readRunTreeCommit(commit.id)).toEqual(expected);
+    await store.close();
+    const reopened = await HelarcExecutionStore.open(root, compiledWorker);
+    stores.push(reopened);
+    expect(await reopened.readRunTreeCommit(commit.id)).toEqual(expected);
+  });
+  it.each([false, true])("records the unacknowledged commit and queued requests on the existing timeout (large=%s)", async large => {
     const record = vi.fn();
     const worker = pathToFileURL(join(process.cwd(), "tests/fixtures/execution-storage-unresponsive-worker.mjs"));
     const store = await HelarcExecutionStore.open(directory(), worker, undefined, undefined, {record});
     stores.push(store);
     vi.useFakeTimers({toFake: ["setTimeout", "clearTimeout", "performance"]});
     try {
-      const commit = treeCommit(0);
+      const initial = treeCommit(0);
+      const commit = large ? {...initial, runs: initial.runs.map(run => ({...run,
+        control: {...run.control, controllerCheckpoints: [["response", {text: "large".repeat(10000)}]]}}))} as RunTreeCommit : initial;
       const first = expect(store.commitRunTree(commit)).rejects.toMatchObject({code: "execution_storage_acknowledgement_unknown"});
       const queued = expect(store.readLatestRun("run-1")).rejects.toMatchObject({code: "execution_storage_not_dispatched"});
       await vi.advanceTimersByTimeAsync(EXECUTION_STORE_LIMITS.acknowledgementMs);
@@ -784,7 +895,7 @@ function runCommit(revision: number): RunCommit {
     state: {run: {id: "run-1"}, taskId: "task-1", revision, status: "running", activeAgent: agent,
       activeInstructionBinding: instructionBinding.ref, startedAt: "2026-10-14T00:00:00Z", deadlineAt: "2026-10-14T01:00:00Z",
       items: revision === 0 ? [] : [{ref: {id: "item-1"}, committedInRevision: 1, payload: {kind: "test"}}]},
-    control: {activeAgent: agent, instructionBinding, instructions, descendantTransfers: [], steering: {epoch: 0, pending: [], ledger: []}},
+    control: {activeAgent: agent, instructionBinding, instructions, controllerCheckpoints: [], descendantTransfers: [], steering: {epoch: 0, pending: [], ledger: []}},
   } as unknown as RunCommit;
 }
 

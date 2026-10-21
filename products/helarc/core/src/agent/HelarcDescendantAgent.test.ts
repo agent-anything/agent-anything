@@ -1,6 +1,8 @@
 import { createDelegationLimits, type DelegationResult } from "@agent-anything/agent-runtime/delegation";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
+import { createModelCallRef, type ModelToolCall } from "@agent-anything/model-interaction";
 import { describe, expect, it } from "vitest";
+import { resolveHelarcFinalReply } from "../controller/HelarcFinalReply.js";
 import { createHelarcDelegatedWorkerAgent } from "./HelarcAgent.js";
 import { createHelarcDescendantAgentContribution } from "./HelarcDescendantAgent.js";
 
@@ -88,13 +90,16 @@ describe("Helarc descendant Agent contribution", () => {
     },
   );
 
-  it.each([null, "Useful findings collected before the failure."])(
+  it.each([null, "Useful findings collected before the failure."].flatMap(narrative =>
+    ["model_output_limit_exhausted", "model_protocol_recovery_exhausted"].map(code => ({narrative, code}))))(
     "delivers a failed Child's actual cause without treating diagnostic text as narrative: %j",
-    (narrative) => {
+    ({narrative, code}) => {
       const agent = createHelarcDelegatedWorkerAgent({ providerId: "test", modelId: "test" });
       const { delegation } = createHelarcDescendantAgentContribution(agent, "2026-09-01T00:00:00.000Z");
       const diagnostic = {
-        message: "Model output was truncated at the configured 2048-token limit after 3 generation attempts.",
+        message: code === "model_output_limit_exhausted"
+          ? "Model output was truncated at the configured 2048-token limit after 3 generation attempts."
+          : "The model did not provide an ending signal after 2 correction opportunities.",
         messageTruncated: false, retryable: false, category: null, underlyingCode: null,
       };
       const outcome = delegation.resultProjection.project({
@@ -102,7 +107,7 @@ describe("Helarc descendant Agent contribution", () => {
           ref: { id: "failed-result", revision: "1" },
           correlation: { child: { run: { id: "child-run" } } },
           terminal: {
-            status: "failed", code: "model_output_limit_exhausted", failureKind: "model",
+            status: "failed", code, failureKind: "model",
             failureDiagnostic: diagnostic,
           },
           narrative: narrative === null ? null : { text: narrative },
@@ -117,11 +122,11 @@ describe("Helarc descendant Agent contribution", () => {
         output: {
           agent_id: "child-reference", status: "failed", summary: narrative ?? "",
           artifact_refs: [], effect_status: "known", uncertainty: [],
-          failure_code: "model_output_limit_exhausted",
-          failure: { kind: "model", code: "model_output_limit_exhausted", ...diagnostic },
+          failure_code: code,
+          failure: { kind: "model", code, ...diagnostic },
         },
         failure: {
-          owner: "helarc", code: "model_output_limit_exhausted", message: diagnostic.message,
+          owner: "helarc", code, message: diagnostic.message,
           retryable: false, metadata: {},
         },
       });
@@ -143,6 +148,55 @@ describe("Helarc descendant Agent contribution", () => {
   it("keeps a completed Child's final output as its narrative", () => {
     expect(projectNarrative("completed", [["Earlier report."]], { kind: "complete", summary: "Final report." }))
       .toBe("Final report.");
+  });
+
+  it.each([
+    { response: undefined, expected: "First finding.\n\nSecond finding.", disposition: "adopted_previous" },
+    { response: "Revised findings.", expected: "Revised findings.", disposition: "supplied" },
+    { response: "The report was provided above.", expected: "The report was provided above.", disposition: "supplied" },
+    { response: "", expected: "", disposition: "explicit_empty" },
+  ])("delivers the selected Child reply, not its private conversation: $disposition / $response", async ({response, expected, disposition}) => {
+    const call: ModelToolCall = {
+      name: "final_result",
+      modelCallRef: createModelCallRef({
+        providerRequestId: "child-request-2", controllerRequestId: "child-controller-2",
+        turnId: "child-turn-2", contentBlockOrdinal: 0, branchId: "child-run:main",
+      }),
+      providerCallRef: null, ordinal: 0, input: response === undefined ? {} : {response},
+    };
+    const resolved = resolveHelarcFinalReply({
+      runId: "child-run", interactionRevision: "3", call,
+      modelItems: [{id: call.modelCallRef.id, kind: "model_tool_call", call, metadata: {}}],
+      previous: {
+        runId: "child-run", runItemId: "child-item-1", runItemSequence: 1, turnId: "child-turn-1",
+        textBlocks: [
+          {modelItemId: "finding-1", ordinal: 0, text: "First finding."},
+          {modelItemId: "finding-2", ordinal: 1, text: "Second finding."},
+        ],
+      },
+    });
+    const agent = createHelarcDelegatedWorkerAgent({providerId: "test", modelId: "test"});
+    const retained = agent.output.validate(JSON.parse(JSON.stringify({kind: "complete", ...resolved})));
+    if (!retained.valid) throw new Error(retained.message);
+    expect(retained.output.finalReply?.disposition).toBe(disposition);
+    if (response === undefined) expect(retained.output.source).toMatchObject({
+      kind: "model_text", turnId: "child-turn-1", modelItemIds: ["finding-1", "finding-2"],
+    });
+    const narrative = projectNarrative("completed", [["Private commentary."], ["First finding.", "Second finding."]], retained.output);
+    const {delegation} = createHelarcDescendantAgentContribution(agent, "2026-09-01T00:00:00.000Z");
+    const parentResult = await delegation.resultProjection.project({
+      result: {
+        terminal: {status: "completed", code: "completion_accepted"},
+        narrative: narrative ? {text: narrative} : null,
+        artifacts: {refs: []}, effects: {status: "none"}, uncertainty: [],
+        expectationCoverage: [{required: true, disposition: narrative ? "present" : "failed"}],
+        limitDisposition: {status: "within_limits"},
+      } as unknown as DelegationResult,
+      continuation: {id: "child-reference", revision: "1"},
+    });
+    expect(parentResult.output).toMatchObject({summary: expected, agent_id: "child-reference", status: "completed"});
+    expect(narrative).toBe(expected);
+    expect(parentResult.output).not.toHaveProperty("messages");
   });
 });
 

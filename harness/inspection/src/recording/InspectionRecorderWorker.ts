@@ -133,14 +133,14 @@ async function projectSlice(): Promise<void> {
     for (const record of records) telemetry.accept(record);
     await telemetry.flush(record => exported.push(record));
     usage.check(exported.reduce((sum, record) => sum + Buffer.byteLength(record.data) * 2 + 8192, 0));
-    db.writeProjection(exported, {...progress.projection, cursor, issues: telemetry.issues,
-      sliceMaxMs: Math.max(progress.projection.sliceMaxMs, performance.now() - started)}, telemetry.dropped);
+    db.recordTiming("projectionConversion", performance.now() - started);
+    db.writeProjection(exported, {...progress.projection, cursor, issues: telemetry.issues}, telemetry.dropped);
     refreshBudget();
   } catch {
     // SDK pairing/export state has advanced: do not replay this slice into it.
     db.writeProjection([], {...progress.projection, status: "failed", code: "inspection_projection_failed",
       issues: telemetry.issues}, telemetry.dropped);
-  }
+  } finally { db.recordTiming("projectionSlice", performance.now() - started); }
 }
 
 async function finishBarriers(): Promise<void> {

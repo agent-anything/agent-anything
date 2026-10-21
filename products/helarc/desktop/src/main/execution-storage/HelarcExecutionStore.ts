@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { restoreExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
 import { reportExecutionFailure, type ExecutionDiagnosticSink, type ExecutionDiagnosticContext } from "../diagnostics/HelarcExecutionDiagnostics.js";
+import {beginExecutionTiming, measureExecutionSync, type ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
 import { FILE_MATERIAL_POLICY, snapshotFileMaterialPreparation, type FileMaterialRecordPort, type FileMaterialPreparation, type FileMaterialReservation,
   type FileMaterialRecord, type FileMaterialRead, type FileMaterialObserver, type FileMaterialObservation } from "@agent-anything/helarc-local-environment/filesystem";
 import { snapshotExecutionEvidence, snapshotCompensationAssociation, type ExecutionEvidenceRecordPort, type ExecutionEvidenceRecord,
@@ -10,7 +11,7 @@ import type { HelarcExecutionAdmission, HelarcExecutionDiscovery } from "./Helar
 import {ExecutionEnvironmentProtection, type ExecutionEnvironmentCipher, type RetainedCommandEnvironment, type StoredProcessCheckpoint} from "./ExecutionEnvironmentProtection.js";
 import type {CommandEnvironmentRecoverySnapshot} from "@agent-anything/helarc-local-environment/command";
 import type { ProcessCheckpoint, ProcessRecordPort, ShellSessionRecordPort, ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
-import {packExecutionContent, unpackExecutionContent, executionContentReferences, EXECUTION_CONTENT_LIMITS,
+import {unpackExecutionContent, executionContentReferences, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentStatistics, EXECUTION_CONTENT_LIMITS,
   type ExecutionContentBlock, type ExecutionContentRoot} from "./ExecutionContent.js";
 import type { RunCommit, RunCommitPort, RunCommitReceipt, RunTreeCommit, RunTreeCommitPort, RunTreeCommitReceipt, RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/runner";
 import type { CompositeCommit, CompositeCommitPort } from "@agent-anything/operation-composition/execution";
@@ -28,7 +29,9 @@ import {
 interface PendingRequest {
   readonly id: number;
   readonly bytes: number;
-  readonly command: ExecutionStoreCommand;
+  readonly command: ExecutionStoreCommand | null;
+  readonly sourceKind: ExecutionStoreCommand["kind"];
+  readonly context: ExecutionDiagnosticContext;
   readonly content: ExecutionContentRoot | null;
   readonly upload: readonly ExecutionContentBlock[];
   uploadOffset: number;
@@ -40,6 +43,11 @@ interface PendingRequest {
   responseBytes: number;
   wireKind: ExecutionStoreWireCommand["kind"] | null;
   dispatchedAt: number | null;
+  endRequest: ReturnType<typeof beginExecutionTiming>;
+  endQueue: ReturnType<typeof beginExecutionTiming>;
+  endWire: ReturnType<typeof beginExecutionTiming> | null;
+  endWorkerWait: ReturnType<typeof beginExecutionTiming> | null;
+  wireSequence: number;
   readonly resolve: (value: ExecutionStoreValue) => void;
   readonly reject: (error: unknown) => void;
 }
@@ -57,24 +65,40 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   private closed = false;
   private readonly activeRoots = new Set<string>();
   private readonly stagedContent = new Set<string>();
+  private readonly contentCache = new ExecutionContentCache();
+  private readonly contentEncoder: ExecutionContentEncoder;
   private readonly exited: Promise<void>;
   private readonly environments: ExecutionEnvironmentProtection;
+  private readonly workerTimings = new Map<string, {event: ExecutionPerformanceEvent; receivedAt: number}>();
 
   private constructor(private readonly worker: Worker, readonly generation: number, private readonly evidenceObserver?: ExecutionEvidenceObserver,
     private readonly fileMaterialObserver?: FileMaterialObserver, private readonly diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher) {
+    this.contentEncoder = new ExecutionContentEncoder(undefined, new ExecutionContentStatistics(Boolean(diagnostics?.performance)));
     this.environments = new ExecutionEnvironmentProtection(environmentCipher);
     this.exited = new Promise(resolve => worker.once("exit", code => {
+      this.contentCache.clear(); this.contentEncoder.clear();
       if (!this.closed) this.fail("execution_storage_acknowledgement_unknown", new Error(`Execution storage Worker exited with code ${code}.`), "storage_worker_exit");
       resolve();
     }));
     worker.on("error", error => this.fail("execution_storage_acknowledgement_unknown", error, "storage_worker_error"));
     worker.on("message", (reply: ExecutionStoreReply) => {
+      if (reply.kind === "performance") {
+        const event = reply.event;
+        if (event.kind === "started") {
+          if (this.workerTimings.size < 32) this.workerTimings.set(event.id, {event, receivedAt: performance.now()});
+          if (event.stage === "storage.worker.command" && event.context.requestId === this.flight?.id) this.flight?.endWorkerWait?.();
+        } else this.workerTimings.delete(event.id);
+        try {this.diagnostics?.performance?.(event);} catch { /* Observation is independent. */ }
+        return;
+      }
       if (reply.kind === "ready" || reply.kind === "startup_failed") return;
       if (!this.flight || reply.id !== this.flight.id) {
         this.fail("execution_storage_protocol_invalid");
         return;
       }
       const request = this.flight;
+      request.endWire?.(reply.kind === "rejected" ? "failed" : "ok");
+      request.endWorkerWait?.();
       try {
         if (reply.kind !== "rejected" &&
             ((request.wireKind === "stage_content") !== (reply.kind === "content_staged") ||
@@ -99,13 +123,14 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
           for (const block of reply.blocks) {
             request.responseBytes += Buffer.byteLength(block.text);
             if (request.responseBytes > EXECUTION_CONTENT_LIMITS.hydratedBytes || request.responseBlocks.size >= EXECUTION_CONTENT_LIMITS.blocks) throw new ExecutionStoreError("execution_content_capacity_exceeded");
-            const refs = executionContentReferences(block);
+            const refs = executionContentReferences(block, this.contentCache);
             request.responseBlocks.set(block.id, block);
             request.responsePending.delete(block.id);
             for (const id of refs) if (!request.responseBlocks.has(id)) request.responsePending.add(id);
           }
           if (request.responsePending.size) { this.readNext(request); return; }
-          const value = unpackExecutionContent(request.responseRoot, id => request.responseBlocks.get(id)!) as ExecutionStoreValue;
+          const value = measureExecutionSync(this.diagnostics, "storage.host.expand_response", request.context,
+            () => unpackExecutionContent(request.responseRoot!, id => request.responseBlocks.get(id)!, this.contentCache, true)) as ExecutionStoreValue;
           reply = {kind: "result", id: reply.id, value};
         }
       } catch (error) { this.fail("execution_storage_acknowledgement_unknown", error, "storage_content_transfer"); return; }
@@ -114,12 +139,14 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       if (this.timer) clearTimeout(this.timer);
       this.timer = null;
       if (reply.kind === "rejected") {
+        request.endRequest("failed");
         const error = new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)});
-        this.recordFailure("storage_worker_rejected", error, request.command, request);
+        this.recordFailure("storage_worker_rejected", error, request.command ?? undefined, request);
         request.reject(error);
       }
       else {
-        if (request.command.kind === "close") this.closed = true;
+        request.endRequest();
+        if (request.sourceKind === "close") this.closed = true;
         request.resolve(reply.value);
       }
       this.dispatch();
@@ -128,11 +155,15 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
 
   static async open(directory: string, workerUrl = new URL("./ExecutionStoreWorker.js", import.meta.url), evidenceObserver?: ExecutionEvidenceObserver,
     fileMaterialObserver?: FileMaterialObserver, diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher): Promise<HelarcExecutionStore> {
-    const worker = new Worker(workerUrl, { workerData: { directory } });
+    const endStartup = beginExecutionTiming(diagnostics, "storage.host.startup");
+    let worker: Worker;
+    try {worker = new Worker(workerUrl, { workerData: { directory, performanceDiagnostics: Boolean(diagnostics?.performance) } });}
+    catch (error) {endStartup("failed"); throw error;}
     const store = await new Promise<HelarcExecutionStore>((resolve, reject) => {
       const timer = setTimeout(() => failed(new ExecutionStoreError("execution_storage_start_timeout")), EXECUTION_STORE_LIMITS.acknowledgementMs);
       const cleanup = () => { clearTimeout(timer); worker.off("error", failed); worker.off("exit", prematureExit); worker.off("message", message); };
       const failed = (error: unknown) => {
+        endStartup("failed");
         reportExecutionFailure(diagnostics, "storage_startup", {}, error);
         cleanup();
         void worker.terminate().then(() => reject(error), () => reject(error));
@@ -142,6 +173,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
         if (reply.kind === "startup_failed") { failed(new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)})); return; }
         if (reply.kind !== "ready") { failed(new ExecutionStoreError("execution_storage_protocol_invalid")); return; }
         const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher);
+        endStartup();
         cleanup();
         resolve(store);
       };
@@ -366,11 +398,14 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   close(): Promise<void> {
     if (this.closing) return this.closing;
     // Close joins the same queue, after all already accepted records.
+    const end = beginExecutionTiming(this.diagnostics, "storage.host.close", {generation: this.generation});
     this.closing = this.request({ kind: "close" }, true).then(async () => {
       await this.exited;
+      end();
     }, async error => {
       await this.worker.terminate();
       await this.exited;
+      end("failed");
       throw error;
     });
     return this.closing;
@@ -381,26 +416,38 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   }
   private request(command: ExecutionStoreCommand, closing = false): Promise<ExecutionStoreValue> {
     if (this.failure || this.closed || this.closing) return Promise.reject(new ExecutionStoreError(this.failure ?? "execution_store_closed", {cause: this.failureCause}));
-    let packed: ReturnType<typeof packExecutionContent>;
-    try { packed = packExecutionContent(command); }
-    catch (error) { this.recordFailure("storage_request_encoding", error, command); throw error; }
-    const text = JSON.stringify(command);
-    const large = Buffer.byteLength(text) > EXECUTION_CONTENT_LIMITS.blockBytes;
+    let packed: ReturnType<ExecutionContentEncoder["pack"]>;
+    const id = ++this.nextId;
+    const context = {...commandContext(command), generation: this.generation, requestId: id, workerThreadId: this.worker.threadId};
+    const endRequest = beginExecutionTiming(this.diagnostics, "storage.host.request", context);
+    const endEncoding = beginExecutionTiming(this.diagnostics, "storage.host.encode", context);
+    try { packed = this.contentEncoder.pack(command); endEncoding("ok", this.contentEncoder.statistics.take()); }
+    catch (error) { endEncoding("failed", this.contentEncoder.statistics.take()); endRequest("failed"); this.recordFailure("storage_request_encoding", error, command); throw error; }
+    // Logical accounting conservatively admits small wire messages. Large requests
+    // already have an owned content representation; do not clone their full history.
+    const large = packed.bytes > EXECUTION_CONTENT_LIMITS.blockBytes / 2;
     const bytes = packed.bytes + (large ? packed.blocks.reduce((sum, block) => sum + Buffer.byteLength(block.text), 0) : 0);
     const reject = (code: string) => {
       const error = new ExecutionStoreError(code);
+      endRequest("failed");
       this.recordFailure("storage_request_admission", error, command, null, bytes);
       return Promise.reject(error);
     };
     if (!closing && (this.queue.length + Number(this.flight !== null) >= EXECUTION_STORE_LIMITS.pendingRequests || this.bytes + bytes > EXECUTION_STORE_LIMITS.pendingBytes)) {
       return reject("execution_storage_capacity_exceeded");
     }
+    let wireCommand: ExecutionStoreCommand | null;
+    try {wireCommand = large ? null : measureExecutionSync(this.diagnostics, "storage.host.clone_wire", context,
+      () => JSON.parse(JSON.stringify(command)) as ExecutionStoreCommand);}
+    catch (error) {endRequest("failed"); throw error;}
     return new Promise((resolve, reject) => {
       this.bytes += bytes;
-      this.queue.push({ id: ++this.nextId, bytes, command: JSON.parse(text) as ExecutionStoreCommand,
+      this.queue.push({ id, bytes, command: wireCommand,
+        sourceKind: command.kind, context,
         content: large ? {format: 1, root: packed.root} : null, upload: large ? packed.blocks : [],
         uploadOffset: 0, uploaded: [], responseRoot: null, responseBlocks: new Map(), responsePending: new Set(), requestedBlocks: [], responseBytes: 0, wireKind: null,
-        dispatchedAt: null, resolve, reject });
+        dispatchedAt: null, endRequest, endQueue: beginExecutionTiming(this.diagnostics, "storage.host.queue", {...context, pendingRequests: this.queue.length, pendingBytes: this.bytes}),
+        endWire: null, endWorkerWait: null, wireSequence: 0, resolve, reject });
       this.dispatch();
     });
   }
@@ -409,6 +456,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     const request = this.queue.shift();
     if (!request) return;
     this.flight = request;
+    request.endQueue();
     request.dispatchedAt = performance.now();
     this.sendNext(request);
   }
@@ -425,7 +473,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     if (batch.length) {
       request.uploaded = batch.map(block => block.id);
       this.sendWire(request, {kind: "stage_content", blocks: batch});
-    } else this.sendWire(request, request.content ? {kind: "invoke_content", root: request.content} : request.command);
+    } else this.sendWire(request, request.content ? {kind: "invoke_content", root: request.content} : request.command!);
   }
   private readNext(request: PendingRequest): void {
     request.requestedBlocks = [...request.responsePending].slice(0, 16);
@@ -433,6 +481,9 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   }
   private sendWire(request: PendingRequest, command: ExecutionStoreWireCommand): void {
     request.wireKind = command.kind;
+    const context = {...request.context, wireKind: command.kind, wireSequence: ++request.wireSequence, requestBytes: request.bytes, contentBlocks: request.upload.length};
+    request.endWire = beginExecutionTiming(this.diagnostics, "storage.host.round_trip", context);
+    request.endWorkerWait = beginExecutionTiming(this.diagnostics, "storage.host.worker_start_wait", context);
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.fail("execution_storage_acknowledgement_unknown", undefined, "storage_acknowledgement_timeout"), EXECUTION_STORE_LIMITS.acknowledgementMs);
     try { this.worker.postMessage({ id: request.id, generation: this.generation, command }); }
@@ -443,12 +494,22 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     this.failure = code;
     const error = new ExecutionStoreError(code, cause === undefined ? undefined : {cause});
     this.failureCause = error;
-    this.recordFailure(stage, error, this.flight?.command, this.flight);
+    this.recordFailure(stage, error, this.flight?.command ?? undefined, this.flight);
+    for (const {event, receivedAt} of this.workerTimings.values()) {
+      try {this.diagnostics?.performance?.({...event, kind: "finished", durationMs: performance.now() - receivedAt,
+        context: {...event.context, timingBasis: "host_elapsed_since_worker_start_received"},
+        occurredAt: new Date().toISOString(), outcome: "unknown"});} catch { /* Observation is independent. */ }
+    }
+    this.workerTimings.clear();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.flight?.endWire?.("unknown"); this.flight?.endWorkerWait?.("unknown"); this.flight?.endRequest("unknown");
     this.flight?.reject(error);
     this.flight = null;
-    for (const pending of this.queue.splice(0)) pending.reject(new ExecutionStoreError("execution_storage_not_dispatched", {cause: error}));
+    for (const pending of this.queue.splice(0)) {
+      pending.endQueue("failed"); pending.endRequest("failed");
+      pending.reject(new ExecutionStoreError("execution_storage_not_dispatched", {cause: error}));
+    }
     this.bytes = 0;
     void this.worker.terminate();
   }
@@ -456,7 +517,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   private recordFailure(stage: string, error: unknown, command?: ExecutionStoreCommand, request: PendingRequest | null = null, bytes?: number): void {
     try {
       reportExecutionFailure(this.diagnostics, stage, {
-        ...commandContext(command), generation: this.generation, requestId: request?.id ?? null,
+        ...(request?.context ?? commandContext(command)), generation: this.generation, requestId: request?.id ?? null,
         requestBytes: request?.bytes ?? bytes ?? null, pendingRequests: this.queue.length,
         pendingBytes: this.bytes, acknowledgementMs: EXECUTION_STORE_LIMITS.acknowledgementMs,
         elapsedMs: request?.dispatchedAt == null ? null : Math.round(performance.now() - request.dispatchedAt),

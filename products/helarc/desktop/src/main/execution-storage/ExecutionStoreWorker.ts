@@ -1,28 +1,44 @@
-import { parentPort, workerData } from "node:worker_threads";
+import { parentPort, workerData, threadId } from "node:worker_threads";
+import {randomUUID} from "node:crypto";
 import { ExecutionDatabase } from "./ExecutionDatabase.js";
 import { ExecutionStoreError, type ExecutionStoreCommand, type ExecutionStoreRequest, type ExecutionStoreReply } from "./ExecutionStoreProtocol.js";
 import {EXECUTION_CONTENT_LIMITS} from "./ExecutionContent.js";
 import { captureExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
+import {beginExecutionTiming, measureExecutionSync, type ExecutionPerformanceSink} from "../diagnostics/ExecutionPerformance.js";
 
 if (!parentPort) throw new Error("Execution storage requires its dedicated Worker.");
 const port = parentPort;
+const timingSink: ExecutionPerformanceSink | undefined = workerData.performanceDiagnostics
+  ? {performance: event => {try {port.postMessage({kind: "performance", event} satisfies ExecutionStoreReply);} catch { /* Best effort only. */ }}}
+  : undefined;
+let timingContext: Record<string, string | number> = {};
 let database: ExecutionDatabase;
 try {
-  database = new ExecutionDatabase((workerData as { directory: string }).directory);
+  database = new ExecutionDatabase((workerData as { directory: string }).directory, Boolean(timingSink));
   send({ kind: "ready", generation: database.generation });
   port.on("message", (wire: ExecutionStoreRequest) => {
+    database.withContentScope(() => {
+    timingContext = {requestId: wire.id, generation: wire.generation, wireKind: wire.command.kind, workerThreadId: threadId};
+    const end = beginExecutionTiming(timingSink, "storage.worker.command", timingContext);
+    let failed = false, close = false;
     try {
       if (wire.generation !== database.generation) throw new ExecutionStoreError("execution_owner_stale");
       if (wire.command.kind === "stage_content") {
-        database.stageContent(wire.generation, wire.command.blocks);
+        const blocks = wire.command.blocks;
+        measureExecutionSync(timingSink, "storage.worker.stage_content", timingContext, () => database.stageContent(wire.generation, blocks));
         send({kind: "content_staged", id: wire.id}); return;
       }
       if (wire.command.kind === "read_content") {
         if (wire.command.ids.length > 16) throw new ExecutionStoreError("execution_content_transfer_too_large");
         send({kind: "content_blocks", id: wire.id, blocks: wire.command.ids.map(id => database.readContentBlock(id))}); return;
       }
-      const command = wire.command.kind === "invoke_content" ? database.hydrateContent(wire.command.root) as ExecutionStoreCommand : wire.command;
+      const wireCommand = wire.command;
+      const command = wireCommand.kind === "invoke_content"
+        ? measureExecutionSync(timingSink, "storage.worker.hydrate_command", timingContext, () => database.hydrateContent(wireCommand.root)) as ExecutionStoreCommand : wireCommand;
+      timingContext.command = command.kind;
       const request = {...wire, command};
+      const endDispatch = beginExecutionTiming(timingSink, "storage.worker.dispatch", timingContext);
+      try {
       switch (request.command.kind) {
         case "file_material": send({kind: "result", id: request.id, value: database.fileMaterialCommand(request.generation, request.command.command)}); break;
         case "commit_reference_transfer": database.commitReferenceTransfer(request.generation, request.command.transfer); send({kind: "result", id: request.id, value: null}); break;
@@ -55,12 +71,24 @@ try {
         case "record_action": send({ kind: "result", id: request.id, value: database.recordAction(request.generation, request.command.record) }); break;
         case "read_action": send({ kind: "result", id: request.id, value: database.readAction(request.command.runId, request.command.actionId) }); break;
         case "read_receipt": send({ kind: "result", id: request.id, value: database.readReceipt(request.command.recordId) }); break;
-        case "close": database.close(); send({ kind: "result", id: request.id, value: null }); port.close(); break;
+        case "close": database.close(); send({ kind: "result", id: request.id, value: null }); close = true; break;
         default: throw new ExecutionStoreError("execution_storage_protocol_invalid");
       }
+      endDispatch();
+      } catch (error) {endDispatch("failed"); throw error;}
     } catch (error) {
+      failed = true;
       send({ kind: "rejected", id: wire.id, code: code(error), error: captureExecutionError(error) });
+    } finally {
+      if (timingSink) {
+        for (const sample of database.takePerformance()) timingSink.performance?.({kind: "finished", id: randomUUID(),
+          stage: `storage.worker.${sample.stage}`, occurredAt: new Date().toISOString(), durationMs: sample.totalMs,
+          outcome: failed ? "failed" : "ok", context: {...timingContext, count: sample.count, totalMs: sample.totalMs, maxMs: sample.maxMs}});
+      }
+      end(failed ? "failed" : "ok", database.takeContentStatistics());
+      if (close) port.close();
     }
+    });
   });
   port.on("close", () => database.close());
 } catch (error) {
@@ -69,9 +97,12 @@ try {
 }
 
 function send(reply: ExecutionStoreReply): void {
-  if (reply.kind === "result" && Buffer.byteLength(JSON.stringify(reply.value)) > EXECUTION_CONTENT_LIMITS.blockBytes) {
-    port.postMessage({kind: "content_result", id: reply.id, root: database.retainContent(reply.value)} satisfies ExecutionStoreReply);
-  } else port.postMessage(reply);
+  if (reply.kind === "ready" || reply.kind === "startup_failed") {port.postMessage(reply); return;}
+  measureExecutionSync(timingSink, "storage.worker.encode_reply", timingContext, () => {
+    if (reply.kind === "result" && Buffer.byteLength(JSON.stringify(reply.value)) > EXECUTION_CONTENT_LIMITS.blockBytes) {
+      port.postMessage({kind: "content_result", id: reply.id, root: database.retainContent(reply.value)} satisfies ExecutionStoreReply);
+    } else port.postMessage(reply);
+  });
 }
 function code(error: unknown): string {
   return error instanceof ExecutionStoreError || error instanceof Error && "code" in error && typeof error.code === "string" ? error.code as string : "execution_storage_failed";

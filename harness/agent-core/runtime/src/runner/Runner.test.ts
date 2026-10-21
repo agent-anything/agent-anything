@@ -1113,6 +1113,15 @@ describe("Runner semantic integration", () => {
     expect(controller.calls).toHaveLength(2);
     expect(result.items.filter(({ payload }) => payload.kind === "controller_feedback"))
       .toHaveLength(1);
+    const feedback = result.items.find(item => item.payload.kind === "controller_feedback")!;
+    const admission = result.items.find(item => item.payload.kind === "input_notification")!;
+    expect(admission.committedInRevision).toBe(feedback.committedInRevision);
+    expect(admission.payload).toMatchObject({notification: {
+      interpretation: {kind: "controller_feedback", turn: {sequence: 1}}, data: {message: "Perform the requested work."},
+    }});
+    expect(controller.calls[1]?.inputDelivery?.entries).toHaveLength(1);
+    expect(JSON.stringify(controller.calls[1]?.context)).not.toContain("Perform the requested work.");
+    expect(result.items.filter(item => item.payload.kind === "input_delivery")).toHaveLength(1);
   });
 
   it("finalizes required Run-owned resources before terminal settlement", async () => {
@@ -2124,12 +2133,12 @@ describe("Runner semantic integration", () => {
             });
           }
           await childMayComplete.promise;
-          expect(input.context.blocks.some((block) =>
-            block.instructionRole === "user" &&
-            block.payload.kind === "text" &&
-            block.payload.text === "Continue with the focused check."
-          )).toBe(true);
-          return complete("Child completed after same-Run recovery", "model_child_complete");
+          expect(input.inputDelivery?.entries).toContainEqual(expect.objectContaining({
+            interpretation: {kind: "steering", commandId: expect.any(String)},
+            data: expect.objectContaining({instruction: "Continue with the focused check."}),
+          }));
+          return {...complete("Child completed after same-Run recovery", "model_child_complete"),
+            inputDeliveryReceipt: createControllerInputDeliveryReceipt(input.inputDelivery!, input.toolExposure.controllerRequestId)};
         }
         if (input.runId !== "run_001") {
           throw new Error(`Unexpected Run '${input.runId}'.`);
@@ -2161,14 +2170,15 @@ describe("Runner semantic integration", () => {
             suspension: { code: "run_suspension_requested" },
             output: { agent_id: "run_002", status: "suspended" },
           });
-          return advance([toolCandidate(
+          return {...advance([toolCandidate(
             "SendMessage",
             {
               agent_id: active!.target.id,
               prompt: "Continue with the focused check.",
             },
             input.toolExposure.controllerRequestId,
-          )], "model_send_message_1");
+          )], "model_send_message_1"), inputDeliveryReceipt: input.inputDelivery ?
+            createControllerInputDeliveryReceipt(input.inputDelivery, input.toolExposure.controllerRequestId) : null};
         }
         if (progressionTurn === 3) {
           childMayComplete.resolve();
@@ -3619,6 +3629,11 @@ describe("Runner semantic integration", () => {
       input => {
         expect(input.plan).toMatchObject({version: 1, steps: [{step: "Inspect", status: "pending"}]});
         expect(input.interaction.unsettledCalls).toEqual([]);
+        expect(input.inputDelivery).toBeNull();
+        expect(JSON.stringify(input.context)).not.toContain("Consider current results.");
+        expect(input.interaction.messages.at(-1)).toMatchObject({role: "tool", content: [{result: {
+          content: {code: "continue", message: "Consider current results."},
+        }}]});
         return completionWithPlan([{step: "Inspect", status: "pending"}], "Unchanged", "embedded-unchanged");
       },
     ]);
@@ -3631,6 +3646,10 @@ describe("Runner semantic integration", () => {
     const results = result.items.flatMap(item => item.payload.kind === "model_call_settlement" ? [item.payload.result] : []);
     expect(results.map(item => item.settlement)).toEqual(["invalidated", "succeeded"]);
     expect(results[1]?.content).toMatchObject({stateUpdate: {content: {result: {status: "no_change"}}}});
+    const feedback = result.items.find(item => item.payload.kind === "controller_feedback")!;
+    const rejection = result.items.find(item => item.payload.kind === "model_call_settlement")!;
+    expect(feedback.committedInRevision).toBe(rejection.committedInRevision);
+    expect(result.items.some(item => item.payload.kind === "input_notification")).toBe(false);
     expect(result.items.filter(item => item.payload.kind === "state_transition" && item.payload.transition === "plan")).toHaveLength(2);
   });
 
@@ -4246,11 +4265,11 @@ describe("Runner semantic integration", () => {
       () => staleDecision.promise,
       (input) => {
         expect(input.plan).toBeNull();
-        expect(input.context.blocks.find((block) =>
-          block.instructionRole === "user" &&
-          block.payload.kind === "text" &&
-          block.payload.text === "Inspect the failing tests first."
-        )).toBeDefined();
+        expect(input.inputDelivery?.entries).toContainEqual(expect.objectContaining({
+          interpretation: {kind: "steering", commandId: "steering-1"},
+          data: expect.objectContaining({instruction: "Inspect the failing tests first."}),
+        }));
+        expect(JSON.stringify(input.context)).not.toContain("Inspect the failing tests first.");
         return complete("Fresh decision", "model_complete_2");
       },
     ]);

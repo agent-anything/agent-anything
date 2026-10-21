@@ -1,5 +1,6 @@
 import { snapshotModelJsonValue } from "@agent-anything/model-interaction";
 import { createHash } from "node:crypto";
+import type { ControllerTurnRef } from "@agent-anything/agent-core/control";
 import { inputNotificationDigest, snapshotInputDeliveryReceipt,
   type ControllerInputDeliveryBatch, type ControllerInputDeliveryReceipt } from "../controller/ControllerInputDelivery.js";
 
@@ -10,6 +11,10 @@ export interface RunInputNotification {
   readonly source: { readonly owner: string; readonly kind: string; readonly id: string; readonly revision: string };
   readonly occurredAt: string;
   readonly data: unknown;
+  /** Host-owned interaction semantics, never inferred from arbitrary payload text. */
+  readonly interpretation?:
+    | { readonly kind: "controller_feedback"; readonly turn: ControllerTurnRef }
+    | { readonly kind: "steering"; readonly commandId: string };
 }
 
 export interface RunInputNotificationSource {
@@ -40,7 +45,10 @@ export class RunInputNotifications {
     let sequence = 0;
     for (const entry of checkpoint.pending) {
       if (entry.runId !== runId || !Number.isSafeInteger(entry.sequence) || entry.sequence <= sequence ||
-          entry.sequence > checkpoint.admissionSequence || (entry.sourceSequence ?? 0) > checkpoint.cursor) {
+          entry.sequence > checkpoint.admissionSequence || (entry.sourceSequence ?? 0) > checkpoint.cursor ||
+          !Number.isFinite(Date.parse(entry.occurredAt)) ||
+          [entry.source.owner, entry.source.kind, entry.source.id, entry.source.revision]
+            .some(token => typeof token !== "string" || !token.trim())) {
         throw new TypeError("Invalid retained notification ownership or order.");
       }
       sequence = entry.sequence;
@@ -48,7 +56,10 @@ export class RunInputNotifications {
     const owner = new RunInputNotifications();
     owner.cursor = checkpoint.cursor;
     owner.admissionSequence = checkpoint.admissionSequence;
-    owner.pending = structuredClone(checkpoint.pending) as RunInputNotification[];
+    owner.pending = checkpoint.pending.map(entry => Object.freeze({...entry,
+      source: Object.freeze({...entry.source}),
+      data: snapshotModelJsonValue(entry.data, "RunInputNotification.data"),
+      ...snapshotInterpretation(runId, entry.interpretation)}));
     return owner;
   }
 
@@ -65,7 +76,7 @@ export class RunInputNotifications {
       const data = snapshotModelJsonValue(value.data, "RunInputNotification.data");
       const fact: RunInputNotification = Object.freeze({runId, sequence: this.admissionSequence + index + 1, sourceSequence: value.sequence,
         source: Object.freeze({owner: value.source.owner, kind: value.source.kind, id: value.source.id, revision: value.source.revision}),
-        occurredAt: value.occurredAt, data});
+        occurredAt: value.occurredAt, data, ...snapshotInterpretation(runId, value.interpretation)});
       if (new TextEncoder().encode(JSON.stringify(fact)).length > maximumBytes) {
         throw new TypeError("Run input notification exceeds the Context contribution bound.");
       }
@@ -86,7 +97,8 @@ export class RunInputNotifications {
     }
     const snapshot = (data: unknown): RunInputNotification => {
       const fact = Object.freeze({runId, sequence: this.admissionSequence + 1, source: Object.freeze({...input.source}),
-        occurredAt: input.occurredAt, data: snapshotModelJsonValue(data, "RunInputNotification.data")});
+        occurredAt: input.occurredAt, data: snapshotModelJsonValue(data, "RunInputNotification.data"),
+        ...snapshotInterpretation(runId, input.interpretation)});
       if (new TextEncoder().encode(JSON.stringify(fact)).length > maximumBytes) throw new TypeError("Owned input notification exceeds delivery bound.");
       return fact;
     };
@@ -119,4 +131,19 @@ export class RunInputNotifications {
     }
     this.pending = this.pending.filter(entry => !selected.has(entry.sequence));
   }
+}
+
+function snapshotInterpretation(runId: string, value: RunInputNotification["interpretation"]):
+  Pick<RunInputNotification, "interpretation"> {
+  if (value === undefined) return {};
+  if (value.kind === "controller_feedback" && value.turn?.run?.id === runId &&
+      typeof value.turn.id === "string" && value.turn.id.trim() &&
+      Number.isSafeInteger(value.turn.sequence) && value.turn.sequence > 0) {
+    return {interpretation: Object.freeze({kind: value.kind,
+      turn: Object.freeze({id: value.turn.id, run: Object.freeze({id: runId}), sequence: value.turn.sequence})})};
+  }
+  if (value.kind === "steering" && typeof value.commandId === "string" && value.commandId.trim()) {
+    return {interpretation: Object.freeze({kind: value.kind, commandId: value.commandId})};
+  }
+  throw new TypeError("Invalid input notification interpretation or target Run.");
 }

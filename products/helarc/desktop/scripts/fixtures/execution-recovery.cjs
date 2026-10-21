@@ -6,6 +6,8 @@ const {mkdir, readFile, writeFile, appendFile} = require("node:fs/promises");
 const {writeFileSync} = require("node:fs");
 const {inspect} = require("node:util");
 const [directory, scenario, stage] = process.argv.slice(2);
+const endingRecovery = scenario.startsWith("ending_");
+const interactionRecovery = scenario.startsWith("interaction_");
 app.setPath("userData", join(directory, "electron-user-data"));
 app.disableHardwareAcceleration();
 globalThis.fetch = async () => {throw new Error("This recovery verification must not call a network Provider");};
@@ -24,10 +26,11 @@ async function main() {
   const {createModelCallRef, createModelTurnId, snapshotModelToolCall, snapshotProviderResponse} = await import("@agent-anything/model-interaction");
   const workspaceRoot = join(directory, "workspace"), marker = join(workspaceRoot, "executions.txt");
   await mkdir(workspaceRoot, {recursive: true});
-  const diagnostics = {record(point, context, error) {process.stderr.write(`${point}: ${inspect(error, {depth: 8})}\n`);}};
+  const {HelarcExecutionDiagnostics} = await import("../../dist/main/diagnostics/HelarcExecutionDiagnostics.js");
+  const diagnostics = new HelarcExecutionDiagnostics(join(directory, `diagnostics-${stage}`, "execution-diagnostics.json"));
   const store = await HelarcExecutionStore.open(join(directory, "execution"), undefined, undefined, undefined, diagnostics, new ElectronSafeStorageCredentialCipher());
   const seedFile = join(directory, "seed.json");
-  let rootRunId, calls = 0;
+  let rootRunId, calls = 0, seedExecution;
   const requests = [];
   const context = createFakeProviderContext("recovery-verification", "deterministic-verification-model");
   const provider = {modelContext: context.modelContext, requestBodyTransportLimit: context.requestBodyTransportLimit,
@@ -41,7 +44,24 @@ async function main() {
       requests.push(request); calls++;
       const child = request.metadata.runId !== rootRunId;
       let requested;
-      if (stage !== "seed") {
+      if (interactionRecovery && stage === "seed" && calls === 2) {
+        if (scenario === "interaction_steering") {
+          const receipt = await seedExecution.activeRun.steer({commandId: "steer-recovery",
+            expectedRunRevision: seedExecution.activeRun.getProjection().runRevision,
+            instruction: "Use the retained command result; do not execute the command again.",
+            attribution: {origin: "user", actorId: "verification"}});
+          assert.equal(receipt.status, "accepted_for_application");
+        }
+        requested = scenario === "interaction_call_feedback"
+          ? [{name: "Write", input: {path: "missing-parent/file.txt", content: "must not be created"}},
+            {name: "final_result", input: {response: "Candidate before a failed write.",
+              plan: [{step: "Append the execution marker", status: "completed"}]}}]
+          : [];
+      } else if (scenario === "interaction_accepted" && stage === "seed" && calls === 3) {
+        requested = [{name: "update_plan", input: {plan: [{step: "Append the execution marker", status: "in_progress"}]}}];
+      } else if (endingRecovery && (stage === "seed" && calls > 1 || stage !== "seed" && scenario === "ending_exhausted")) {
+        requested = [];
+      } else if (stage !== "seed") {
         // Only a genuine final response is supplied after restart: never recreate accepted work.
         requested = [{name: "final_result", input: {response: child ? "Child completed once." : "Root completed once.",
           plan: [{step: "Append the execution marker", status: "completed"}]}}];
@@ -62,6 +82,7 @@ async function main() {
         providerCallRef: {providerId: provider.descriptor.id, id: `${responseId}:${ordinal}`}, ordinal,
         name: ["final_result", "update_plan"].includes(call.name) ? call.name : request.interaction.callables.find(value => value.name.startsWith(`${call.name}_`)).name,
         input: call.input})}));
+      if (requested.length === 0) content.push({kind: "text", text: `Ordinary report without an ending signal (${stage}:${calls}).`});
       return {kind: "succeeded", response: snapshotProviderResponse({kind: "native_tool_turn", turn: {turnId, assistant: {role: "assistant", content},
         finish: {kind: "normal"}, usage: null, responseRef: {providerId: provider.descriptor.id, requestId: request.requestId, responseId}}, continuation: null, metadata: {}})};
     }};
@@ -85,12 +106,33 @@ async function main() {
     await new Promise(() => {});
   }
   if (stage === "seed") {
-    let seedExecution, submissionStarted = false;
+    let submissionStarted = false;
     const prepared = await prepareHelarcHostRun(common); rootRunId = prepared.rootRunId;
-    if (scenario === "accepted" || scenario.startsWith("approval")) {
+    if (scenario === "accepted" || scenario.startsWith("approval") || endingRecovery || interactionRecovery) {
       const commit = store.commitRunTree.bind(store);
       store.commitRunTree = async value => {
         const receipt = await commit(value);
+        if (interactionRecovery) {
+          const runs = value.runs;
+          const entries = runs.flatMap(run => run.state.items.map(item => item.payload));
+          const feedback = entries.some(item => item.kind === "input_notification" && item.notification.interpretation?.kind === "controller_feedback");
+          if (scenario === "interaction_admitted" && feedback) await interrupt();
+          if (scenario === "interaction_steering" && entries.some(item =>
+            item.kind === "input_notification" && item.notification.interpretation?.kind === "steering")) await interrupt();
+          if (scenario === "interaction_call_feedback" && entries.some(item => item.kind === "controller_feedback")) await interrupt();
+          if (scenario === "interaction_accepted" && entries.some(item => item.kind === "input_delivery" &&
+            item.batch.entries.some(entry => entry.interpretation?.kind === "controller_feedback"))) await interrupt();
+          if (scenario === "interaction_prepared" && feedback) {
+            const retained = runs.flatMap(run => run.control.controllerCheckpoints).find(([key, record]) =>
+              JSON.parse(key)[2].startsWith("provider-controller:provider-request:") &&
+              record.value?.composition.sections.some(section => section.kind === "input_notification"));
+            if (retained) await interrupt({preparedRequest: retained[1].value});
+          }
+        }
+        if (endingRecovery && value.runs.some(run => run.control.controllerCheckpoints.some(([key, state]) =>
+          JSON.parse(key)[2] === "helarc.ending-signal-recovery" && state.consecutiveMissing === 2))) {
+          await interrupt();
+        }
         if (scenario === "accepted" && value.runs.some(run => run.control.decision?.status === "active")) await interrupt();
         if (scenario === "approval") {
           const pending = value.runs.flatMap(run => run.state.pending).find(item => item.kind === "interaction");
@@ -162,7 +204,9 @@ async function main() {
       await writeFile(join(directory, "submitted-approval.json"), JSON.stringify(submitted, null, 2));
     }
     const outcome = await result;
-    assert.equal(outcome.runResult.status, "completed", JSON.stringify(outcome.runResult.cause));
+    assert.equal(outcome.runResult.status, scenario === "ending_exhausted" ? "failed" : "completed", JSON.stringify(outcome.runResult.cause));
+    if (scenario === "ending_exhausted") assert.equal(outcome.runResult.cause.failure.failure.code,
+      "model_protocol_recovery_exhausted", JSON.stringify(outcome.runResult.cause));
     assert.equal(await readFile(marker, "utf8"), "x");
     const after = await store.readRunTree(rootRunId);
     assert.deepEqual(after.commit.checkpoint.input, before.commit.checkpoint.input);
@@ -181,11 +225,12 @@ async function main() {
         appended.filter(item => item.payload.kind === "run_action").length);
       assert.equal(next.head.state.counters.observations, previous.head.state.counters.observations +
         appended.filter(item => item.payload.kind === "observation").length);
+      const replayedTurn = endingRecovery ? 1 : 0;
       assert.equal(next.head.state.counters.controllerTurns, previous.head.state.counters.controllerTurns +
-        requests.filter(request => request.metadata.runId === previous.head.state.run.id).length);
+        requests.filter(request => request.metadata.runId === previous.head.state.run.id).length + replayedTurn);
       assert.equal(next.head.state.startedAt, previous.head.state.startedAt);
       assert.equal(next.head.state.deadlineAt, previous.head.state.deadlineAt);
-      assert.equal(next.head.state.plan.steps[0].status, "completed");
+      assert.equal(next.head.state.plan.steps[0].status, scenario === "ending_exhausted" ? "in_progress" : "completed");
       if (previous.head.state.plan) assert.equal(next.head.state.plan.id, previous.head.state.plan.id);
     }
     const processes = (await Promise.all(after.members.map(member => store.readProcesses(member.head.state.run.id)))).flat();
@@ -195,6 +240,62 @@ async function main() {
     const shellRequest = requests.find(request => JSON.stringify(request.messages.filter(message => message.role === "tool")).includes("completed once"));
     assert(shellRequest, "The completed command result must reach the model after restart");
     assert.equal(calls, scenario === "child" ? 2 : 1);
+    if (endingRecovery) {
+      const state = after.members[0].head.control.controllerCheckpoints.find(([key]) =>
+        JSON.parse(key)[2] === "helarc.ending-signal-recovery")[1];
+      assert.equal(state.consecutiveMissing, scenario === "ending_exhausted" ? 3 : 0);
+      assert.equal(state.disposition, scenario === "ending_exhausted" ? "exhausted" : "reset");
+      assert.equal(seed.calls, 3, "One command turn plus two correction turns before restart");
+      assert(requests.every(request => request.instructions.content.length === 0), "Recovery must not enable System Instructions");
+    }
+    if (interactionRecovery) {
+      const items = after.members[0].head.state.items;
+      const feedbackItems = items.filter(item => item.payload.kind === "controller_feedback");
+      const notifications = items.filter(item => item.payload.kind === "input_notification" && item.payload.notification.interpretation);
+      const deliveries = items.filter(item => item.payload.kind === "input_delivery" &&
+        item.payload.batch.entries.some(entry => entry.interpretation));
+      assert(requests.every(request => request.instructions.content.length === 0), "No System Instructions may be enabled");
+      const request = requests[0];
+      if (scenario === "interaction_call_feedback") {
+        assert.equal(feedbackItems.length, 1);
+        assert.equal(notifications.length, 0);
+        const rejection = items.find(item => item.payload.kind === "model_call_settlement" &&
+          item.payload.result.content.code === "completion_calls_not_successful");
+        assert(rejection, "Completion refusal must be a correlated result");
+        assert.equal(rejection.committedInRevision, feedbackItems[0].committedInRevision);
+        assert.equal(rejection.payload.result.content.message, feedbackItems[0].payload.feedback.message);
+        const supplied = request.messages.filter(message => message.role === "tool").flatMap(message => message.content)
+          .filter(block => block.result?.modelCallRef.id === rejection.payload.result.modelCallRef.id);
+        assert.equal(supplied.length, 1);
+        assert.equal(supplied[0].result.content.message, feedbackItems[0].payload.feedback.message);
+      } else {
+        assert.equal(feedbackItems.length, scenario === "interaction_steering" ? 0 : 1);
+        assert.equal(notifications.length, 1);
+        assert.equal(deliveries.length, 1);
+        const delivered = deliveries[0].payload;
+        assert.deepEqual(delivered.batch.entries, [notifications[0].payload.notification]);
+        const consumedIndex = items.indexOf(deliveries[0]) + 1;
+        assert.equal(items[consumedIndex].payload.kind, "controller_turn");
+        assert.equal(items[consumedIndex].payload.turn.id, delivered.turn.id);
+        assert.equal(items[consumedIndex].committedInRevision, deliveries[0].committedInRevision);
+        const heading = scenario === "interaction_steering" ? "Applied steering instruction:" : "Host Controller feedback:";
+        const messages = request.messages.flatMap(message => message.content.map(block => ({role: message.role, text: block.text ?? ""})));
+        assert.equal(messages.filter(message => message.text.startsWith(heading)).length, 1);
+        const section = request.composition.sections.find(section => section.kind ===
+          (scenario === "interaction_accepted" ? "input_notification_history" : "input_notification"));
+        assert(section, "The delivered input must have an explicit request section");
+        const current = request.composition.sections.find(section => section.kind === "context_projection");
+        assert(!JSON.stringify(current).includes(heading));
+        if (scenario === "interaction_prepared") assert.deepEqual(request, seed.preparedRequest, "Recovery must reuse the exact saved request");
+        if (scenario === "interaction_accepted") {
+          const index = messages.findIndex(message => message.text.startsWith(heading));
+          assert.equal(messages[index + 1].role, "assistant", "Feedback must stay before the response that consumed it");
+        }
+      }
+      const settlements = items.filter(item => item.payload.kind === "model_call_settlement").map(item => item.payload.result.modelCallRef.id);
+      assert.equal(new Set(settlements).size, settlements.length, "No Call may settle twice");
+      assert.equal(new Set(items.map(item => item.ref.id)).size, items.length);
+    }
     assert.equal((await store.listProductRuns())[0].delivered, false);
     if (seed.actionId) {
       const records = await store.readAction({runId: seed.actionRunId, action: {id: seed.actionId}});
@@ -223,6 +324,13 @@ async function main() {
     assert.equal(calls, 0);
   }
   await store.close();
+  await diagnostics.flush();
+  const performanceReport = JSON.parse(await readFile(join(directory, `diagnostics-${stage}`, "execution-performance.json"), "utf8"));
+  assert.equal(performanceReport.active.length, 0, "All Worker/Host timing spans must settle on close");
+  for (const stage of ["storage.host.encode", "storage.host.queue", "storage.host.round_trip",
+    "storage.worker.command", "storage.worker.dispatch", "storage.worker.encode_reply"]) {
+    assert(Object.keys(performanceReport.totals).some(key => key.startsWith(`${stage}:`)), `Missing timing stage: ${stage}`);
+  }
   for (const name of ["execution.sqlite", "execution.sqlite-wal"]) {
     const bytes = await readFile(join(directory, "execution", name)).catch(error => {if (error.code === "ENOENT") return Buffer.alloc(0); throw error;});
     assert.equal(bytes.includes(Buffer.from(process.env.HELARC_RECOVERY_SECRET_TEST)), false, "Environment plaintext leaked to SQLite");

@@ -39,8 +39,10 @@ async function launch(directory, scenario, stage, expectedExit) {
 
 let passed = false;
 const selected = process.argv.slice(2);
-const scenarios = selected.length ? selected : ["accepted", "effect", "child", "approval", "approval_applied"];
-assert(scenarios.every(value => ["accepted", "effect", "child", "approval", "approval_applied"].includes(value)));
+const supportedScenarios = ["accepted", "effect", "child", "approval", "approval_applied", "ending_feedback", "ending_exhausted",
+  "interaction_admitted", "interaction_prepared", "interaction_accepted", "interaction_call_feedback", "interaction_steering"];
+const scenarios = selected.length ? selected : supportedScenarios;
+assert(scenarios.every(value => supportedScenarios.includes(value)));
 try {
   for (const scenario of scenarios) {
     const directory = join(root, scenario); await mkdir(directory);
@@ -48,7 +50,7 @@ try {
     await launch(directory, scenario, "resume", 0);
     await launch(directory, scenario, "verify", 0);
     const report = JSON.parse(await readFile(join(directory, "resume.json"), "utf8"));
-    assert.equal(report.status, "completed"); assert.equal(report.effects, 1);
+    assert.equal(report.status, scenario === "ending_exhausted" ? "failed" : "completed"); assert.equal(report.effects, 1);
     console.log(JSON.stringify(report));
   }
   passed = true;

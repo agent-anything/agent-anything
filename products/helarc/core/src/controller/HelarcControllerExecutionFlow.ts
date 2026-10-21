@@ -1,4 +1,14 @@
 import { createExecutionFlowDefinition } from "@agent-anything/observability/execution-flow";
+export const HELARC_PROTOCOL_RECOVERY_EXECUTION_FLOW = createExecutionFlowDefinition({
+  owner: "helarc", id: "controller-protocol-recovery", revision: "1", label: "Helarc Protocol Recovery",
+  description: "Bound missing-ending feedback per Run, retaining correction state across recovery without inferring task success.",
+  steps: [
+    {id: "assess", label: "Assess protocol correction allowance", kind: "entry", checks: ["correction_allowance"]},
+    {id: "return", label: "Return protocol decision", kind: "exit", checks: []},
+  ],
+  transitions: [{id: "assess:return", from: "assess", to: "return", label: "Admitted decision"}],
+  entryStepIds: ["assess"], exitStepIds: ["return"],
+});
 export const HELARC_REQUEST_EXECUTION_FLOW = createExecutionFlowDefinition({
   owner:"helarc",id:"model-input-composition",revision:"1",label:"Helarc Model Input",
   description:"Current optional instructions, complete callable definitions, conversation, and Context assembled for this exact model request.",

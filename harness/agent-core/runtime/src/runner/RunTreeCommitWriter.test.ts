@@ -23,7 +23,7 @@ function fixture() {
     state: {run: {id: "root"}, taskId: "task", activeAgent: agent, activeInstructionBinding: binding.ref,
       revision: 0, items: [], status: "initializing", startedAt: now(), deadlineAt: "2026-10-15T02:00:00.000Z",
       completedAt: null, settlementCause: null},
-    control: {activeAgent: agent, instructionBinding: binding, instructions, descendantTransfers: []},
+    control: {activeAgent: agent, instructionBinding: binding, instructions, descendantTransfers: [], controllerCheckpoints: []},
   } as unknown as RunCommit;
   let records: RunTreeRecoveryRecords | null = null;
   const port: RunTreeCommitPort = {

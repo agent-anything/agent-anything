@@ -43,5 +43,6 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     environment: "node",
+    poolMatchGlobs: [["**/HelarcHostRunComposition.test.ts", "forks"]],
   },
 });

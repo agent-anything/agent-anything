@@ -1,5 +1,6 @@
 import { persistenceFailureCode, type HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
 import { reportExecutionFailure, type ExecutionDiagnosticSink } from "./diagnostics/HelarcExecutionDiagnostics.js";
+import {measureExecutionAsync} from "./diagnostics/ExecutionPerformance.js";
 import { restoreHelarcTerminalResult } from "./execution-storage/restoreHelarcTerminalResult.js";
 import {
   createDefaultHelarcInstructionSettings,
@@ -705,7 +706,7 @@ export class HelarcMainController {
     let startCommitted = false;
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
-      const preparedHostRun = await prepareHelarcHostRun({
+      const preparedHostRun = await measureExecutionAsync(this.executionDiagnostics, "host.prepare", {threadId, productRunId: runId}, () => prepareHelarcHostRun({
         executionStore: this.executionStore,
         commandOutputDirectory: this.commandOutputDirectory,
         responseDelivery: this.responseDelivery,
@@ -738,7 +739,7 @@ export class HelarcMainController {
         permissionPreset: preparedStart.prepared.run.permissionPreset,
         sessionAuthorityPort: this.sessionAuthorityStore,
         persistentPolicyAmendments: this.policyAmendmentStore,
-      });
+      }));
       const startCommitResult = this.createRunStartCommit({
         project,
         sequenceNumber,
@@ -872,7 +873,8 @@ export class HelarcMainController {
       }
       if (!this.recoverProvider) throw new Error("Original Provider binding is unavailable.");
       const provider = await this.recoverProvider(saved);
-      const prepared = await prepareHelarcHostRun({executionStore: this.executionStore, recoveryAdmission: saved,
+      const recoveryContext = {threadId: saved.sessionId, productRunId: saved.productRunId, runId: saved.rootRunId};
+      const prepared = await measureExecutionAsync(this.executionDiagnostics, "host.prepare_recovery", recoveryContext, () => prepareHelarcHostRun({executionStore: this.executionStore, recoveryAdmission: saved,
         commandOutputDirectory: this.commandOutputDirectory, responseDelivery: saved.responseDelivery,
         retainCommandOutput: (runId, executionId, paths) => this.commandOutputRegistry.register(
           {threadId: saved.sessionId, productRunId: saved.productRunId, runId}, executionId, this.commandOutputDirectory, paths),
@@ -886,8 +888,8 @@ export class HelarcMainController {
         modelContinuationStore: this.modelContinuationStore, contextManifestPersistence: this.contextManifestPersistence,
         runTranscriptPort: this.runTranscriptPort, permissionPreset: saved.permissionPreset, enforcement: saved.enforcement,
         runLimits: saved.runLimits, runTreeLimits: saved.runTreeLimits, commandLimits: saved.commandLimits ?? undefined,
-        sessionAuthorityPort: this.sessionAuthorityStore, persistentPolicyAmendments: this.policyAmendmentStore});
-      const composition = await prepared.recover(request.intent);
+        sessionAuthorityPort: this.sessionAuthorityStore, persistentPolicyAmendments: this.policyAmendmentStore}));
+      const composition = await measureExecutionAsync(this.executionDiagnostics, "host.recover", recoveryContext, () => prepared.recover(request.intent));
       this.acceptedTask = {id: saved.task.id, prompt: saved.task.input.prompt};
       this.attachActiveHostRun(token, saved.sessionId, saved.productRunId, composition.activeRun);
       void this.observeActiveRun(token, composition.result);
@@ -1124,7 +1126,8 @@ export class HelarcMainController {
       }, error);
       failedSlot.finishing = true;
       failedSlot.pendingProjection = null;
-      await failedSlot.progressTail;
+      await measureExecutionAsync(this.executionDiagnostics, "host.failed_projection_drain",
+        {runId: failedSlot.handle.runId, threadId: failedSlot.threadId}, () => failedSlot.progressTail);
       this.lastError = {
         code: "run_execution_failed",
         message: "Helarc could not settle the active Run.",
@@ -1137,7 +1140,8 @@ export class HelarcMainController {
     if (slot.kind !== "active" || slot.token !== token) return;
     slot.finishing = true;
     slot.pendingProjection = null;
-    await slot.progressTail;
+    const terminalContext = {runId: slot.handle.runId, threadId: slot.threadId, productRunId: slot.productRunId};
+    await measureExecutionAsync(this.executionDiagnostics, "host.final_projection_drain", terminalContext, () => slot.progressTail);
 
     if (outcome.product.status === "failed") {
       const firstError = outcome.product.output.safeErrors[0];
@@ -1150,8 +1154,9 @@ export class HelarcMainController {
     }
 
     try {
-      await this.persistWorkContextTerminal(outcome);
-      await this.executionStore?.commitProductDelivery(outcome.harnessRunId);
+      await measureExecutionAsync(this.executionDiagnostics, "host.terminal_persistence", terminalContext, () => this.persistWorkContextTerminal(outcome));
+      await measureExecutionAsync(this.executionDiagnostics, "host.result_delivery", terminalContext,
+        async () => {await this.executionStore?.commitProductDelivery(outcome.harnessRunId);});
       if (slot.persistenceFailure !== null && this.lastError?.code === "run_persistence_failed") this.lastError = null;
     } catch (cause) {
       this.recordPersistenceFailure(slot, "run_terminal", cause);

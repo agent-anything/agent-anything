@@ -104,7 +104,7 @@ export type RunItemPayload<TOutput = unknown> =
       readonly pending: Extract<PendingRunSubject, { readonly kind: "retry_wait" }>;
     }
   | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
-  | { readonly kind: "controller_feedback"; readonly feedback: ControllerFeedback }
+  | { readonly kind: "controller_feedback"; readonly feedback: ControllerFeedback; readonly turn: ControllerTurnRef }
   | { readonly kind: "input_notification"; readonly notification: import("../runner/RunInputNotifications.js").RunInputNotification }
   | { readonly kind: "input_delivery";
       readonly batch: import("../controller/index.js").ControllerInputDeliveryBatch;

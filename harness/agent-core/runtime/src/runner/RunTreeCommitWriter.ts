@@ -1,4 +1,5 @@
 import { sameRunCommitValue as same } from "./RunCommitValue.js";
+import {snapshotRunTreeCommit} from "./RunCommitSnapshot.js";
 import type { RunCommit } from "./RunCommitPort.js";
 import { RunCommitError } from "./RunCommitPort.js";
 import {
@@ -129,11 +130,11 @@ export class RunTreeCommitWriter {
       }
       const revision = before === null ? 0 : before.commit.revision + 1;
       const checkpoint = tree.checkpoint();
-      const commit = freeze(structuredClone({
+      const commit = snapshotRunTreeCommit({
         id: `${checkpoint.input.rootRunId}:tree_commit:${revision}`,
         expectedRevision: before?.commit.revision ?? null,
         revision, checkpoint, runs: prepared.runs,
-      } satisfies RunTreeCommit));
+      } satisfies RunTreeCommit);
       const members = new Map((before?.members ?? []).map(member => [member.head.state.run.id, member]));
       for (const run of commit.runs) {
         const previous = members.get(run.state.run.id);
@@ -149,7 +150,7 @@ export class RunTreeCommitWriter {
         const receipt = this.port === null
           ? {recordId: commit.id, revision: commit.revision,
               runs: commit.runs.map(run => ({recordId: run.id, revision: run.state.revision}))}
-          : await this.port.commitRunTree(structuredClone(commit));
+          : await this.port.commitRunTree(commit);
         if (receipt.recordId !== commit.id || receipt.revision !== commit.revision ||
             !same(receipt.runs, commit.runs.map(run => ({recordId: run.id, revision: run.state.revision})))) {
           throw new TypeError("Run Tree commit receipt mismatch.");
