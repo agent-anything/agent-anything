@@ -25,6 +25,20 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
         r.offer({subject, occurredAt: value.occurredAt, payload: {kind: "event", name, sequence: null, code: null},
           links: [inspectionLink("binding", subject, run)], contents: content(name, data, "bound")});
       }
+      for (const item of value.input.items) {
+        const subject = ref("agent-core", "contribution", item.id, "1");
+        r.offer({subject, occurredAt: value.occurredAt,
+          payload: {kind: "event", name: "run_input_item.bound", sequence: null, code: null},
+          links: [inspectionLink("contains", input, subject)], contents: content("Bound input item", item, "bound")});
+      }
+      if (value.delegationRequest) {
+        const request = value.delegationRequest;
+        const subject = r.ref("agent-runtime", "contribution", request.ref.id, request.origin.parent.run.id, request.ref.revision);
+        r.offer({subject, occurredAt: value.occurredAt,
+          payload: {kind: "event", name: "delegation_request.bound", sequence: null, code: null},
+          links: [inspectionLink("produces", r.ref("runtime", "action", request.origin.parent.action.id, request.origin.parent.run.id), subject),
+            inspectionLink("binding", subject, run)], contents: content("Accepted delegation request", request, "bound")});
+      }
     } else if (value.kind === "operation_request") {
       const request = ref("operations", "contribution", `${value.invocationId}:request`, "1");
       const operation = ref("operations", "operation", value.invocationId);

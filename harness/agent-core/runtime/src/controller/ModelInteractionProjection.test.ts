@@ -8,7 +8,8 @@ import {
 } from "@agent-anything/model-interaction";
 import type { RunItem } from "../run/RunItem.js";
 import { createControllerModelItems } from "./ControllerModelItems.js";
-import { createControllerInputDeliveryReceipt, createInputDeliverySections, inputNotificationMessage } from "./ControllerInputDelivery.js";
+import { createModelConversationSeed } from "./ControllerConversation.js";
+import { createControllerInputDeliveryReceipt, createInputDeliverySections, inputNotificationMessage, retainInputPresentation } from "./ControllerInputDelivery.js";
 import {
   ModelInteractionProjectionError,
   projectModelInteraction,
@@ -27,7 +28,7 @@ describe("ModelInteractionProjection", () => {
       const batch = {id: `batch-${sequence}`, revision: "1", runId: "run-1", entries: [entry]};
       const receipt = {...createControllerInputDeliveryReceipt(batch, `request-${sequence + 1}`),
         via: {kind: "provider" as const, requestId: `request-${sequence + 1}`, compositionId: `composition-${sequence}`,
-          sectionIds: createInputDeliverySections(batch).map(section => section.id)}};
+          sectionIds: createInputDeliverySections(batch).map(section => section.id), presentations: createInputDeliverySections(batch).map(retainInputPresentation)}};
       const next = controllerTurn(modelTurn([], `turn-${sequence + 1}`, `request-${sequence + 1}`));
       if (next.kind !== "controller_turn") throw new Error("Invalid fixture");
       const delivery = runItem(history.length + 1, {kind: "input_delivery", batch, receipt, turn: next.turn});
@@ -46,7 +47,7 @@ describe("ModelInteractionProjection", () => {
       occurredAt: "2026-10-13T00:00:00.000Z", data: {exitCode: 0}}]};
     const controllerReceipt = createControllerInputDeliveryReceipt(batch, "request-2");
     const receipt = {...controllerReceipt, via: {kind: "provider" as const, requestId: "request-2", compositionId: "request-2",
-      sectionIds: createInputDeliverySections(batch).map(section => section.id)}};
+      sectionIds: createInputDeliverySections(batch).map(section => section.id), presentations: createInputDeliverySections(batch).map(retainInputPresentation)}};
     const next = controllerTurn(modelTurn([], "turn-2", "request-2"));
     if (next.kind !== "controller_turn") throw new Error("Invalid fixture");
     const delivery = runItem(3, {kind: "input_delivery", batch, receipt, turn: next.turn});
@@ -54,31 +55,57 @@ describe("ModelInteractionProjection", () => {
     const history = [runItem(1, controllerTurn(modelTurn([call]))), runItem(2, settlement(call, "succeeded")), delivery, nextItem];
     const projection = projectModelInteraction({runId: "run-1", runRevision: 3, items: history});
     expect(projection.messages.map(message => message.role)).toEqual(["assistant", "tool", "user", "assistant"]);
-    expect(projection.notificationHistory).toEqual([{messageIndex: 2, batchId: "batch-1", batchRevision: "1", sequence: 1}]);
+    expect(projection.notificationHistory).toMatchObject([{messageIndex: 2, batchId: "batch-1", batchRevision: "1", sequence: 1}]);
     expect(JSON.stringify(projection.messages).match(/host_notification/g)).toHaveLength(1);
     expect(() => projectModelInteraction({runId: "run-1", runRevision: 3, items: [history[0]!, delivery, nextItem]}))
       .toThrowError(expect.objectContaining({code: "input_delivery_history_invalid"}));
     expect(() => projectModelInteraction({runId: "run-1", runRevision: 4, items: [...history.slice(0, 3), runItem(4, next)]}))
       .toThrowError(expect.objectContaining({code: "input_delivery_history_invalid"}));
+    const mismatched = {...delivery, payload: {...delivery.payload, receipt: {...receipt,
+      via: {...receipt.via, requestId: "another-request"}}}} as RunItem;
+    expect(() => projectModelInteraction({runId: "run-1", runRevision: 3, items: [history[0]!, history[1]!, mismatched, nextItem]}))
+      .toThrowError(expect.objectContaining({code: "input_delivery_request_mismatch"}));
     const deterministic = {...delivery, payload: {...delivery.payload, receipt: controllerReceipt}} as RunItem;
     expect(projectModelInteraction({runId: "run-1", runRevision: 3, items: [history[0]!, history[1]!, deterministic, nextItem]})
       .messages.map(message => message.role)).toEqual(["assistant", "tool", "assistant"]);
   });
   it("projects exact admitted local text provenance, not seed messages or an older text-bearing Turn", () => {
-    const seedMessages = [{role: "assistant" as const, content: [{kind: "text" as const, text: "Seed report"}]}];
-    expect(projectModelInteraction({runId: "run-1", runRevision: 0, items: [], seedMessages}).latestTurn).toBeNull();
+    const source = {owner: "agent-runtime", kind: "run_item", id: "old-turn", revision: "1", runId: "old-child"};
+    const seed = createModelConversationSeed("old-child", "1", [retainInputPresentation({id: "old-history", source,
+      kind: "interaction_history", role: "assistant", necessity: "mandatory",
+      content: {kind: "model_message", message: {role: "assistant", content: [{kind: "text", text: "Seed report"}]}},
+      provenance: {purpose: "accepted_exchange", recipientRunId: "old-child", author: "model", sources: [source],
+        presenter: source, coverage: ["old-turn@1"], limitations: []}})]);
+    const imported = projectModelInteraction({runId: "run-1", runRevision: 0, items: [], seed});
+    expect(imported.latestTurn).toBeNull();
+    expect(imported.messages).toEqual([]);
+    expect(imported.seed).toEqual(seed);
     const turn = modelTurn([]);
     const textTurn: ModelTurn = {...turn, assistant: {role: "assistant", content: [
       {kind: "text", text: " First "}, {kind: "text", text: "Second"},
     ]}};
     const first = runItem(1, controllerTurn(textTurn));
-    expect(projectModelInteraction({runId: "run-1", runRevision: 1, items: [first], seedMessages}).latestTurn)
+    expect(projectModelInteraction({runId: "run-1", runRevision: 1, items: [first], seed}).latestTurn)
       .toMatchObject({runId: "run-1", runItemId: first.ref.id, runItemSequence: 1, turnId: turn.turnId,
         textBlocks: [{ordinal: 0, text: " First "}, {ordinal: 1, text: "Second"}]});
     const later = modelTurn([], "turn-2", "request-2");
     expect(projectModelInteraction({runId: "run-1", runRevision: 2, items: [first, runItem(2, controllerTurn(later))]}).latestTurn)
       .toMatchObject({turnId: "turn-2", textBlocks: []});
   });
+  it("rejects continuation seeds that omit a result or interrupt the native Call group", () => {
+    const call = modelCall("read", 0);
+    const projection = projectModelInteraction({runId: "run-1", runRevision: 2,
+      items: [runItem(1, controllerTurn(modelTurn([call]))), runItem(2, settlement(call, "succeeded"))]});
+    const presentations = projection.historyPresentations!;
+    expect(createModelConversationSeed("run-1", "2", presentations).presentations).toHaveLength(2);
+    expect(() => createModelConversationSeed("run-1", "2", presentations.slice(0, 1))).toThrow("unsettled Calls");
+    expect(() => createModelConversationSeed("run-1", "2", presentations.slice(1))).toThrow("no matching Call");
+    const interruption = retainInputPresentation({...presentations[0]!.section, id: "interruption", role: "user",
+      content: {kind: "text", text: "New information"}});
+    expect(() => createModelConversationSeed("run-1", "2", [presentations[0]!, interruption, presentations[1]!]))
+      .toThrow("interrupts an unsettled");
+  });
+
   it("preserves reasoning across transcript projection without moving native call ordinals", () => {
     const call = modelCall("read", 0);
     const turn = modelTurn([call]);

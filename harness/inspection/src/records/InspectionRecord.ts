@@ -85,6 +85,10 @@ export interface InspectionPayloadMap {
     readonly status: string; readonly code: string | null; readonly effectCertainty: string | null };
   transfer: { readonly stage: "produced" | "transformed" | "delivered" | "included" | "omitted";
     readonly producerId: string; readonly consumerId: string | null; readonly operation: string | null };
+  conversation: {readonly stage: "included" | "accepted"; readonly purpose: string; readonly author: string;
+    readonly role: string; readonly recipientRunId: string; readonly originRunId: string | null;
+    readonly requestId: string; readonly attemptId: string | null; readonly position: number; readonly presenter: string; readonly digest: string;
+    readonly delivery: "new" | "replay" | "import"; readonly sourceCount: number};
   dependency: { readonly condition: "settled" | "succeeded" | "result";
     readonly status: "registered" | "satisfied" | "unsatisfied"; readonly prerequisiteId: string; readonly dependentId: string };
   event: { readonly name: string; readonly sequence: number | null; readonly code: string | null };

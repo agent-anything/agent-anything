@@ -3,7 +3,7 @@ import type { ProviderRequest } from "@agent-anything/model-interaction";
 import { modelInputSectionLocations } from "@agent-anything/model-interaction/input";
 import { RunInputNotifications, type RunInputNotification } from "../runner/RunInputNotifications.js";
 import { createControllerInputDeliveryReceipt, createInputDeliverySections,
-  createProviderInputDeliveryReceipt, snapshotInputDeliveryReceipt } from "./ControllerInputDelivery.js";
+  createProviderInputDeliveryReceipt, snapshotInputDeliveryReceipt, retainInputPresentation } from "./ControllerInputDelivery.js";
 import { inputNotificationMessage } from "./ControllerInputDelivery.js";
 
 const fact = (sequence: number): RunInputNotification => ({runId: "run-1", sequence,
@@ -59,7 +59,8 @@ describe("Controller input delivery", () => {
     const sections = createInputDeliverySections(batch);
     const request = {requestId: "request-1", composition: {id: "composition-1", sections}} as ProviderRequest;
     const receipt = createProviderInputDeliveryReceipt(batch, request)!;
-    expect(receipt.via).toEqual({kind: "provider", requestId: "request-1", compositionId: "composition-1", sectionIds: [sections[0]!.id]});
+    expect(receipt.via).toEqual({kind: "provider", requestId: "request-1", compositionId: "composition-1", sectionIds: [sections[0]!.id],
+      presentations: sections.map(retainInputPresentation)});
     expect(modelInputSectionLocations(sections)[0]!.jsonPointers).toEqual(["/messages/0/content/0"]);
     expect(sections[0]).toMatchObject({role: "user", necessity: "mandatory", content: {kind: "model_message"}});
     expect(JSON.stringify(sections[0])).toContain("host_notification");
@@ -68,6 +69,23 @@ describe("Controller input delivery", () => {
       sections: [{...sections[0]!, content: {kind: "text", text: "different"}}]}})).toThrow("complete, unchanged");
     expect(() => createProviderInputDeliveryReceipt(batch, {...request, composition: {...request.composition,
       sections: [...sections, {...sections[0]!, id: "later-assistant", role: "assistant"}]}})).toThrow("complete interaction history");
+  });
+  it("replays frozen presentation rather than re-rendering and checks its content and source binding", () => {
+    const {batch} = setup();
+    const sections = createInputDeliverySections(batch);
+    const receipt = createProviderInputDeliveryReceipt(batch,
+      {requestId: "request", composition: {id: "composition", sections}} as ProviderRequest)!;
+    if (receipt.via.kind !== "provider") throw new Error("Invalid fixture");
+    const historical = retainInputPresentation({...sections[0]!, content: {kind: "model_message", message:
+      {role: "user", content: [{kind: "text", text: "The retained historical presenter phrased this differently."}]}}});
+    const saved = {...receipt, via: {...receipt.via, presentations: [historical]}};
+    expect(snapshotInputDeliveryReceipt(saved, batch)).toEqual(saved);
+    expect(() => snapshotInputDeliveryReceipt({...saved, via: {...saved.via, presentations: [{...historical, digest: "changed"}]}}, batch))
+      .toThrow("digest mismatch");
+    const wrongRecipient = retainInputPresentation({...historical.section,
+      provenance: {...historical.section.provenance!, recipientRunId: "another-run"}});
+    expect(() => snapshotInputDeliveryReceipt({...saved, via: {...saved.via, presentations: [wrongRecipient]}}, batch))
+      .toThrow("recipient mismatch");
   });
   it("rejects wrong recipient, revision, entry payload, membership, and missing actual locations", () => {
     const {batch} = setup();

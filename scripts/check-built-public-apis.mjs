@@ -587,6 +587,8 @@ const expectedLowerValueExports = {
     "HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE",
     "HELARC_VERIFICATION_GUIDED_COMPLETION_ACCEPTED_BASELINE",
     "HELARC_VERIFICATION_GUIDED_COMPLETION_BASELINE_ACCEPTANCE",
+    "HELARC_WORKING_CONVERSATION_ACCEPTED_BASELINE",
+    "HELARC_WORKING_CONVERSATION_BASELINE_ACCEPTANCE",
     "adaptHelarcExternalBenchmarkManifest",
     "captureHelarcProductEffectiveness",
     "compareHelarcAgentInstructionEffectiveness",
@@ -641,6 +643,7 @@ const expectedLowerValueExports = {
     "modelInputFromSections",
     "modelInputSectionLocations",
     "snapshotModelInputComposition",
+    "snapshotModelInputSection",
     "snapshotModelOutputFormat",
   ],
   "@agent-anything/model-interaction/context": [
@@ -757,10 +760,18 @@ const expectedValueExports = {
     "StructuredOutputError",
     "createControllerInputDeliveryReceipt",
     "createControllerModelItems",
+    "createConversationOpeningReceipt",
     "createInputDeliverySections",
+    "createModelConversationSeed",
     "createModelOutputRecoverySection",
+    "freezeConversationOpening",
+    "importModelConversationSeed",
     "projectModelInteraction",
+    "retainInputPresentation",
     "snapshotControllerFeedback",
+    "snapshotConversationOpeningReceipt",
+    "snapshotInputPresentation",
+    "snapshotModelConversationSeed",
     "unsupportedModelInputRecovery",
     "validateControllerDecision",
   ],
@@ -1010,6 +1021,7 @@ const expectedValueExports = {
     "HELARC_CONTROLLER_CAPABILITY",
     "HELARC_CONTROLLER_CONTROL_GUIDANCE",
     "HELARC_NATIVE_TOOL_PROTOCOL_REVISION",
+    "HELARC_PROTOCOL_RECOVERY_POLICY",
     "buildHelarcProviderRequest",
     "createHelarcBaselineControllerProtocolComposition",
     "createHelarcContextProjectionConfiguration",
@@ -1624,15 +1636,15 @@ checkBuiltSurfaces(
 );
 
 checkBuiltSurfaces({
-  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "inspectionSubjectKey"],
-  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "inspectionSubjectKey"],
+  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "initialInspectionTimings", "inspectionSubjectKey"],
+  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "initialInspectionTimings", "inspectionSubjectKey"],
   "@agent-anything/inspection/content": ["DEFAULT_INSPECTION_CAPTURE_POLICY", "captureClassEnabled", "redactInspectionContent", "validateInspectionCapturePolicy"],
   "@agent-anything/inspection/sources": ["atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "inspectionSourceId", "registerInspectionSource", "validateOpaqueId"],
   "@agent-anything/inspection/recording": ["InspectionRecorder", "InspectionRecorderError"],
   "@agent-anything/inspection/storage": ["INSPECTION_STORAGE_POLICY", "InspectionDatabase", "InspectionStorageMaintenance", "inspectionSourceBytes", "maintainInspectionStorage", "readInspectionStorageInventory", "retireInspectionDatasets", "wasInspectionDatasetRetired"],
   "@agent-anything/inspection/telemetry": ["InspectionTelemetry"],
   "@agent-anything/inspection/query": ["InspectionQueryService", "executeInspectionQuery", "readInspectionJson", "validateInspectionQuery"],
-  "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ExecutionEvidenceInspectionAdapter", "ExecutionFlowInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink"],
+  "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ExecutionEvidenceInspectionAdapter", "ExecutionFlowInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink", "inspectionModelSource"],
 }, ["@agent-anything/inspection/recording/InspectionRecorderWorker", "@agent-anything/inspection/storage/InspectionDatasetAccess"], join(repoRoot, "harness/inspection"));
 
 console.log("Built public API check passed.");

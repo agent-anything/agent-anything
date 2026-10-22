@@ -160,7 +160,7 @@ export class Runner {
       ordinaryConfig.config,
       null,
       Object.freeze([]),
-      Object.freeze([]),
+      null,
       tree.rootLineage,
       tree,
       measureInitialRunContextBytes(inputSnapshot),
@@ -980,6 +980,8 @@ function createDelegatedRunInput(input: {
       metadata: Object.freeze({
         source: "delegation_objective",
         delegationRequestId: input.request.ref.id,
+        parentRunId: input.request.origin.parent.run.id,
+        delegationRequestRevision: input.request.ref.revision,
       }),
     })]),
     metadata: Object.freeze({

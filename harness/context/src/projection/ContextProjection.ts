@@ -68,6 +68,8 @@ export interface ContextProjectionRequest {
   readonly estimator: ContextEstimatorRef;
   readonly audiences: readonly string[];
   readonly mandatoryItems: readonly ActiveContextItemRef[];
+  readonly retainedCoverage?: readonly {readonly contribution: ContextContributionRef;
+    readonly presentation: {readonly id: string; readonly revision: string}}[];
   readonly requestedAt: string;
 }
 
@@ -109,6 +111,7 @@ export type ContextProjectionReason =
   | "omitted_invalidated"
   | "omitted_removed"
   | "omitted_duplicate"
+  | "omitted_retained_presentation"
   | "rejected_contract"
   | "rejected_policy"
   | "blocked_mandatory_overflow"
@@ -124,6 +127,7 @@ export interface ProjectionManifestRecord {
   readonly originalPayloadBytes: number;
   readonly projectedAmount: number;
   readonly transformation: ContextProjectionTransformation | null;
+  readonly coveredBy?: {readonly id: string; readonly revision: string};
 }
 
 export interface ProjectionManifestAccounting {
@@ -166,7 +170,7 @@ export function snapshotContextProjectionRequest(
 ): ContextProjectionRequest {
   strictRecord(input, "ContextProjectionRequest", [
     "id", "activeContext", "consumer", "purpose", "profile", "budget",
-    "policy", "estimator", "audiences", "mandatoryItems", "requestedAt",
+    "policy", "estimator", "audiences", "mandatoryItems", "requestedAt", "retainedCoverage",
   ], "context_projection_contract_invalid");
   strictRecord(input.consumer, "ContextProjectionRequest.consumer", [
     "owner", "kind", "id",
@@ -176,6 +180,9 @@ export function snapshotContextProjectionRequest(
   ], "context_projection_contract_invalid");
   if (!isAccountingUnit(input.budget.unit)) {
     projectionFailure("Context budget unit is invalid.", "ContextProjectionRequest.budget.unit");
+  }
+  if (input.retainedCoverage !== undefined && !Array.isArray(input.retainedCoverage)) {
+    projectionFailure("Retained presentation coverage must be an array.", "ContextProjectionRequest.retainedCoverage");
   }
   return Object.freeze({
     id: projectionToken(input.id, "ContextProjectionRequest.id"),
@@ -207,6 +214,9 @@ export function snapshotContextProjectionRequest(
       "context_projection_contract_invalid",
     ),
     mandatoryItems: snapshotMandatoryItems(input.mandatoryItems),
+    ...(input.retainedCoverage === undefined ? {} : {retainedCoverage: Object.freeze(input.retainedCoverage.map(value =>
+      Object.freeze({contribution: snapshotContextContributionRef(value.contribution),
+        presentation: snapshotRevisionRef(value.presentation, "ContextProjectionRequest.retainedCoverage.presentation")})))}),
     requestedAt: isoDateTime(
       input.requestedAt,
       "ContextProjectionRequest.requestedAt",
@@ -474,7 +484,7 @@ function snapshotProjectionPayload(input: ContextPayload, path: string): Context
 function snapshotManifestRecord(input: ProjectionManifestRecord, path: string): ProjectionManifestRecord {
   strictRecord(input, path, [
     "item", "contribution", "source", "disposition", "reason",
-    "originalPayloadBytes", "projectedAmount", "transformation",
+    "originalPayloadBytes", "projectedAmount", "transformation", "coveredBy",
   ], "context_projection_contract_invalid");
   if (!isDisposition(input.disposition) || !isReason(input.reason)) {
     projectionFailure("Projection Manifest disposition or reason is invalid.", path);
@@ -483,6 +493,9 @@ function snapshotManifestRecord(input: ProjectionManifestRecord, path: string): 
   const projectedAmount = nonNegativeInteger(input.projectedAmount, `${path}.projectedAmount`, "context_projection_contract_invalid");
   if (!isDispositionReasonPair(input.disposition, input.reason, projectedAmount)) {
     projectionFailure("Projection Manifest reason does not match its disposition.", path);
+  }
+  if ((input.reason === "omitted_retained_presentation") !== (input.coveredBy !== undefined)) {
+    projectionFailure("Retained presentation omission requires its exact coverage reference.", `${path}.coveredBy`);
   }
   return Object.freeze({
     item: snapshotItemRef(input.item, `${path}.item`),
@@ -495,6 +508,7 @@ function snapshotManifestRecord(input: ProjectionManifestRecord, path: string): 
     transformation: input.transformation === null
       ? null
       : snapshotTransformation(input.transformation, `${path}.transformation`),
+    ...(input.coveredBy === undefined ? {} : {coveredBy: snapshotRevisionRef(input.coveredBy, `${path}.coveredBy`)}),
   });
 }
 
@@ -582,6 +596,7 @@ function isDisposition(value: unknown): value is ContextProjectionDisposition {
 }
 
 function isReason(value: unknown): value is ContextProjectionReason {
+  if (value === "omitted_retained_presentation") return true;
   return value === "included_exact" || value === "transformed_truncate" || value === "transformed_redact" || value === "transformed_reference" || value === "omitted_budget" || value === "omitted_scope" || value === "omitted_disclosure" || value === "omitted_replaced" || value === "omitted_invalidated" || value === "omitted_removed" || value === "omitted_duplicate" || value === "rejected_contract" || value === "rejected_policy" || value === "blocked_mandatory_overflow" || value === "blocked_mandatory_rejected" || value === "blocked_prior_failure";
 }
 

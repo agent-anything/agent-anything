@@ -80,6 +80,7 @@ export interface ProcessExecutionFact {
 }
 export interface ProcessInitialDelivery {
   readonly runId: string;
+  readonly executionId: string | null;
   readonly runActionId: string;
   readonly settlementId: string;
   readonly observationId: string | null;
@@ -94,6 +95,8 @@ export interface ProcessInputNotification {
   readonly source: { readonly owner: string; readonly kind: string; readonly id: string; readonly revision: string };
   readonly occurredAt: string;
   readonly data: Readonly<Record<string, unknown>>;
+  readonly interpretation?: {readonly kind: "notification"; readonly purpose: "later_outcome";
+    readonly author: "capability"; readonly originRunId: string};
 }
 
 export interface ProcessCleanupSummary {

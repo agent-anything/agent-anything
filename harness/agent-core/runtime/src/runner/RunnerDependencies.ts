@@ -111,6 +111,7 @@ export interface RunnerContextProjection {
   allocate(input: ControllerPreProjectionInput): {
     readonly budget: ContextBudgetGrant;
     readonly estimator: ContextProjectionEstimator;
+    readonly retainedCoverage?: import("@agent-anything/context/projection").ContextProjectionRequest["retainedCoverage"];
   };
 }
 

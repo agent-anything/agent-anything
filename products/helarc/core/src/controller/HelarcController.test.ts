@@ -4,6 +4,11 @@ import { validHelarcFinalReply } from "./HelarcFinalReply.js";
 import {
   ControllerError,
   ProviderBackedController,
+  createConversationOpeningReceipt,
+  snapshotConversationOpeningReceipt,
+  createModelConversationSeed,
+  freezeConversationOpening,
+  retainInputPresentation,
   validateControllerDecision,
   type ControllerCallContext,
   type ControllerInput,
@@ -44,7 +49,7 @@ import {
 } from "./index.js";
 import type { ResolvedHelarcToolGuidance } from "../tools/guidance/index.js";
 import { createHelarcProviderProfile } from "../configuration/index.js";
-import type { HelarcCommandStateSnapshot } from "./HelarcCommandState.js";
+import { helarcConversationOpening } from "../prompt/HelarcConversationOpening.js";
 import {
   resolveHelarcModelQualification,
 } from "../composition/HelarcModelUseAdmission.js";
@@ -163,6 +168,22 @@ function createHelarcModelCallableCatalog(input: {
 }
 
 describe("Helarc native Tool controller", () => {
+  it("publishes the actual bound background under the presentation source identity", () => {
+    const input = createControllerInput();
+    const protocol = createTestControllerProtocol(input);
+    const observations: import("@agent-anything/observability/execution-flow").ExecutionFlowObservation[] = [];
+    const request = buildProviderRequest(input, {...requestBuildContext(), executionFlow: {
+      observer: {observe: value => observations.push(value)},
+    }}, protocol, createTestQualification(input, protocol));
+    const section = request.composition.sections.find(value => value.provenance?.purpose === "initial_background")!;
+    const material = observations.find(value => value.kind === "material" && value.subject.id === section.source.id);
+    expect(material?.kind).toBe("material");
+    if (material?.kind !== "material" || section.content.kind !== "text") throw new Error("Missing background evidence");
+    expect(material.subject).toEqual(section.source);
+    expect(section.content.text).toContain(JSON.stringify(material.value));
+    expect(material.value).toMatchObject({runId: input.runId, permission: {profile: input.permission.profile}});
+  });
+
   it("builds one native request from the exact Tool exposure and Product controls", () => {
     const input = createControllerInput();
     const request = buildHelarcProviderRequest(input, requestBuildContext());
@@ -183,7 +204,7 @@ describe("Helarc native Tool controller", () => {
     expect(request.interaction.callables.some(({ name }) => name === "Read")).toBe(false);
     expect(request.metadata).toMatchObject({
       runId: "run-1",
-      promptArchitectureVersion: "helarc-prompt-v9",
+      promptArchitectureVersion: "helarc-prompt-v10",
       toolExposureVersion: "trusted-tool-exposure-v1",
       exposedToolCount: FILE_TOOLS.length,
       interactionMessageCount: 0,
@@ -218,7 +239,7 @@ describe("Helarc native Tool controller", () => {
     expect(prompt).not.toContain("Use only callable definitions supplied with the current model request.");
     expect(prompt).not.toContain("When multiple calls do not require results from one another, issue them together in the same response.");
     expect(prompt).not.toContain("When a call requires another call's result, wait for that result and issue the dependent call in a later response.");
-    expect(prompt).toContain("Task:\nUpdate docs");
+    expect(prompt).toContain("Update docs");
     expect(prompt).not.toContain("Return only JSON");
     expect(prompt).not.toContain("D:/projects/agent-anything");
     expect(JSON.stringify(request.metadata)).not.toContain("Complete the code task.");
@@ -358,10 +379,9 @@ describe("Helarc native Tool controller", () => {
         },
       },
     });
-    const general = assembly.promptSections.find(({ id }) => id === "context_projection");
-    expect(general?.content).toContain("test_output");
-    expect(assembly.sections.find(({ id }) => id === "helarc:model-input:context_projection")?.source)
-      .toMatchObject({ owner: "context", id: "projection-1", revision: "1" });
+    const material = assembly.sections.find(section => section.provenance?.purpose === "selected_material")!;
+    expect(JSON.stringify(material.content)).toContain("test_output");
+    expect(material.source).toMatchObject({owner: "context", id: "check-output-run-1", revision: "3", runId: "run-1"});
   });
 
   it("preserves a complete admitted Context Projection larger than 128 Ki characters", () => {
@@ -383,17 +403,17 @@ describe("Helarc native Tool controller", () => {
     });
     const amount = blocks.reduce((total, block) => total + block.accounting.amount, 0);
     expect(amount).toBeLessThan(input.contextManifest.budget.maximum);
-    const expected = "Context projection:" + blocks.map(renderHelarcContextProjectionFragment).join("");
-    expect(expected.length).toBeGreaterThan(131_072);
+    const expected = blocks.map(renderHelarcContextProjectionFragment);
+    expect(expected.join("").length).toBeGreaterThan(131_072);
     const request = snapshotProviderRequest(buildHelarcProviderRequest({
       ...input,
       context: { ...input.context, blocks, accounting: { unit: "bytes", amount } },
     }, requestBuildContext()));
-    const section = request.composition.sections.find(section => section.kind === "context_projection");
-    expect(section?.content).toEqual({ kind: "text", text: expected });
+    const materials = request.composition.sections.filter(section => section.provenance?.purpose === "selected_material");
+    expect(materials.map(section => section.content.kind === "text" && section.content.text === expected[materials.indexOf(section)])).toEqual([true, true, true]);
     expect(request.messages).toHaveLength(1);
     expect(request.messages[0]?.role).toBe("user");
-    expect(request.messages[0]?.content).toContainEqual({ kind: "text", text: expected });
+    expect(expected.every(text => request.messages[0]?.content.some(block => block.kind === "text" && block.text === text))).toBe(true);
     expect(request.composition.messages).toEqual(request.messages);
     expect(request.composition.lineage.contextProjection?.id).toBe(input.context.id);
   });
@@ -432,26 +452,11 @@ describe("Helarc native Tool controller", () => {
       ]),
     });
     expect(request.composition?.sections.some(({ role }) => role === "instruction")).toBe(false);
-    const running: HelarcCommandStateSnapshot = {
-      ref: { runId: input.runId, executionId: "process-1" }, revision: 1, phase: "running",
-      startedAt: "2026-09-30T00:00:00Z", finishedAt: null, deadlineAt: "2026-09-30T00:00:30Z",
-      outcome: null, rootExit: null, termination: null, containment: { disposition: "active", confirmedAt: null },
-      output: { capture: "open", persistence: "pending", retainedBytes: 0, omittedBytes: 0 },
-    };
-    const withCommand = (state: HelarcCommandStateSnapshot) => buildProviderRequest(
-      input, requestBuildContext(), protocol, createTestQualification(input, protocol), [state],
-    );
-    const runningRequest = withCommand(running);
-    const settledRequest = withCommand({ ...running, revision: 9, phase: "settled", outcome: "timed_out",
-      rootExit: { code: 0, signal: null, observedAt: "2026-09-30T00:00:05Z" },
-    });
-    expect(requestText(runningRequest)).toContain('"phase":"running"');
-    expect(requestText(runningRequest)).not.toContain("timed_out");
-    expect(requestText(settledRequest)).toContain('"outcome":"timed_out"');
-    expect(settledRequest.instructions.content).toEqual([]);
-    expect(settledRequest.interaction).toEqual(request.interaction);
-    expect(settledRequest.composition.sections.find(section => section.id === "helarc:model-input:command-state"))
-      .toMatchObject({ role: "user", necessity: "mandatory", source: { owner: "helarc", id: input.runId } });
+    const environment = {shell: {toolName: "Bash", executable: "bash", dialect: "bash"} as const, cwd: "/workspace"};
+    const withEnvironment = buildProviderRequest(input, requestBuildContext(), protocol, createTestQualification(input, protocol), environment);
+    expect(requestText(withEnvironment)).toContain('"initialCwd":"/workspace"');
+    expect(withEnvironment.instructions.content).toEqual([]);
+    expect(withEnvironment.interaction).toEqual(request.interaction);
     const deliveryInput: ControllerInput<HelarcAgentOutput> = {...input, inputDelivery: {
       id: "feedback-batch", revision: "1", runId: input.runId, entries: [{
         runId: input.runId, sequence: 1, occurredAt: "2026-10-20T00:00:00Z",
@@ -462,9 +467,9 @@ describe("Helarc native Tool controller", () => {
       }],
     }};
     const deliveredRequest = buildProviderRequest(deliveryInput, requestBuildContext(), protocol,
-      createTestQualification(input, protocol), [running]);
+      createTestQualification(input, protocol), environment);
     expect(deliveredRequest.composition.sections.at(-1)?.kind).toBe("input_notification");
-    expect(deliveredRequest.composition.sections.at(-2)?.id).toBe("helarc:model-input:command-state");
+    expect(deliveredRequest.composition.sections.some(section => section.kind === "command_state")).toBe(false);
     expect(deliveredRequest.messages.at(-1)?.role).toBe("user");
     expect(deliveredRequest.messages.at(-1)?.content.at(-1)).toMatchObject({
       text: expect.stringContaining("Host Controller feedback:"),
@@ -491,7 +496,7 @@ describe("Helarc native Tool controller", () => {
     expect(enabledRequest.interaction).toEqual(request.interaction);
   });
 
-  it("projects the initial Task and Run state as one logical user message", () => {
+  it("introduces bound background before the actual assignment without a mutable state tail", () => {
     const request = buildHelarcProviderRequest(
       createControllerInput(),
       requestBuildContext(),
@@ -502,24 +507,26 @@ describe("Helarc native Tool controller", () => {
     const userMessage = request.messages[0];
     expect(userMessage?.role).toBe("user");
     if (userMessage?.role !== "user") throw new TypeError("Expected one user message.");
-    expect(userMessage.content.map(({ text }) => text)).toEqual(expect.arrayContaining([
-      expect.stringMatching(/^Task:\n/),
-      "Pending interactions:\n[]",
-      "Descendant targets:\n{\"active\":[],\"continuations\":[]}",
-    ]));
+    expect(userMessage.content.map(({ text }) => text)).toEqual([
+      expect.stringMatching(/^Host-provided execution background/), "Update docs",
+    ]);
+    expect(requestText(request)).not.toMatch(/Current plan:|Pending interactions:|Descendant targets:|Context projection:/);
   });
 
-  it("places Run-owned model interaction history before current state material", () => {
+  it("keeps accepted exchanges after the opening without appending another current-state user message", () => {
     const input = createControllerInput();
+    const message = {role: "assistant" as const, content: [{kind: "text" as const, text: "I inspected the workspace."}]};
+    const source = {owner: "agent-runtime", kind: "run_item", id: "turn-item-1", revision: "7", runId: input.runId};
     const request = buildHelarcProviderRequest({
       ...input,
       interaction: {
         id: "run-1:model-interaction",
         revision: "7",
-        messages: [{
-          role: "assistant",
-          content: [{ kind: "text", text: "I inspected the workspace." }],
-        }],
+        messages: [message],
+        historyPresentations: [retainInputPresentation({id: "retained-turn-1", kind: "interaction_history", source,
+          role: "assistant", necessity: "mandatory", content: {kind: "model_message", message},
+          provenance: {purpose: "accepted_exchange", recipientRunId: input.runId, author: "model", sources: [source],
+            presenter: {owner: "agent-runtime", kind: "presenter", id: "model-interaction", revision: "1"}, coverage: ["turn-item-1"], limitations: []}})],
         unsettledCalls: [],
         settledCallCount: 1,
         latestTurn: null,
@@ -537,12 +544,65 @@ describe("Helarc native Tool controller", () => {
     );
 
     expect(historyIndex).toBeGreaterThan(-1);
-    expect(stateIndex).toBeGreaterThan(historyIndex);
+    expect(stateIndex).toBe(-1);
+    expect(request.messages.at(-1)?.role).toBe("assistant");
     expect(request.metadata).toMatchObject({
       interactionProjectionId: "run-1:model-interaction",
       interactionProjectionRevision: "7",
       interactionMessageCount: 1,
     });
+  });
+
+  it("freezes the exact opening before dispatch and replays it despite later mutable state", async () => {
+    const input = createControllerInput();
+    const records = new Map<string, unknown>();
+    const port = {read: (key: string) => records.get(key) ?? null,
+      async commit(key: string, value: unknown) {records.set(key, structuredClone(value));}};
+    const first = snapshotProviderRequest(buildHelarcProviderRequest(input, requestBuildContext()));
+    await freezeConversationOpening(first, input.runId, port);
+    const changed = {...input, permission: {...input.permission, approval: {...input.permission.approval, canRequest: false}}};
+    expect(buildHelarcProviderRequest(changed, requestBuildContext()).messages).not.toEqual(first.messages);
+    const retry = await freezeConversationOpening(snapshotProviderRequest(buildHelarcProviderRequest(changed, requestBuildContext())), input.runId, port);
+    expect(retry.messages).toEqual(first.messages);
+    const opening = createConversationOpeningReceipt(input.runId, first)!;
+    const next = buildHelarcProviderRequest({...changed, interaction: {...input.interaction, opening}}, requestBuildContext());
+    expect(next.messages).toEqual(first.messages);
+    expect(next.composition.sections.filter(section => section.kind === "conversation_opening_history")).toHaveLength(opening.presentations.length);
+    expect(() => snapshotConversationOpeningReceipt({...opening, digest: "invalid"}, input.runId)).toThrow("digest mismatch");
+    expect(() => snapshotConversationOpeningReceipt(opening, "another-run")).toThrow("binding");
+  });
+
+  it("imports only a completed Child's scoped conversation, then binds fresh background and one Parent assignment", () => {
+    const input = createControllerInput();
+    const opening = createConversationOpeningReceipt(input.runId, snapshotProviderRequest(buildHelarcProviderRequest(input, requestBuildContext())))!;
+    const seed = createModelConversationSeed(input.runId, "7", opening.presentations);
+    const next = helarcConversationOpening({...input, runId: "child-next", interaction: {...input.interaction, seed},
+      inputItems: [{id: "objective", role: "user", content: "Continue with these findings.", metadata: {
+        source: "delegation_objective", delegationRequestId: "delegate-next", delegationRequestRevision: "1", parentRunId: "parent",
+      }}]});
+    expect(next.map(section => section.provenance?.purpose)).toEqual([
+      ...opening.presentations.map(() => "imported_history"), "initial_background", "assignment",
+    ]);
+    expect(next.every(section => section.provenance?.recipientRunId === "child-next")).toBe(true);
+    expect(next[0]?.provenance?.retainedPresentation?.runId).toBe(input.runId);
+    const assignments = next.filter(section => section.provenance?.purpose === "assignment");
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0]?.content).toEqual({kind: "text", text: "Parent assignment:\nContinue with these findings."});
+    expect(next.some(section => section.role === "instruction")).toBe(false);
+    expect(() => createModelConversationSeed("sibling", "7", opening.presentations)).toThrow("another recipient");
+  });
+
+  it("does not charge already-retained selected material twice while preserving its provenance", () => {
+    const input = createControllerInput();
+    const opening = createConversationOpeningReceipt(input.runId, snapshotProviderRequest(buildHelarcProviderRequest({...input,
+      context: {...input.context, blocks: [{id: "selection", item: {id: "item"}, contribution: {id: "material", revision: "2"},
+        instructionRole: "data", payload: {kind: "structured", value: {text: "selected evidence"}},
+        accounting: {unit: "bytes", amount: 1}, transformation: null}]},
+    }, requestBuildContext())))!;
+    const allocation = createHelarcContextProjectionConfiguration().allocate({...input, interaction: {...input.interaction, opening}});
+    expect(allocation.retainedCoverage).toEqual([{contribution: {id: "material", revision: "2"}, presentation: {
+      id: "run-1:opening:material:selection", revision: expect.stringMatching(/^sha256:/),
+    }}]);
   });
 
   it("rejects correction attempts and unsettled calls before transport", () => {

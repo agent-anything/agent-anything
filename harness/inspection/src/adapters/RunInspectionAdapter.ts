@@ -2,7 +2,8 @@ import { RUN_LIFECYCLE_DESCRIPTION, type RunObserver, type RunSnapshotObservatio
 import type { RunTranscriptObserver, RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { InspectionJson } from "../records/index.js";
 import type { InspectionRecorder } from "../recording/index.js";
-import { inspectionLink } from "./ProviderInspectionAdapter.js";
+import { inspectionLink, inspectionModelSource } from "./ProviderInspectionAdapter.js";
+import type { RetainedInputPresentation } from "@agent-anything/agent-runtime/controller";
 
 /** Reads published owner snapshots; never derives a replacement Run state. */
 export class RunInspectionAdapter implements RunObserver {
@@ -118,6 +119,9 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
       });
     } else if (payload.kind === "input_notification") {
       const notification = payload.notification;
+      r.offer({id: `${item.ref.id}:source`, subject: ref(notification.source.owner, "contribution", notification.source.id, notification.source.revision),
+        occurredAt: notification.occurredAt, payload: {kind: "event", name: "addressed_input.recorded", sequence: notification.sequence, code: null},
+        contents: [{name: "Addressed public fact", class: "agent", stage: "admitted", mediaType: "application/json", value: notification as unknown as InspectionJson}]});
       r.offer({subject, occurredAt: item.createdAt, payload: {kind: "event", name: "input_notification.admitted", sequence: item.ref.sequence, code: null},
         links: [inspectionLink("delivers", ref(notification.source.owner, "contribution", notification.source.id, notification.source.revision), subject)],
       });
@@ -139,12 +143,14 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
             ref("model-interaction", "request", via.requestId), {operation: "accepted_input_delivery"})] : [])],
         contents: [{name: "Accepted input delivery", class: "agent", stage: "accepted", mediaType: "application/json",
           value: payload as unknown as InspectionJson}]});
+      if (via.kind === "provider") this.presentations(via.presentations, via.requestId, payload.turn.id, record);
     } else if (payload.kind === "controller_turn") {
       const turn = ref("runtime", "turn", payload.turn.id);
       r.offer({ subject: turn, occurredAt: item.createdAt, payload: { kind: "event", name: "controller_turn.committed", sequence: null, code: null },
         links: [inspectionLink("trigger", subject, turn), ...payload.toolExposure.exposedTools.map((tool) => inspectionLink("binding", r.ref("tools", "definition", `${tool.tool.namespace}.${tool.tool.name}`, null, tool.revision), turn))],
         contents: [{ name: "Controller turn and exposure", class: "agent", stage: "committed", mediaType: "application/json", value: payload as unknown as InspectionJson }],
       });
+      if (payload.openingReceipt) this.presentations(payload.openingReceipt.presentations, payload.openingReceipt.requestId, payload.turn.id, record);
       for (const model of payload.modelItems) {
         if (model.kind !== "assistant_text" && model.kind !== "model_tool_call") continue;
         const modelRef = model.kind === "model_tool_call" ? ref("runtime", "call", model.call.modelCallRef.id)
@@ -154,6 +160,26 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
           links: [inspectionLink("contains", turn, modelRef)],
           contents: [{name: "Committed model item", class: "agent", stage: "committed", mediaType: "application/json", value: model as unknown as InspectionJson}]});
       }
+    }
+  }
+
+  private presentations(presentations: readonly RetainedInputPresentation[], requestId: string, turnId: string, record: RunTranscriptRecord): void {
+    const r = this.recorder;
+    for (const [position, presentation] of presentations.entries()) {
+      const {section, digest} = presentation;
+      const provenance = section.provenance!;
+      const subject = r.ref("agent-runtime", "contribution", `presentation:${section.id}`, record.runId, digest);
+      r.offer({id: `${record.item.ref.id}:presentation:${position}`, subject, occurredAt: record.item.createdAt,
+        payload: {kind: "conversation", stage: "accepted", purpose: provenance.purpose, author: provenance.author,
+          role: section.role, recipientRunId: record.runId, originRunId: provenance.originRunId ?? null, requestId, attemptId: null, position,
+          presenter: `${provenance.presenter.id}@${provenance.presenter.revision}`, digest,
+          delivery: provenance.purpose === "imported_history" ? "import" : "new", sourceCount: provenance.sources.length},
+        links: [inspectionLink("settles", r.ref("runtime", "event", record.item.ref.id, record.runId), subject),
+          inspectionLink("delivers", subject, r.ref("runtime", "turn", turnId, record.runId), {operation: "accepted_conversation_input"}),
+          inspectionLink("includes", subject, r.ref("model-interaction", "request", requestId, record.runId)),
+          ...provenance.sources.map(source => inspectionLink("transforms", inspectionModelSource(r, source, record.runId), subject))],
+        contents: [{name: "Accepted presentation", class: "agent", stage: "accepted", mediaType: "application/json",
+          value: presentation as unknown as InspectionJson}]});
     }
   }
 }

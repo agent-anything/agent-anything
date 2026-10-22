@@ -58,6 +58,7 @@ describe("Model Interaction public API", () => {
       "modelInputFromSections",
       "modelInputSectionLocations",
       "snapshotModelInputComposition",
+      "snapshotModelInputSection",
       "snapshotModelOutputFormat",
     ]);
     expect(Object.keys(continuationApi).sort()).toEqual([

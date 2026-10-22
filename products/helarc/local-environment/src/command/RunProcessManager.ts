@@ -208,9 +208,11 @@ export class RunProcessManager {
     return Object.freeze((this.notifications.get(runId) ?? []).filter(fact => fact.sequence > afterSequence));
   }
   async commitInitialDelivery(input: ProcessInitialDelivery): Promise<void> {
-    const key = JSON.stringify(input);
-    const entries = [...this.executions.values()].filter(entry => entry.input.runId === input.runId &&
-      entry.input.origin?.runActionId === input.runActionId);
+    const key = JSON.stringify({runId: input.runId, executionId: input.executionId, runActionId: input.runActionId,
+      settlementId: input.settlementId, observationId: input.observationId, cursor: input.cursor});
+    // A Shell call can wrap an internal process-start Action. Bind its committed
+    // result to the process receipt, not to equality with that internal Action.
+    const entries = input.executionId === null ? [] : [this.find(input.runId, input.executionId)];
     for (const entry of entries) {
       if (entry.initialDelivery !== null) {
         if (entry.initialDelivery !== key) throw new ProcessManagerError("process_initial_delivery_conflict");
@@ -536,7 +538,9 @@ export class RunProcessManager {
     };
     const fact: ProcessInputNotification = immutable({runId: entry.input.runId, sequence: ++this.notificationSequence,
       source: {owner: "helarc-command", kind, id: entry.input.executionId, revision: String(snapshot.revision)},
-      occurredAt: this.now(), data: {kind, task_id: entry.input.executionId,
+      occurredAt: this.now(), interpretation: {kind: "notification", purpose: "later_outcome", author: "capability", originRunId: entry.input.runId},
+      data: {kind, task_id: entry.input.executionId, origin: snapshot.origin,
+        initial_cwd: snapshot.initialCwd, final_cwd: snapshot.finalCwd, session_cwd: snapshot.sessionCwd, cwd_disposition: snapshot.cwdDisposition,
         command: entry.input.displayCommand?.command.slice(0, 4096) ?? null,
         command_truncated: (entry.input.displayCommand?.command.length ?? 0) > 4096,
         snapshot_revision: snapshot.revision, phase: snapshot.phase,

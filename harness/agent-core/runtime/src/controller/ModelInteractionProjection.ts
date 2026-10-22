@@ -8,7 +8,9 @@ import {
   type ModelToolResult,
 } from "@agent-anything/model-interaction";
 import type { RunItem } from "../run/RunItem.js";
-import { inputNotificationMessage, snapshotInputDeliveryReceipt } from "./ControllerInputDelivery.js";
+import { retainInputPresentation, snapshotInputDeliveryReceipt } from "./ControllerInputDelivery.js";
+import { snapshotConversationOpeningReceipt, snapshotModelConversationSeed, type ModelConversationSeed } from "./ControllerConversation.js";
+import type { ModelInputSourceRef } from "@agent-anything/model-interaction/input";
 import type {
   ControllerModelItem,
   ModelInteractionProjection,
@@ -25,9 +27,21 @@ export function projectModelInteraction(input: {
   readonly runId: string;
   readonly runRevision: number;
   readonly items: readonly RunItem[];
-  readonly seedMessages?: readonly ModelMessage[];
+  readonly seed?: ModelConversationSeed | null;
 }): ModelInteractionProjection {
-  const messages: ModelMessage[] = (input.seedMessages ?? []).map(snapshotModelMessage);
+  const seed = input.seed ? snapshotModelConversationSeed(input.seed) : null;
+  const messages: ModelMessage[] = [];
+  let opening: ModelInteractionProjection["opening"] = null;
+  const historyPresentations: NonNullable<ModelInteractionProjection["historyPresentations"]>[number][] = [];
+  const append = (message: ModelMessage, sources: readonly ModelInputSourceRef[]) => {
+    const section = {id: `${input.runId}:history:${messages.length}`, source: sources[0]!, kind: "interaction_history",
+      role: message.role, necessity: "mandatory" as const, content: {kind: "model_message" as const, message},
+      provenance: {purpose: "accepted_exchange", recipientRunId: input.runId, author: message.role === "assistant" ? "model" : "capability",
+        sources, presenter: {owner: "agent-runtime", kind: "presenter", id: "model-interaction-history", revision: "1"},
+        coverage: sources.map(source => `${source.id}@${source.revision}`), limitations: []}};
+    historyPresentations.push(retainInputPresentation(section));
+    messages.push(message);
+  };
   const unsettled = new Map<string, ModelToolCall>();
   const settled = new Set<string>();
   const callOrder = new Map<string, number>();
@@ -37,18 +51,19 @@ export function projectModelInteraction(input: {
   let pendingResults: Array<{
     readonly order: number;
     readonly result: ModelToolResult;
+    readonly source: ModelInputSourceRef;
   }> = [];
 
   const flushResults = (): void => {
     if (pendingResults.length === 0) return;
-    messages.push(snapshotModelMessage({
+    append(snapshotModelMessage({
       role: "tool",
       content: [...pendingResults].sort((left, right) => left.order - right.order)
         .map(({ result }) => Object.freeze({
         kind: "model_tool_result" as const,
         result,
       })),
-    }));
+    }), pendingResults.map(entry => entry.source));
     pendingResults = [];
   };
 
@@ -62,15 +77,31 @@ export function projectModelInteraction(input: {
           next.committedInRevision !== item.committedInRevision) {
         throw projectionFailure("input_delivery_history_invalid", "Input delivery must immediately precede its atomically committed Controller Turn, after all Call results.");
       }
-      snapshotInputDeliveryReceipt(receipt, batch);
-      if (receipt.via.kind === "provider") for (const entry of batch.entries) {
+      const retainedReceipt = snapshotInputDeliveryReceipt(receipt, batch)!;
+      if (retainedReceipt.via.kind === "provider") {
+        const requestId = retainedReceipt.via.requestId;
+        if (next.payload.modelItems.some(value => value.kind === "model_response_correlation" && value.response.requestId !== requestId)) {
+          throw projectionFailure("input_delivery_request_mismatch", "Accepted input must belong to the response request.");
+        }
+      }
+      if (retainedReceipt.via.kind === "provider") for (const [entryIndex, entry] of batch.entries.entries()) {
+        const presentation = retainedReceipt.via.presentations[entryIndex]!;
         notificationHistory.push(Object.freeze({messageIndex: messages.length, batchId: batch.id,
-          batchRevision: batch.revision, sequence: entry.sequence}));
-        messages.push(inputNotificationMessage(entry));
+          batchRevision: batch.revision, sequence: entry.sequence, presentation}));
+        if (presentation.section.content.kind !== "model_message") throw projectionFailure("input_presentation_invalid", "Notification presentation must be a message.");
+        messages.push(presentation.section.content.message);
+        historyPresentations.push(presentation);
       }
       continue;
     }
     if (item.payload.kind === "controller_turn") {
+      if (item.payload.openingReceipt) {
+        if (opening || latestTurn || item.payload.status !== "decided") throw projectionFailure("conversation_opening_repeated", "Opening may only be accepted with the first decided Turn.");
+        opening = snapshotConversationOpeningReceipt(item.payload.openingReceipt, input.runId);
+        if (item.payload.modelItems.some(value => value.kind === "model_response_correlation" && value.response.requestId !== opening!.requestId)) {
+          throw projectionFailure("conversation_opening_request_mismatch", "Accepted opening must belong to the response request.");
+        }
+      }
       flushResults();
       if (unsettled.size > 0) {
         throw projectionFailure(
@@ -90,7 +121,8 @@ export function projectModelInteraction(input: {
         textBlocks: Object.freeze(item.payload.modelItems.flatMap(model => model.kind === "assistant_text"
           ? [Object.freeze({ modelItemId: model.id, ordinal: model.contentBlockOrdinal, text: model.text })] : [])),
       });
-      messages.push(projected.message);
+      append(projected.message, [{owner: "agent-runtime", kind: "run_item", id: item.ref.id,
+        revision: String(item.committedInRevision), runId: input.runId}]);
       for (const call of projected.calls) {
         const key = modelCallRefKey(call.modelCallRef);
         if (unsettled.has(key) || settled.has(key)) {
@@ -127,7 +159,8 @@ export function projectModelInteraction(input: {
       }
       unsettled.delete(key);
       settled.add(key);
-      pendingResults.push(Object.freeze({ order: callOrder.get(key)!, result }));
+      pendingResults.push(Object.freeze({ order: callOrder.get(key)!, result,
+        source: {owner: "agent-runtime", kind: "run_item", id: item.ref.id, revision: String(item.committedInRevision), runId: input.runId} }));
     }
   }
 
@@ -140,6 +173,7 @@ export function projectModelInteraction(input: {
     settledCallCount: settled.size,
     latestTurn,
     notificationHistory: Object.freeze(notificationHistory),
+    opening, seed, historyPresentations: Object.freeze(historyPresentations),
   });
 }
 

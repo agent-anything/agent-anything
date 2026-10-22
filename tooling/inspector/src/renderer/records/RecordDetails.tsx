@@ -21,6 +21,7 @@ export function payloadSummary(payload: InspectionPayload): string {
     case "request": return payload.purpose + " / " + (payload.model ?? payload.providerId);
     case "exposure": return payload.exposed.length + " exposed / " + payload.omitted.length + " omitted";
     case "transfer": return payload.stage + " / " + (payload.operation ?? "no transform recorded");
+    case "conversation": return `${payload.purpose} / ${payload.delivery} / ${payload.stage}`;
     case "definition": return payload.name + " / " + payload.revision;
     case "response": return payload.status;
     case "interval": return payload.activity + " / " + payload.phase;
@@ -46,6 +47,15 @@ export function RecordDetails({ record, link, onSubject, onRecord, onContent, on
     { key: "record", label: "Record", children: record.id },
     { key: "sequence", label: "Commit", children: record.commitSequence },
     { key: "time", label: "Occurred", children: record.occurredAt ?? "Not recorded" },
+    ...(record.payload.kind === "conversation" ? [
+      {key:"purpose",label:"Interaction purpose",children:record.payload.purpose},
+      {key:"author",label:"Author / API role",children:`${record.payload.author} / ${record.payload.role}`},
+      {key:"recipient",label:"Recipient Run",children:record.payload.recipientRunId},
+      {key:"origin",label:"Origin Run",children:record.payload.originRunId ?? "Not separately recorded; inspect source references"},
+      {key:"delivery",label:"Delivery",children:record.payload.delivery},
+      {key:"presenter",label:"Presenter",children:record.payload.presenter},
+      {key:"sources",label:"Sources",children:String(record.payload.sourceCount)},
+    ] : []),
     ...(record.payload.kind === "process" ? [
       {key:"command-pid",label:"Command PID",children:String(record.payload.processId ?? "Not started")},
       {key:"helper-pid",label:"Helper PID",children:String(record.payload.helperProcessId ?? "Not used")},

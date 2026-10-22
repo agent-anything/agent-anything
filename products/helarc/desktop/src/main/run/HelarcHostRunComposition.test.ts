@@ -585,7 +585,7 @@ describe("Helarc Host Run composition", () => {
         expect(outputs, invocation.subject.id).toBeGreaterThan(0);
       }
       const material = (await queries.query({...scope, kind: "list_records", recordKind: "event", limit: 500})).records;
-      for (const name of ["Run input", "Run configuration", "controller.decision", "operation.request", "operation.binding", "operation.result"]) {
+      for (const name of ["Run input", "Run configuration", "Bound execution background", "controller.decision", "operation.request", "operation.binding", "operation.result"]) {
         expect(material.find(record => record.payload.kind === "event" && record.payload.name === name)?.contents[0]?.availability, name).toBe("present");
       }
       const nativeRefs = execution.records.flatMap((record) => record.links.flatMap((link) => [link.from, link.to]))
@@ -599,7 +599,7 @@ describe("Helarc Host Run composition", () => {
           record.subject.revision === subject.revision), `Missing native source: ${JSON.stringify(subject)}`).toBe(true);
       }
       const flow = (await queries.query({ ...scope, kind: "get_data_flow" })).graph!;
-      expect(flow.links.some((link) => link.targetLocation?.stage === "projected" && link.targetLocation.jsonPointer?.startsWith("/blocks/"))).toBe(true);
+      expect(flow.links.some((link) => link.targetLocation?.stage === "semantic" && link.targetLocation.jsonPointer?.startsWith("/messages/"))).toBe(true);
       expect((await queries.query({ ...scope, kind: "get_scheduling", subject: runs[0]!.subject })).records.length).toBeGreaterThan(0);
     } finally {
       await queries.close(); await inspection.close();
@@ -776,7 +776,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(2);
     expect(provider.lastControllerResultCounts).toEqual([0, 1]);
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata).toMatchObject({
-      promptArchitectureVersion: "helarc-prompt-v9",
+      promptArchitectureVersion: "helarc-prompt-v10",
       toolExposureVersion: "trusted-tool-exposure-v1",
     });
     expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata)
@@ -917,8 +917,8 @@ describe("Helarc Host Run composition", () => {
     const result = await executeTestHostRun({ ...createTask(workspaceRoot), provider });
     expect(result.runResult.status).toBe("completed");
     expect(provider.requests).toHaveLength(5);
-    expect(findTextBlock(provider.requests[1]!, "Task:")).toBe(`Task:\n${childPrompt}`);
-    expect(findTextBlock(provider.requests[2]!, "Task:")).toBe(`Task:\n${nestedPrompt}`);
+    expect(findTextBlock(provider.requests[1]!, "Parent assignment:")).toBe(`Parent assignment:\n${childPrompt}`);
+    expect(findTextBlock(provider.requests[2]!, "Parent assignment:")).toBe(`Parent assignment:\n${nestedPrompt}`);
     expect(operationResults(result)).toEqual([]);
   }));
 
@@ -929,12 +929,12 @@ describe("Helarc Host Run composition", () => {
       { kind: "tool_call", toolName: "Agent", input: { prompt: "Inspect and report." } },
       { kind: "completion", summary: "Child findings." },
       (request: ProviderRequest) => {
-        const marker = "Descendant targets:";
-        const targets = JSON.parse(findTextBlock(request, marker)!.slice(marker.length));
+        const results = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result.content) : []);
+        const delegation = results.find(value => value && typeof value === "object" && "kind" in value && value.kind === "descendant_run") as {output: {agent_id: string}};
         return {
           kind: "tool_call",
           toolName: "SendMessage",
-          input: { agent_id: targets.continuations[0].ref.id, prompt: message },
+          input: { agent_id: delegation.output.agent_id, prompt: message },
         };
       },
       { kind: "completion", summary: "Second finding explained." },
@@ -945,7 +945,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(5);
     expect(provider.requests[3]?.messages).toContainEqual(expect.objectContaining({
       role: "user",
-      content: expect.arrayContaining([expect.objectContaining({ kind: "text", text: message })]),
+      content: expect.arrayContaining([expect.objectContaining({ kind: "text", text: `Parent assignment:\n${message}` })]),
     }));
     expect(operationResults(result)).toEqual([]);
   }));
@@ -1332,18 +1332,11 @@ describe("Helarc Host Run composition", () => {
     ]);
     expect(provider.lastControllerResultCounts).toEqual([0, 1, 2]);
     expect(provider.requests).toHaveLength(3);
-    const stateSection = (request: ProviderRequest) => request.composition.sections.find(
-      section => section.id === "helarc:model-input:command-state",
-    );
-    expect(stateSection(provider.requests[0]!)).toBeUndefined();
-    const runningState = stateSection(provider.requests[1]!)!;
-    const stoppedState = stateSection(provider.requests[2]!)!;
-    expect(runningState).toMatchObject({ role: "user", necessity: "mandatory" });
-    expect(JSON.stringify(runningState)).toContain('\\"phase\\":\\"running\\"');
-    expect(JSON.stringify(stoppedState)).toContain('\\"outcome\\":\\"cancelled\\"');
-    expect(stoppedState.source.revision).not.toBe(runningState.source.revision);
     const priorResults = provider.requests[1]!.messages.filter(message => message.role === "tool");
     const subsequentResults = provider.requests[2]!.messages.filter(message => message.role === "tool");
+    expect(JSON.stringify(priorResults)).toContain('"phase":"running"');
+    expect(JSON.stringify(subsequentResults)).toContain('"outcome":"cancelled"');
+    expect(provider.requests.every(request => !request.composition.sections.some(section => section.id === "helarc:model-input:command-state"))).toBe(true);
     expect(subsequentResults.slice(0, priorResults.length)).toEqual(priorResults);
     expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
   }));
@@ -1373,12 +1366,11 @@ describe("Helarc Host Run composition", () => {
 
     expect(result.runResult.status, JSON.stringify(result.product.output.safeErrors)).toBe("completed");
     expect(provider.requests).toHaveLength(3);
-    const currentState = (request: ProviderRequest) => request.composition.sections.find(
-      section => section.id === "helarc:model-input:command-state",
-    )?.content;
-    expect(currentState(provider.requests[1]!)).toMatchObject({kind: "text", text: expect.stringContaining('"phase":"running"')});
-    expect(currentState(provider.requests[2]!)).toMatchObject({kind: "text", text: expect.stringContaining('"outcome":"timed_out"')});
+    const notices = provider.requests[2]!.composition.sections.filter(section => section.provenance?.purpose === "later_outcome");
+    expect(notices.some(section => section.provenance?.sources.some(source => source.owner === "helarc-command") &&
+      section.content.kind === "model_message" && JSON.stringify(section.content.message).includes('\\"outcome\\":\\"timed_out\\"')), JSON.stringify(notices)).toBe(true);
     const oldResults = provider.requests[1]!.messages.filter(message => message.role === "tool");
+    expect(JSON.stringify(oldResults)).toContain('"phase":"running"');
     expect(provider.requests[2]!.messages.filter(message => message.role === "tool").slice(0, oldResults.length)).toEqual(oldResults);
     expect(operationResults(result).some(operation => operation.binding.operation.operation.name === "task-output")).toBe(false);
     expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
@@ -1516,7 +1508,10 @@ describe("Helarc Host Run composition", () => {
           { step: "Finish task", status: "pending" },
         ],
       };
-    expect(provider.lastControllerInputPlans).toEqual([null, recordedPlan]);
+    expect(provider.lastControllerPlanExchanges).toEqual([[], [{
+      input: {explanation: "The task has multiple steps.", plan: recordedPlan.steps},
+      outcome: {kind: "plan_update", result: {status: "applied", transition: "created", planId: recordedPlan.id, version: 1}},
+    }]]);
     expect(provider.requests).toHaveLength(2);
     expect(provider.stopRequests).toHaveLength(0);
     expect(result.runResult.items.filter(({ payload }) => payload.kind === "controller_feedback")).toHaveLength(0);
@@ -1737,22 +1732,27 @@ describe("Helarc Host Run composition", () => {
   it("keeps approval review and statistics after the former cumulative request limit", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-unbounded-approvals-"));
     let reviewCount = 0;
+    const started = performance.now();
+    const timings: {stage: string; elapsedMs: number}[] = [];
+    const mark = (stage: string) => timings.push({stage, elapsedMs: Math.round(performance.now() - started)});
     const provider = new ScriptedProvider([
       ...Array.from({length: 9}, (_, index) => ({kind: "tool_call", toolName: "Write",
         input: {file_path: `approved-${index}.txt`, content: "approved\n"}})),
       {kind: "completion", summary: "All nine individually reviewed writes completed."},
-    ]);
+    ], () => {mark("model_request");});
     try {
       const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider,
-        permissionPreset: "approve_for_me", automaticApprovalReviewer: automaticReviewer("accept", () => { reviewCount += 1; })});
+        permissionPreset: "approve_for_me", automaticApprovalReviewer: automaticReviewer("accept", () => { reviewCount += 1; mark("approval"); })});
       const composition = prepared.start();
       const result = await composition.result;
+      mark("settled");
       expect(result.product.status).toBe("completed");
       expect(reviewCount).toBe(9);
       expect(composition.activeRun.getProjection().runTree.approvals).toMatchObject({totalRequests: 9, settledRequests: 9,
         activeReviews: 0, exhaustedCode: null});
       await expect(readFile(join(workspaceRoot, "approved-8.txt"), "utf8")).resolves.toBe("approved\n");
     } finally {
+      console.log("Approval composition timings", JSON.stringify(timings));
       await rm(workspaceRoot, {recursive: true, force: true});
     }
   }), 20_000);
@@ -2015,7 +2015,7 @@ class ScriptedProvider implements Provider {
   };
   readonly requests: ProviderRequest[] = [];
   readonly lastControllerResultCounts: number[] = [];
-  readonly lastControllerInputPlans: unknown[] = [];
+  readonly lastControllerPlanExchanges: unknown[] = [];
 
   constructor(
     private readonly outputs: unknown[],
@@ -2031,10 +2031,10 @@ class ScriptedProvider implements Provider {
       return scriptedTaskFulfillmentResult(request, this.descriptor.id);
     }
     this.requests.push(request);
-    expect(readContextValues(request).filter(value => value.kind === "run_observation")).toEqual([]);
+    expect(findTextBlock(request, "Context projection:")).toBeUndefined();
     this.lastControllerResultCounts.push(request.messages.reduce((count, message) =>
       count + (message.role === "tool" ? message.content.length : 0), 0));
-    this.lastControllerInputPlans.push(readCurrentPlan(request));
+    this.lastControllerPlanExchanges.push(readPlanExchanges(request));
     await this.beforeResponse(request);
     const scriptedOutput = this.outputs.shift();
     if (scriptedOutput === undefined) {
@@ -2296,41 +2296,19 @@ function createTask(workspaceRoot: string) {
   };
 }
 
-function readContextValues(request: ProviderRequest): Readonly<Record<string, unknown>>[] {
-  const marker = "Context projection:";
-  const content = findTextBlock(request, marker);
-  if (content === undefined) {
-    return [];
-  }
-
-  return content.slice(marker.length).split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as unknown;
-      } catch {
-        return null;
-      }
-    })
-    .flatMap((block) =>
-      typeof block === "object" &&
-      block !== null &&
-      "payload" in block &&
-      typeof block.payload === "object" &&
-      block.payload !== null &&
-      "value" in block.payload &&
-      typeof block.payload.value === "object" &&
-      block.payload.value !== null &&
-      "kind" in block.payload.value ? [block.payload.value as Readonly<Record<string, unknown>>] : []
-    );
-}
-
-function readCurrentPlan(request: ProviderRequest): unknown {
+function readPlanExchanges(request: ProviderRequest): readonly unknown[] {
   expect(findTextBlock(request, "Current plan:")).toBeUndefined();
-  const plans = readContextValues(request).filter(value => value.kind === "run_plan");
-  expect(plans).toHaveLength(1);
-  return plans[0]!.plan;
+  const calls = new Map<string, unknown>();
+  const exchanges = [];
+  for (const message of request.messages) {
+    if (message.role === "assistant") for (const block of message.content) {
+      if (block.kind === "model_tool_call" && block.call.name === "update_plan") calls.set(block.call.modelCallRef.id, block.call.input);
+    }
+    if (message.role === "tool") for (const {result} of message.content) {
+      if (calls.has(result.modelCallRef.id)) exchanges.push({input: calls.get(result.modelCallRef.id), outcome: result.content});
+    }
+  }
+  return exchanges;
 }
 
 function findTextBlock(request: ProviderRequest, marker: string): string | undefined {

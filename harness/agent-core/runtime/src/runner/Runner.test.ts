@@ -856,7 +856,8 @@ describe("Runner semantic integration", () => {
     const store = createTreeCommitFixture();
     const agent = createAgent();
     const controller = new ScriptedController([complete("Done")]);
-    const result = await createRunner(controller, operations, {runTreeCommits: store.port})
+    const result = await createRunner(controller, operations, {runTreeCommits: store.port,
+      contextProjection: {...createTestContextProjection(), audiences: ["runtime"]}})
       .run(agent, createRunInput(), createRunConfig(operations));
     expect(result.status).toBe("completed");
     const prepared = store.records.flatMap(record => record.runs)
@@ -1227,6 +1228,7 @@ describe("Runner semantic integration", () => {
     const result = await createRunner(controller, operations, {
       contextProjection: Object.freeze({
         ...baseProjection,
+        audiences: ["runtime"],
         allocate(input) {
           const allocation = baseProjection.allocate(input);
           return Object.freeze({
@@ -2859,16 +2861,10 @@ describe("Runner semantic integration", () => {
       },
       (input) => {
         expect(input.runId).toBe("run_003");
-        expect(input.interaction.messages).toEqual(expect.arrayContaining([
-          expect.objectContaining({ role: "assistant" }),
-          expect.objectContaining({
-            role: "user",
-            content: [expect.objectContaining({
-              kind: "text",
-              text: "Refine the retained finding.",
-            })],
-          }),
-        ]));
+        expect(input.interaction.messages).toEqual([]);
+        expect(input.interaction.seed?.sourceRunId).toBe("run_002");
+        expect(JSON.stringify(input.interaction.seed?.presentations)).toContain("Child context retained");
+        expect(input.inputItems).toEqual(expect.arrayContaining([expect.objectContaining({content: "Refine the retained finding."})]));
         return complete("Continuation complete", "model_continuation_complete");
       },
       (input) => {
@@ -2980,8 +2976,9 @@ describe("Runner semantic integration", () => {
         )], "model_send_message_1");
       },
       (input) => {
-        expect(JSON.stringify(input.interaction.messages)).toContain("Original child finding");
-        expect(JSON.stringify(input.interaction.messages)).toContain("Refine the original finding.");
+        expect(JSON.stringify(input.interaction.seed?.presentations)).toContain("Original child finding");
+        expect(JSON.stringify(input.inputItems)).toContain("Refine the original finding.");
+        expect(input.interaction.latestTurn).toBeNull();
         return complete("First continuation finding", "model_continuation_1");
       },
       (input) => {
@@ -2999,11 +2996,11 @@ describe("Runner semantic integration", () => {
         )], "model_send_message_2");
       },
       (input) => {
-        const history = JSON.stringify(input.interaction.messages);
+        const history = JSON.stringify(input.interaction.seed?.presentations);
         expect(history).toContain("Original child finding");
-        expect(history).toContain("Refine the original finding.");
         expect(history).toContain("First continuation finding");
-        expect(history).toContain("Refine the finding one final time.");
+        expect(JSON.stringify(input.inputItems)).toContain("Refine the finding one final time.");
+        expect(input.interaction.messages).toEqual([]);
         return complete("Second continuation finding", "model_continuation_2");
       },
       complete("Parent complete", "model_parent_complete"),
@@ -5278,7 +5275,7 @@ function createTestDelegation(
             schemaVersion: 1 as const,
             childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
             task: input.sourceRequest.task,
-            objective: input.sourceRequest.objective,
+            objective: {...input.sourceRequest.objective, text: input.message},
             expectedResult: input.sourceRequest.expectedResult,
             contextPlan: createDelegationContextPlan({
               entries: Object.freeze([]),

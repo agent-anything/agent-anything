@@ -2,7 +2,6 @@ export type {
   HelarcPromptAssemblyResult,
   HelarcPromptAssemblyVersions,
   HelarcPromptSection,
-  HelarcPromptSectionId,
 } from "./HelarcPromptAssembly.js";
 export {
   buildHelarcPromptAssembly,

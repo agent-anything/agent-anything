@@ -39,13 +39,18 @@ export function createHelarcContextProjectionConfiguration(): RunnerContextProje
     policy,
     audiences: Object.freeze(["model"]),
     maxContributionPayloadBytes: 128 * 1_024,
-    allocate() {
+    allocate(input: Parameters<RunnerContextProjection["allocate"]>[0]) {
       return Object.freeze({
         budget: Object.freeze({
           unit: "bytes" as const,
           maximum: HELARC_MAXIMUM_CONTEXT_INPUT_BYTES,
         }),
         estimator,
+        retainedCoverage: Object.freeze([...(input.interaction.opening?.presentations ?? []), ...(input.interaction.historyPresentations ?? [])].flatMap(presentation =>
+          (presentation.section.provenance?.sources ?? []).filter(source => source.owner === "context" &&
+            source.kind === "context_contribution" && (source.runId ?? presentation.section.provenance?.recipientRunId) === input.runId && source.revision !== null)
+          .map(source => ({contribution: {id: source.id, revision: source.revision!},
+            presentation: {id: presentation.section.id, revision: presentation.digest}})))),
       });
     },
   });

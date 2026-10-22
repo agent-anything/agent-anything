@@ -3,7 +3,7 @@ import type { InspectionSource, InspectionDatasetManifest } from "../sources/ind
 import type { ExecutionFlowDefinition, ExecutionFlowSubjectRef } from "@agent-anything/observability/execution-flow";
 
 export interface InspectionSelection { readonly sourceId: string; readonly datasetId: string; readonly watermark: number }
-export type InspectionViewQuery = "list_definitions" | "list_runs" | "list_records" | "get_hierarchy" | "get_lifecycle" | "get_data_flow" | "get_dependencies" | "get_scheduling" | "get_model_request" | "get_execution" | "get_timeline" | "get_telemetry";
+export type InspectionViewQuery = "list_definitions" | "list_runs" | "list_records" | "get_hierarchy" | "get_lifecycle" | "get_data_flow" | "get_dependencies" | "get_scheduling" | "get_model_request" | "get_conversation_delivery" | "get_execution" | "get_timeline" | "get_telemetry";
 export type InspectionQuery =
   | { readonly kind: "list_sources" }
   | { readonly kind: "list_datasets"; readonly sourceId: string; readonly after?: string }

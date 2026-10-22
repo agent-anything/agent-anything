@@ -61,6 +61,7 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
   readonly internalHandlers: readonly InternalOperationHandler[];
   readonly shellTool: HelarcShellToolName;
   readonly shellRuntime: HelarcShellRuntimeProfile;
+  readonly shellSession?: (runId: string) => {readonly canonicalPath: string};
   readonly shellActionAdapterId: string;
   readonly taskStopActionAdapterId: string;
   readonly environment: {
@@ -69,7 +70,6 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
   };
   readonly taskStopBinding: OperationBindingRevisionRef;
   readonly taskState: {
-    getRunSnapshots(runId: string): readonly import("../controller/HelarcCommandState.js").HelarcCommandStateSnapshot[];
   };
   readonly taskAvailability: {
     getRunAvailability(runId: string): {

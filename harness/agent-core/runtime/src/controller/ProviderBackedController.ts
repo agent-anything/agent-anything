@@ -5,6 +5,8 @@ import { MODEL_TURN_EXECUTION_FLOW } from "./ModelTurnExecutionFlow.js";
 import { MODEL_CONTEXT_EXECUTION_FLOW } from "./ModelContextExecutionFlow.js";
 import { createProviderInputDeliveryReceipt, snapshotInputDeliveryReceipt,
   type ControllerInputDeliveryReceipt } from "./ControllerInputDelivery.js";
+import { createConversationOpeningReceipt, freezeConversationOpening, snapshotConversationOpeningReceipt,
+  type ConversationOpeningReceipt } from "./ControllerConversation.js";
 import type {
   ModelCallRef,
   ModelAssistantContentBlock,
@@ -302,7 +304,7 @@ export class ProviderBackedController<TOutput = unknown>
         const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
         build.output(requestRef);
         const send = flow.advance("send", {requestId: request.requestId}, [requestRef]);
-        const {response, inputDeliveryReceipt} = await this.sendRequest(
+        const {response, inputDeliveryReceipt, openingReceipt} = await this.sendRequest(
           request,
           controllerInput,
           {...callContext, executionFlow: flow.callContext},
@@ -354,7 +356,8 @@ export class ProviderBackedController<TOutput = unknown>
         );
         throwIfCancelled(callContext);
         delivery.finish("validated", decision.modelItems);
-        return Object.freeze({...decision, ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt})});
+        return Object.freeze({...decision, ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
+          ...(openingReceipt === null ? {} : {openingReceipt})});
       }
     } catch (error) {
       delivery.finish(callContext.cancellation.signal.aborted ? "cancelled"
@@ -426,11 +429,12 @@ export class ProviderBackedController<TOutput = unknown>
 
           let response: ProviderResponse;
           let inputDeliveryReceipt: ControllerInputDeliveryReceipt | null;
+          let openingReceipt: ConversationOpeningReceipt | null;
           const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
           build.output(requestRef);
           try {
             flow.advance("send", {requestId: request.requestId}, [requestRef]);
-            ({response, inputDeliveryReceipt} = await this.sendRequest(
+            ({response, inputDeliveryReceipt, openingReceipt} = await this.sendRequest(
               request,
               controllerInput,
               {...callContext, executionFlow: flow.callContext},
@@ -482,7 +486,8 @@ export class ProviderBackedController<TOutput = unknown>
             );
             return interruptedAfterValidation ?? {
               kind: "succeeded" as const,
-              value: Object.freeze({...decision, ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt})}),
+              value: Object.freeze({...decision, ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
+                ...(openingReceipt === null ? {} : {openingReceipt})}),
             };
           } catch (error) {
             if (error instanceof StructuredOutputError) {
@@ -626,7 +631,9 @@ export class ProviderBackedController<TOutput = unknown>
     nextProviderRequestNumber: () => number,
     modelInputRecoveryAttempt = 0,
     delivery?: ControllerResponseDelivery,
-  ): Promise<{readonly response: ProviderResponse; readonly inputDeliveryReceipt: ControllerInputDeliveryReceipt | null}> {
+  ): Promise<{readonly response: ProviderResponse; readonly inputDeliveryReceipt: ControllerInputDeliveryReceipt | null;
+    readonly openingReceipt: ConversationOpeningReceipt | null}> {
+    if (!controllerInput.interaction.opening) request = await freezeConversationOpening(request, controllerInput.runId, callContext.runCheckpoints);
     const assessedRequest = snapshotProviderRequest(await new ProviderControllerCheckpoint(callContext.checkpoints)
       .once(`assessed-request:${request.requestId}:${modelInputRecoveryAttempt}`, () => this.prepareModelContextRequest(
       request,
@@ -641,6 +648,7 @@ export class ProviderBackedController<TOutput = unknown>
     });
     const preparedRequest = withContinuation(request, preparation.continuation);
     const inputDeliveryReceipt = createProviderInputDeliveryReceipt(controllerInput.inputDelivery, preparedRequest);
+    const openingReceipt = controllerInput.interaction.opening ? null : createConversationOpeningReceipt(controllerInput.runId, preparedRequest);
     let settlement: ProviderRequestSettlement;
     try {
       settlement = await this.executeProviderRequest(
@@ -737,11 +745,11 @@ export class ProviderBackedController<TOutput = unknown>
         );
       }
       await this.advanceContinuation(resetPreparation, settlement.response);
-      return Object.freeze({response: settlement.response, inputDeliveryReceipt});
+      return Object.freeze({response: settlement.response, inputDeliveryReceipt, openingReceipt});
     }
 
     await this.advanceContinuation(preparation, settlement.response);
-    return Object.freeze({response: settlement.response, inputDeliveryReceipt});
+    return Object.freeze({response: settlement.response, inputDeliveryReceipt, openingReceipt});
   }
 
   private async prepareModelContextRequest(
@@ -1213,6 +1221,8 @@ export function validateControllerDecision<TOutput>(
 
   const modelItems = validateModelItems(candidate.modelItems);
   const inputDeliveryReceipt = snapshotInputDeliveryReceipt(candidate.inputDeliveryReceipt, input.inputDelivery);
+  const openingReceipt = candidate.openingReceipt == null ? null : snapshotConversationOpeningReceipt(candidate.openingReceipt, input.runId);
+  if (openingReceipt && (input.interaction.opening || input.interaction.latestTurn)) throw decisionContractError("conversation_opening_repeated");
   if (inputDeliveryReceipt?.via.kind === "controller" &&
       inputDeliveryReceipt.via.controllerRequestId !== input.toolExposure.controllerRequestId) {
     throw decisionContractError("controller_input_delivery_request_mismatch");
@@ -1275,6 +1285,7 @@ export function validateControllerDecision<TOutput>(
       return Object.freeze({
         kind: "propose_completion",
         ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
+        ...(openingReceipt === null ? {} : {openingReceipt}),
         candidates,
         completionSource,
         output: validation.output,
@@ -1287,6 +1298,7 @@ export function validateControllerDecision<TOutput>(
       return Object.freeze({
         kind: "advance",
         ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
+        ...(openingReceipt === null ? {} : {openingReceipt}),
         candidates: candidates as readonly [ProgressionCandidate, ...ProgressionCandidate[]],
         modelItems,
       });
@@ -1299,6 +1311,7 @@ export function validateControllerDecision<TOutput>(
       return Object.freeze({
         kind: "continue_with_feedback",
         ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
+        ...(openingReceipt === null ? {} : {openingReceipt}),
         feedback: snapshotControllerFeedback(candidate.feedback),
         modelItems,
       });

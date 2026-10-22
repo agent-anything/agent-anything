@@ -7,7 +7,7 @@ import {
   type ProjectionManifest,
 } from "@agent-anything/context/projection";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
-import type { ModelMessage } from "@agent-anything/model-interaction";
+import type { ModelConversationSeed } from "../controller/ControllerConversation.js";
 import type { DescendantTargetsProjection } from "../delegation/index.js";
 import {
   projectModelInteraction,
@@ -68,7 +68,7 @@ export interface PrepareControllerOperationInput<TOutput> {
   readonly exposure: ToolExposureProof;
   readonly contextProjection: RunnerContextProjection;
   readonly requestedAt: string;
-  readonly modelInteractionSeed: readonly ModelMessage[];
+  readonly modelInteractionSeed: ModelConversationSeed | null;
   readonly descendants: DescendantTargetsProjection;
 }
 
@@ -105,7 +105,7 @@ export function prepareControllerOperation<TOutput>(
       runId: input.state.run.id,
       runRevision: input.state.revision,
       items: input.state.items,
-      seedMessages: input.modelInteractionSeed,
+      seed: input.modelInteractionSeed,
     }),
     plan: input.state.plan === null ? null : projectPlan(input.state.plan),
     planLimits: input.config.limits.plan,
@@ -199,6 +199,7 @@ function createContextProjection<TOutput>(
     estimator: allocation.estimator.ref,
     audiences: input.contextProjection.audiences,
     mandatoryItems: Object.freeze([]),
+    ...(allocation.retainedCoverage ? {retainedCoverage: allocation.retainedCoverage} : {}),
     requestedAt: input.requestedAt,
   });
   try {

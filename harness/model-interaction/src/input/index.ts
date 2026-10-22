@@ -4,6 +4,7 @@ export type {
   ModelInputComposition,
   ModelInputContent,
   ModelInputLineage,
+  ModelInputProvenance,
   ModelInputMessageContent,
   ModelInputSection,
   ModelInputSectionRole,
@@ -14,6 +15,7 @@ export type {
 export {
   modelInputFromSections,
   snapshotModelInputComposition,
+  snapshotModelInputSection,
 } from "./ModelInput.js";
 export type {
   ModelOutputFormat,

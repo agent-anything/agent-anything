@@ -67,6 +67,7 @@ export type RunItemPayload<TOutput = unknown> =
       readonly instructionBinding: AgentInstructionBindingRef;
       readonly toolExposure: ControllerToolExposureRecord;
       readonly modelItems: readonly ControllerModelItem[];
+      readonly openingReceipt?: import("../controller/ControllerConversation.js").ConversationOpeningReceipt | null;
       readonly failure: RunFailureCause | null;
     }
   | { readonly kind: "run_action"; readonly action: RuntimeRunAction }

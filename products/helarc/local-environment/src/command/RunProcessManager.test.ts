@@ -39,13 +39,34 @@ async function setup(options: { records?: ProcessRecordPort; instant?: boolean; 
     signal: new AbortController().signal, ...extra });
   const cleanup = () => manager.finalizeRun({ runId: input.runId, deadlineAt: new Date(Date.now() + 1000).toISOString(), signal: new AbortController().signal });
   const commit = (observation: Awaited<ReturnType<typeof observe>> | null, target = manager) => target.commitInitialDelivery({
-    runId: input.runId, runActionId: input.origin!.runActionId, settlementId: "call-1",
+    runId: input.runId, executionId: input.executionId, runActionId: input.origin!.runActionId, settlementId: "call-1",
     observationId: observation?.id ?? null, cursor: observation?.nextCursor ?? null});
   return { directory, paths, manager, input, observe, commit, cleanup, handle, backend, finish, controller,
     emit: (event: ProcessBackendEvent) => publish(event) };
 }
 
 describe("RunProcessManager", () => {
+  it("binds a composite Tool receipt to its exact process without equating outer and internal Actions", async () => {
+    const t = await setup();
+    try {
+      await t.manager.start(t.input);
+      const initial = await t.observe({initial: true});
+      const receipt = {runId: t.input.runId, executionId: t.input.executionId, runActionId: "outer-shell-action",
+        settlementId: "shell-call", observationId: initial.id, cursor: initial.nextCursor};
+      await expect(t.manager.commitInitialDelivery({...receipt, runId: "foreign"})).rejects.toThrow("process_execution_foreign_run");
+      await expect(t.manager.commitInitialDelivery({...receipt, cursor: "incorrect"})).rejects.toThrow("process_initial_delivery_invalid");
+      await t.manager.commitInitialDelivery(receipt);
+      await t.manager.commitInitialDelivery({cursor: receipt.cursor, observationId: receipt.observationId,
+        settlementId: receipt.settlementId, runActionId: receipt.runActionId, executionId: receipt.executionId, runId: receipt.runId});
+      t.finish();
+      await t.cleanup();
+      expect(t.manager.readInputNotifications(t.input.runId, 0)).toContainEqual(expect.objectContaining({data: expect.objectContaining({
+        task_id: t.input.executionId, outcome: "succeeded", origin: expect.objectContaining({runActionId: t.input.origin!.runActionId}),
+      })}));
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    } finally {await t.cleanup();}
+  });
+
   it("restores exact settled observations, cursors and notifications without another launch", async () => {
     let latest: ProcessCheckpoint | null = null;
     const records: ProcessRecordPort = {
@@ -137,7 +158,7 @@ describe("RunProcessManager", () => {
       t.commit(null);
       expect(t.manager.readInputNotifications(t.input.runId, 0)[0]).toMatchObject({data: {
         task_id: t.input.executionId, capture: {previousCursor: null, stdout: {text: "retained"}}}});
-      await expect(t.manager.commitInitialDelivery({runId: t.input.runId, runActionId: t.input.origin!.runActionId,
+      await expect(t.manager.commitInitialDelivery({runId: t.input.runId, executionId: t.input.executionId, runActionId: t.input.origin!.runActionId,
         settlementId: "different", observationId: null, cursor: null})).rejects.toThrow("process_initial_delivery_conflict");
     } finally { await t.cleanup(); }
   });

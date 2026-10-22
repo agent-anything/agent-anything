@@ -72,8 +72,12 @@ export interface ModelInteractionProjection {
   readonly unsettledCalls: readonly ModelToolCall[];
   readonly settledCallCount: number;
   readonly latestTurn: LocalModelTurnProjection | null;
+  readonly opening?: import("./ControllerConversation.js").ConversationOpeningReceipt | null;
+  readonly seed?: import("./ControllerConversation.js").ModelConversationSeed | null;
+  readonly historyPresentations?: readonly import("./ControllerInputDelivery.js").RetainedInputPresentation[];
   readonly notificationHistory?: readonly {readonly messageIndex: number; readonly batchId: string;
-    readonly batchRevision: string; readonly sequence: number}[];
+    readonly batchRevision: string; readonly sequence: number;
+    readonly presentation?: import("./ControllerInputDelivery.js").RetainedInputPresentation}[];
 }
 
 export interface LocalModelTurnProjection {
@@ -216,6 +220,7 @@ export interface ControllerFeedback {
 export type ControllerDecision<TOutput = unknown> = {
   /** Absence does not acknowledge pending input. Set only by the trusted Controller. */
   readonly inputDeliveryReceipt?: import("./ControllerInputDelivery.js").ControllerInputDeliveryReceipt | null;
+  readonly openingReceipt?: import("./ControllerConversation.js").ConversationOpeningReceipt | null;
 } & (
   | {
       readonly kind: "propose_completion";

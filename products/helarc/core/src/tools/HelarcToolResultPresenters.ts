@@ -8,7 +8,7 @@ import { commitHelarcExecutionEvidence, helarcExecutionReferences } from "./Hela
 
 export interface HelarcCommandResultDelivery {
   commitInitialDelivery(input: {
-    readonly runId: string; readonly runActionId: string; readonly settlementId: string;
+    readonly runId: string; readonly executionId: string | null; readonly runActionId: string; readonly settlementId: string;
     readonly observationId: string | null; readonly cursor: string | null;
   }): void | Promise<void>;
 }
@@ -44,6 +44,7 @@ export function createHelarcToolResultPresenters(
         const output = input.presentation.presentation.disposition !== "unavailable" && record(content) && record(content.output)
           ? content.output : null;
         return delivery.commitInitialDelivery({runId: input.runId, runActionId: input.call.parentRunAction.id,
+          executionId: record(input.result.output) && typeof input.result.output.task_id === "string" ? input.result.output.task_id : null,
           settlementId: input.presentation.modelCallRef.id,
           observationId: typeof output?.observation_id === "string" ? output.observation_id : null,
           cursor: typeof output?.observation_id === "string" && typeof output?.next_cursor === "string" ? output.next_cursor : null});

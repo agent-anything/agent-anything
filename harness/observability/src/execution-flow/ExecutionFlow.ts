@@ -139,8 +139,8 @@ export class ExecutionFlowInvocation<TStep extends string = string> {
     this.emit({kind: "link", from, to, relation, transitionId, establishedBy});
   }
   /** Data-only owner material; executable dependencies and resolved secrets are excluded. */
-  material(name: string, stage: string, value: unknown, contentClass: "agent" | "provider" | "execution" = "agent"): ExecutionFlowSubjectRef {
-    const subject = Object.freeze({owner: this.definition.owner, kind: "contribution", id: `${this.ref.invocationId}:material:${++this.materialSequence}`, revision: "1", runId: this.runId});
+  material(name: string, stage: string, value: unknown, contentClass: "agent" | "provider" | "execution" = "agent", identity?: ExecutionFlowSubjectRef): ExecutionFlowSubjectRef {
+    const subject = Object.freeze(identity ? {...identity} : {owner: this.definition.owner, kind: "contribution", id: `${this.ref.invocationId}:material:${++this.materialSequence}`, revision: "1", runId: this.runId});
     this.emit({kind: "material", subject, name, stage, contentClass, value});
     return subject;
   }

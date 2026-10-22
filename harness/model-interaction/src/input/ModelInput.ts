@@ -26,6 +26,19 @@ export interface ModelInputSourceRef {
   readonly kind: string;
   readonly id: string;
   readonly revision: string | null;
+  readonly runId?: string;
+}
+
+export interface ModelInputProvenance {
+  readonly purpose: string;
+  readonly recipientRunId: string;
+  readonly author: string;
+  readonly originRunId?: string;
+  readonly retainedPresentation?: ModelInputSourceRef;
+  readonly sources: readonly ModelInputSourceRef[];
+  readonly presenter: ModelInputSourceRef;
+  readonly coverage: readonly string[];
+  readonly limitations: readonly string[];
 }
 
 export interface ModelInputTextContent {
@@ -57,6 +70,7 @@ export interface ModelInputSection {
   readonly role: ModelInputSectionRole;
   readonly necessity: "mandatory" | "optional";
   readonly content: ModelInputContent;
+  readonly provenance?: ModelInputProvenance;
 }
 
 export interface ModelInputLineage {
@@ -111,7 +125,7 @@ export function snapshotModelInputComposition(
     throw new TypeError("ModelInputComposition.sections must be non-empty.");
   }
   const sections = input.sections.map((section, index) =>
-    snapshotSection(section, `ModelInputComposition.sections[${index}]`),
+    snapshotModelInputSection(section, `ModelInputComposition.sections[${index}]`),
   );
   if (new Set(sections.map((section) => section.id)).size !== sections.length) {
     throw new TypeError("ModelInputComposition section identities must be unique.");
@@ -183,15 +197,15 @@ function sameSource(left: ModelInputSourceRef, right: ModelInputSourceRef): bool
   return left.owner === right.owner &&
     left.kind === right.kind &&
     left.id === right.id &&
-    left.revision === right.revision;
+    left.revision === right.revision && left.runId === right.runId;
 }
 
-function snapshotSection(
+export function snapshotModelInputSection(
   input: ModelInputSection,
-  path: string,
+  path = "ModelInputSection",
 ): ModelInputSection {
   strictRecord(input, path, [
-    "id", "source", "kind", "role", "necessity", "content",
+    "id", "source", "kind", "role", "necessity", "content", "provenance",
   ]);
   if (!isRole(input.role)) throw new TypeError(`${path}.role is invalid.`);
   if (input.necessity !== "mandatory" && input.necessity !== "optional") {
@@ -204,7 +218,22 @@ function snapshotSection(
     role: input.role,
     necessity: input.necessity,
     content: snapshotContent(input.content, `${path}.content`),
+    ...(input.provenance === undefined ? {} : {provenance: snapshotProvenance(input.provenance, `${path}.provenance`)}),
   });
+}
+
+function snapshotProvenance(input: ModelInputProvenance, path: string): ModelInputProvenance {
+  strictRecord(input, path, ["purpose", "recipientRunId", "originRunId", "retainedPresentation", "author", "sources", "presenter", "coverage", "limitations"]);
+  const strings = (values: readonly string[], name: string) => {
+    if (!Array.isArray(values)) throw new TypeError(`${path}.${name} must be an array.`);
+    return Object.freeze(values.map(value => token(value, `${path}.${name}`)));
+  };
+  return Object.freeze({purpose: token(input.purpose, `${path}.purpose`),
+    recipientRunId: token(input.recipientRunId, `${path}.recipientRunId`), author: token(input.author, `${path}.author`),
+    ...(input.originRunId === undefined ? {} : {originRunId: token(input.originRunId, `${path}.originRunId`)}),
+    ...(input.retainedPresentation === undefined ? {} : {retainedPresentation: snapshotSource(input.retainedPresentation, `${path}.retainedPresentation`)}),
+    sources: snapshotSourceList(input.sources, `${path}.sources`), presenter: snapshotSource(input.presenter, `${path}.presenter`),
+    coverage: strings(input.coverage, "coverage"), limitations: strings(input.limitations, "limitations")});
 }
 
 function snapshotContent(input: ModelInputContent, path: string): ModelInputContent {
@@ -295,12 +324,13 @@ function snapshotNullableSource(input: ModelInputSourceRef | null, path: string)
 }
 
 function snapshotSource(input: ModelInputSourceRef, path: string): ModelInputSourceRef {
-  strictRecord(input, path, ["owner", "kind", "id", "revision"]);
+  strictRecord(input, path, ["owner", "kind", "id", "revision", "runId"]);
   return Object.freeze({
     owner: token(input.owner, `${path}.owner`),
     kind: token(input.kind, `${path}.kind`),
     id: token(input.id, `${path}.id`),
     revision: nullableToken(input.revision, `${path}.revision`),
+    ...(input.runId === undefined ? {} : {runId: token(input.runId, `${path}.runId`)}),
   });
 }
 

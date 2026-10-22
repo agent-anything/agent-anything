@@ -1070,7 +1070,8 @@ export class HelarcMainController {
           role: message.role,
           content: message.content,
           createdAt: message.createdAt,
-          metadata: {},
+          metadata: {source: "prior_conversation", threadId: record.thread.id,
+            sequence: message.sequence, relatedRunIds: [...message.relatedRunIds]},
         });
       }
     }

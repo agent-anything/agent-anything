@@ -39,7 +39,7 @@ async function launch(directory, scenario, stage, expectedExit) {
 
 let passed = false;
 const selected = process.argv.slice(2);
-const supportedScenarios = ["accepted", "effect", "child", "approval", "approval_applied", "ending_feedback", "ending_exhausted",
+const supportedScenarios = ["accepted", "effect", "child", "opening_prepared", "continued_child", "approval", "approval_applied", "ending_feedback", "ending_exhausted",
   "interaction_admitted", "interaction_prepared", "interaction_accepted", "interaction_call_feedback", "interaction_steering"];
 const scenarios = selected.length ? selected : supportedScenarios;
 assert(scenarios.every(value => supportedScenarios.includes(value)));

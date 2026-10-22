@@ -1769,11 +1769,13 @@ describe("HelarcMainController", () => {
 
     expect(provider.requests).toHaveLength(2);
     const continuedPrompt = provider.requests[1]?.messages
-      .filter((message) => message.role === "user")
+      .filter((message) => message.role === "user" || message.role === "assistant")
       .map(modelMessageText)
       .join("\n") ?? "";
     expect(continuedPrompt).toContain("Inspect the current implementation");
     expect(continuedPrompt).toContain("No changes needed.");
+    expect(provider.requests[1]?.messages).toContainEqual(expect.objectContaining({role: "assistant",
+      content: expect.arrayContaining([expect.objectContaining({kind: "text", text: "No changes needed."})])}));
     expect(continuedPrompt.match(/Summarize the next step/g)).toHaveLength(1);
   });
 

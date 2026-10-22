@@ -108,12 +108,10 @@ import {
 import {
   modelCallRefKey,
   snapshotModelJsonValue,
-  snapshotModelMessage,
   snapshotModelToolResult,
   snapshotModelToolResultContent,
   type ModelCallSettlementKind,
   type ModelJsonValue,
-  type ModelMessage,
   type ModelToolCall,
   type ModelToolResult,
 } from "@agent-anything/model-interaction";
@@ -133,6 +131,9 @@ import {
   validateControllerDecision,
   snapshotControllerFeedback,
   projectModelInteraction,
+  createModelConversationSeed,
+  snapshotModelConversationSeed,
+  importModelConversationSeed,
   type ControllerDecision,
   type ModelInteractionProjection,
   type InteractionRequestCandidate,
@@ -314,7 +315,7 @@ export interface RuntimeDescendantRunAdmissionInput {
   readonly contextMaterials: readonly DelegationContextMaterial[];
   readonly authority: DelegationAuthorityDerivation;
   readonly limits: DelegationLimitDerivation;
-  readonly modelInteractionSeed: readonly ModelMessage[];
+  readonly modelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed | null;
   readonly dispatch: DescendantDispatchProvenance;
 }
 
@@ -441,7 +442,7 @@ interface AdmittedDescendantExecution {
   readonly dispatch: DescendantDispatchProvenance;
   readonly request: DelegationRequest;
   readonly continuationRecord: RuntimeContinuationRecord | null;
-  readonly continuationModelInteractionSeed: readonly ModelMessage[];
+  readonly continuationModelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed | null;
   readonly composition: NonNullable<ResolvedRunnerDependencies["operations"]["delegation"]>;
   readonly admission: Extract<
     RuntimeDescendantRunAdmissionResult,
@@ -460,7 +461,7 @@ export interface RestoredDescendantRoute {
   readonly handle: RunHandle;
   readonly getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null;
   readonly resourceSettlement: Promise<RunTreeResourceSettlement>;
-  readonly modelInteractionSeed: readonly ModelMessage[];
+  readonly modelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed | null;
 }
 
 type DescendantRejectionOperationStatus = Exclude<
@@ -481,7 +482,7 @@ interface RuntimeContinuationRecord {
   readonly projection: DescendantContinuationTargetProjection;
   readonly sourceRequest: DelegationRequest;
   readonly sourceResult: DelegationResult;
-  readonly modelInteractionSeed: readonly ModelMessage[];
+  readonly modelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed;
   status: "available" | "starting" | "consumed";
 }
 
@@ -496,7 +497,7 @@ interface ManagedActiveDescendant {
   readonly composition: NonNullable<ResolvedRunnerDependencies["operations"]["delegation"]>;
   readonly pending: PendingRunSubject;
   readonly resourceSettlement: Promise<RunTreeResourceSettlement>;
-  readonly continuationModelInteractionSeed: readonly ModelMessage[];
+  readonly continuationModelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed | null;
   readonly initialBoundary: Promise<DescendantExecutionOutcome>;
   resolveInitialBoundary(outcome: DescendantExecutionOutcome): void;
   rejectInitialBoundary(error: unknown): void;
@@ -628,7 +629,7 @@ export class RunExecution<TOutput> {
     private readonly rootConfig: RunConfig,
     private readonly delegationRequest: DelegationRequest | null,
     private readonly delegationContextMaterials: readonly DelegationContextMaterial[],
-    private readonly modelInteractionSeed: readonly ModelMessage[],
+    private readonly modelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed | null,
     private readonly lineage: RunLineage,
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
@@ -647,6 +648,7 @@ export class RunExecution<TOutput> {
     this.flow = new RunExecutionFlow(executionFlow ?? dependencies.executionFlow ?? {}, runId);
     this.startedAt = startedAt;
     this.contextPayloadBytes = restored?.control.contextPayloadBytes ?? initialContextBytes;
+    if (restored && restored.control.conversationVersion !== 1) throw new RunRecoveryError(runId, "conversation_format_incompatible", runId);
     this.inputNotifications = restored ? RunInputNotifications.restore(runId, restored.control.inputNotifications) : new RunInputNotifications();
     this.startedAtMs = Date.parse(this.startedAt);
     this.activeAgent = agent;
@@ -759,7 +761,13 @@ export class RunExecution<TOutput> {
         this.descendantTransfers.set(entry.childRunId, entry);
         if (entry.result) this.settledDelegations.set(entry.result.ref.id, {result: entry.result});
       }
-      for (const entry of control.descendantContinuations) this.continuationRecords.set(entry.correlation.ref.id, {...entry});
+      for (const entry of control.descendantContinuations) {
+        const seed = snapshotModelConversationSeed(entry.modelInteractionSeed);
+        if (seed.sourceRunId !== entry.correlation.sourceChild.id || seed.sourceRunId !== entry.sourceResult.correlation.child.run.id) {
+          throw new RunRecoveryError(runId, "conversation_seed_source_mismatch", entry.correlation.ref.id);
+        }
+        this.continuationRecords.set(entry.correlation.ref.id, {...entry, modelInteractionSeed: seed});
+      }
       this.acceptedDecision = control.decision;
       this.controllerInvocation = control.controllerInvocation;
       for (const [key, value] of control.controllerCheckpoints) this.controllerCheckpoints.set(key, retainControllerCheckpoint(value));
@@ -799,6 +807,7 @@ export class RunExecution<TOutput> {
       if (control.completionNotification?.outcome.status === "pending" && !this.dependencies.controller.recoverBeforeCompletion) {
         throw new RunRecoveryError(runId, "completion_notification_unconfirmed", control.completionNotification.turn.id);
       }
+      projectModelInteraction({runId, runRevision: initial.revision, items: initial.items, seed: this.modelInteractionSeed});
     }
     this.toolExposure = new RunToolExposureCoordinator({
       run: initial.run,
@@ -1250,6 +1259,7 @@ export class RunExecution<TOutput> {
 
   async run(): Promise<RunResult<TOutput>> {
     publishRunExecutionObservation(this.dependencies.executionObserver, {kind: "run_input", runId: this.runId, occurredAt: this.startedAt, input: this.input,
+      delegationRequest: this.delegationRequest,
       configuration: {limits: this.config.limits, cancellationLimits: this.config.cancellationLimits, audit: this.config.audit, telemetry: this.config.telemetry}});
     const configurationRef = {owner: "runtime", kind: "contribution", id: `${this.runId}:configuration`, revision: "1"};
     const initialization = this.flow.enter("initialize", {agentId: this.activeAgent.id, revision: this.writer.getSnapshot().revision}, [
@@ -2450,6 +2460,7 @@ export class RunExecution<TOutput> {
         instructionBinding: prepared.input.instructionBinding.ref,
         toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
         modelItems: decision.modelItems,
+        ...(decision.openingReceipt ? {openingReceipt: decision.openingReceipt} : {}),
         failure: null,
       }], (current) => {
         if (inputDelivery && decision.inputDeliveryReceipt) {
@@ -4376,7 +4387,7 @@ export class RunExecution<TOutput> {
     }
     const targetAgent = call.binding.agent;
     let continuationRecord: RuntimeContinuationRecord | null = null;
-    let continuationModelInteractionSeed: readonly ModelMessage[] = Object.freeze([]);
+    let continuationModelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed | null = null;
     let prepared: Awaited<ReturnType<typeof composition.preparation.prepare>>;
     try {
       if (call.binding.kind === "descendant_message") {
@@ -4396,16 +4407,7 @@ export class RunExecution<TOutput> {
         }
         candidate.status = "starting";
         continuationRecord = candidate;
-        continuationModelInteractionSeed = Object.freeze([
-          ...candidate.modelInteractionSeed,
-          snapshotModelMessage({
-            role: "user",
-            content: Object.freeze([Object.freeze({
-              kind: "text" as const,
-              text: message.prompt,
-            })]),
-          }),
-        ]);
+        continuationModelInteractionSeed = candidate.modelInteractionSeed;
         prepared = await composition.continuation.prepare({
           parentRunId: this.runId,
           targetAgent,
@@ -4602,7 +4604,7 @@ export class RunExecution<TOutput> {
       authority,
       limits,
       modelInteractionSeed: continuationRecord === null
-        ? Object.freeze([])
+        ? null
         : continuationModelInteractionSeed,
       dispatch,
     });
@@ -5112,7 +5114,7 @@ export class RunExecution<TOutput> {
     request: DelegationRequest,
     result: DelegationResult,
     childResult: RunResult,
-    childModelInteractionSeed: readonly ModelMessage[],
+    childModelInteractionSeed: import("../controller/ControllerConversation.js").ModelConversationSeed | null,
   ): DescendantContinuationCorrelation | null {
     if (
       result.terminal.status === "cancelled" ||
@@ -5126,7 +5128,7 @@ export class RunExecution<TOutput> {
         runId: childResult.runId,
         runRevision: childResult.items.at(-1)?.ref.sequence ?? 0,
         items: childResult.items,
-        seedMessages: childModelInteractionSeed,
+        seed: childModelInteractionSeed,
       });
     } catch {
       return null;
@@ -5167,7 +5169,10 @@ export class RunExecution<TOutput> {
       }),
       sourceRequest: request,
       sourceResult: result,
-      modelInteractionSeed: interaction.messages,
+      modelInteractionSeed: createModelConversationSeed(childResult.runId, interaction.revision, [
+        ...(interaction.opening?.presentations ?? (interaction.seed ? importModelConversationSeed(interaction.seed, childResult.runId) : [])),
+        ...(interaction.historyPresentations ?? []),
+      ]),
       status: "available",
     };
     this.continuationRecords.set(correlation.ref.id, record);
@@ -5546,6 +5551,8 @@ export class RunExecution<TOutput> {
       const projected = projectObservationSettlement(observation);
       const notification = this.inputNotifications.admitOwned(this.runId, {
         source: {owner, kind: payload.kind, id: observation.id, revision: "1"}, occurredAt: observation.createdAt,
+        interpretation: {kind: "notification", purpose: "later_outcome", author: "capability",
+          originRunId: payload.kind === "descendant_result_transfer" ? payload.childRunId : payload.progress.childRun.id},
         data: {settlement: projected.settlement, presentation: projected.presentation, content: projected.content},
       }, this.dependencies.contextProjection.maxContributionPayloadBytes,
       modelSettlement(projected.settlement, undefined, descendantDeliveryFacts(payload)));
@@ -6189,7 +6196,12 @@ export class RunExecution<TOutput> {
   ): Promise<ApprovalApplicationOutcome> {
     const immediate = await this.writer.transaction<ReturnType<typeof applyImmediateApprovalAuthority>>(state => {
       const value = applyImmediateApprovalAuthority({permission: state.permission, decision: resolution.decision});
-      return value.status === "applied" ? {value, payloads: [], patch: {permission: value.permission}} : {value};
+      if (value.status !== "applied") return {value};
+      const decision = resolution.decision;
+      const grant = decision.kind === "grantPermissions" && decision.authority.scope === "run" ? decision.authority.grant : null;
+      const payloads = grant && !state.permission.runPermissionGrants.some(item => item.id === grant.id)
+        ? this.permissionChangeDelivery(grant.id, {scope: "run", permissions: grant.permissions}) : [];
+      return {value, payloads, patch: {permission: value.permission}};
     });
     if (immediate.status === "applied") {
       return immediate.application;
@@ -6218,7 +6230,7 @@ export class RunExecution<TOutput> {
       now: this.dependencies.now,
     });
     if (result.kind === "applied") {
-      await this.writer.commitState(state => {
+      await this.writer.transaction(state => {
       const permission = result.owner === "permission"
         ? applyCommittedSessionAuthority({
             permission: state.permission,
@@ -6228,10 +6240,25 @@ export class RunExecution<TOutput> {
             permission: state.permission,
             record: result.record as import("@agent-anything/governance").AppliedPolicyAmendmentRecord,
           });
-      return {permission};
+      const prior = result.owner === "permission" ? state.permission.sessionAuthorityRecords : state.permission.appliedPolicyAmendments;
+      const payloads = prior.some(item => item.id === result.record.id) ? [] : this.permissionChangeDelivery(result.record.id,
+        result.owner === "permission" ? {scope: "session", category: (result.record as import("@agent-anything/permission").SessionAuthorityRecord).category,
+          applicability: (result.record as import("@agent-anything/permission").SessionAuthorityRecord).applicabilityKeys,
+          permissions: (result.record as import("@agent-anything/permission").SessionAuthorityRecord).grantedPermissions}
+          : {scope: "policy", amendment: (result.record as import("@agent-anything/governance").AppliedPolicyAmendmentRecord).amendment});
+      return {value: undefined, payloads, patch: {permission}};
       });
     }
     return result.application;
+  }
+
+  private permissionChangeDelivery(sourceId: string, applied: unknown): import("../run/RunItem.js").RunItemPayload<TOutput>[] {
+    const notification = this.inputNotifications.admitOwned(this.runId, {
+      source: {owner: "permission", kind: "applied_authority", id: sourceId, revision: "1"}, occurredAt: this.now(),
+      interpretation: {kind: "notification", purpose: "context_change", author: "host", originRunId: this.runId},
+      data: {kind: "permission_change", applied},
+    }, this.dependencies.contextProjection.maxContributionPayloadBytes);
+    return [{kind: "input_notification", notification}];
   }
 
   private async consumeApprovalCoverage(coverageId: string): Promise<boolean> {
@@ -6961,6 +6988,7 @@ export class RunExecution<TOutput> {
       state,
       control: {
         initialized: this.initialized,
+        conversationVersion: 1,
         finalization: this.finalizationCheckpoint,
         lifecycleRecordings: [...this.lifecycleRecordings.values()],
         controllerCheckpoints: [...this.controllerCheckpoints],

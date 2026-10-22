@@ -19,6 +19,8 @@ import { EXECUTION_STORE_LIMITS } from "./ExecutionStoreProtocol.js";
 import {packExecutionContent, executionContentReferences, EXECUTION_CONTENT_LIMITS} from "./ExecutionContent.js";
 import type { RunCommit, RunTreeCommit } from "@agent-anything/agent-runtime/runner";
 import { RunTreeCommitWriter } from "@agent-anything/agent-runtime/runner";
+import {createModelConversationSeed, importModelConversationSeed, retainInputPresentation} from "@agent-anything/agent-runtime/controller";
+import {modelInputFromSections} from "@agent-anything/model-interaction/input";
 import { CompositeExecution, type CompositeCommit } from "@agent-anything/operation-composition/execution";
 import {snapshotExecutionEvidence, type ExecutionReferenceTransfer} from "@agent-anything/operation-catalog/evidence";
 
@@ -68,6 +70,52 @@ it("retains exact reference transfers and stable bounded public-execution pages 
 
 // Real Worker restarts and FULL durable commits are not five-second unit tests.
 describe("execution owner persistence", {timeout: 20_000}, () => {
+  it("measures growing retained conversations and preserves cold and reused checkpoints across Worker reopen", async () => {
+    const root = directory();
+    const events: import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent[] = [];
+    const diagnostics = {record() {}, performance(event: typeof events[number]) {events.push(event);}};
+    let store = await HelarcExecutionStore.open(root, compiledWorker, undefined, undefined, diagnostics); stores.push(store);
+    let revision = 0;
+    const results = [], retained: RunTreeCommit[] = [];
+    for (const count of [100, 500, 1000]) {
+      let started = performance.now();
+      const seed = createModelConversationSeed("run-1", String(revision), Array.from({length: count}, (_, index) => retainInputPresentation({
+        id: `message-${index}`, source: {owner: "runtime", kind: "run_item", id: `item-${index}`, revision: "1", runId: "run-1"},
+        kind: "accepted_exchange", role: index % 2 === 0 ? "user" : "assistant", necessity: "mandatory",
+        content: {kind: "text", text: `${index}: ` + "retained conversation content ".repeat(64)},
+        provenance: {purpose: "accepted_exchange", recipientRunId: "run-1", author: index % 2 === 0 ? "user" : "model",
+          sources: [{owner: "runtime", kind: "run_item", id: `item-${index}`, revision: "1", runId: "run-1"}],
+          presenter: {owner: "runtime", kind: "presenter", id: "exchange", revision: "1"}, coverage: [], limitations: []},
+      })));
+      const prepareMs = performance.now() - started;
+      started = performance.now();
+      const replay = modelInputFromSections(importModelConversationSeed(seed, "continued").map(value => value.section));
+      const replayMs = performance.now() - started;
+      expect(replay.messages).toHaveLength(count);
+      console.info("Conversation preparation", {count, prepareMs, replayMs});
+      const writes = [];
+      for (const mode of ["cold", "reused"]) {
+        const base = treeCommit(revision++);
+        const commit = {...base, runs: base.runs.map(run => ({...run, control: {...run.control,
+          controllerCheckpoints: [["retained-conversation", seed]]}}))} as unknown as RunTreeCommit;
+        events.length = 0; started = performance.now();
+        await store.commitRunTree(commit);
+        const writeMs = performance.now() - started;
+        console.info("Conversation checkpoint", {count, mode, writeMs});
+        const counters: Record<string, number> = {};
+        for (const event of events) if (event.kind === "finished") for (const [key, value] of Object.entries(event.counters ?? {}))
+          if (/reuse|read|expand|insert/.test(key)) counters[key] = (counters[key] ?? 0) + value;
+        expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);
+        writes.push({mode, writeMs: Math.round(writeMs), counters}); retained.push(commit);
+      }
+      results.push({count, bytes: Buffer.byteLength(JSON.stringify(seed)), prepareMs: Math.round(prepareMs), replayMs: Math.round(replayMs), writes});
+    }
+    await store.close();
+    store = await HelarcExecutionStore.open(root, compiledWorker); stores.push(store);
+    for (const commit of retained) expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);
+    console.info("Retained conversation scaling", JSON.stringify(results));
+  });
+
   it.each([false, true])("observes real Worker costs without changing commits or recovery (observer throws=%s)", async throws => {
     const events: import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent[] = [];
     const diagnostics = {record() {}, performance(event: import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent) {

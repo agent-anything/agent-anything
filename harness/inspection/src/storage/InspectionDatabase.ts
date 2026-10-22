@@ -329,6 +329,14 @@ export class InspectionDatabase {
     return (this.db.prepare(`SELECT value FROM records WHERE ${clauses.join(" AND ")} ORDER BY sequence LIMIT ?`).all(...values, Math.min(input.limit ?? 100, 501)) as Row[]).map((row) => JSON.parse(String(row.value)));
   }
 
+  conversationDeliveries(requestKey: string, watermark: number, after: number, limit: number): InspectionRecord[] {
+    const rows = this.statement(`SELECT DISTINCT r.sequence, r.value FROM relations l JOIN records r ON r.id=l.record_id
+      WHERE l.to_key=? AND l.kind='includes' AND l.sequence<=? AND r.sequence>? AND r.sequence<=?
+        AND r.kind='conversation' AND json_extract(r.value,'$.payload.stage')='included'
+      ORDER BY r.sequence LIMIT ?`).all(requestKey, watermark, after, watermark, Math.min(limit, 501)) as Row[];
+    return rows.map(row => JSON.parse(String(row.value)));
+  }
+
   subjectFacts(keys: readonly string[], watermark: number): InspectionRecord[] {
     if (!keys.length) return [];
     if (keys.length > 500) throw new Error("inspection_query_invalid");

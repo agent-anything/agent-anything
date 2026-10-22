@@ -106,7 +106,7 @@ describe("execution resource recovery", () => {
       publish({kind: "output", stream: "stdout", bytes: Buffer.from("first")});
       const observation = {runId, executionId, invocationId: "observe", initial: true, waitMs: 0, signal: new AbortController().signal};
       const initial = await manager.observe(observation);
-      await manager.commitInitialDelivery({runId, runActionId: "run-action", settlementId: "settlement",
+      await manager.commitInitialDelivery({runId, executionId, runActionId: "run-action", settlementId: "settlement",
         observationId: initial.id, cursor: initial.nextCursor});
       expect(await store.listRetentionPins()).toContainEqual({ownerId: executionId, reason: "unsettled_process"});
       publish({kind: "output", stream: "stdout", bytes: Buffer.from("second")});
@@ -128,7 +128,7 @@ describe("execution resource recovery", () => {
       expect(await restored.observe(observation)).toEqual(initial);
       expect(restored.readOutput(runId, executionId, initial.nextCursor).stdout.text).toBe("second");
       expect(restored.readInputNotifications(runId, 0)).toEqual(notifications);
-      await restored.commitInitialDelivery({runId, runActionId: "run-action", settlementId: "settlement",
+      await restored.commitInitialDelivery({runId, executionId, runActionId: "run-action", settlementId: "settlement",
         observationId: initial.id, cursor: initial.nextCursor});
       expect(launch).toHaveBeenCalledTimes(1);
     } finally {if (!closed) await finalize();}

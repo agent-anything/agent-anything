@@ -5,6 +5,7 @@ import type {
   ModelInputSection,
   ModelInputSectionRole,
   ModelInputSourceRef,
+  ModelInputProvenance,
 } from "./ModelInput.js";
 import {
   modelInputFromSections,
@@ -20,6 +21,7 @@ export interface ModelInputSectionCandidate {
   readonly role: ModelInputSectionRole;
   readonly necessity: "mandatory" | "optional";
   readonly content: ModelInputContent;
+  readonly provenance?: ModelInputProvenance;
 }
 
 export type ModelInputCompositionFailureCode = "model_input_sections_invalid";
@@ -61,6 +63,7 @@ export function composeModelInput(input: {
     role: section.role,
     necessity: section.necessity,
     content: section.content,
+    ...(section.provenance === undefined ? {} : {provenance: section.provenance}),
   }));
   const projectedInput = modelInputFromSections(sections);
   return snapshotModelInputComposition({

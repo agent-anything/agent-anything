@@ -206,7 +206,7 @@ export function createHelarcDescendantAgentContribution(
               schemaVersion: 1 as const,
               childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
               task: input.sourceRequest.task,
-              objective: input.sourceRequest.objective,
+              objective: Object.freeze({...input.sourceRequest.objective, text: input.message}),
               expectedResult: input.sourceRequest.expectedResult,
               contextPlan: createDelegationContextPlan({
                 entries: Object.freeze([]),

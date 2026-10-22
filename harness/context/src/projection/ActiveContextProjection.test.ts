@@ -16,6 +16,25 @@ import {
 } from "./ActiveContextProjection.js";
 
 describe("Active Context projection", () => {
+  it("accounts an exact retained presentation once without bypassing disclosure or policy", () => {
+    const material = contribution("material", 10, "mandatory", ["model"]);
+    const context = activeContext([material]);
+    const retainedCoverage = [{contribution: material.ref, presentation: {id: "opening:material", revision: "digest-1"}}];
+    const evaluate = (policy: ContextProjectionPolicy, revision = "1") => projectActiveContext({context,
+      request: {...request(context.ref, 0), retainedCoverage: [{...retainedCoverage[0]!, contribution: {...material.ref, revision}}]},
+      estimator: byteEstimator, policy, maxContributionPayloadBytes: 1024});
+    const retained = evaluate(allowPolicy);
+    expect(retained.projection?.blocks).toEqual([]);
+    expect(retained.manifest.records[0]).toMatchObject({reason: "omitted_retained_presentation", projectedAmount: 0,
+      coveredBy: retainedCoverage[0]!.presentation});
+    expect(evaluate(allowPolicy, "other").status).toBe("blocked");
+    expect(evaluate({...allowPolicy, decide: () => ({kind: "reject", code: "not_allowed"})})).toMatchObject({
+      status: "blocked", failure: {code: "context_projection_mandatory_rejected"}});
+    const hidden = activeContext([contribution("material", 10, "optional", ["product"])]);
+    const rejected = projectActiveContext({context: hidden, request: {...request(hidden.ref, 0), retainedCoverage},
+      estimator: byteEstimator, policy: allowPolicy, maxContributionPayloadBytes: 1024});
+    expect(rejected.manifest.records[0]?.reason).toBe("omitted_disclosure");
+  });
   it("projects eligible Contributions in deterministic precedence order", () => {
     const lower = contribution("lower", 10, "optional", ["model"]);
     const higher = contribution("higher", 20, "optional", ["model"]);

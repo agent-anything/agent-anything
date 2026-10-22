@@ -182,6 +182,13 @@ export function projectActiveContext(input: {
     }
 
     const payload = transformed?.payload ?? item.contribution.payload;
+    const coverage = policyDecision.kind === "allow" ? request.retainedCoverage?.find(value =>
+      value.contribution.id === contributionRef.id && value.contribution.revision === contributionRef.revision) : undefined;
+    if (coverage) {
+      records.push(Object.freeze({...record(item, contributionRef, source, "omitted", "omitted_retained_presentation", originalPayloadBytes, 0, null),
+        coveredBy: coverage.presentation}));
+      continue;
+    }
     const transformation = transformed?.transformation ?? null;
     const amount = estimate(input.estimator, item, payload, transformation);
     if (used + amount <= request.budget.maximum) {

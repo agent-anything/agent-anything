@@ -4,7 +4,8 @@ import type { AgentRevisionRef, AgentInstructions } from "@agent-anything/agent-
 import type { ToolCall } from "@agent-anything/tools/invocation";
 import type { ResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
 import type { RuntimeRunAction, RunSteeringCommand } from "../run/index.js";
-import type { ModelMessage, ModelToolCall, ModelToolResult } from "@agent-anything/model-interaction";
+import type { ModelToolCall, ModelToolResult } from "@agent-anything/model-interaction";
+import type { ModelConversationSeed } from "../controller/ControllerConversation.js";
 import type { AgentInstructionBinding } from "../instructions/index.js";
 import type { RunState } from "../run/index.js";
 import type { RetainedRunConfig } from "./RunConfigurationCheckpoint.js";
@@ -17,7 +18,7 @@ export interface RetainedDescendantContinuation {
   readonly projection: DescendantContinuationTargetProjection;
   readonly sourceRequest: DelegationRequest;
   readonly sourceResult: DelegationResult;
-  readonly modelInteractionSeed: readonly ModelMessage[];
+  readonly modelInteractionSeed: ModelConversationSeed;
   readonly status: "available" | "starting" | "consumed";
 }
 
@@ -32,6 +33,7 @@ export interface RetainedDescendantTransfer {
 
 /** Data needed to continue the accepted decision; never executable callbacks. */
 export interface RunControlCheckpoint {
+  readonly conversationVersion: 1;
   readonly initialized: boolean;
   readonly finalization: import("./RunFinalizationCheckpoint.js").RunFinalizationCheckpoint | null;
   readonly lifecycleRecordings: readonly import("./RunFinalizationCheckpoint.js").RunLifecycleRecordingCheckpoint[];
@@ -92,7 +94,7 @@ export interface RunCommit {
   readonly admission: null | {
     readonly input: RunInput;
     readonly config: RetainedRunConfig;
-    readonly modelInteractionSeed: readonly ModelMessage[];
+    readonly modelInteractionSeed: ModelConversationSeed | null;
     readonly lineage: import("@agent-anything/agent-core/run-tree").RunLineage;
     readonly rootTask: import("@agent-anything/agent-core/task").AgentTask;
     readonly rootConfig: RetainedRunConfig;

@@ -29,6 +29,7 @@ export type RunExecutionObservation = {
       readonly batch: import("../controller/index.js").ControllerInputDeliveryBatch }
   | { readonly kind: "retry_event"; readonly event: import("../retry/index.js").RetryEvent }
   | { readonly kind: "run_input"; readonly input: import("@agent-anything/agent-core/input").RunInput;
+      readonly delegationRequest?: import("../delegation/DelegationRequest.js").DelegationRequest | null;
       readonly configuration: Pick<import("./RunConfig.js").RunConfig, "limits" | "cancellationLimits" | "audit" | "telemetry"> }
   | { readonly kind: "operation_result"; readonly invocationId: string; readonly result: import("@agent-anything/operation-catalog/result").OperationResult }
   | { readonly kind: "operation_result_validation"; readonly invocationId: string;

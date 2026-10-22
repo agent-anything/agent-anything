@@ -31,11 +31,11 @@ describe("Helarc Tool result presentation", () => {
 
   it.each(["complete", "unavailable"])("commits only ranges in the actual %s initial presentation", disposition => {
     const {presenter, commitInitialDelivery} = setup();
-    presenter.committed!({runId: "run", call: {parentRunAction: {id: "action"}}, result: {},
+    presenter.committed!({runId: "run", call: {parentRunAction: {id: "action"}}, result: {output: {task_id: "process"}},
       presentation: {modelCallRef: {id: "call"}, presentation: {disposition},
         content: {output: {observation_id: "observation", next_cursor: "cursor"}}}} as unknown as Parameters<NonNullable<ToolResultPresenter["committed"]>>[0]);
     expect(commitInitialDelivery).toHaveBeenCalledTimes(1);
-    expect(commitInitialDelivery).toHaveBeenCalledWith({runId: "run", runActionId: "action", settlementId: "call",
+    expect(commitInitialDelivery).toHaveBeenCalledWith({runId: "run", executionId: "process", runActionId: "action", settlementId: "call",
       observationId: disposition === "complete" ? "observation" : null,
       cursor: disposition === "complete" ? "cursor" : null});
   });

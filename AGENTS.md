@@ -11,6 +11,15 @@ or repeat completed work on recovery. Protocol validity alone is insufficient:
 verify actual encoded requests against independent expected facts. Keep source,
 authority, transformations and missing information explicit.
 
+Core principle: model input is a truthful, coherent working conversation, not
+a mirror of internal state. Preserve truthfulness, coherence, and consistency
+before removing repetition without an independent interaction purpose. Read
+the actual input in delivery order; each contribution needs a clear source,
+recipient, purpose, and position. A state change alone does not justify a new
+message, while necessary restatement is not automatically redundant. Apply
+this across Context, Tools, notifications, history, recovery, and compaction;
+do not silently rewrite past exchanges or restore disabled instructions.
+
 This is the highest-priority project method for analyzing problems and changing
 this repository. The full human-maintained standard is
 `../agent-anything-design/standards/problem-analysis-and-change-method.md` when

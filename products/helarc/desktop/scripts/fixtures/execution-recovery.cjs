@@ -23,6 +23,7 @@ async function main() {
   const {createHelarcTask} = await import("@agent-anything/helarc/task");
   const {createHelarcProviderProfile} = await import("@agent-anything/helarc/configuration");
   const {createFakeProviderContext} = await import("@agent-anything/test-support");
+  const {OpenAICompatibleProvider} = await import("@agent-anything/provider-integrations/openai-compatible");
   const {createModelCallRef, createModelTurnId, snapshotModelToolCall, snapshotProviderResponse} = await import("@agent-anything/model-interaction");
   const workspaceRoot = join(directory, "workspace"), marker = join(workspaceRoot, "executions.txt");
   await mkdir(workspaceRoot, {recursive: true});
@@ -32,19 +33,69 @@ async function main() {
   const seedFile = join(directory, "seed.json");
   let rootRunId, calls = 0, seedExecution;
   const requests = [];
-  const context = createFakeProviderContext("recovery-verification", "deterministic-verification-model");
+  const runCalls = new Map();
+  const providerId = "openai-compatible.chat-completions";
+  const context = createFakeProviderContext(providerId, "deterministic-verification-model");
+  let encodedRequest = null;
+  const wireAdapter = new OpenAICompatibleProvider({baseUrl: "https://encoded.test/v1", apiKey: "", model: "deterministic-verification-model",
+    timeoutMs: 30000, nativeToolInteraction: {supported: true}, requestBodyTransportLimit: {
+      maximumBytes: 16 * 1024 * 1024, source: "host_configured", revision: "verification-v1"}}, async (_url, init) => {
+    encodedRequest = JSON.parse(init.body);
+    return new Response(JSON.stringify({error: {message: "No network: serialization verification only"}}), {status: 503});
+  });
   const provider = {modelContext: context.modelContext, requestBodyTransportLimit: context.requestBodyTransportLimit,
-    descriptor: {id: "recovery-verification", name: "Recovery verification", metadata: {}, capabilities: {
+    descriptor: {id: providerId, name: "Recovery verification", metadata: {}, capabilities: {
       nativeToolInteraction: {supported: true, callableDefinitions: true, modelCalls: true, resultMessages: true, multipleCalls: true, callCorrelation: "provider_supplied"},
       structuredGeneration: {supported: true}, streaming: {supported: false},
       modelContext: {capacity: context.modelContext.capacity, requestedOutput: context.modelContext.requestedOutput, inputPreservation: context.modelContext.inputPreservation},
       continuation: {supported: false}, compaction: {supported: false}, usageMetering: {inputTokens: "unavailable", outputTokens: "unavailable", costUnits: "unavailable"}},
       requestRetryScheduler: {kind: "harness"}},
-    async send(request) {
+    async send(request, interruption) {
       requests.push(request); calls++;
+      encodedRequest = null;
+      const wire = await wireAdapter.send(request, interruption);
+      assert(encodedRequest, `Actual Provider encoder did not produce a request: ${JSON.stringify(wire)}`);
+      const expectedRoles = request.messages.flatMap(message => message.role === "tool" ? message.content.map(() => "tool") : [message.role]);
+      assert.deepEqual(encodedRequest.messages.map(message => message.role), expectedRoles);
+      let wireIndex = 0;
+      for (const message of request.messages) {
+        if (message.role === "tool") for (const {result} of message.content) {
+          const actual = encodedRequest.messages[wireIndex++];
+          assert.equal(actual.tool_call_id, result.providerCallRef.id);
+          assert.deepEqual(JSON.parse(actual.content).content, result.content);
+        } else {
+          const actual = encodedRequest.messages[wireIndex++];
+          assert.equal(actual.content ?? "", message.content.filter(block => block.kind === "text").map(block => block.text).join("\n\n"));
+          if (message.role === "assistant") assert.deepEqual((actual.tool_calls ?? []).map(call => call.id),
+            message.content.filter(block => block.kind === "model_tool_call").map(block => block.call.providerCallRef.id));
+        }
+      }
+      const runCall = (runCalls.get(request.metadata.runId) ?? 0) + 1;
+      runCalls.set(request.metadata.runId, runCall);
       const child = request.metadata.runId !== rootRunId;
       let requested;
-      if (interactionRecovery && stage === "seed" && calls === 2) {
+      const originalCommand = () => {
+        const command = process.platform === "win32"
+          ? "if ($env:HELARC_NEW_HOST_ONLY) { throw 'Ambient environment leaked' }; [System.IO.File]::AppendAllText('executions.txt', 'x'); Write-Output 'completed once'"
+          : "test -z \"$HELARC_NEW_HOST_ONLY\" || exit 9; printf x >> executions.txt; printf 'completed once\\n'";
+        return [{name: "update_plan", input: {plan: [{step: "Append the execution marker", status: "in_progress"}]}},
+          {name: process.platform === "win32" ? "PowerShell" : "Bash", input: {command, timeout_ms: 10000, wait_ms: 10000}}];
+      };
+      if (scenario === "opening_prepared" && stage === "resume" && runCall === 1) {
+        requested = originalCommand();
+      } else if (scenario === "continued_child" && stage === "seed") {
+        if (!child && runCall === 1) requested = [
+          {name: "update_plan", input: {plan: [{step: "Append the execution marker", status: "in_progress"}]}},
+          {name: "Agent", input: {prompt: "Append the execution marker exactly once, then report.", description: "Original child assignment"}},
+        ];
+        else if (!child) {
+          const agentId = request.messages.flatMap(message => message.content).find(block =>
+            block.kind === "model_tool_result" && block.result.content.output?.agent_id)?.result.content.output.agent_id;
+          assert(agentId, "Continuation must use the actual delivered child reference");
+          requested = [{name: "SendMessage", input: {agent_id: agentId, prompt: "Explain the retained finding. Do not execute the command again."}}];
+        } else if (runCall === 1) requested = originalCommand();
+        else requested = [{name: "final_result", input: {response: "Child completed once.", plan: [{step: "Append the execution marker", status: "completed"}]}}];
+      } else if (interactionRecovery && stage === "seed" && calls === 2) {
         if (scenario === "interaction_steering") {
           const receipt = await seedExecution.activeRun.steer({commandId: "steer-recovery",
             expectedRunRevision: seedExecution.activeRun.getProjection().runRevision,
@@ -69,11 +120,7 @@ async function main() {
         requested = [{name: "update_plan", input: {plan: [{step: "Append the execution marker", status: "in_progress"}]}},
           {name: "Agent", input: {prompt: "Append the execution marker exactly once, then report.", description: "Recovery verification child"}}];
       } else {
-        const command = process.platform === "win32"
-          ? "if ($env:HELARC_NEW_HOST_ONLY) { throw 'Ambient environment leaked' }; [System.IO.File]::AppendAllText('executions.txt', 'x'); Write-Output 'completed once'"
-          : "test -z \"$HELARC_NEW_HOST_ONLY\" || exit 9; printf x >> executions.txt; printf 'completed once\\n'";
-        requested = [{name: "update_plan", input: {plan: [{step: "Append the execution marker", status: "in_progress"}]}},
-          {name: process.platform === "win32" ? "PowerShell" : "Bash", input: {command, timeout_ms: 10000, wait_ms: 10000}}];
+        requested = originalCommand();
       }
       const responseId = `verification:${stage}:${calls}`, turnId = createModelTurnId({providerId: provider.descriptor.id, requestId: request.requestId, responseId});
       const content = requested.map((call, ordinal) => ({kind: "model_tool_call", call: snapshotModelToolCall({
@@ -108,10 +155,16 @@ async function main() {
   if (stage === "seed") {
     let submissionStarted = false;
     const prepared = await prepareHelarcHostRun(common); rootRunId = prepared.rootRunId;
-    if (scenario === "accepted" || scenario.startsWith("approval") || endingRecovery || interactionRecovery) {
+    if (scenario === "accepted" || scenario === "opening_prepared" || scenario === "continued_child" || scenario.startsWith("approval") || endingRecovery || interactionRecovery) {
       const commit = store.commitRunTree.bind(store);
       store.commitRunTree = async value => {
         const receipt = await commit(value);
+        if (scenario === "opening_prepared") {
+          const opening = value.runs.flatMap(run => run.control.controllerCheckpoints)
+            .find(([key]) => JSON.parse(key)[2] === "working-conversation-opening.v1");
+          if (opening) await interrupt({opening: opening[1]});
+        }
+        if (scenario === "continued_child" && value.runs.some(run => run.admission?.modelInteractionSeed)) await interrupt();
         if (interactionRecovery) {
           const runs = value.runs;
           const entries = runs.flatMap(run => run.state.items.map(item => item.payload));
@@ -239,7 +292,41 @@ async function main() {
     assert.deepEqual(processes[0].input.environment, original.environment);
     const shellRequest = requests.find(request => JSON.stringify(request.messages.filter(message => message.role === "tool")).includes("completed once"));
     assert(shellRequest, "The completed command result must reach the model after restart");
-    assert.equal(calls, scenario === "child" ? 2 : 1);
+    assert.equal(calls, ["child", "continued_child", "opening_prepared"].includes(scenario) ? 2 : 1);
+    for (const request of requests) {
+      assert.equal(request.instructions.content.length, 0, "Recovery must not enable optional Instructions");
+      assert(!request.composition.sections.some(section => section.kind === "active_run_context"));
+      assert(!JSON.stringify(request.messages).includes("Context projection:"));
+    }
+    for (const member of after.members) {
+      const openings = member.head.state.items.filter(item => item.payload.kind === "controller_turn" && item.payload.openingReceipt);
+      assert.equal(openings.length, 1, "Each Run accepts its exact opening only once");
+      const opening = openings[0].payload.openingReceipt;
+      assert.equal(opening.runId, member.head.state.run.id);
+      const matching = requests.filter(request => request.metadata.runId === opening.runId);
+      for (const request of matching) {
+        const sections = request.composition.sections.filter(section => ["conversation_opening", "conversation_opening_history"].includes(section.kind));
+        assert.deepEqual(sections.map(section => section.content), opening.presentations.map(value => value.section.content));
+        assert.equal(sections.filter(section => section.provenance.purpose === "assignment").length, 1);
+      }
+    }
+    if (scenario === "opening_prepared") {
+      assert.equal(seed.calls, 0);
+      const opening = after.members[0].head.state.items.find(item => item.payload.kind === "controller_turn" && item.payload.openingReceipt).payload.openingReceipt;
+      assert.deepEqual(opening.presentations, seed.opening.presentations);
+    }
+    if (scenario === "continued_child") {
+      assert.equal(after.members.length, 3);
+      const continued = after.members.find(member => member.admission?.modelInteractionSeed || member.head.admission?.modelInteractionSeed);
+      assert(continued, "The continued Child retains its scoped seed admission");
+      const request = requests.find(request => request.metadata.runId === continued.head.state.run.id);
+      const imported = request.composition.sections.filter(section => section.provenance?.purpose === "imported_history");
+      assert(imported.length > 0);
+      assert(imported.every(section => section.provenance.recipientRunId === request.metadata.runId &&
+        section.provenance.originRunId !== request.metadata.runId && section.provenance.originRunId !== rootRunId));
+      assert.equal(request.composition.sections.filter(section => section.provenance?.purpose === "assignment").length, 1);
+      assert(request.composition.sections.find(section => section.provenance?.purpose === "assignment").content.text.includes("Explain the retained finding"));
+    }
     if (endingRecovery) {
       const state = after.members[0].head.control.controllerCheckpoints.find(([key]) =>
         JSON.parse(key)[2] === "helarc.ending-signal-recovery")[1];
@@ -281,11 +368,11 @@ async function main() {
         const heading = scenario === "interaction_steering" ? "Applied steering instruction:" : "Host Controller feedback:";
         const messages = request.messages.flatMap(message => message.content.map(block => ({role: message.role, text: block.text ?? ""})));
         assert.equal(messages.filter(message => message.text.startsWith(heading)).length, 1);
-        const section = request.composition.sections.find(section => section.kind ===
-          (scenario === "interaction_accepted" ? "input_notification_history" : "input_notification"));
+        const section = request.composition.sections.find(section => section.content.kind === "model_message" &&
+          section.content.message.content.some(block => block.text?.startsWith(heading)));
         assert(section, "The delivered input must have an explicit request section");
         const current = request.composition.sections.find(section => section.kind === "context_projection");
-        assert(!JSON.stringify(current).includes(heading));
+        assert.equal(current, undefined);
         if (scenario === "interaction_prepared") assert.deepEqual(request, seed.preparedRequest, "Recovery must reuse the exact saved request");
         if (scenario === "interaction_accepted") {
           const index = messages.findIndex(message => message.text.startsWith(heading));

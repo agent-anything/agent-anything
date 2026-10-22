@@ -1,9 +1,11 @@
 import { Button, Descriptions, Empty, Table, Tabs, Tag } from "antd";
 import { inspectionSubjectKey, type InspectionRecord, type InspectionSubjectRef } from "@agent-anything/inspection/records";
-import type { InspectionObjectSummary } from "@agent-anything/inspection/query";
+import type { InspectionObjectSummary, InspectionSelection } from "@agent-anything/inspection/query";
 import { payloadSummary } from "./RecordDetails.js";
+import { ConversationDelivery } from "./ConversationDelivery.js";
 
-export function ObjectSummaries({summaries, kind, onRecord, onContent, onHistory}: {
+export function ObjectSummaries({summaries, kind, scope, onRecord, onContent, onHistory}: {
+  scope: InspectionSelection | null;
   summaries: readonly InspectionObjectSummary[]; kind: "Requests" | "Calls" | "Scheduling";
   onRecord: (id: string) => void; onContent: (id: string) => void;
   onHistory: (subject: InspectionSubjectRef) => void;
@@ -25,10 +27,10 @@ export function ObjectSummaries({summaries, kind, onRecord, onContent, onHistory
   return <Table className="summary-table" rowKey={s=>inspectionSubjectKey(s.subject)} size="small" dataSource={[...summaries]} pagination={{pageSize:20,showSizeChanger:false}} columns={[
     {title:"Commit",render:(_,s)=>s.record.commitSequence,width:80}, ...columns,
     {title:"Run",render:(_,s)=><code title={s.subject.runId ?? ""}>{s.subject.runId?.slice(0,12) ?? "Unknown"}</code>,width:135},
-  ]} expandable={{expandRowByClick:true,expandedRowRender:s=><SummaryDetail summary={s} onRecord={onRecord} onContent={onContent} onHistory={onHistory}/>}} />;
+  ]} expandable={{expandRowByClick:true,expandedRowRender:s=><SummaryDetail summary={s} scope={scope} onRecord={onRecord} onContent={onContent} onHistory={onHistory}/>}} />;
 }
 
-function SummaryDetail({summary, onRecord, onContent, onHistory}: {summary: InspectionObjectSummary; onRecord: (id:string)=>void; onContent:(id:string)=>void; onHistory:(subject:InspectionSubjectRef)=>void}) {
+function SummaryDetail({summary, scope, onRecord, onContent, onHistory}: {summary: InspectionObjectSummary; scope: InspectionSelection | null; onRecord: (id:string)=>void; onContent:(id:string)=>void; onHistory:(subject:InspectionSubjectRef)=>void}) {
   const facts = summary.facts;
   const material=[...facts,...summary.relatedRecords.filter(record=>["provider-attempt","action","attempt"].includes(record.subject.kind))];
   const contents = [...new Map(material.flatMap(record=>record.contents.map(content=>[content.id,{content,record}] as const))).values()];
@@ -45,6 +47,8 @@ function SummaryDetail({summary, onRecord, onContent, onHistory}: {summary: Insp
       {key:"position",label:"Position",children:<span>{record.payload.position}</span>},
     ] : []),
   ]}/><Tabs items={[
+    ...(summary.subject.kind === "request" && scope ? [{key:"conversation",label:"Conversation delivery",children:
+      <ConversationDelivery key={JSON.stringify([scope,summary.subject])} scope={scope} request={summary.subject} onRecord={onRecord}/>}] : []),
     {key:"content",label:"Input / Output",children:contents.length ? <div className="summary-links">{contents.map(({content,record})=><div key={content.id}><Button onClick={()=>onContent(content.id)}>{content.name}</Button><Tag>{content.stage}</Tag><Tag>{content.availability}</Tag><Button type="link" onClick={()=>onRecord(record.id)}>Record #{record.commitSequence}</Button></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No content on this object; inspect linked objects"/>},
     {key:"stages",label:"Stages",children:history},
     {key:"linked",label:"Linked objects",children:relations},

@@ -30,7 +30,7 @@ import {
   type HelarcModelCallableCatalog,
 } from "./HelarcModelCallableCatalog.js";
 import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
-import { createHelarcCommandStateSection, type HelarcCommandStateSnapshot } from "./HelarcCommandState.js";
+import { helarcOpeningBackground, type HelarcExecutionBackground } from "../prompt/HelarcConversationOpening.js";
 import { createHelarcUnknownCallableRejection } from "./HelarcModelCallFeedback.js";
 import { finalResultInputError } from "./HelarcFinalResultInput.js";
 import type {
@@ -59,13 +59,17 @@ export function buildHelarcProviderRequest(
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
   qualification: HelarcModelQualificationResolution,
-  commandState: readonly HelarcCommandStateSnapshot[] = [],
+  executionBackground?: HelarcExecutionBackground,
 ): ProviderRequest {
   const flow = new ExecutionFlowPath(HELARC_REQUEST_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId);
   try {
     const step = flow.advance("compose", {agentId:input.agent.id, instructionBlocks:input.agent.instructions.blocks.length, unsettledCalls:input.interaction.unsettledCalls.length},
       [{owner: "runtime", kind: "request", id: input.toolExposure.controllerRequestId, revision: null}]);
-    const request = buildRequest(input, context, protocol, qualification, commandState);
+    if (!input.interaction.opening) {
+      const background = helarcOpeningBackground(input, executionBackground);
+      flow.material("Bound execution background", "bound", background.value, "agent", background.source);
+    }
+    const request = buildRequest(input, context, protocol, qualification, executionBackground);
     step.check("instruction_binding", "passed", {bindingId:input.instructionBinding.ref.id});
     step.check("settled_interaction", "passed");
     const compositionRef = flow.material("Model input composition", "composed", request.composition, "provider");
@@ -82,7 +86,7 @@ function buildRequest(
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
   qualification: HelarcModelQualificationResolution,
-  commandState: readonly HelarcCommandStateSnapshot[],
+  executionBackground?: HelarcExecutionBackground,
 ): ProviderRequest {
   assertInstructionModelIdentity(input, context);
   if (context.correction !== null) {
@@ -98,11 +102,10 @@ function buildRequest(
   );
   const toolGuidanceBinding = protocol.bindRun(input.runId);
   const interaction = createNativeToolTurnInteraction(callableCatalog.definitions);
-  const commandSection = createHelarcCommandStateSection(input.runId, commandState);
   const promptAssembly = buildHelarcPromptAssembly({
     controllerInput: input,
     protocolInstructions: protocol.protocolInstructions,
-    currentStateSections: commandSection ? [commandSection] : [],
+    executionBackground,
   });
   const recoverySection = createModelOutputRecoverySection(context.outputRecovery);
   const composition = composeModelInput({
@@ -201,6 +204,10 @@ function buildRequest(
       interactionProjectionId: input.interaction.id,
       interactionProjectionRevision: input.interaction.revision,
       interactionMessageCount: input.interaction.messages.length,
+      conversationOpeningSections: composition.sections.filter(section => section.kind.startsWith("conversation_opening")).length,
+      conversationReplaySections: composition.sections.filter(section => section.provenance?.retainedPresentation !== undefined).length,
+      conversationImportedSections: composition.sections.filter(section => section.provenance?.purpose === "imported_history").length,
+      conversationNewNotifications: input.inputDelivery?.entries.length ?? 0,
       instructionBindingId: input.instructionBinding.ref.id,
       instructionBindingRevision: input.instructionBinding.ref.revision,
       agentId: input.agent.id,

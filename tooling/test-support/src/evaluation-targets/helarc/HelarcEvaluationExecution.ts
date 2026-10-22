@@ -62,6 +62,11 @@ import {
   type HelarcEvaluationExpectedClaim,
 } from "./HelarcEvaluationCorpus.js";
 import { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
+import {
+  HELARC_SIMULATED_LATENCY_METRIC_ID,
+  projectHelarcLatencySummary,
+  projectHelarcSemanticMeasurements,
+} from "./HelarcEvaluationMeasurements.js";
 
 const BASELINE_LIMITATION = Object.freeze({
   code: "deterministic_system_baseline_only",
@@ -404,7 +409,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.final-plan-submission-baseline-result`,
+      id: `${definition.ref.id}.working-conversation-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -415,7 +420,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.final-plan-submission.report.baseline",
+      id: "helarc.working-conversation.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -461,7 +466,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.explicit-final-result.report.baseline",
+      id: "helarc.final-plan-submission.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -477,13 +482,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.final-plan-submission.baseline-acceptance",
+      id: "helarc.working-conversation.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "final-plan-submission-v1",
+      revision: "working-conversation-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -492,14 +497,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Final control submits an existing Plan with the reply. Its state update precedes ending notification and receives one native-call settlement. Existing task outcomes and safety gates are preserved; unfinished steps do not prevent normal ending.",
+      "Frozen openings, accepted exchange replay and scoped Child history replace the mutable state tail. Outcome and safety gates remain unchanged; the logical clock includes one opening checkpoint per model-backed Run. Actual cross-process recovery is verified separately.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.explicit-final-result.baseline-acceptance",
+      id: "helarc.final-plan-submission.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -524,10 +529,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v26-")) {
-    throw new TypeError(`Unknown final-plan-submission Target revision '${revision}'.`);
+  if (!revision.startsWith("v27-")) {
+    throw new TypeError(`Unknown working-conversation Target revision '${revision}'.`);
   }
-  return revision.replace(/^v26-/, "v25-");
+  return revision.replace(/^v27-/, "v26-");
 }
 
 function gradeExpectedOutcome(
@@ -721,7 +726,7 @@ function createCaseResults(
       semanticDigest: digest({
         outcome: observation.outcome,
         slots: capture.slots,
-        measurements: capture.measurements,
+        measurements: projectHelarcSemanticMeasurements(capture.measurements),
       }),
     });
   }).sort((left, right) => caseResultKey(left).localeCompare(caseResultKey(right)));
@@ -870,12 +875,18 @@ function compareExactTarget(
 }
 
 function semanticReportDigest(artifact: HelarcEvaluationBaselineSignature): string {
+  const simulatedLatencyRefs = new Set(artifact.metrics
+    .filter(metric => metric.definitionRef.id === HELARC_SIMULATED_LATENCY_METRIC_ID)
+    .map(metric => refKey(metric.ref)));
   return digest({
-    publication: artifact.publication,
+    publication: {...artifact.publication, metricSummaries: artifact.publication.metricSummaries.map(summary =>
+      simulatedLatencyRefs.has(refKey(summary.metricRef))
+        ? {...summary, ...projectHelarcLatencySummary(summary)} : summary)},
     metricDistributions: artifact.metrics.map((metric) => ({
       definitionRef: metric.definitionRef,
-      distribution: metric.distribution,
-      uncertainty: metric.uncertainty,
+      ...(metric.definitionRef.id === HELARC_SIMULATED_LATENCY_METRIC_ID
+        ? projectHelarcLatencySummary(metric)
+        : {distribution: metric.distribution, uncertainty: metric.uncertainty}),
       exclusions: metric.exclusions,
     })),
     limitations: artifact.limitations,

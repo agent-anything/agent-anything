@@ -11,6 +11,8 @@ import { retireInspectionDatasets } from "../../dist/storage/index.js";
 import { datasetDirectory } from "../sources/index.js";
 import { acquireInspectionReadLease } from "../storage/InspectionDatasetAccess.js";
 import { RunExecutionInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectionAdapter } from "../../dist/adapters/index.js";
+import { retainInputPresentation, createModelConversationSeed, importModelConversationSeed } from "@agent-anything/agent-runtime/controller";
+import { modelInputFromSections, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -24,6 +26,53 @@ async function setup(rich = false) {
   return { directory, recorder, query, subject, selection: { sourceId: subject.sourceId, datasetId: subject.datasetId } };
 }
 describe("Inspection recording", () => {
+  it("pages exact request deliveries and distinguishes inclusion, acceptance, replay and scoped Child import", async () => {
+    const {recorder, query, selection} = await setup(true);
+    const provider = new ProviderInspectionAdapter(recorder), transcript = new RunTranscriptInspectionAdapter(recorder);
+    const now = "2026-10-21T00:00:00Z";
+    const section = (run: string, index: number): ModelInputSectionCandidate => ({id: `${run}:opening:${index}`,
+      kind: "conversation_opening", role: "user", necessity: "mandatory", content: {kind: "text", text: `Material ${index}`},
+      source: {owner: "context", kind: "context_contribution", id: `material-${index}`, revision: "1", runId: run},
+      provenance: {purpose: index === 0 ? "assignment" : "selected_material", author: "parent", recipientRunId: run,
+        sources: [{owner: "context", kind: "context_contribution", id: `material-${index}`, revision: "1", runId: run}],
+        presenter: {owner: "test", kind: "presenter", id: "opening", revision: "1"}, coverage: [`material-${index}`], limitations: []}});
+    const offer = (runId: string, requestId: string, sections: readonly ModelInputSectionCandidate[]) => provider.observe({
+      stage: "request", runId, requestId, attemptId: `${requestId}:attempt`, providerId: "fixture", model: "fixture", occurredAt: now,
+      request: {requestId, purpose: "controller", ...modelInputFromSections(sections), composition: {id: requestId, sections, lineage: {}},
+        interaction: {kind: "native_tool_turn", callables: []}},
+    } as never);
+    const original = retainInputPresentation(section("child-old", 0));
+    offer("child-old", "first-request", [original.section]);
+    transcript.observe({runId: "child-old", item: {ref: {id: "accepted-item", sequence: 1}, createdAt: now,
+      payload: {kind: "controller_turn", turn: {id: "accepted-turn"}, modelItems: [], toolExposure: {exposedTools: []},
+        openingReceipt: {requestId: "first-request", presentations: [original]}}}} as never);
+    offer("child-old", "replayed-request", [{...original.section, kind: "conversation_opening_history",
+      provenance: {...original.section.provenance!, retainedPresentation: {owner: "agent-runtime", kind: "presentation",
+        id: original.section.id, revision: original.digest, runId: "child-old"}}}]);
+    const seed = createModelConversationSeed("child-old", "5", [original]);
+    const imported = importModelConversationSeed(seed, "child-new");
+    offer("child-new", "continued-request", [...imported.map(value => value.section), ...Array.from({length: 70}, (_, index) => section("child-new", index))]);
+    await recorder.flush();
+    const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
+    const request = recorder.ref("model-interaction", "request", "continued-request", "child-new");
+    const page = await query.query({...scope, kind: "get_conversation_delivery", subject: request, limit: 50});
+    const rest = await query.query({...scope, kind: "get_conversation_delivery", subject: request, limit: 50, after: String(page.next)});
+    const entries = [...page.records, ...rest.records];
+    expect(entries).toHaveLength(71);
+    expect(entries.map(record => record.payload.kind === "conversation" ? record.payload.position : null)).toEqual(Array.from({length: 71}, (_, index) => index));
+    expect(entries[0]?.payload).toMatchObject({delivery: "import", originRunId: "child-old", recipientRunId: "child-new", attemptId: "continued-request:attempt"});
+    expect(entries[0]?.links).toContainEqual(expect.objectContaining({kind: "transforms", operation: "scoped_history_import",
+      from: expect.objectContaining({runId: "child-old", revision: original.digest}), to: expect.objectContaining({runId: "child-new"})}));
+    expect(entries[0]?.links).toContainEqual(expect.objectContaining({kind: "includes", targetLocation: expect.objectContaining({jsonPointer: "/messages/0/content/0", stage: "semantic"})}));
+    const oldRequest = recorder.ref("model-interaction", "request", "first-request", "child-old");
+    const first = await query.query({...scope, kind: "get_conversation_delivery", subject: oldRequest});
+    expect(first.records).toHaveLength(1);
+    expect(first.records[0]?.payload).toMatchObject({stage: "included", delivery: "new", requestId: "first-request"});
+    await expect(query.query({...scope, kind: "get_conversation_delivery", subject: oldRequest, after: String(page.next)})).rejects.toThrow("inspection_cursor_invalid");
+    const graph = (await query.query({...scope, kind: "get_data_flow", subject: entries[0]!.subject})).graph!;
+    expect(graph.links.some(link => link.operation === "scoped_history_import")).toBe(true);
+    expect(recorder.health().rejected).toBe(0);
+  });
   it("keeps notification preparation and accepted history separate from request inclusion", async () => {
     const {recorder, query, selection} = await setup(true);
     const execution = new RunExecutionInspectionAdapter(recorder);
@@ -34,7 +83,7 @@ describe("Inspection recording", () => {
     const batch = {id: "batch-1", revision: "1", runId: "run-1", entries: [notification]};
     execution.observe({kind: "input_delivery_prepared", runId: "run-1", occurredAt: now, turnId: "turn-1", batch});
     transcript.observe({runId: "run-1", sequence: 1, item: {ref: {id: "delivery-1", sequence: 1}, createdAt: now,
-      payload: {kind: "input_delivery", batch, turn: {id: "turn-1"}, receipt: {via: {kind: "provider", requestId: "request-1"}}}}} as never);
+      payload: {kind: "input_delivery", batch, turn: {id: "turn-1"}, receipt: {via: {kind: "provider", requestId: "request-1", presentations: []}}}}} as never);
     transcript.observe({runId: "run-1", sequence: 2, item: {ref: {id: "closure-1", sequence: 2}, createdAt: now,
       payload: {kind: "input_delivery_closed", reason: "cancelled", entries: [{...notification, sequence: 2}]}}} as never);
     await recorder.flush();

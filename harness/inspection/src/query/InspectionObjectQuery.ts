@@ -78,6 +78,15 @@ export function summarizeObjects(db: InspectionDatabase, records: readonly Inspe
       if(["provider-attempt","attempt","action"].includes(ref.kind))return db.subjectFacts([target],watermark);
       const result = db.material(target, watermark) ?? db.latest(target, watermark); return result ? [result] : [];
     });
+    if (record.subject.kind === "request") {
+      // Read the inclusion occurrence, not the presentation's latest use in another request.
+      const included = links.filter(link => link.kind === "includes" && inspectionSubjectKey(link.to) === key)
+        .map(link => db.record(link.establishedBy, watermark)).filter((value): value is InspectionRecord =>
+          value !== null && value.payload.kind === "conversation" && value.payload.requestId === record.subject.id);
+      const exact = new Map([...included, ...relatedRecords.filter(value => value.payload.kind !== "conversation" ||
+        value.payload.requestId === record.subject.id)].map(value => [value.id, value]));
+      relatedRecords.splice(0, relatedRecords.length, ...exact.values());
+    }
     const definition = relatedRecords.find(item => item.payload.kind === "definition");
     const request = owned.find(item => item.payload.kind === "request");
     let label = objectLabel(request ?? definition ?? record);

@@ -32,7 +32,7 @@ export function recordControllerPreparation<TOutput>(
       pending: state.pending, descendants: input.descendants,
       counters: state.counters, metadata: state.metadata,
       history: {
-        seedMessages: input.modelInteractionSeed,
+        seed: input.modelInteractionSeed,
         items: state.items.map(item => ({ref: item.ref, kind: item.payload.kind})),
       },
     }),

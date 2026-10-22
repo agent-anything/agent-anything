@@ -99,7 +99,7 @@ export function createDelegationSelectedContextContribution(input: {
     payload: input.material.payload,
     payloadKind: "structured",
     retention: "current",
-    replacementKey: `delegation_${input.role}`,
+    replacementKey: `delegation_${input.role}:${input.material.ref.owner}:${input.material.ref.kind}:${input.material.ref.id}`,
     instructionRole: "data",
     necessity: input.necessity,
     precedence: 85,
@@ -133,7 +133,7 @@ export function createCurrentRunContextContributions(input: {
     revision: input.revision, runId: input.state.run.id, owner: "agent-runtime",
     sourceRevision: input.revision, observedAt: input.createdAt, payloadKind: "structured" as const,
     retention: "current" as const, instructionRole: "data" as const, necessity: "mandatory" as const,
-    audiences: Object.freeze(["model"]), provenanceKind: "run_state", provenanceId: input.state.run.id,
+    audiences: Object.freeze(["runtime", "product"]), provenanceKind: "run_state", provenanceId: input.state.run.id,
     provenanceRevision: input.revision,
   };
   return Object.freeze([
@@ -206,7 +206,7 @@ export function createCurrentRunContextAdmissionProfile(): ContextAdmissionProfi
   return admissionProfile({
     owner: "agent-runtime",
     sourceKinds: ["run_state", "run_plan"],
-    audiences: ["model"],
+    audiences: ["runtime", "product"],
     retention: ["current"],
     instructionRoles: ["data"],
     necessities: ["mandatory"],

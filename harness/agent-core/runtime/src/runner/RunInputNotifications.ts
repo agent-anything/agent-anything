@@ -14,7 +14,9 @@ export interface RunInputNotification {
   /** Host-owned interaction semantics, never inferred from arbitrary payload text. */
   readonly interpretation?:
     | { readonly kind: "controller_feedback"; readonly turn: ControllerTurnRef }
-    | { readonly kind: "steering"; readonly commandId: string };
+    | { readonly kind: "steering"; readonly commandId: string }
+    | { readonly kind: "notification"; readonly purpose: "later_outcome" | "context_change" | "selected_material";
+        readonly author: "host" | "capability"; readonly originRunId: string };
 }
 
 export interface RunInputNotificationSource {
@@ -144,6 +146,10 @@ function snapshotInterpretation(runId: string, value: RunInputNotification["inte
   }
   if (value.kind === "steering" && typeof value.commandId === "string" && value.commandId.trim()) {
     return {interpretation: Object.freeze({kind: value.kind, commandId: value.commandId})};
+  }
+  if (value.kind === "notification" && ["later_outcome", "context_change", "selected_material"].includes(value.purpose) &&
+      ["host", "capability"].includes(value.author) && typeof value.originRunId === "string" && value.originRunId.trim()) {
+    return {interpretation: Object.freeze({kind: value.kind, purpose: value.purpose, author: value.author, originRunId: value.originRunId})};
   }
   throw new TypeError("Invalid input notification interpretation or target Run.");
 }

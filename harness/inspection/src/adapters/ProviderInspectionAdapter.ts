@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { providerResponseUsage } from "@agent-anything/model-interaction";
+import { retainInputPresentation } from "@agent-anything/agent-runtime/controller";
+import type { ModelInputSourceRef } from "@agent-anything/model-interaction/input";
 import { modelInputSectionLocations } from "@agent-anything/model-interaction/input";
 import type { ProviderObservation, ProviderObserver } from "@agent-anything/model-interaction/transport";
 import type { InspectionJson, InspectionLink, InspectionRecordInput, InspectionSubjectRef } from "../records/index.js";
@@ -10,6 +12,11 @@ export function inspectionLink(kind: InspectionLink["kind"], from: InspectionSub
   return { kind, from, to, condition: null, operation: null, sourceLocation: null, targetLocation: null, ...details };
 }
 export function inspectionContentId(recordId: string, index = 0): string { return createHash("sha256").update(`${recordId}:content:${index}`).digest("hex"); }
+export function inspectionModelSource(recorder: InspectionRecorder, source: ModelInputSourceRef, runId: string | null): InspectionSubjectRef {
+  return source.kind === "run_item" ? recorder.ref("runtime", "event", source.id, source.runId ?? runId)
+    : recorder.ref(source.owner, "contribution", source.kind === "presentation" ? `presentation:${source.id}` : source.id,
+      source.runId ?? runId, source.revision);
+}
 
 export class ProviderInspectionAdapter implements ProviderObserver {
   constructor(private readonly recorder: InspectionRecorder) {}
@@ -44,13 +51,28 @@ export class ProviderInspectionAdapter implements ProviderObserver {
         }
       }
       for (const [index, section] of semantic.composition.sections.entries()) {
-        const source = recorder.ref(section.source.owner, "contribution", section.source.id, value.runId, section.source.revision);
+        const provenance = section.provenance;
+        const retained = provenance ? retainInputPresentation(section) : null;
+        const source = retained ? recorder.ref("agent-runtime", "contribution", `presentation:${section.id}`, value.runId, retained.digest)
+          : inspectionModelSource(recorder, section.source, value.runId);
         const paths = locations.find((location) => location.sectionId === section.id)?.jsonPointers ?? [];
         recorder.offer({ id: `${id}:section:${index}`, subject: source, occurredAt: value.occurredAt,
-          payload: { kind: "transfer", stage: "included", producerId: section.source.id, consumerId: semantic.requestId, operation: section.kind },
-          links: paths.map((jsonPointer) => inspectionLink("includes", source, request, { operation: section.kind,
+          payload: provenance && retained ? {kind: "conversation", stage: "included", purpose: provenance.purpose, author: provenance.author,
+            role: section.role, recipientRunId: provenance.recipientRunId, originRunId: provenance.originRunId ?? null,
+            requestId: semantic.requestId, attemptId: value.attemptId, position: index, presenter: `${provenance.presenter.id}@${provenance.presenter.revision}`,
+            digest: retained.digest, delivery: provenance.purpose === "imported_history" ? "import" : provenance.retainedPresentation ? "replay" : "new",
+            sourceCount: provenance.sources.length}
+            : { kind: "transfer", stage: "included", producerId: section.source.id, consumerId: semantic.requestId, operation: section.kind },
+          links: [...paths.map((jsonPointer) => inspectionLink("includes", source, request, { operation: section.kind,
             sourceLocation: { contentId: inspectionContentId(id), partId: section.id, jsonPointer: `/composition/sections/${index}/content`, stage: "composition" },
             targetLocation: { contentId: inspectionContentId(id), partId: section.id, jsonPointer, stage: "semantic" } })),
+            ...(provenance?.sources ?? []).map(origin => inspectionLink("transforms",
+              inspectionModelSource(recorder, origin, value.runId), source, {operation: provenance!.purpose})),
+            ...(provenance?.retainedPresentation ? [inspectionLink("transforms",
+              inspectionModelSource(recorder, provenance.retainedPresentation, value.runId), source,
+              {operation: provenance.purpose === "imported_history" ? "scoped_history_import" : "retained_history_replay"})] : [])],
+          ...(section.provenance === undefined ? {} : {contents: [{name: "Presentation provenance", stage: "composition",
+            class: "provider" as const, mediaType: "application/json", value: section.provenance as unknown as InspectionJson}]}),
         });
       }
       for (const [name, lineage] of Object.entries(semantic.composition.lineage)) {
