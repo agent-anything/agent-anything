@@ -5,10 +5,13 @@ describe("Context Continuity Evaluation public API", () => {
   it("exports only the focused Test Support operations", () => {
     expect(Object.keys(api).sort()).toEqual([
       "CONTEXT_CONTINUITY_EVALUATION_REVISION",
+      "CONTEXT_TRANSFORMATION_CRITERIA",
+      "CONTEXT_TRANSFORMATION_EVALUATION_REVISION",
       "classifyContextContinuityFailure",
       "createContextContinuityEvaluationFixtures",
       "observeContextContinuityFixtures",
       "runContextContinuityEvaluationCandidate",
+      "runContextTransformationTrial",
     ]);
   });
 });

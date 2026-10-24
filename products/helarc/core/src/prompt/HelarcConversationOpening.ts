@@ -1,6 +1,6 @@
 import {createHash} from "node:crypto";
 import type { ControllerInput, ControllerPreProjectionInput } from "@agent-anything/agent-runtime/controller";
-import { importModelConversationSeed } from "@agent-anything/agent-runtime/controller";
+import { importModelConversationSeed, canonicalConversationPresentations } from "@agent-anything/agent-runtime/controller";
 import type { ModelInputSectionCandidate, ModelInputSourceRef } from "@agent-anything/model-interaction/input";
 import type { ContextProjectionEstimationInput } from "@agent-anything/context/projection";
 import type { HelarcShellRuntimeProfile } from "../tools/HelarcBaselineToolContracts.js";
@@ -32,7 +32,8 @@ export function renderHelarcSelectedMaterial(input: ContextProjectionEstimationI
 export function helarcConversationOpening(input: ControllerInput | ControllerPreProjectionInput,
   environment?: HelarcExecutionBackground): readonly ModelInputSectionCandidate[] {
   if (input.interaction.opening) {
-    const sources = [...input.interaction.opening.presentations, ...(input.interaction.historyPresentations ?? [])]
+    const selected = canonicalConversationPresentations(input.interaction);
+    const sources = selected
       .flatMap(value => value.section.provenance?.sources ?? []);
     sources.push(...(input.inputDelivery?.entries ?? []).filter(entry => entry.interpretation?.kind === "notification" &&
       entry.interpretation.purpose === "selected_material").map(entry => entry.source));
@@ -40,7 +41,8 @@ export function helarcConversationOpening(input: ControllerInput | ControllerPre
       source.kind === "context_contribution" && source.id === block.contribution.id && source.revision === block.contribution.revision))) {
       throw new TypeError("Later selected material requires an explicitly addressed input delivery, not a new state snapshot.");
     }
-    return Object.freeze(input.interaction.opening.presentations.map(({section, digest}) =>
+    const openingIds = new Set(input.interaction.opening.presentations.map(value => value.section.id));
+    return Object.freeze(selected.filter(value => openingIds.has(value.section.id)).map(({section, digest}) =>
       Object.freeze({...section, kind: "conversation_opening_history", provenance: {...section.provenance!,
         retainedPresentation: {owner: "agent-runtime", kind: "presentation", id: section.id, revision: digest, runId: input.runId}}})));
   }
@@ -52,6 +54,8 @@ export function helarcConversationOpening(input: ControllerInput | ControllerPre
         presenter: {owner: "helarc", kind: "presenter", id: "working-conversation-opening", revision: "1"},
         coverage: sources.map(value => `${value.id}@${value.revision}`),
         limitations: purpose === "prior_user_visible_conversation" ? ["text_only_prior_conversation"] : []},
+      preservation: {obligations: [{id: purpose, requirement: "account" as const,
+        basis: `Retain an adequate account of the explicitly supplied ${purpose}.`}], relationships: []},
     }));
   if (input.interaction.seed) sections.push(...importModelConversationSeed(input.interaction.seed, input.runId).map(value => value.section));
   const assignment = input.inputItems.find(item => item.metadata.source === "delegation_objective");
@@ -76,6 +80,10 @@ export function helarcConversationOpening(input: ControllerInput | ControllerPre
       : {owner: "agent-core", kind: "task", id: input.task.id, revision: "1", runId: input.runId});
   for (const item of input.inputItems.filter(item => item !== assignment && item.metadata.source !== "prior_conversation")) addInput(item);
   const executionRefs = (input.task.input as {execution_refs?: unknown}).execution_refs;
+  const materialRefs = (input.task.input as {material_refs?: unknown}).material_refs;
+  if (Array.isArray(materialRefs) && materialRefs.length) add("material-references", "selected_material", "parent",
+    `Transferred retained-material references (use ContextRead for contents; not already read):\n${JSON.stringify(materialRefs)}`,
+    {owner: "agent-core", kind: "task", id: input.task.id, revision: "1", runId: input.runId});
   if (Array.isArray(executionRefs) && executionRefs.length) add("execution-references", "selected_material", "parent",
     `Transferred execution references (references, not contents already read):\n${JSON.stringify(executionRefs)}`,
     {owner: "agent-core", kind: "task", id: input.task.id, revision: "1", runId: input.runId});
@@ -83,6 +91,14 @@ export function helarcConversationOpening(input: ControllerInput | ControllerPre
     const source = {owner: "context", kind: "context_contribution", id: block.contribution.id,
       revision: block.contribution.revision, runId: input.runId};
     add(`material:${block.id}`, "selected_material", "host", renderHelarcSelectedMaterial(block), source);
+    if (block.preservation) {
+      const last = sections.length - 1;
+      sections[last] = Object.freeze({...sections[last]!, preservation: {
+        obligations: block.preservation.obligations,
+        relationships: block.preservation.relationships.map(({kind, source: origin}) => ({kind,
+          source: {owner: origin.owner, kind: origin.kind, id: origin.id, revision: origin.revision}})),
+      }});
+    }
   }
   return Object.freeze(sections);
 }

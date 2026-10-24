@@ -4,6 +4,7 @@ export type { ModelThinkingSelection, ModelThinkingCapability } from "./ModelThi
 export { snapshotModelReasoning } from "./ModelReasoning.js";
 export type { ModelReasoning } from "./ModelReasoning.js";
 export { ProviderDeliverySession, publishProviderDelivery } from "./ProviderDelivery.js";
+export {snapshotProviderUsage} from "./ProviderUsage.js";
 export type {
   ProviderDeliveryOptions, ProviderDeliveryObserver, ProviderDeliveryProgress,
   ProviderDeliveryEvent, ProviderResponsePartMapping,

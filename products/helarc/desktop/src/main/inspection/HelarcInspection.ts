@@ -9,6 +9,7 @@ import { CommandConstraintInspectionAdapter } from "./CommandConstraintInspectio
 import { FinalReplyInspectionAdapter } from "./FinalReplyInspectionAdapter.js";
 import { ExecutionEvidenceInspectionAdapter } from "@agent-anything/inspection/adapters";
 import { FileMaterialInspectionAdapter } from "./FileMaterialInspectionAdapter.js";
+import {ContextMaterialInspectionAdapter} from "./ContextMaterialInspectionAdapter.js";
 
 const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: true, provider: true, execution: true });
 
@@ -22,6 +23,7 @@ export class HelarcInspection {
   readonly actionObserver: ActionExecutionInspectionAdapter | undefined;
   readonly evidenceObserver: ExecutionEvidenceInspectionAdapter | undefined;
   readonly fileMaterialObserver: FileMaterialInspectionAdapter | undefined;
+  readonly contextMaterialObserver: ContextMaterialInspectionAdapter | undefined;
   readonly traceObserver: RunTraceInspectionAdapter | undefined;
   readonly processObserver: import("@agent-anything/helarc-local-environment/command").ProcessExecutionObserver | undefined;
   readonly commandConstraintObserver: import("@agent-anything/helarc-local-environment/command").CommandConstraintObserver | undefined;
@@ -40,6 +42,7 @@ export class HelarcInspection {
     this.actionObserver = recorder ? new ActionExecutionInspectionAdapter(recorder) : undefined;
     this.evidenceObserver = recorder ? new ExecutionEvidenceInspectionAdapter(recorder) : undefined;
     this.fileMaterialObserver = recorder ? new FileMaterialInspectionAdapter(recorder) : undefined;
+    this.contextMaterialObserver = recorder ? new ContextMaterialInspectionAdapter(recorder) : undefined;
     this.traceObserver = recorder ? new RunTraceInspectionAdapter(recorder) : undefined;
     this.executionFlow = recorder ? {observer: new ExecutionFlowInspectionAdapter(recorder)} : undefined;
     this.processObserver = recorder ? new ProcessInspectionAdapter(recorder,this.executionFlow!).observe : undefined;
@@ -95,6 +98,21 @@ export class HelarcInspection {
         links: [inspectionLink("includes", r.ref("runtime", "run", input.runId, input.runId), subject)],
         contents: [{name: "Recovery binding check", class: "execution", stage: "checked", mediaType: "application/json", value: input}]});
     } catch { /* Observation is not recovery authority. */ }
+  }
+  async registerExecutionRecording(runId: string, recovery: boolean, store: Pick<import("../execution-storage/HelarcExecutionStore.js").HelarcExecutionStore, "registerRecording">): Promise<void> {
+    const r = this.recorder;
+    if (!r || !this.settings.enabled || !r.health().available) return;
+    let target: import("../execution-storage/ExecutionRecording.js").ExecutionRecording | null = null;
+    let limitation: string | null = null;
+    try {
+      target = (await store.registerRecording({sourceId: r.source.sourceId, datasetId: r.manifest.datasetId, runId})).previous;
+      if (!target) limitation = "previous_recording_not_registered";
+    } catch { limitation = "recording_registration_unavailable"; }
+    if (!recovery) return;
+    const subject = r.ref("helarc", "contribution", `${runId}:recording-recovery`, runId);
+    r.offer({subject, occurredAt: new Date().toISOString(),
+      payload: {kind: "recording_link", stage: "recovery_prepared", target, limitation},
+      links: [inspectionLink("includes", r.ref("runtime", "run", runId, runId), subject)]});
   }
   async close(): Promise<void> {
     const result = await this.recorder?.flush(true);

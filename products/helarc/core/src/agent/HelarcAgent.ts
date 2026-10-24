@@ -6,6 +6,7 @@ import {
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import { validHelarcFinalReply } from "../controller/HelarcFinalReply.js";
 import { snapshotModelCallRef, type ModelCallRef } from "@agent-anything/model-interaction";
+import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 import {
   HELARC_INSTRUCTION_CATALOG,
   resolveHelarcAgentInstructions,
@@ -81,7 +82,7 @@ function createAgent(
 ): Agent<HelarcAgentOutput> {
   return snapshotAgent({
     id,
-    revision: `instructions-v1:${instructions.contentDigest.value}:output-v2`,
+    revision: `instructions-v1:${instructions.contentDigest.value}:output-v3`,
     name,
     instructions,
     output: HELARC_OUTPUT_CONTRACT,
@@ -108,6 +109,9 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
         !validHelarcFinalReply(candidate.summary, source as HelarcAgentOutput["source"], candidate.finalReply)) {
       return {valid: false as const, message: "Helarc final reply content and provenance are inconsistent."};
     }
+    let materialRefs: readonly import("@agent-anything/context/material").ContextMaterialRef[] | undefined;
+    try {if (candidate.materialRefs !== undefined) materialRefs = snapshotContextMaterialRefs(candidate.materialRefs);}
+    catch {return {valid:false as const,message:"Helarc output material references are invalid."};}
     return {
       valid: true as const,
       output: Object.freeze({
@@ -115,6 +119,7 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
         summary: candidate.summary,
         source: structuredClone(source) as HelarcAgentOutput["source"],
         ...(candidate.finalReply === undefined ? {} : {finalReply: structuredClone(candidate.finalReply) as NonNullable<HelarcAgentOutput["finalReply"]>}),
+        ...(materialRefs === undefined ? {} : {materialRefs}),
       }),
     };
   },

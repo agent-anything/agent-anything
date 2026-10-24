@@ -12,7 +12,9 @@ import { datasetDirectory } from "../sources/index.js";
 import { acquireInspectionReadLease } from "../storage/InspectionDatasetAccess.js";
 import { RunExecutionInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectionAdapter } from "../../dist/adapters/index.js";
 import { retainInputPresentation, createModelConversationSeed, importModelConversationSeed } from "@agent-anything/agent-runtime/controller";
-import { modelInputFromSections, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
+import { modelInputFromSections, createExactModelWorkingView, createOwnerModelWorkingView, applyModelInputOwnerForms,
+  modelInputOccurrenceDigest, type ModelInputOwnerForm, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
+import { createModelNativeInputFootprint, planModelInput, observeModelInputUsage } from "@agent-anything/model-interaction/context";
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -26,6 +28,43 @@ async function setup(rich = false) {
   return { directory, recorder, query, subject, selection: { sourceId: subject.sourceId, datasetId: subject.datasetId } };
 }
 describe("Inspection recording", () => {
+  it("links input planning to exact requests and prior accepted usage without promoting cache counters to capacity", async () => {
+    const {recorder, query, selection} = await setup(true);
+    recorder.setPolicy({...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "provider-content", agent: true, provider: true});
+    const provider = new ProviderInspectionAdapter(recorder);
+    const at = "2026-10-23T00:00:00Z";
+    const section: ModelInputSectionCandidate = {id: "assignment", kind: "task", role: "user", necessity: "mandatory",
+      source: {owner: "agent-core", kind: "task", id: "task", revision: "1"}, content: {kind: "text", text: "Inspect."}};
+    const footprint = createModelNativeInputFootprint({messages: [{role: "user", content: "Inspect."}]});
+    const accounting = {basis: {endpoint: "fixture"}, inputUsage: "complete" as const, outputUsage: "complete" as const,
+      defaultGenerationRoom: null, limitations: ["input_preservation_unqualified"], project: () => footprint};
+    const plan = (requestId: string, previous: ReturnType<typeof observeModelInputUsage>) => planModelInput({requestId,
+      runId: "run-1", purpose: "controller", accounting, footprint, previous, capacity: {supported: false}, growthPolicy: "exact",
+      measurement: {status: "unknown", unit: "tokens", accuracy: "unknown", estimator: null, reason: "unsupported",
+        measuredCompositionId: requestId, measuredAt: at}});
+    const usage = {inputTokens: 100, outputTokens: 10, totalTokens: 110, costUnits: null, metadata: {cachedInputTokens: 80}};
+    const planning = plan("request-2", observeModelInputUsage(plan("request-1", null), usage, "response-1", true));
+    const exchange = {attemptId: "attempt-2", requestId: "request-2", runId: "run-1", controllerRequestId: null,
+      providerId: "fixture", model: "model", occurredAt: at, endpoint: "http://localhost/chat", httpStatus: 200,
+      encodedBytes: 100, code: null, status: "succeeded", body: null, contentUnavailable: false};
+    provider.observe({...exchange, stage: "request", request: {requestId: "request-2", purpose: "controller",
+      ...modelInputFromSections([section]), composition: {id: "request-2", sections: [section], lineage: {},
+        workingView: createExactModelWorkingView({sections: [section], recipientRunId: "run-1", boundary: "request"})},
+      interaction: {kind: "native_tool_turn", callables: []}, modelContext: {assessment: {planning, disposition: "unresolved", measurement: planning.measurement}}}} as never);
+    provider.observe({...exchange, stage: "settled", result: {kind: "succeeded", response: {kind: "native_tool_turn",
+      turn: {turnId: "turn-2", usage, finish: {kind: "normal"}, assistant: {content: []}}}}} as never);
+    await recorder.flush();
+    const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
+    const records = (await query.query({...scope, kind: "list_records", limit: 100})).records;
+    const recorded = records.find(record => record.payload.kind === "context_planning");
+    expect(recorded?.payload).toMatchObject({measurement: "estimated", inputTokens: 100, anchorRequestId: "request-1"});
+    expect(recorded?.links).toEqual(expect.arrayContaining([
+      expect.objectContaining({kind: "binding", to: expect.objectContaining({id: "request-2"}), targetLocation: expect.objectContaining({jsonPointer: "/modelContext/assessment/planning"})}),
+      expect.objectContaining({operation: "accepted_usage_anchor", to: expect.objectContaining({id: "request-1"})}),
+    ]));
+    expect(records.find(record => record.payload.kind === "event" && record.payload.name === "provider.usage_observed")?.contents[0]?.availability).toBe("present");
+    expect(recorder.health()).toMatchObject({rejected: 0, dropped: 0});
+  });
   it("pages exact request deliveries and distinguishes inclusion, acceptance, replay and scoped Child import", async () => {
     const {recorder, query, selection} = await setup(true);
     const provider = new ProviderInspectionAdapter(recorder), transcript = new RunTranscriptInspectionAdapter(recorder);
@@ -38,14 +77,16 @@ describe("Inspection recording", () => {
         presenter: {owner: "test", kind: "presenter", id: "opening", revision: "1"}, coverage: [`material-${index}`], limitations: []}});
     const offer = (runId: string, requestId: string, sections: readonly ModelInputSectionCandidate[]) => provider.observe({
       stage: "request", runId, requestId, attemptId: `${requestId}:attempt`, providerId: "fixture", model: "fixture", occurredAt: now,
-      request: {requestId, purpose: "controller", ...modelInputFromSections(sections), composition: {id: requestId, sections, lineage: {}},
+      request: {requestId, purpose: "controller", ...modelInputFromSections(sections), composition: {id: requestId, sections, lineage: {},
+        workingView: createExactModelWorkingView({sections, recipientRunId: runId, boundary: "request"})},
         interaction: {kind: "native_tool_turn", callables: []}},
     } as never);
     const original = retainInputPresentation(section("child-old", 0));
     offer("child-old", "first-request", [original.section]);
     transcript.observe({runId: "child-old", item: {ref: {id: "accepted-item", sequence: 1}, createdAt: now,
       payload: {kind: "controller_turn", turn: {id: "accepted-turn"}, modelItems: [], toolExposure: {exposedTools: []},
-        openingReceipt: {requestId: "first-request", presentations: [original]}}}} as never);
+        openingReceipt: {requestId: "first-request", presentations: [original], workingViewId:
+          createExactModelWorkingView({sections: [original.section], recipientRunId: "child-old", boundary: "request"}).id}}}} as never);
     offer("child-old", "replayed-request", [{...original.section, kind: "conversation_opening_history",
       provenance: {...original.section.provenance!, retainedPresentation: {owner: "agent-runtime", kind: "presentation",
         id: original.section.id, revision: original.digest, runId: "child-old"}}}]);
@@ -83,7 +124,7 @@ describe("Inspection recording", () => {
     const batch = {id: "batch-1", revision: "1", runId: "run-1", entries: [notification]};
     execution.observe({kind: "input_delivery_prepared", runId: "run-1", occurredAt: now, turnId: "turn-1", batch});
     transcript.observe({runId: "run-1", sequence: 1, item: {ref: {id: "delivery-1", sequence: 1}, createdAt: now,
-      payload: {kind: "input_delivery", batch, turn: {id: "turn-1"}, receipt: {via: {kind: "provider", requestId: "request-1", presentations: []}}}}} as never);
+      payload: {kind: "input_delivery", batch, turn: {id: "turn-1"}, receipt: {via: {kind: "provider", requestId: "request-1", workingViewId: "view-1", presentations: []}}}}} as never);
     transcript.observe({runId: "run-1", sequence: 2, item: {ref: {id: "closure-1", sequence: 2}, createdAt: now,
       payload: {kind: "input_delivery_closed", reason: "cancelled", entries: [{...notification, sequence: 2}]}}} as never);
     await recorder.flush();
@@ -175,8 +216,10 @@ describe("Inspection recording", () => {
     const call = {id: "call-id", turnId: "model-turn", providerRequestId: "provider-request", controllerRequestId: "controller-request", contentBlockOrdinal: 0};
     execution.observe({kind: "tool_exposure", runId: "run-1", occurredAt: now, turnId: "controller-turn", selected: [], exposure: {exposedTools: [], omissions: []}, proof: {controllerRequestId: call.controllerRequestId}} as never);
     const exchange = {attemptId: "http-attempt", requestId: call.providerRequestId, runId: "run-1", controllerRequestId: call.controllerRequestId, providerId: "test", model: "test", occurredAt: now, endpoint: "http://localhost/api/chat", httpStatus: 200, encodedBytes: 100, code: null, status: "succeeded", result: null, body: null, contentUnavailable: false};
-    const section = {id: "task-section", kind: "task", role: "user", source: {owner: "agent-core", id: "task", revision: "1"}, content: {kind: "text", text: "Inspect the workspace."}};
-    provider.observe({...exchange, stage: "request", request: {requestId: call.providerRequestId, purpose: "controller", instructions: {content: []}, messages: [{role: "user", content: [{kind: "text", text: section.content.text}]}], composition: {id: "composition", sections: [section], lineage: {}}, interaction: {kind: "native_tool_turn", callables: []}}} as never);
+    const section: ModelInputSectionCandidate = {id: "task-section", kind: "task", role: "user", necessity: "mandatory", source: {owner: "agent-core", kind: "task", id: "task", revision: "1"}, content: {kind: "text", text: "Inspect the workspace."}};
+    provider.observe({...exchange, stage: "request", request: {requestId: call.providerRequestId, purpose: "controller", ...modelInputFromSections([section]),
+      composition: {id: "composition", sections: [section], lineage: {}, workingView: createExactModelWorkingView({sections: [section], recipientRunId: "run-1", boundary: "request"})},
+      interaction: {kind: "native_tool_turn", callables: []}}} as never);
     provider.observe({...exchange, stage: "settled", result: {kind: "succeeded", response: {kind: "native_tool_turn", turn: {turnId: "model-turn", usage: null, finish: {kind: "normal"}, assistant: {content: callCount ? [{kind: "model_tool_call", call: {modelCallRef: call}}] : [{kind: "text", text: "Done"}]}}}}} as never);
     if (callCount) execution.observe({kind: "scheduling", runId: "run-1", occurredAt: now, call, position: 0, disposition: "queued", rule: "decision_source_order", groupId: null, reason: null} as never);
     execution.observe({kind: "retry_event", runId: "run-1", occurredAt: now, event: {type: "retry_attempt_started", runId: "run-1", owner: "provider_request", operationId: "retry-operation", attemptId: "logical-attempt", occurredAt: now}} as never);
@@ -263,7 +306,7 @@ describe("Inspection recording", () => {
     expect(recorder.health().rejected).toBe(0);
   });
 
-  it("links a replayed result to its actual request location without relabeling its source Run", async () => {
+  it.each([false, true])("links a replayed result to its actual request location without relabeling its source Run (owner form=%s)", async ownerForm => {
     const {recorder, query, selection} = await setup(true);
     const provider = new ProviderInspectionAdapter(recorder);
     const result = {modelCallRef: {id: "call-1", turnId: "source-turn", providerRequestId: "source-request",
@@ -271,21 +314,55 @@ describe("Inspection recording", () => {
       name: "Read", settlement: "succeeded", presentation: {presenter: {id: "fixture", revision: "1"},
         disposition: "complete", failureCode: null}, sourceRefs: [
       {owner: "agent-runtime", kind: "model_call", id: "call-1", revision: null, runId: "source-run"}],
-      content: {text: "retained"}};
-    const message = {role: "tool", content: [{kind: "model_tool_result", result}]};
+      content: {text: "retained"}} as const;
+    const sections: ModelInputSectionCandidate[] = [
+      {id: "original-call", kind: "interaction_history", role: "assistant", necessity: "mandatory",
+        source: {owner: "fixture", kind: "turn", id: "source-turn", revision: "1", runId: "source-run"},
+        content: {kind: "model_message", message: {role: "assistant", content: [{kind: "model_tool_call", call: {
+          modelCallRef: result.modelCallRef, providerCallRef: null, name: "Read", ordinal: 0, input: {path: "file"}}}]}}},
+      {id: "history", kind: "interaction_history", role: "tool", necessity: "mandatory",
+        source: {owner: "fixture", kind: "result", id: "history", revision: "1", runId: "source-run"},
+        content: {kind: "model_message", message: {role: "tool", content: [{kind: "model_tool_result", result}]}}},
+    ];
+    const forms: ModelInputOwnerForm[] = [];
+    if (ownerForm) {
+      sections[1] = {...sections[1]!, preservation: {obligations: [{id: "result", requirement: "account", basis: "Owner-approved result account"}], relationships: []}};
+      sections.push({id: "next-turn", kind: "interaction_history", role: "assistant", necessity: "mandatory",
+        source: {owner: "fixture", kind: "turn", id: "next-turn", revision: "1", runId: "source-run"}, content: {kind: "text", text: "Finding accepted"}});
+      forms.push({id: "owner-result", sectionId: "history", sourceDigest: modelInputOccurrenceDigest(sections[1]!),
+        owner: {owner: "fixture", kind: "presenter", id: "result-account", revision: "1"}, method: "owner_presentation",
+        content: {kind: "model_message", message: {role: "tool", content: [{kind: "model_tool_result", result: {...result, content: {text: "Account"}}}]}},
+        satisfies: ["result"], companions: ["original-call"], dependencies: [], limitations: ["Not the original result body"]});
+    }
+    const actual = applyModelInputOwnerForms(sections, forms, "consumer-run");
+    const workingView = createOwnerModelWorkingView({sections: actual, recipientRunId: "consumer-run", boundary: "request", forms});
     provider.observe({stage: "request", runId: "consumer-run", requestId: "request-replay", attemptId: "attempt-replay",
       occurredAt: "2026-10-13T00:00:00Z", providerId: "fixture", model: "fixture", controllerRequestId: null,
-      request: {requestId: "request-replay", purpose: "controller", composition: {id: "composition", sections: [
-        {id: "history", kind: "interaction_history", role: "tool", source: {owner: "fixture", id: "history", revision: "1"},
-          content: {kind: "model_message", message}}], lineage: {}},
-        messages: [message], interaction: {kind: "structured_output"}}} as never);
+      request: {requestId: "request-replay", purpose: "controller", composition: {id: "composition", sections: actual, lineage: {}, workingView},
+        ...modelInputFromSections(actual), interaction: {kind: "text_generation"}}} as never);
     await recorder.flush();
     const scope = (await query.query({...selection, kind: "get_snapshot"})).selection!;
     const graph = (await query.query({...scope, kind: "get_data_flow"})).graph!;
-    expect(graph.links).toContainEqual(expect.objectContaining({kind: "includes", operation: "model_result_history",
-      from: expect.objectContaining({id: "call-1:presentation", runId: "source-run"}),
+    expect(graph.links).toContainEqual(expect.objectContaining({kind: "includes", operation: ownerForm ? "owner_form_result_history" : "model_result_history",
+      from: expect.objectContaining(ownerForm ? {id: `${workingView.id}:selection:1`, runId: "consumer-run"} : {id: "call-1:presentation", runId: "source-run"}),
       to: expect.objectContaining({id: "request-replay", runId: "consumer-run"}),
-      targetLocation: expect.objectContaining({jsonPointer: "/messages/0/content/0/result"})}));
+      targetLocation: expect.objectContaining({jsonPointer: "/messages/1/content/0/result"})}));
+    const records = (await query.query({...scope, kind: "list_records", limit: 100})).records;
+    expect(records.filter(record => record.payload.kind === "working_view").map(record => record.payload)).toEqual([
+      expect.objectContaining({stage: "included", requestId: "request-replay", recipientRunId: "consumer-run", selectionCount: actual.length, groupCount: 1}),
+    ]);
+    expect(records.filter(record => record.payload.kind === "working_selection")).toHaveLength(actual.length);
+    if (ownerForm) {
+      expect(records.find(record => record.payload.kind === "working_selection" && record.payload.sectionId === "history")?.payload)
+        .toMatchObject({representation: "owner_form"});
+      expect(graph.links).toContainEqual(expect.objectContaining({kind: "transforms", operation: "owner_presentation",
+        from: expect.objectContaining({id: "history", runId: "source-run"}), to: expect.objectContaining({id: `${workingView.id}:selection:1`})}));
+    }
+    const groups = records.filter(record => record.payload.kind === "native_group");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.payload).toMatchObject({turnId: "source-turn", callCount: 1, settledCallCount: 1, status: "settled"});
+    expect(groups[0]!.links).toContainEqual(expect.objectContaining({kind: "binding", from: expect.objectContaining({kind: "call", id: "call-1", runId: "source-run"}),
+      to: expect.objectContaining({kind: "context", runId: "consumer-run"})}));
     expect(recorder.health().rejected).toBe(0);
   });
 

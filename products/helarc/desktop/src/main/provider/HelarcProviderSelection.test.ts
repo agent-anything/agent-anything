@@ -24,6 +24,27 @@ function fixture() {
 }
 
 describe("Provider selection admission", () => {
+  it("retains requested, advertised and loaded context as distinct recoverable facts", async () => {
+    const {selection, fetch, stored} = fixture();
+    stored.config.ollamaRuntime = {contextWindowTokens: 163840};
+    stored.profile.ollamaRuntime = stored.config.ollamaRuntime;
+    fetch.mockImplementation(async url => new Response(JSON.stringify(String(url).endsWith("/api/tags")
+      ? {models: [{name: "model", digest: "sha256:artifact"}]}
+      : String(url).endsWith("/api/version") ? {version: "0.35.1"}
+      : String(url).endsWith("/api/ps") ? {models: [{name: "model", digest: "sha256:artifact", context_length: 16384}]}
+      : {model_info: {"model.context_length": 131072}, template: "template-v1", thinking: {values: [false, true], default: true}})));
+    const resolved = (await selection.resolve())!;
+    const original = createHelarcProvider(resolved.config);
+    expect(original.modelContext.capacity).toMatchObject({maximum: 131072});
+    expect(original.modelContext.accounting?.evidence).toMatchObject({advertisedModelCapacity: 131072, observedLoadedContext: 16384});
+    expect(original.modelContext.accounting?.basis).toMatchObject({runtimeVersion: "0.35.1"});
+    expect(original.modelContext.accounting?.limitations).toContain("input_preservation_unqualified");
+    const saved = {providerProfile: resolved.profile, providerBinding: retainHelarcProviderBinding(original)};
+    const restored = restoreHelarcProvider(JSON.parse(JSON.stringify(saved)), "");
+    expect(retainHelarcProviderBinding(restored)).toEqual(saved.providerBinding);
+    expect(saved.providerBinding.modelContext.accounting).not.toHaveProperty("project");
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
   it("restores the exact resolved thinking and artifact without serializing implementation or credentials", async () => {
     const {selection} = fixture();
     const resolved = (await selection.resolve())!;
@@ -62,11 +83,12 @@ describe("Provider selection admission", () => {
     expect(stored.config.modelSettings?.thinking).toEqual({ mode: "default" });
     expect(resolved?.config.modelArtifact).toBe("sha256:artifact");
     await selection.resolve();
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(8);
     stored.profile = { ...stored.profile, revision: "2", displayName: "Renamed" };
     const next = await selection.resolve();
-    expect(fetch).toHaveBeenCalledTimes(4);
-    expect(createHelarcProvider(next!.config).descriptor).toEqual(createHelarcProvider(resolved!.config).descriptor);
+    expect(fetch).toHaveBeenCalledTimes(12);
+    expect(createHelarcProvider(next!.config).modelContext.accounting?.basis)
+      .toEqual(createHelarcProvider(resolved!.config).modelContext.accounting?.basis);
   });
   it("rejects stale selection and responses that arrive after a profile edit", async () => {
     const { selection, store, stored, fetch } = fixture();

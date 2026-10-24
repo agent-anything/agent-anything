@@ -4,6 +4,7 @@ import type {
 import { assessModelContext } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
+  createExactModelWorkingView,
   modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
@@ -17,6 +18,25 @@ import {
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 
 describe("OpenAICompatibleProvider", () => {
+  it.each([
+    {finish: "stop", extra: {}, expected: "succeeded"},
+    {finish: "length", extra: {}, expected: "failed"},
+    {finish: "content_filter", extra: {}, expected: "failed"},
+    {finish: "stop", extra: {refusal: "Declined"}, expected: "failed"},
+    {finish: "stop", extra: {tool_calls: [{id: "not-executable"}]}, expected: "failed"},
+    {finish: "stop", extra: {tool_calls: {}}, expected: "failed"},
+  ])("rejects partial/refused/call-bearing auxiliary responses ($finish/$expected)", async ({finish, extra, expected}) => {
+    const provider = new OpenAICompatibleProvider(config(), async () => okResponse({id: "response", choices: [{index: 0,
+      finish_reason: finish, message: {role: "assistant", content: '{"summary":"data"}', ...extra}}]}));
+    const input = request(provider);
+    const method = {owner: "model-interaction", kind: "transformation_method", id: "test-method", revision: "1"};
+    const sections = input.composition.sections.map(section => section.kind === "agent_instruction" ? {...section, kind: "transformation_instruction"} : section);
+    const auxiliary = {...input, purpose: "context_generation", composition: {...input.composition, sections,
+      workingView: createExactModelWorkingView({sections, recipientRunId: input.composition.workingView.recipientRunId, boundary: "request"}), lineage: {...input.composition.lineage,
+      instructionBinding: null, agent: null, instructions: null, instructionRelease: null, instructionResolver: null, instructionContent: null,
+      instructionBlocks: [], auxiliary: {purpose: "context_generation" as const, method, basis: method}}}};
+    expect((await provider.send(auxiliary, context())).kind).toBe(expected);
+  });
   it("omits caller output limits in native and structured requests when unspecified", async () => {
     const { maximumOutputTokens: _maximum, ...settings } = config();
     const bodies: Record<string, unknown>[] = [];

@@ -20,6 +20,25 @@ async function fixture() {
 }
 
 describe("Investigation read projections",()=>{
+  it("pages exact request context evidence without leaking another request or crossing its watermark", async () => {
+    const {recorder:r,query,snapshot}=await fixture();
+    const request=r.ref("model-interaction","request","q","root"), other=r.ref("model-interaction","request","other","child");
+    for (const [index,target] of [request, request, other].entries()) {
+      const subject=r.ref("model-interaction","contribution",`selection-${index}`,target.runId);
+      r.offer({id:`context-${index}`,subject,occurredAt:null,payload:{kind:"working_selection",requestId:target.id,sectionId:`source-${index}`,position:index,digest:`digest-${index}`,
+        representation:"exact",obligationCount:1,relationshipCount:0,protection:["first_delivery"]},links:[inspectionLink("includes",subject,target)]});
+    }
+    const scope=await snapshot();
+    const first=await query.query({...scope,kind:"get_context_evidence",subject:request,limit:1});
+    expect(first.records.map(record=>record.id)).toEqual(["context-0"]);
+    const next=await query.query({...scope,kind:"get_context_evidence",subject:request,limit:1,after:String(first.next)});
+    expect(next.records.map(record=>record.id)).toEqual(["context-1"]);
+    expect(next.next).toBeNull();
+    await expect(query.query({...scope,kind:"get_context_evidence",subject:other,after:String(first.next)})).rejects.toThrow("inspection_cursor_invalid");
+    r.offer({id:"later",subject:request,occurredAt:null,payload:{kind:"event",name:"context_assessment.generation_bound",sequence:null,code:null},links:[inspectionLink("observes",other,request)]});
+    await snapshot();
+    expect((await query.query({...scope,kind:"get_context_evidence",subject:request})).records).toHaveLength(2);
+  });
   it("retains transport material after dense bindings and follows explicit Call execution relationships",async()=>{
     const {recorder:r,query,snapshot}=await fixture();
     const request=r.ref("model-interaction","request","request","root");

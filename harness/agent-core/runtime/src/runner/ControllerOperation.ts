@@ -160,6 +160,8 @@ export function executeControllerOperation<TOutput>(input: {
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
   readonly checkpoints?: import("../controller/ControllerCheckpoint.js").ControllerCheckpointPort;
   readonly runCheckpoints?: import("../controller/ControllerCheckpoint.js").ControllerCheckpointPort;
+  readonly auxiliaryUsage?: import("../controller/Controller.js").ControllerCallContext["auxiliaryUsage"];
+  readonly auxiliaryWork?: import("../controller/Controller.js").ControllerCallContext["auxiliaryWork"];
   readonly recovering?: boolean;
 }): Promise<ControllerDecision<TOutput>> {
   const controller = input.dependencies.controller;
@@ -170,6 +172,8 @@ export function executeControllerOperation<TOutput>(input: {
     Object.freeze({
       checkpoints: input.checkpoints,
       runCheckpoints: input.runCheckpoints,
+      auxiliaryUsage: input.auxiliaryUsage,
+      auxiliaryWork: input.auxiliaryWork,
       executionFlow: input.executionFlow,
       cancellation: input.config.cancellation.context,
       retry: Object.freeze({

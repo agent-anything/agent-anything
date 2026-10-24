@@ -20,7 +20,7 @@ export function commandResultContract(registration: RegisteredOperation): Operat
       if (is(HELARC_PROCESS_START_OPERATION)) return handle(value) && text(value.action_id) && text(value.attempt_id) && snapshot(value.snapshot);
       if (is(HELARC_TASK_STOP_OPERATION)) return text(value.task_id) && snapshot(value.snapshot) &&
         ["known_applied", "known_not_applied"].includes(value.effect_certainty as string);
-      if (is(HELARC_TASK_OUTPUT_OPERATION)) return observation(value);
+      if (is(HELARC_TASK_OUTPUT_OPERATION)) return observation(value) || outputSearch(value);
       if (is(HELARC_INITIAL_OBSERVATION_OPERATION)) return observation(value.observation) &&
         (value.commandFailure === null || record(value.commandFailure) && text(value.commandFailure.code) &&
           typeof value.commandFailure.message === "string" && value.commandFailure.retryable === false);
@@ -35,6 +35,13 @@ function observation(value: unknown): boolean {
     count(value.requested_wait_ms) && count(value.effective_wait_ms) && duration(value.elapsed_wait_ms) && text(value.return_reason) &&
     stream(value.stdout) && stream(value.stderr) && text(value.next_cursor) && typeof value.has_more === "boolean" &&
     record(value.containment) && record(value.output) && strings(value.limitations);
+}
+function outputSearch(value: Record<string, unknown>): boolean {
+  return value.kind === "output_search" && handle(value) && ["stdout", "stderr"].includes(value.stream as string) &&
+    value.coordinate === "projected_utf8_bytes" && record(value.frontier) && count(value.frontier.segments) && count(value.frontier.bytes) &&
+    count(value.scanned_bytes) && typeof value.exhausted === "boolean" && (value.next_search_cursor === null || text(value.next_search_cursor)) &&
+    text(value.integrity) && strings(value.limitations) && Array.isArray(value.matches) && value.matches.length <= 16 && value.matches.every(item =>
+      record(item) && count(item.byte_start) && count(item.byte_end) && item.byte_end >= item.byte_start && typeof item.text === "string");
 }
 function stream(value: unknown): boolean {
   return record(value) && typeof value.text === "string" && (value.encoding === null || text(value.encoding)) && text(value.encoding_source) &&

@@ -96,6 +96,12 @@ export class ProcessInspectionAdapter {
         code:fact.cleanupConfirmed ? null:"process_cleanup_unconfirmed"},[content("Cleanup outcome",{confirmed:fact.cleanupConfirmed,snapshot:s},"finalized")],
         [link("binding",process,run)]);
     }
+    if (fact.search && fact.invocationId) {
+      const search = ref("contribution", fact.invocationId, "1");
+      offer(search,{kind:"event",name:"process.output.searched",sequence:fact.sequence,code:null},
+        [content("Retained output search",{...fact.search,reused:fact.searchReused ?? false},"returned")],
+        [link("produces",process,search),link("produces",ref("operation",fact.invocationId,null,"operations"),search)]);
+    }
     if(!fact.observationId || !fact.invocationId)return;
     const observation=ref("process-observation",fact.observationId,"1");
     const invocation=ref("operation",fact.invocationId,null,"operations");

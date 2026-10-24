@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as continuationApi from "./continuation/index.js";
 import * as inputApi from "./input/index.js";
+import * as contextApi from "./context/index.js";
 import type { RetrySchedulerOwnership } from "./index.js";
 import * as api from "./index.js";
 
@@ -49,17 +50,30 @@ describe("Model Interaction public API", () => {
       "snapshotProviderInteraction",
       "snapshotProviderRequest",
       "snapshotProviderResponse",
+      "snapshotProviderUsage",
       "verifyProviderTransportAccounting",
     ]);
     expect(Object.keys(inputApi).sort()).toEqual([
       "ModelInputCompositionError",
+      "accountObligations",
+      "accountRelationships",
+      "applyModelInputAccounts",
+      "applyModelInputOwnerForms",
       "composeModelInput",
+      "createExactModelWorkingView",
+      "createOwnerModelWorkingView",
       "modelInputFromComposition",
       "modelInputFromSections",
+      "modelInputOccurrenceDigest",
       "modelInputSectionLocations",
+      "modelInputValueDigest",
+      "selectModelWorkingView",
       "snapshotModelInputComposition",
+      "snapshotModelInputPreservation",
       "snapshotModelInputSection",
+      "snapshotModelInputSourceRef",
       "snapshotModelOutputFormat",
+      "validateModelAccountScope",
     ]);
     expect(Object.keys(continuationApi).sort()).toEqual([
       "ModelContinuationLifecycle",
@@ -69,6 +83,13 @@ describe("Model Interaction public API", () => {
       "snapshotModelContinuationCompatibility",
       "snapshotModelContinuationOutcome",
       "snapshotModelContinuationRef",
+    ]);
+    expect(Object.keys(contextApi).sort()).toEqual([
+      "CONTEXT_ACCOUNT_METHOD", "CONTEXT_ASSESSMENT_CRITERIA", "MODEL_INPUT_ALLOCATION_GROUPS", "allocateModelInput", "assessModelContext",
+      "contextAssessmentAllowsAccount", "contextTransformationFormat", "contextTransformationNodeBasis", "contextTransformationPrefixLimit", "createContextTransformationBasis", "createContextTransformationRequest", "createModelNativeInputFootprint",
+      "createUnknownModelInputMeasurement", "observeModelInputUsage", "parseContextAccountAssessment", "parseContextGeneratedAccount", "planContextTransformationStages", "planModelInput", "renderContextAccount", "snapshotModelContextAssessment",
+      "snapshotModelContextCapacity", "snapshotModelContextHeadroom", "snapshotModelInputPlanning", "snapshotModelInputUsageObservation",
+      "snapshotProviderInputPreservationConformance", "snapshotProviderModelTarget", "snapshotProviderRequestedOutput",
     ]);
   });
 

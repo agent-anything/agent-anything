@@ -47,6 +47,14 @@ describe("Helarc Agents", () => {
     expect(second.revision).not.toBe(first.revision);
   });
 
+  it("preserves validated final material references without treating arbitrary locators as access", () => {
+    const output = createHelarcAgent({target:"production",...MODEL}).output;
+    const reference = {id:"material",revision:`sha256:${"a".repeat(64)}`};
+    const candidate = {kind:"complete",summary:"Report",source:{kind:"product_status"},materialRefs:[reference]};
+    expect(output.validate(candidate)).toEqual({valid:true,output:candidate});
+    expect(output.validate({...candidate,materialRefs:["C:/private.txt"]}).valid).toBe(false);
+  });
+
   it("rejects non-terminal controller decisions as Agent output", () => {
     const output = createHelarcAgent({ target: "production", ...MODEL }).output;
 

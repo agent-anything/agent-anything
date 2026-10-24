@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { publishCommandConstraint, type CommandConstraintObserver, type CommandConstraintFact } from "./CommandConstraintObservation.js";
 import type { CommandInputContract } from "./CommandInputContract.js";
 import { ProcessRecordError, type ProcessCheckpoint, type ProcessRecordPort } from "./ProcessCheckpoint.js";
+import {searchProcessOutput, type ProcessOutputSearchInput} from "./ProcessOutputSearch.js";
+import type {ProcessOutputSearchReceipt} from "./ProcessCheckpoint.js";
 import { performance } from "node:perf_hooks";
 import type { CanonicalProcessIdentity } from "@agent-anything/canonical-action/subject";
 import { ProcessLaunchFailure, type ProcessBackend, type ProcessBackendEvent, type ProcessBackendHandle } from "./ProcessBackend.js";
@@ -36,6 +38,7 @@ interface Execution {
   persistence: Promise<void>;
   persistenceFailure: ProcessRecordError | null;
   observations: ProcessObservation[];
+  searches: ProcessOutputSearchReceipt[];
   readonly input: ManagedProcessStart;
   snapshot: ProcessSnapshot;
   output: ProcessOutputStore | null;
@@ -107,7 +110,7 @@ export class RunProcessManager {
     const settled = new Promise<void>((done) => { resolve = done; });
     const launchAbort = new AbortController();
     const entry: Execution = {
-      checkpointRevision: -1, launchIntent: false, recovered: false, persistence: Promise.resolve(), persistenceFailure: null, observations: [],
+      checkpointRevision: -1, launchIntent: false, recovered: false, persistence: Promise.resolve(), persistenceFailure: null, observations: [], searches: [],
       input, output: null, handle: null, launchFinished: false, timer: null, runDeadlineTimer: null, terminationTimer: null, listeners: new Set(), launchAbort,
       abort: () => { void this.requestTermination(entry, "run_cancelled"); }, settled, resolve,
       closePromise: null, outputClosePromise: null, cwdPromise: null, stopPromise: null, observationSequence: 0, initialObservation: false,
@@ -258,6 +261,26 @@ export class RunProcessManager {
       entry.snapshot.containment.disposition !== "empty";
   }
 
+  async searchOutput(input: {runId: string; executionId: string; invocationId: string; search: ProcessOutputSearchInput; signal: AbortSignal}) {
+    const entry = this.find(input.runId, input.executionId);
+    const retained = entry.searches.find(item => item.invocationId === input.invocationId);
+    if (retained) {
+      if (JSON.stringify(retained.input) !== JSON.stringify(input.search)) throw new ProcessManagerError("process_search_invocation_conflict");
+      await this.flush(entry);
+      this.publish(entry, "output_searched", {invocationId: input.invocationId, search: retained.output, searchReused: true});
+      return retained.output;
+    }
+    input.signal.throwIfAborted();
+    if (!entry.output) throw new ProcessManagerError("process_output_unavailable");
+    const output = searchProcessOutput(entry.output.checkpoint(), input.search);
+    entry.searches.push(immutable({invocationId: input.invocationId, input: input.search, output}));
+    // Freeze both captured source and exact result before returning a page or cursor.
+    this.retain(entry);
+    await this.flush(entry);
+    this.publish(entry, "output_searched", {invocationId: input.invocationId, search: output, searchReused: false});
+    return output;
+  }
+
   async observe(input: { runId: string; executionId: string; invocationId: string; cursor?: string; waitMs: number; requestedWaitMs?:number; signal: AbortSignal; initial?: boolean }): Promise<ProcessObservation> {
     const entry = this.find(input.runId, input.executionId);
     const retained = entry.observations.find(item => item.invocationId === input.invocationId);
@@ -355,7 +378,7 @@ export class RunProcessManager {
         ...(saved.input.origin ? {origin: saved.input.origin} : {origin: undefined}),
         displayCommand: saved.input.displayCommand ?? undefined};
       const entry: Execution = {input, snapshot, checkpointRevision: saved.revision, launchIntent: saved.launchIntent,
-        recovered: true, persistence: Promise.resolve(), persistenceFailure: null, observations: [...saved.observations],
+        recovered: true, persistence: Promise.resolve(), persistenceFailure: null, observations: [...saved.observations], searches: [...saved.searches],
         output: saved.output ? ProcessOutputStore.restore(saved.output, saved.input.paths) : null,
         handle: null, launchFinished: true, timer: null, runDeadlineTimer: null, terminationTimer: null,
         listeners: new Set(), launchAbort: new AbortController(), abort: () => {}, settled: Promise.resolve(), resolve: () => {},
@@ -397,7 +420,7 @@ export class RunProcessManager {
         environment: source.environment, timeoutMs: source.timeoutMs, deadlineAt: source.deadlineAt, paths: source.paths,
         maximumOutputBytes: source.maximumOutputBytes, background: source.background, displayCommand: source.displayCommand ?? null},
       launchIntent: entry.launchIntent, snapshot: entry.snapshot, output: entry.output?.checkpoint() ?? null,
-      observationSequence: entry.observationSequence, initialSnapshot: entry.initialSnapshot, observations: entry.observations,
+      observationSequence: entry.observationSequence, initialSnapshot: entry.initialSnapshot, observations: entry.observations, searches: entry.searches,
       initialDelivery: entry.initialDelivery, deliveryCursor: entry.deliveryCursor ?? null, deliveryState: entry.deliveryState,
       notifications: (this.notifications.get(source.runId) ?? []).filter(fact => fact.source.id === source.executionId)});
     entry.persistence = entry.persistence.then(async () => {
@@ -620,7 +643,7 @@ export class RunProcessManager {
     for (const listener of entry.listeners) listener();
   }
   private publish(entry: Execution, kind: ProcessExecutionFact["kind"], extra: Partial<ProcessExecutionFact> = {}): void {
-    if (kind !== "output" && kind !== "scope_members") this.retain(entry);
+    if (kind !== "output" && kind !== "scope_members" && kind !== "output_searched") this.retain(entry);
     const fact: ProcessExecutionFact = immutable({ ...extra, kind, sequence: ++this.sequence, activationId: this.scopeId,
       occurredAt: this.now(), snapshot: entry.snapshot, ...(entry.output ? {outputPositions:entry.output.positions} : {}) });
     const emit = () => { try { void Promise.resolve(this.options.observer?.(fact)).catch(() => {}); } catch {} };

@@ -16,6 +16,20 @@ import {
 } from "./ActiveContextProjection.js";
 
 describe("Active Context projection", () => {
+  it("carries owner preservation separately from payload and refuses to weaken exact content", () => {
+    const original = contribution("material", 10, "mandatory", ["model"], ["truncate", "redact"]);
+    const preservation = {obligations: [{id: "quoted-evidence", requirement: "exact" as const, basis: "Keep exact evidence."}],
+      relationships: [{kind: "qualifies" as const, source: original.source}]};
+    const context = activeContext([{...original, handling: {...original.handling, preservation}}]);
+    const full = project(context, 1024);
+    expect(full.projection?.blocks[0]?.preservation).toEqual(preservation);
+    expect(full.projection?.blocks[0]?.payload).toEqual(original.payload);
+    expect(projectActiveContext({context, request: request(context.ref, 1, ["truncate"]), estimator: byteEstimator,
+      policy: allowPolicy, maxContributionPayloadBytes: 1024}).status).toBe("blocked");
+    const redacted = projectActiveContext({context, request: request(context.ref, 1024, ["redact"]), estimator: byteEstimator,
+      policy: {...allowPolicy, decide: () => ({kind: "redact", code: "restricted", payload: {kind: "text", text: "redacted"}})}, maxContributionPayloadBytes: 1024});
+    expect(redacted.status).toBe("blocked");
+  });
   it("accounts an exact retained presentation once without bypassing disclosure or policy", () => {
     const material = contribution("material", 10, "mandatory", ["model"]);
     const context = activeContext([material]);

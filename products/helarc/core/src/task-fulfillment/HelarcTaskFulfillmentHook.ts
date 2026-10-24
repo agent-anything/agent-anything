@@ -224,6 +224,9 @@ function buildRequest(provider: Provider, event: AgentStopEvent, instructions: s
       kind: "task_fulfillment_material",
       role: "user" as const,
       necessity: "mandatory" as const,
+      provenance: {purpose: "task_fulfillment_material", recipientRunId: event.run.id, author: "host",
+        originRunId: event.run.id, sources: [source("task_fulfillment_material", event.task.id, event.ref.revision)],
+        presenter: source("product_hook", hookRef.id, hookRef.revision), coverage: [], limitations: []},
       content: Object.freeze({
         kind: "model_message" as const,
         message: Object.freeze({

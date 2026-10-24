@@ -61,11 +61,13 @@ export interface ProcessObservation {
 
 export interface ProcessExecutionFact {
   readonly activationId?: string;
-  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "scope_members" | "input_notified" | "initial_delivery_committed" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired" | "reconciled";
+  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "scope_members" | "input_notified" | "initial_delivery_committed" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired" | "reconciled" | "output_searched";
   readonly sequence: number;
   readonly occurredAt: string;
   readonly snapshot: ProcessSnapshot;
   readonly observation?: ProcessObservation;
+  readonly search?: import("./ProcessOutputSearch.js").ProcessOutputSearchResult;
+  readonly searchReused?: boolean;
   readonly invocationId?: string;
   readonly waitMs?: number;
   readonly requestedWaitMs?: number;

@@ -66,6 +66,10 @@ export type ControllerModelItem =
     };
 
 export interface ModelInteractionProjection {
+  readonly workingForms?: readonly import("@agent-anything/model-interaction/input").ModelInputOwnerForm[];
+  readonly workingAccounts?: readonly import("@agent-anything/model-interaction/input").ModelInputAccount[];
+  readonly inputUsageObservations?: readonly import("@agent-anything/model-interaction/context").ModelInputUsageObservation[];
+  readonly workingView: import("@agent-anything/model-interaction/input").ModelWorkingView;
   readonly id: string;
   readonly revision: string;
   readonly messages: readonly ModelMessage[];
@@ -191,6 +195,12 @@ export type ControllerPreProjectionInput<TOutput = unknown> = Omit<
 >;
 
 export interface ControllerCallContext {
+  readonly auxiliaryWork?: import("./ControllerAuxiliaryWork.js").ControllerAuxiliaryWorkPort;
+  readonly auxiliaryInvocationId?: string;
+  readonly auxiliaryUsage?: {
+    assertAvailable(): void;
+    record(value: import("./ControllerAuxiliaryUsage.js").ControllerAuxiliaryUsage): Promise<void>;
+  };
   readonly checkpoints?: import("./ControllerCheckpoint.js").ControllerCheckpointPort;
   readonly runCheckpoints?: import("./ControllerCheckpoint.js").ControllerCheckpointPort;
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;

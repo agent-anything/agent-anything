@@ -40,7 +40,9 @@ async function launch(directory, scenario, stage, expectedExit) {
 let passed = false;
 const selected = process.argv.slice(2);
 const supportedScenarios = ["accepted", "effect", "child", "opening_prepared", "continued_child", "approval", "approval_applied", "ending_feedback", "ending_exhausted",
-  "interaction_admitted", "interaction_prepared", "interaction_accepted", "interaction_call_feedback", "interaction_steering"];
+  "interaction_admitted", "interaction_prepared", "interaction_accepted", "interaction_call_feedback", "interaction_steering", "material_child", "material_read_prepared",
+  "context_intent", "context_candidate", "context_selected", "context_frozen", "context_returned", "context_accepted",
+  "semantic_generated", "semantic_assessed", "semantic_candidate", "semantic_leaf", "semantic_merge", "semantic_background", "semantic_background_adopt"];
 const scenarios = selected.length ? selected : supportedScenarios;
 assert(scenarios.every(value => supportedScenarios.includes(value)));
 try {

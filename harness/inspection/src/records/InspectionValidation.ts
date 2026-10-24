@@ -16,6 +16,14 @@ function shape(fields: Record<string, Check>): Check {
     Object.keys(value).length === Object.keys(fields).length && Object.entries(fields).every(([key, check]) => check((value as Record<string, unknown>)[key]));
 }
 const payloads: Record<string, Record<string, Check>> = {
+  recording_link: {stage: oneOf("recovery_prepared"), target: nullable(shape({sourceId: identity, datasetId: identity, runId: identity})), limitation: nullable(identity)},
+  context_planning: {requestId: identity, planningId: identity, disposition: identity, measurement: identity,
+    inputTokens: nullable(integer), proxyBytes: integer, workingTarget: nullable(integer), anchorRequestId: nullable(identity), limitationCount: integer},
+  working_view: {requestId: identity, recipientRunId: nullable(identity), version: integer, selectionCount: integer, groupCount: integer, stage: oneOf("included")},
+  working_selection: {requestId: identity, sectionId: identity, position: integer, digest: identity, representation: oneOf("exact", "owner_form", "semantic_account"),
+    obligationCount: integer, relationshipCount: integer, protection: array(identity)},
+  native_group: {requestId: identity, turnId: identity, callCount: integer, settledCallCount: integer,
+    status: oneOf("settled", "unsettled"), protection: identity},
   process: {phase:identity,revision:integer,backend:identity,processId:nullable(integer),helperProcessId:nullable(integer),
     rootExit:nullable(shape({code:nullable(value=>Number.isSafeInteger(value)),signal:nullable(text),observedAt:identity})),
     containment:identity,capture:identity,persistence:identity,outcome:nullable(identity)},

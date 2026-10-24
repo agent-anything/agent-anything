@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelInputComposition } from "../input/index.js";
+import { snapshotModelInputPlanning, type ModelInputPlanning, type ProviderInputAccounting } from "./ModelInputAccounting.js";
 
 export interface ProviderModelTarget {
   readonly providerId: string;
@@ -80,6 +81,7 @@ export type ModelContextAssessmentDisposition =
   | "unresolved";
 
 export interface ModelContextAssessment {
+  readonly planning?: ModelInputPlanning;
   readonly id: string;
   readonly revision: string;
   readonly compositionId: string;
@@ -114,6 +116,7 @@ export interface ProviderInputPreservationConformance {
 }
 
 export interface ProviderModelContext {
+  readonly accounting?: ProviderInputAccounting;
   readonly target: ProviderModelTarget;
   readonly capacity: ModelContextCapacity;
   readonly requestedOutput: ProviderRequestedOutput;
@@ -122,6 +125,7 @@ export interface ProviderModelContext {
     composition: ModelInputComposition,
     measuredAt: string,
   ): ModelInputMeasurement;
+  measureAsync?(composition: ModelInputComposition, measuredAt: string, signal: AbortSignal): Promise<ModelInputMeasurement>;
 }
 
 export function createUnknownModelInputMeasurement(input: {
@@ -142,6 +146,7 @@ export function createUnknownModelInputMeasurement(input: {
 }
 
 export function assessModelContext(input: {
+  readonly planning?: ModelInputPlanning;
   readonly compositionId: string;
   readonly capacity: ModelContextCapacity;
   readonly measurement: ModelInputMeasurement;
@@ -157,6 +162,11 @@ export function assessModelContext(input: {
   const headroom = snapshotModelContextHeadroom(input.headroom);
   const assessedAt = isoDateTime(input.assessedAt, "assessedAt");
   const revision = requiredText(input.revision, "revision");
+  if (input.planning && (input.planning.requestId !== compositionId ||
+      canonicalJson(input.planning.measurement) !== canonicalJson(measurement) ||
+      canonicalJson(input.planning.capacity) !== canonicalJson(capacity))) {
+    throw new TypeError("Model input planning must describe this complete assessment.");
+  }
 
   let effectiveInputBudget: number | null = null;
   let disposition: ModelContextAssessmentDisposition = "unresolved";
@@ -192,6 +202,7 @@ export function assessModelContext(input: {
   }
 
   const basis = {
+    ...(input.planning ? {planning: snapshotModelInputPlanning(input.planning)} : {}),
     compositionId,
     capacity,
     measurement,
@@ -307,6 +318,7 @@ export function snapshotModelContextAssessment(
   input: ModelContextAssessment,
 ): ModelContextAssessment {
   const snapshot = assessModelContext({
+    ...(input.planning ? {planning: input.planning} : {}),
     compositionId: input.compositionId,
     capacity: input.capacity,
     measurement: input.measurement,

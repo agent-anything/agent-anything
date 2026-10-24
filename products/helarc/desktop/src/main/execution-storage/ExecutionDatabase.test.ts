@@ -37,6 +37,24 @@ afterEach(async () => {
 function directory(): string { const value = mkdtempSync(join(tmpdir(), "helarc-execution-")); directories.push(value); return value; }
 function open(path: string): ExecutionDatabase { const value = new ExecutionDatabase(path); databases.push(value); return value; }
 
+it("retains independent preparation stages, rejects mutation and fences retired producers across reopening", () => {
+  const path = directory(), first = open(path);
+  const intent = {id: "preparation", runId: "root", basis: "immutable-basis", predecessor: null, deadlineAt: "2099-01-01T00:00:00Z", stages: ["candidate", "frozen"]};
+  expect(first.contextPreparationCommand(first.generation, {kind: "open", intent})).toMatchObject({preparationValue: {state: "open"}});
+  const value = {body: "retained source ".repeat(20000), pending: ["a", "b"], sourceRevision: "1"};
+  first.contextPreparationCommand(first.generation, {kind: "write", id: intent.id, stage: "candidate", value});
+  expect(() => first.contextPreparationCommand(first.generation, {kind: "write", id: intent.id, stage: "candidate", value: {body: "changed"}})).toThrow("stage_conflict");
+  expect(() => first.contextPreparationCommand(first.generation, {kind: "write", id: intent.id, stage: "unadmitted", value})).toThrow("stage_not_admitted");
+  first.close();
+  const second = open(path);
+  expect(second.contextPreparationCommand(second.generation, {kind: "read", id: intent.id, stage: "candidate"})).toEqual({preparationValue: value});
+  second.contextPreparationCommand(second.generation, {kind: "retire", id: intent.id, reason: "cancelled"});
+  second.contextPreparationCommand(second.generation, {kind: "write", id: intent.id, stage: "candidate", value});
+  expect(() => second.contextPreparationCommand(second.generation, {kind: "write", id: intent.id, stage: "frozen", value})).toThrow("retired");
+  expect(() => second.contextPreparationCommand(second.generation, {kind: "open", intent: {...intent, basis: "new"}})).toThrow("conflict");
+  expect(() => second.contextPreparationCommand(first.generation, {kind: "read", id: intent.id, stage: "candidate"})).toThrow();
+});
+
 it("retains exact reference transfers and stable bounded public-execution pages across reopening", () => {
   const path = directory(), database = open(path);
   database.commitRunTree(database.generation, treeCommit(0, true));

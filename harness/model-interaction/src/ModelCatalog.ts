@@ -1,6 +1,12 @@
 import type { ModelThinkingCapability } from "./ModelThinking.js";
 
 export interface DiscoveredModel {
+  readonly contextEvidence?: {
+    readonly runtimeVersion: string | null;
+    readonly templateDigest: string | null;
+    readonly loadedContextWindowTokens: number | null;
+    readonly observedAt: string;
+  };
   readonly id: string;
   readonly name: string;
   readonly artifact: string | null;

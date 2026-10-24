@@ -76,7 +76,7 @@ async function createWindow(): Promise<void> {
   executionDiagnostics ??= new HelarcExecutionDiagnostics(join(userDataPath, "execution-diagnostics.json"));
   inspection ??= HelarcInspection.create(join(userDataPath, "inspection-settings.json"));
   const inspectionSource = await inspection;
-  executionStore ??= HelarcExecutionStore.open(join(userDataPath, "execution"), undefined, inspectionSource.evidenceObserver, inspectionSource.fileMaterialObserver, executionDiagnostics, new ElectronSafeStorageCredentialCipher()).then(async store => {
+  executionStore ??= HelarcExecutionStore.open(join(userDataPath, "execution"), undefined, inspectionSource.evidenceObserver, inspectionSource.fileMaterialObserver, executionDiagnostics, new ElectronSafeStorageCredentialCipher(), inspectionSource.contextMaterialObserver).then(async store => {
     try { await reconcileInterruptedHooks(store, record => inspectionSource.definitions?.recoveredHook(record)); return store; }
     catch (error) { await store.close(); throw error; }
   });

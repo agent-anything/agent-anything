@@ -52,13 +52,14 @@ export class HelarcProviderSelection {
     if (!model) throw new Error("Select a model before starting work or verification.");
     const requested = selection?.thinking ?? settings.thinking;
     let catalog: ModelDiscovery | null = null;
-    try { catalog = await this.catalog(stored, model, false); }
+    try { catalog = await this.query(stored.config, model, true); }
     catch (error) { if (error instanceof TypeError) throw new Error("Provider model metadata is inconsistent."); }
     const facts = catalog?.models.find(item => item.id === model);
     const thinking = resolveModelThinkingSelection(requested, facts?.thinking ?? unknownThinking);
     const config: HelarcProviderConfig = { ...stored.config, model,
       modelArtifact: facts?.artifact ?? null, modelSettings: { ...settings, thinking },
       selectionFacts: { requested, effective: thinking, capability: facts?.thinking ?? unknownThinking,
+        ...(facts?.contextEvidence ? {contextEvidence: facts.contextEvidence} : {}),
         source: catalog?.source ?? null, declarationRevision: catalog?.declarationRevision ?? null,
         contextWindowTokens: facts?.contextWindowTokens ?? null, maximumOutputTokens: facts?.maximumOutputTokens ?? null } };
     const current = selection ? await this.store.resolveProfile(stored.profile.id, this.credentials)
@@ -77,10 +78,10 @@ export class HelarcProviderSelection {
     while (this.cache.size > 128) this.cache.delete(this.cache.keys().next().value!);
     return catalog;
   }
-  private async query(config: HelarcProviderConfig, model: string): Promise<ModelDiscovery> {
+  private async query(config: HelarcProviderConfig, model: string, includeRuntimeContext = false): Promise<ModelDiscovery> {
     const settings = snapshotHelarcProviderModelSettings(config.modelSettings, config.providerKind);
     return config.providerKind === "ollama"
-      ? await discoverOllamaModels({ baseUrl: config.baseUrl, model }, this.fetchImpl)
+      ? await discoverOllamaModels({ baseUrl: config.baseUrl, model, includeRuntimeContext }, this.fetchImpl)
       : await discoverChatCompletionModels({ baseUrl: config.baseUrl, apiKey: config.apiKey,
           service: settings.service === "deepseek" ? "deepseek" : "generic" }, this.fetchImpl);
   }

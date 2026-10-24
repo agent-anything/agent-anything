@@ -635,6 +635,7 @@ describe("Helarc Host Run composition", () => {
     const instructionSettings = { ...defaults, stop: [{ ...defaults.stop[0]!, enabled: true, content: "Check only the supplied completion evidence." }] };
     await executeTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings });
     expect(provider.stopRequests).toHaveLength(1);
+    expect(provider.stopRequests[0]?.composition.workingView.recipientRunId).toBe(provider.requests[0]?.composition.workingView.recipientRunId);
     expect(provider.stopRequests[0]?.instructions.content).toEqual([
       { kind: "text", text: "Check only the supplied completion evidence." },
     ]);

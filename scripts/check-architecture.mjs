@@ -142,6 +142,8 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/context/projection",
       "@agent-anything/context/evidence",
       "@agent-anything/context/persistence",
+      "@agent-anything/context/material",
+      "@agent-anything/context/preparation",
     ]),
   ],
   [
@@ -784,7 +786,9 @@ function checkContextHostAndMcpSourceTopology() {
         "contract",
         "contribution",
         "evidence",
+        "material",
         "persistence",
+        "preparation",
         "projection",
       ],
       allowedSourceEntries: [
@@ -793,7 +797,9 @@ function checkContextHostAndMcpSourceTopology() {
         "contract",
         "contribution",
         "evidence",
+        "material",
         "persistence",
+        "preparation",
         "projection",
       ],
       forbiddenPaths: ["src/index.ts", "src/context", "src/observation"],
@@ -1034,6 +1040,7 @@ function checkExecutionSourceTopology() {
     {
       packagePath: "harness/integrations/providers",
       allowedSourceEntries: [
+        "accounting",
         "discovery",
         "http",
         "native-tool-conformance",

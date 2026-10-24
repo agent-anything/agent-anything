@@ -139,7 +139,7 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
         payload: {kind: "event", name: "input_delivery.accepted", sequence: item.ref.sequence, code: null},
         links: [inspectionLink("trigger", subject, batch),
           inspectionLink("delivers", batch, ref("runtime", "turn", payload.turn.id), {operation: `${via.kind}_input_acceptance`}),
-          ...(via.kind === "provider" ? [inspectionLink("includes", batch,
+          ...(via.kind === "provider" ? [inspectionLink("binding", ref("model-interaction", "context", via.workingViewId, "1"), batch), inspectionLink("includes", batch,
             ref("model-interaction", "request", via.requestId), {operation: "accepted_input_delivery"})] : [])],
         contents: [{name: "Accepted input delivery", class: "agent", stage: "accepted", mediaType: "application/json",
           value: payload as unknown as InspectionJson}]});
@@ -150,7 +150,12 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
         links: [inspectionLink("trigger", subject, turn), ...payload.toolExposure.exposedTools.map((tool) => inspectionLink("binding", r.ref("tools", "definition", `${tool.tool.namespace}.${tool.tool.name}`, null, tool.revision), turn))],
         contents: [{ name: "Controller turn and exposure", class: "agent", stage: "committed", mediaType: "application/json", value: payload as unknown as InspectionJson }],
       });
-      if (payload.openingReceipt) this.presentations(payload.openingReceipt.presentations, payload.openingReceipt.requestId, payload.turn.id, record);
+      if (payload.openingReceipt) {
+        r.offer({subject: turn, occurredAt: item.createdAt,
+          payload: {kind: "event", name: "working_view.opening_accepted", sequence: item.ref.sequence, code: null},
+          links: [inspectionLink("binding", ref("model-interaction", "context", payload.openingReceipt.workingViewId, "1"), turn)]});
+        this.presentations(payload.openingReceipt.presentations, payload.openingReceipt.requestId, payload.turn.id, record);
+      }
       for (const model of payload.modelItems) {
         if (model.kind !== "assistant_text" && model.kind !== "model_tool_call") continue;
         const modelRef = model.kind === "model_tool_call" ? ref("runtime", "call", model.call.modelCallRef.id)

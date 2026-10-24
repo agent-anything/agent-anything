@@ -15,6 +15,8 @@ export async function readOpenAIResponseStream(
   let reasoning: string | undefined;
   let refusal = "";
   let responseId: string | null = null;
+  let model: string | null = null;
+  let fingerprint: string | null = null;
   let finish: string | null = null;
   let usage: unknown = null;
   let done = false;
@@ -38,6 +40,14 @@ export async function readOpenAIResponseStream(
         responseId = frame.id;
       }
       if (frame.usage !== undefined && frame.usage !== null) usage = frame.usage;
+      if (frame.model != null) {
+        if (typeof frame.model !== "string" || (model !== null && model !== frame.model)) malformedStream();
+        model = frame.model;
+      }
+      if (frame.system_fingerprint != null) {
+        if (typeof frame.system_fingerprint !== "string" || (fingerprint !== null && fingerprint !== frame.system_fingerprint)) malformedStream();
+        fingerprint = frame.system_fingerprint;
+      }
       if (!Array.isArray(frame.choices) || frame.choices.length > 1) malformedStream();
       if (frame.choices.length === 0) return;
       if (finish !== null) malformedStream();
@@ -90,7 +100,7 @@ export async function readOpenAIResponseStream(
     if (index !== ordinal || (finish !== "length" && (!call.id || call.type !== "function" || !call.name))) malformedStream();
     return { id: call.id, type: call.type, function: { name: call.name, arguments: call.arguments } };
   });
-  return { id: responseId, choices: [{ index: 0, finish_reason: finish,
+  return { id: responseId, model, system_fingerprint: fingerprint, choices: [{ index: 0, finish_reason: finish,
     message: { role: "assistant", content, refusal: refusal || null, tool_calls: toolCalls,
       ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) },
   }], usage };

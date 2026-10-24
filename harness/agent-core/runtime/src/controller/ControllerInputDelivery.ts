@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { snapshotModelMessage, type ModelMessage, type ProviderRequest } from "@agent-anything/model-interaction";
-import { modelInputSectionLocations, snapshotModelInputSection, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
+import { modelInputSectionLocations, snapshotModelInputSection, selectModelWorkingView, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
 import type { RunInputNotification } from "../runner/RunInputNotifications.js";
 
 export interface ControllerInputDeliveryBatch {
@@ -16,6 +16,7 @@ export interface ControllerInputDeliveryReceipt {
   readonly via:
     | { readonly kind: "controller"; readonly controllerRequestId: string }
     | { readonly kind: "provider"; readonly requestId: string; readonly compositionId: string;
+        readonly workingViewId: string;
         readonly sectionIds: readonly string[]; readonly presentations: readonly RetainedInputPresentation[] };
 }
 
@@ -64,6 +65,8 @@ export function createInputDeliverySections(batch: ControllerInputDeliveryBatch 
     source: Object.freeze({owner: "agent-runtime", kind: "input_delivery", id: batch.id, revision: batch.revision}),
     kind: "input_notification", role: "user", necessity: "mandatory",
     content: Object.freeze({kind: "model_message", message: inputNotificationMessage(entry)}),
+    preservation: {obligations: [{id: "addressed-input", requirement: "account" as const,
+      basis: "Retain the addressed input, its author and its correction or outcome role."}], relationships: []},
     provenance: Object.freeze({purpose: entry.interpretation?.kind === "notification" ? entry.interpretation.purpose :
       entry.interpretation?.kind === "steering" ? "intervention" :
       entry.interpretation?.kind === "controller_feedback" ? "correction" : "later_outcome", recipientRunId: batch.runId,
@@ -103,7 +106,10 @@ export function createProviderInputDeliveryReceipt(
     }
     previous = index;
   }
+  if (request.composition.workingView?.recipientRunId !== batch.runId) throw new TypeError("Input-delivery working-view recipient mismatch.");
+  selectModelWorkingView(request.composition.workingView, request.composition.sections);
   return receipt(batch, Object.freeze({kind: "provider", requestId: request.requestId,
+    workingViewId: request.composition.workingView.id,
     compositionId: request.composition.id, sectionIds: Object.freeze(sections.map(section => section.id)),
     presentations: Object.freeze(sections.map(section => retainInputPresentation(request.composition.sections.find(value => value.id === section.id)!)))}));
 }
@@ -127,6 +133,7 @@ export function snapshotInputDeliveryReceipt(
   }
   requireToken(value.via.requestId);
   requireToken(value.via.compositionId);
+  requireToken(value.via.workingViewId);
   const via = value.via;
   const presentations = via.presentations.map((presentation, index) => {
     const retained = snapshotInputPresentation(presentation);

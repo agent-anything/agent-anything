@@ -1,5 +1,6 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { randomUUID } from "node:crypto";
+import { nativeInputAccounting, normalizedUsageMetadata } from "../accounting/ProviderInputAccounting.js";
 import { readProviderReasoning, reasoningBinding, replayReasoning } from "../reasoning/ProviderReasoning.js";
 import { ProviderDeliverySession, type ProviderDeliveryOptions } from "@agent-anything/model-interaction";
 import { ProviderStreamError } from "../http/ProviderResponseStream.js";
@@ -122,7 +123,7 @@ export class OllamaProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "ollama.api.adapter.v7",
+      adapterRevision: "ollama.api.adapter.v8",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -130,6 +131,16 @@ export class OllamaProvider implements Provider {
       revision: "ollama.api.input-preservation.unqualified.v1",
     });
     const modelContext: ProviderModelContext = Object.freeze({
+      accounting: nativeInputAccounting({
+        basis: {endpoint: `${this.config.baseUrl}/api/chat`, generationEndpoint: `${this.config.baseUrl}/api/generate`,
+          model: this.config.model, artifact: this.config.modelArtifact ?? null, adapter: inputPreservation.adapterRevision,
+          mode: this.config.think ?? null, requestedContext: this.config.runtime.contextWindowTokens,
+          runtimeVersion: null, deployedContext: null, templateRevision: null, preservation: inputPreservation.revision,
+          requestedTruncation: false, requestedShift: false},
+        inputUsage: "complete", outputUsage: "complete", defaultGenerationRoom: null,
+        limitations: ["deployment_capacity_unobserved", "runtime_template_revision_unknown", "input_preservation_unqualified"],
+        encode: composition => encodeOllamaRequest(this.config, composition.instructions, composition.messages, composition.interaction, false),
+      }),
       target,
       capacity,
       requestedOutput,
@@ -452,6 +463,7 @@ function encodeOllamaRequest(
       })),
       stream: streaming,
       truncate: false,
+      shift: false,
       options: ollamaRuntimeOptions(config),
     });
   }
@@ -464,6 +476,7 @@ function encodeOllamaRequest(
     ].join("\n\n"),
     stream: false,
     truncate: false,
+    shift: false,
     options: ollamaRuntimeOptions(config),
     ...ollamaFormatField(interaction),
   });
@@ -726,7 +739,10 @@ function readOllamaUsage(value: Record<string, unknown>) {
           ? null
           : inputTokens + outputTokens,
         costUnits: null,
-        metadata: {},
+        metadata: normalizedUsageMetadata({input: inputTokens, output: outputTokens, cached: value.prompt_eval_cached_count,
+          reportedModel: value.model, revision: "ollama.usage.v1", raw: {prompt_eval_count: value.prompt_eval_count,
+            prompt_eval_cached_count: value.prompt_eval_cached_count, eval_count: value.eval_count,
+            prompt_eval_duration: value.prompt_eval_duration, eval_duration: value.eval_duration}}),
       };
 }
 
@@ -756,6 +772,9 @@ function mapOllamaGenerateResponse(
   }
   if (value.done_reason === "length") {
     return failed("response", "provider_output_limit_exceeded", "Provider exhausted the output limit before completing the response.");
+  }
+  if (request.composition.lineage.auxiliary && (value.done !== true || ollamaFinish(value.done_reason).kind !== "normal")) {
+    return failed("response", "provider_response_incomplete", "Context transformation requires a confirmed complete, non-refused response.");
   }
   let reasoning;
   try {

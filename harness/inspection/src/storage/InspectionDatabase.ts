@@ -337,6 +337,16 @@ export class InspectionDatabase {
     return rows.map(row => JSON.parse(String(row.value)));
   }
 
+  contextEvidence(requestKey: string, watermark: number, after: number, limit: number): InspectionRecord[] {
+    const rows = this.statement(`SELECT DISTINCT r.sequence, r.value FROM relations l JOIN records r ON r.id=l.record_id
+      WHERE (l.to_key=? OR l.from_key=?) AND l.sequence<=? AND r.sequence>? AND r.sequence<=?
+        AND (r.kind IN ('context_planning','working_view','working_selection','native_group')
+          OR r.kind='event' AND json_extract(r.value,'$.payload.name') IN
+            ('context_generation.basis_bound','context_assessment.basis_bound','context_assessment.generation_bound'))
+      ORDER BY r.sequence LIMIT ?`).all(requestKey, requestKey, watermark, after, watermark, Math.min(limit, 501)) as Row[];
+    return rows.map(row => JSON.parse(String(row.value)));
+  }
+
   subjectFacts(keys: readonly string[], watermark: number): InspectionRecord[] {
     if (!keys.length) return [];
     if (keys.length > 500) throw new Error("inspection_query_invalid");

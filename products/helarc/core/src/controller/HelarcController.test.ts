@@ -1,6 +1,7 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createAgentInstructions } from "@agent-anything/agent-core/agent";
 import { validHelarcFinalReply } from "./HelarcFinalReply.js";
+import {createExactModelWorkingView, type ModelInputSection} from "@agent-anything/model-interaction/input";
 import {
   ControllerError,
   ProviderBackedController,
@@ -517,16 +518,18 @@ describe("Helarc native Tool controller", () => {
     const input = createControllerInput();
     const message = {role: "assistant" as const, content: [{kind: "text" as const, text: "I inspected the workspace."}]};
     const source = {owner: "agent-runtime", kind: "run_item", id: "turn-item-1", revision: "7", runId: input.runId};
+    const retainedSection: ModelInputSection = {id: "retained-turn-1", kind: "interaction_history", source,
+      role: "assistant", necessity: "mandatory", content: {kind: "model_message", message},
+      provenance: {purpose: "accepted_exchange", recipientRunId: input.runId, author: "model", sources: [source],
+        presenter: {owner: "agent-runtime", kind: "presenter", id: "model-interaction", revision: "1"}, coverage: ["turn-item-1"], limitations: []}};
     const request = buildHelarcProviderRequest({
       ...input,
       interaction: {
         id: "run-1:model-interaction",
         revision: "7",
+        workingView: createExactModelWorkingView({sections: [retainedSection], recipientRunId: input.runId, boundary: "history"}),
         messages: [message],
-        historyPresentations: [retainInputPresentation({id: "retained-turn-1", kind: "interaction_history", source,
-          role: "assistant", necessity: "mandatory", content: {kind: "model_message", message},
-          provenance: {purpose: "accepted_exchange", recipientRunId: input.runId, author: "model", sources: [source],
-            presenter: {owner: "agent-runtime", kind: "presenter", id: "model-interaction", revision: "1"}, coverage: ["turn-item-1"], limitations: []}})],
+        historyPresentations: [retainInputPresentation(retainedSection)],
         unsettledCalls: [],
         settledCallCount: 1,
         latestTurn: null,
@@ -565,7 +568,8 @@ describe("Helarc native Tool controller", () => {
     const retry = await freezeConversationOpening(snapshotProviderRequest(buildHelarcProviderRequest(changed, requestBuildContext())), input.runId, port);
     expect(retry.messages).toEqual(first.messages);
     const opening = createConversationOpeningReceipt(input.runId, first)!;
-    const next = buildHelarcProviderRequest({...changed, interaction: {...input.interaction, opening}}, requestBuildContext());
+    const next = buildHelarcProviderRequest({...changed, interaction: {...input.interaction, opening,
+      workingView: createExactModelWorkingView({sections: opening.presentations.map(value => value.section), recipientRunId: input.runId, boundary: "history"})}}, requestBuildContext());
     expect(next.messages).toEqual(first.messages);
     expect(next.composition.sections.filter(section => section.kind === "conversation_opening_history")).toHaveLength(opening.presentations.length);
     expect(() => snapshotConversationOpeningReceipt({...opening, digest: "invalid"}, input.runId)).toThrow("digest mismatch");
@@ -599,7 +603,8 @@ describe("Helarc native Tool controller", () => {
         instructionRole: "data", payload: {kind: "structured", value: {text: "selected evidence"}},
         accounting: {unit: "bytes", amount: 1}, transformation: null}]},
     }, requestBuildContext())))!;
-    const allocation = createHelarcContextProjectionConfiguration().allocate({...input, interaction: {...input.interaction, opening}});
+    const allocation = createHelarcContextProjectionConfiguration().allocate({...input, interaction: {...input.interaction, opening,
+      workingView: createExactModelWorkingView({sections: opening.presentations.map(value => value.section), recipientRunId: input.runId, boundary: "history"})}});
     expect(allocation.retainedCoverage).toEqual([{contribution: {id: "material", revision: "2"}, presentation: {
       id: "run-1:opening:material:selection", revision: expect.stringMatching(/^sha256:/),
     }}]);
@@ -1164,6 +1169,7 @@ function createControllerInput(
     interaction: {
       id: "run-1:model-interaction",
       revision: "1",
+      workingView: createExactModelWorkingView({sections: [], recipientRunId: "run-1", boundary: "history"}),
       messages: [],
       unsettledCalls: [],
       settledCallCount: 0,

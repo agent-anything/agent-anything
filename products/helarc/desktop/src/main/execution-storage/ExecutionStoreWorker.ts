@@ -40,6 +40,9 @@ try {
       const endDispatch = beginExecutionTiming(timingSink, "storage.worker.dispatch", timingContext);
       try {
       switch (request.command.kind) {
+        case "register_recording": send({kind: "result", id: request.id, value: database.registerRecording(request.generation, request.command.recording)}); break;
+        case "context_preparation": send({kind: "result", id: request.id, value: database.contextPreparationCommand(request.generation, request.command.command)}); break;
+        case "context_material": send({kind: "result", id: request.id, value: database.contextMaterialCommand(request.generation, request.command.command)}); break;
         case "file_material": send({kind: "result", id: request.id, value: database.fileMaterialCommand(request.generation, request.command.command)}); break;
         case "commit_reference_transfer": database.commitReferenceTransfer(request.generation, request.command.transfer); send({kind: "result", id: request.id, value: null}); break;
         case "read_reference_transfers": send({kind: "result", id: request.id, value: database.readReferenceTransfers(request.command.runId)}); break;
@@ -80,6 +83,9 @@ try {
       failed = true;
       send({ kind: "rejected", id: wire.id, code: code(error), error: captureExecutionError(error) });
     } finally {
+      for (const observation of database.takeContextMaterialObservations()) if (!failed) {
+        try {port.postMessage({kind: "context_material_observation", observation} satisfies ExecutionStoreReply);} catch { /* Independent observation. */ }
+      }
       if (timingSink) {
         for (const sample of database.takePerformance()) timingSink.performance?.({kind: "finished", id: randomUUID(),
           stage: `storage.worker.${sample.stage}`, occurredAt: new Date().toISOString(), durationMs: sample.totalMs,

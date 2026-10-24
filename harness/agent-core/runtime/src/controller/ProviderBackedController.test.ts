@@ -1,4 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {InMemoryContextPreparationStore} from "@agent-anything/context/preparation";
+import {createModelNativeInputFootprint} from "@agent-anything/model-interaction/context";
+import {createExactModelWorkingView, modelInputOccurrenceDigest, type ModelInputOwnerForm} from "@agent-anything/model-interaction/input";
+import {prepareControllerContext, type ControllerContextPreparation} from "./ControllerContextPreparation.js";
+import {prepareContextSemanticAccount, contextSemanticTargetDigest} from "./ControllerContextTransformation.js";
+import {prepareContextBackground} from "./ControllerContextBackground.js";
+import type {ControllerAuxiliaryRecord, ControllerAuxiliaryWorkPort} from "./ControllerAuxiliaryWork.js";
+import {ControllerCheckpointError, type ControllerCheckpointPort} from "./ControllerCheckpoint.js";
+import {RetryCheckpointError} from "../retry/RetryCheckpoint.js";
+import {RetryInvocationInvalidatedError} from "../retry/RetryWaitControl.js";
+import {CONTEXT_ASSESSMENT_CRITERIA} from "@agent-anything/model-interaction/context";
 import type {
   Provider,
   ProviderCallResult,
@@ -63,6 +74,313 @@ const TEST_OUTPUT_FORMAT = Object.freeze({
 
 describe("ProviderBackedController", () => {
   afterEach(() => vi.useRealTimers());
+  it.each([true, false])("prepares changed input once after actual window rejection (eligible: %s)", async eligible => {
+    const fixture = semanticProvider("adequate"), seen: ProviderRequest[] = [];
+    const provider: Provider = {...fixture.provider, modelContext: {...fixture.provider.modelContext,
+      accounting: {...fixture.provider.modelContext.accounting!, defaultGenerationRoom: 0}},
+      send: async (value, context, delivery) => {
+        seen.push(value);
+        if (seen.length === 1) return {kind: "failed", failure: {category: "invalid_request", code: "provider_context_window_exceeded",
+          message: "Actual endpoint rejected this input", statusCode: 400, metadata: {}}};
+        return fixture.provider.send(value, context, delivery);
+      }};
+    const controller = createController(provider, {contextPreparation: {store: new InMemoryContextPreparationStore(), semantic: {revision: "1"}},
+      buildRequest: () => request("Original report: " + "detail ".repeat(2000)),
+      prepareRequest: value => {
+        const sections = value.composition.sections.map(section => section.role === "user" && !section.provenance && eligible ? {...section,
+          preservation: {obligations: [{id: "report", requirement: "account" as const, basis: "Source owner permits account"}], relationships: []}} : section);
+        return {...value, composition: {...value.composition, sections, workingView: createExactModelWorkingView({sections, recipientRunId: "run_001", boundary: "request"})}};
+      }, parseResponse: () => {
+        const decision = finalDecision({summary: "Done"});
+        return {...decision, modelItems: decision.modelItems.map(item => item.kind === "model_response_correlation" ?
+          {...item, response: {...item.response, requestId: seen.at(-1)!.requestId}} : item)};
+      }});
+    const operation = controller.next(createControllerInput(), {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()});
+    if (eligible) {
+      await operation;
+      expect(seen.map(value => value.purpose)).toEqual(["agent-control", "context_generation", "context_assessment", "agent-control"]);
+      expect(seen.at(-1)!.composition.workingView.accounts).toHaveLength(1);
+      expect(JSON.stringify(seen.at(-1)!.messages)).not.toContain("detail detail");
+    } else {
+      await expect(operation).rejects.toMatchObject({failure: {failure: {code: "model_context_capacity_exceeded"}}});
+      expect(seen).toHaveLength(1);
+    }
+  });
+  it.each(["adequate", "unknown", "invalid"] as const)("separates semantic generation, assessment and selection (%s), then replays without new work", async verdict => {
+    const {provider, requests} = semanticProvider(verdict);
+    const store = new InMemoryContextPreparationStore();
+    const controller = createController(provider, {contextPreparation: {store, semantic: {revision: "1"}},
+      buildRequest: () => request("Original report: " + "detail ".repeat(2000)), prepareRequest: value => {
+        const sections = value.composition.sections.map(section => section.role === "user" && !section.provenance ? {...section,
+          preservation: {obligations: [{id: "report", requirement: "account" as const, basis: "Source owner permits account"}], relationships: []}} : section);
+        return {...value, composition: {...value.composition, sections,
+          workingView: createExactModelWorkingView({sections, recipientRunId: "run_001", boundary: "request"})}};
+      }, parseResponse: () => {
+        const decision = finalDecision({summary: "Done"});
+        return {...decision, modelItems: decision.modelItems.map(item => item.kind === "model_response_correlation" ?
+          {...item, response: {...item.response, requestId: requests.at(-1)!.requestId}} : item)};
+      }});
+    const charged = new Map<string, unknown>();
+    const context = {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints(), auxiliaryUsage: {
+      assertAvailable: () => {}, record: async (value: import("./ControllerAuxiliaryUsage.js").ControllerAuxiliaryUsage) => {
+        if (charged.has(value.attemptId)) expect(charged.get(value.attemptId)).toEqual(value);
+        charged.set(value.attemptId, value);
+      },
+    }};
+    const decision = await controller.next(createControllerInput(), context);
+    expect(requests.map(value => value.purpose), JSON.stringify(requests.at(-1)?.modelContext.assessment?.planning)).toEqual(verdict === "invalid" ?
+      ["context_generation", "agent-control"] : ["context_generation", "context_assessment", "agent-control"]);
+    expect(requests[0]!.composition.lineage.agent).toBeNull();
+    expect(requests[1]!.interaction.kind).toBe("structured_generation");
+    const actual = requests.at(-1)!;
+    expect(actual.composition.workingView.accounts?.length ?? 0).toBe(verdict === "adequate" ? 1 : 0);
+    expect(JSON.stringify(actual.messages).includes("detail detail")).toBe(verdict !== "adequate");
+    if (verdict === "adequate") expect(decision.modelItems.find(value => value.kind === "model_response_correlation")?.metadata.workingAccounts).toHaveLength(1);
+    await controller.recover(createControllerInput(), context);
+    expect(requests).toHaveLength(verdict === "invalid" ? 2 : 3);
+    expect(charged.size).toBe(verdict === "invalid" ? 1 : 2);
+    if (verdict === "unknown") {
+      const resend = vi.fn(async () => {throw new Error("A new request ID must not reset semantic work");});
+      const next = await prepareContextSemanticAccount({store, request: {...actual, requestId: "later-request"}, runId: "run_001",
+        preparationId: "later-preparation", deadlineAt: context.retry.deadlineAt, support: {revision: "1"},
+        targetDigest: contextSemanticTargetDigest(provider), send: resend, measure: async value => value, guard: async () => {}});
+      expect(next.accounts).toEqual([]);
+      expect(next.limitations).toContain("semantic_basis_already_attempted");
+      expect(resend).not.toHaveBeenCalled();
+    }
+  });
+  it.each([true, false])("does not restart a spent background/foreground basis after another Turn (foreground: %s)", async foreground => {
+    const fixture = semanticProvider("unknown"), store = new InMemoryContextPreparationStore();
+    const support = {revision:"1",background:{enabled:true as const,revision:"1"}};
+    const controller=createController(fixture.provider,{contextPreparation:foreground ? {store,semantic:support}:undefined,
+      buildRequest:()=>request("Original report: "+"detail ".repeat(2000)),prepareRequest:value=>{
+        const sections=value.composition.sections.map(section=>section.role==="user"&&!section.provenance?{...section,
+          preservation:{obligations:[{id:"report",requirement:"account" as const,basis:"Source owner permits account"}],relationships:[]}}:section);
+        return {...value,composition:{...value.composition,sections,workingView:createExactModelWorkingView({sections,recipientRunId:"run_001",boundary:"request"})}};
+      },parseResponse:()=>{
+        const decision=finalDecision({summary:"Done"});
+        return {...decision,modelItems:decision.modelItems.map(item=>item.kind==="model_response_correlation"?
+          {...item,response:{...item.response,requestId:fixture.requests.at(-1)!.requestId}}:item)};
+      }});
+    const context={...callContext(),runCheckpoints:memoryCheckpoints(),checkpoints:memoryCheckpoints()};
+    await controller.next(createControllerInput(),context);
+    const original=fixture.requests.at(-1)!, planning=original.modelContext.assessment!.planning!;
+    if(planning.measurement.status!=="measured")throw new Error("Expected measured input");
+    const early={...original,modelContext:{...original.modelContext,assessment:{...original.modelContext.assessment!,planning:{...planning,
+      workingTarget:planning.measurement.amount+1,growthAllowance:2}}}};
+    const records=new Map<string,ControllerAuxiliaryRecord>();
+    const start=vi.fn<ControllerAuxiliaryWorkPort["start"]>(async registration=>{
+      records.set(registration.id,{...registration,authority:"test",status:"failed",failure:"known failure"});return true;
+    });
+    const port:ControllerAuxiliaryWorkPort={current:()=>null,read:id=>records.get(id)??null,start,wait:async()=>{}};
+    const input={store,request:early,runId:"run_001",support,targetDigest:contextSemanticTargetDigest(fixture.provider),
+      context:{...context,auxiliaryWork:port},measure:async(value:ProviderRequest)=>value,send:vi.fn(async()=>{throw new Error("No new dispatch expected");})};
+    await prepareContextBackground(input);
+    expect(start).toHaveBeenCalledTimes(foreground?0:1);
+    const retry=await prepareContextBackground({...input,capacityRejected:true});
+    if(!foreground)expect(retry).toMatchObject({status:"unavailable"});
+    await prepareContextBackground(input);
+    expect(start).toHaveBeenCalledTimes(foreground?0:1);
+    expect(input.send).not.toHaveBeenCalled();
+  });
+  it("keeps an admitted exact view when an optional source-form proposal fails", async () => {
+    const provider = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const store = new InMemoryContextPreparationStore();
+    const opened = vi.spyOn(store, "open");
+    const resolve = vi.fn(async () => {throw new Error("Owner proposal unavailable");});
+    const controller = createController(provider, {contextPreparation: {store, forms: {revision: "1", resolve}}});
+    const context = {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()};
+    await controller.next(createControllerInput(), context);
+    await controller.recover(createControllerInput(), context);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(provider.requests()).toHaveLength(1);
+    expect(provider.requests()[0]!.composition.workingView.forms).toBeUndefined();
+    expect(await store.read(opened.mock.calls[0]![0].id, "candidate")).toMatchObject({status: "ready", value: {
+      limitations: expect.arrayContaining(["optional_form_proposal_failed:Error"]), forms: []}});
+  });
+  it("does not publish or dispatch cancelled preparation, and a fresh Run remains usable", async () => {
+    const provider = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const store = new InMemoryContextPreparationStore();
+    const opened = vi.spyOn(store, "open");
+    const cancellation = createRunCancellationController({runId: "run_001"});
+    let entered = false;
+    const controller = createController(provider, {contextPreparation: {store, forms: {revision: "1", resolve: async () => {
+      entered = true; await new Promise(() => {}); return {offered: [], expand: []};
+    }}}});
+    const run = memoryCheckpoints();
+    const pending = captureError(controller.next(createControllerInput(), {...callContext(cancellation.context), runCheckpoints: run, checkpoints: memoryCheckpoints()}));
+    await vi.waitFor(() => expect(entered).toBe(true));
+    cancellation.requestCancellation({origin: "host", reasonCode: "host_requested"});
+    await pending;
+    expect(provider.requests()).toHaveLength(0);
+    expect(run.read("context-preparation:selected.v1")).toBeNull();
+    expect((await store.open(opened.mock.calls[0]![0])).state).toBe("retired");
+    await createController(provider, {contextPreparation: {store: new InMemoryContextPreparationStore()}}).next(createControllerInput(),
+      {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()});
+    expect(provider.requests()).toHaveLength(1);
+  });
+  it("freezes independent preparation stages and recovers the same request without another Provider call", async () => {
+    const provider = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const store = new InMemoryContextPreparationStore();
+    const write = vi.spyOn(store, "write");
+    const run = memoryCheckpoints(), invocation = memoryCheckpoints();
+    const controller = createController(provider, {contextPreparation: {store}});
+    const context = {...callContext(), runCheckpoints: run, checkpoints: invocation};
+    const first = await controller.next(createControllerInput(), context);
+    const stages = write.mock.calls.length;
+    expect(stages).toBe(5);
+    expect(await controller.recover(createControllerInput(), context)).toEqual(first);
+    expect(write.mock.calls).toHaveLength(stages);
+    expect(provider.requests()).toHaveLength(1);
+    expect(run.read("context-preparation:selected.v1")).toMatchObject({epoch: 1});
+  });
+  it("adopts an owner-approved account, not arbitrary text truncation, before actual dispatch", async () => {
+    const fake = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const original = ensureTestProviderContext(fake);
+    const capacity = {supported: true as const, unit: "tokens" as const, maximum: 2000, semantics: "input_only" as const,
+      source: "host_configured" as const, providerId: original.descriptor.id, model: original.modelContext.target.model, revision: "test"};
+    const provider: Provider = {...original, modelContext: {...original.modelContext, capacity,
+      accounting: {basis: {fixture: "owner-forms"}, inputUsage: "complete", outputUsage: "complete", defaultGenerationRoom: null, limitations: [],
+        project: composition => createModelNativeInputFootprint({messages: composition.messages})},
+      measure: (composition, measuredAt) => ({status: "measured", amount: JSON.stringify(composition.messages).length,
+        estimator: {id: "test", revision: "1", unit: "tokens", accuracy: "exact"}, uncertainty: {kind: "none"}, measuredAt, measuredCompositionId: composition.id})},
+      descriptor: {...original.descriptor, capabilities: {...original.descriptor.capabilities,
+        modelContext: {...original.descriptor.capabilities.modelContext, capacity}}}, send: fake.send.bind(fake)};
+    let offered: ModelInputOwnerForm | undefined;
+    const controller = createController(provider, {contextPreparation: {store: new InMemoryContextPreparationStore(), forms: {revision: "1", resolve: async ({request}) => {
+      const section = request.composition.sections.find(value => value.role === "user")!;
+      offered = {id: "owner-account", sectionId: section.id, sourceDigest: modelInputOccurrenceDigest(section), owner: {...section.source, kind: "presenter"},
+        method: "owner_presentation", content: {kind: "model_message", message: {role: "user", content: [{kind: "text", text: "Owner account: the retained report is complete."}]}},
+        satisfies: ["report"], companions: [], dependencies: [], limitations: ["Owner-authored reduced account"]};
+      return {offered: [offered], expand: []};
+    }}}, parseResponse: () => {
+      const decision = finalDecision({summary: "Done"});
+      return {...decision, modelItems: decision.modelItems.map(item => item.kind === "model_response_correlation" ?
+        {...item, response: {...item.response, requestId: fake.requests().at(-1)!.requestId}} : item)};
+    }, buildRequest: () => request("REPORT " + "detail ".repeat(2000)), prepareRequest: value => {
+      const sections = value.composition.sections.map(section => section.role === "user" && !section.provenance ? {...section,
+        preservation: {obligations: [{id: "report", requirement: "account" as const, basis: "Explicit source owner account"}], relationships: []}} : section);
+      return {...value, composition: {...value.composition, sections,
+        workingView: createExactModelWorkingView({sections, recipientRunId: "run_001", boundary: "request"})}};
+    }});
+    const base = createControllerInput();
+    const queue = new RunInputNotifications();
+    queue.collect(base.runId, {read: () => [{runId: base.runId, sequence: 1, occurredAt: "2026-10-13T00:00:00.000Z",
+      source: {owner: "process", kind: "scope_closed", id: "process-1", revision: "4"}, data: {exitCode: 0}}]}, 8192);
+    const inputDelivery = queue.prepare(base.runId, base.toolExposure.controllerRequestId)!;
+    const decision = await controller.next({...base, inputDelivery}, {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()});
+    const actual = fake.requests()[0]!;
+    expect(actual.composition.workingView.forms, JSON.stringify(actual.modelContext.assessment?.planning)).toEqual([offered]);
+    expect(JSON.stringify(actual.messages)).toContain("Owner account");
+    expect(JSON.stringify(actual.messages)).not.toContain("detail detail");
+    expect(decision.modelItems.find(value => value.kind === "model_response_correlation")?.metadata.workingForms).toEqual([offered]);
+    expect(JSON.stringify(actual.messages)).toContain("host_notification");
+    expect(decision.inputDeliveryReceipt).toMatchObject({batch: {id: inputDelivery.id},
+      via: {kind: "provider", requestId: actual.requestId, workingViewId: actual.composition.workingView.id}});
+    expect(queue.undelivered).toBe(1);
+  });
+  it("recovers a recorded capacity failure without remeasuring, consuming pending input or calling the Provider", async () => {
+    const fake = new FakeProvider({results: []});
+    const original = ensureTestProviderContext(fake);
+    const capacity = {supported: true as const, unit: "tokens" as const, maximum: 1, semantics: "input_only" as const,
+      source: "host_configured" as const, providerId: original.descriptor.id, model: original.modelContext.target.model, revision: "test"};
+    const measure = vi.fn((composition: ProviderRequest["composition"], measuredAt: string) => ({status: "measured" as const, amount: 200,
+      estimator: {id: "test", revision: "1", unit: "tokens" as const, accuracy: "exact" as const}, uncertainty: {kind: "none" as const},
+      measuredAt, measuredCompositionId: composition.id}));
+    const provider: Provider = {...original, modelContext: {...original.modelContext, capacity, measure},
+      descriptor: {...original.descriptor, capabilities: {...original.descriptor.capabilities,
+        modelContext: {...original.descriptor.capabilities.modelContext, capacity}}}, send: fake.send.bind(fake)};
+    const store = new InMemoryContextPreparationStore();
+    const opened = vi.spyOn(store, "open"), written = vi.spyOn(store, "write");
+    const controller = createController(provider, {contextPreparation: {store}});
+    const queue = new RunInputNotifications();
+    const base = createControllerInput();
+    queue.collect(base.runId, {read: () => [{runId: base.runId, sequence: 1, occurredAt: "2026-10-13T00:00:00.000Z",
+      source: {owner: "process", kind: "scope_closed", id: "process-1", revision: "4"}, data: {exitCode: 0}}]}, 8192);
+    const input = {...base, inputDelivery: queue.prepare(base.runId, base.toolExposure.controllerRequestId)!};
+    const context = {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()};
+    const first = await captureError(controller.next(input, context));
+    expect(first).toBeInstanceOf(ControllerError);
+    expect(first).toMatchObject({failure: {kind: "model", failure: {code: "model_context_capacity_exceeded"}}, operationSettlement: "settled_failure"});
+    const measured = measure.mock.calls.length, writes = written.mock.calls.length;
+    const recovered = await captureError(controller.recover(input, context));
+    expect(recovered).toBeInstanceOf(ControllerError);
+    expect((recovered as ControllerError).failure).toEqual((first as ControllerError).failure);
+    expect(measure).toHaveBeenCalledTimes(measured);
+    expect(written).toHaveBeenCalledTimes(writes);
+    expect(fake.requests()).toHaveLength(0);
+    expect(queue.undelivered).toBe(1);
+    expect(context.runCheckpoints.read("context-preparation:selected.v1")).toBeNull();
+    expect(await store.read(opened.mock.calls[0]![0].id, "admitted")).toMatchObject({status: "failed", failure: {kind: "controller"}});
+  });
+  it("rejects admission that silently replaces the prepared request", async () => {
+    const provider = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const input = createControllerInput();
+    await createController(provider).next(input, callContext());
+    const context = {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()};
+    await expect(prepareControllerContext({support: {store: new InMemoryContextPreparationStore()},
+      request: provider.requests()[0]!, controller: input, context, now: Date.now,
+      measure: async value => value, admit: async value => ({...value, requestId: "unprepared-replacement",
+        composition: {...value.composition, id: "unprepared-replacement"}, modelContext: {...value.modelContext, assessment: null}})}))
+      .rejects.toThrow("Context admission cannot replace the prepared input");
+    expect(context.runCheckpoints.read("context-preparation:selected.v1")).toBeNull();
+  });
+  it("aborts the actual preparation work at its deadline and rejects a late candidate", async () => {
+    const provider = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const controller = createControllerInput();
+    await createController(provider).next(controller, callContext());
+    vi.useFakeTimers();
+    const context = {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()};
+    context.retry = {...context.retry, deadlineAt: new Date(Date.now() + 100).toISOString()};
+    let workSignal: AbortSignal | undefined, finish: ((value: ProviderRequest) => void) | undefined;
+    const support = {store: new InMemoryContextPreparationStore()};
+    const pending = captureError(prepareControllerContext({support, request: provider.requests()[0]!, controller, context, now: Date.now,
+      measure: (_request, signal) => {workSignal = signal; return new Promise(resolve => {finish = resolve;});},
+      admit: async value => value}));
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await pending as Error).message).toBe("context_preparation_deadline_exceeded");
+    expect(workSignal?.aborted).toBe(true);
+    finish!(provider.requests()[0]!);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(context.runCheckpoints.read("context-preparation:selected.v1")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([new ControllerCheckpointError("candidate-basis"), new RetryCheckpointError("capacity-recovery"), new RetryInvocationInvalidatedError()])(
+    "preserves coordination failure classification on replay ($name)", async failure => {
+      const provider = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+      const controller = createControllerInput();
+      await createController(provider).next(controller, callContext());
+      const measure = vi.fn(async () => {throw failure;});
+      const input = {support: {store: new InMemoryContextPreparationStore()}, request: provider.requests()[0]!, controller,
+        context: {...callContext(), runCheckpoints: memoryCheckpoints(), checkpoints: memoryCheckpoints()}, now: Date.now,
+        measure, admit: async (value: ProviderRequest) => value};
+      expect(await captureError(prepareControllerContext(input))).toBe(failure);
+      const replayed = await captureError(prepareControllerContext(input));
+      expect(replayed).toBeInstanceOf(failure.constructor);
+      expect(replayed).toMatchObject(failure);
+      expect(measure).toHaveBeenCalledTimes(1);
+      expect(input.context.runCheckpoints.read("context-preparation:selected.v1")).toBeNull();
+    });
+  it("cancels asynchronous measurement before dispatch and leaves subsequent work usable", async () => {
+    const fake = new FakeProvider({results: [succeededResult({summary: "Done"})]});
+    const original = ensureTestProviderContext(fake);
+    let entered = false;
+    let first = true;
+    const provider = {descriptor: original.descriptor, requestBodyTransportLimit: original.requestBodyTransportLimit,
+      modelContext: {...original.modelContext, measureAsync: (composition, at, signal) => {
+        if (!first) return Promise.resolve(original.modelContext.measure(composition, at));
+        first = false; entered = true;
+        return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), {once: true}));
+      }}, send: fake.send.bind(fake)} as Provider;
+    const cancellation = createRunCancellationController({runId: "run_001"});
+    const promise = captureError(createController(provider).next(createControllerInput(), callContext(cancellation.context)));
+    await vi.waitFor(() => expect(entered).toBe(true));
+    cancellation.requestCancellation({origin: "host", reasonCode: "host_requested"});
+    await promise;
+    expect(fake.requests()).toHaveLength(0);
+    await createController(provider).next(createControllerInput(), callContext());
+    expect(fake.requests()).toHaveLength(1);
+  });
 
   it("acknowledges notification membership in the actual Provider composition without consuming the Runtime queue", async () => {
     const input = createControllerInput();
@@ -1612,6 +1930,31 @@ describe("ProviderBackedController native streaming", () => {
   });
 });
 
+function semanticProvider(verdict: "adequate" | "unknown" | "invalid") {
+  const base = ensureTestProviderContext(new FakeProvider({results: []}));
+  const requests: ProviderRequest[] = [];
+  const capacity = {supported: true as const, unit: "tokens" as const, maximum: 40000, semantics: "input_and_output" as const,
+    source: "host_configured" as const, providerId: base.descriptor.id, model: base.modelContext.target.model, revision: "test"};
+  const requestedOutput = {unit: "tokens" as const, maximum: null, source: "unspecified" as const, revision: "test"};
+  const provider: Provider = {...base, modelContext: {...base.modelContext, capacity, requestedOutput,
+    accounting: {basis: {fixture: "semantic"}, inputUsage: "complete", outputUsage: "complete", defaultGenerationRoom: 30000, limitations: [],
+      project: composition => createModelNativeInputFootprint({messages: composition.messages})},
+    measure: (composition, measuredAt) => ({status: "measured", amount: JSON.stringify(composition.messages).length,
+      estimator: {id: "test-character-cost", revision: "1", unit: "tokens", accuracy: "exact"}, uncertainty: {kind: "none"}, measuredAt, measuredCompositionId: composition.id})},
+    descriptor: {...base.descriptor, capabilities: {...base.descriptor.capabilities, structuredGeneration: {supported: true},
+      modelContext: {...base.descriptor.capabilities.modelContext, capacity, requestedOutput}}}, send: async request => {
+      requests.push(request);
+      if (request.purpose === "agent-control") return succeededResult({summary: "Done"});
+      const payload = JSON.parse((request.messages[0]!.content[0] as {text: string}).text);
+      const ids = payload.replacementSources.map((value: {id: string}) => value.id);
+      return succeededResult(request.purpose === "context_generation" ? verdict === "invalid" ? {entries: []} :
+        {entries: [{text: "The source is a long repetitive report, with no execution claimed.", sources: ids}], limitations: [], omittedDetails: ["Repeated detail text"]} :
+        {findings: CONTEXT_ASSESSMENT_CRITERIA.map(criterion => ({criterion, verdict, reason: "Checked supplied source and background.", sources: ids})),
+          inheritedDefects: [], introducedLoss: [], limitations: []});
+    }};
+  return {provider, requests};
+}
+
 function createController(
   provider: Provider,
   overrides: Partial<{
@@ -1625,6 +1968,8 @@ function createController(
     ) => ControllerDecision<TestOutput>;
     maxProviderOutputLength: number;
     continuation: ModelContinuationLifecycle;
+    contextPreparation: ControllerContextPreparation;
+    prepareRequest: (request: ProviderRequest) => ProviderRequest;
   }> = {},
 ): ProviderBackedController<TestOutput> {
   const accountedProvider = ensureTestProviderContext(provider);
@@ -1632,12 +1977,13 @@ function createController(
   return new ProviderBackedController({
     provider: accountedProvider,
     buildRequest(input, context) {
-      return accountTestRequest(
+      const value = accountTestRequest(
         buildRequest(input, context),
         accountedProvider,
         input,
         context,
       );
+      return overrides.prepareRequest?.(value) ?? value;
     },
     parseResponse:
       overrides.parseResponse ?? (() => finalDecision({ summary: "Done" })),
@@ -1649,7 +1995,17 @@ function createController(
     retryExecutor: createSystemRetryExecutor(),
     retryClock: systemRetryClock,
     continuation: overrides.continuation,
+    contextPreparation: overrides.contextPreparation,
   });
+}
+
+function memoryCheckpoints(): ControllerCheckpointPort {
+  const values = new Map<string, unknown>();
+  return {read: key => structuredClone(values.get(key) ?? null), commit: async (key, value) => {values.set(key, structuredClone(value));},
+    compareAndCommit: async (expected, writes) => {
+      for (const item of expected) expect(values.get(item.key) ?? null).toEqual(item.value);
+      for (const item of writes) values.set(item.key, structuredClone(item.value));
+    }};
 }
 
 function createControllerInput(): ControllerInput<TestOutput> {

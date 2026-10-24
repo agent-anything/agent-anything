@@ -1,4 +1,6 @@
 import type { RunInputItem } from "@agent-anything/agent-core/input";
+import {withHelarcProviderAdmission, HELARC_PROVIDER_ADMISSION} from "../provider/HelarcProviderAdmission.js";
+import {createHelarcContextPreparation, HELARC_CONTEXT_PREPARATION_BINDING} from "../execution-storage/HelarcContextPreparation.js";
 import { createDefaultHelarcInstructionSettings, snapshotHelarcInstructionSettings, type HelarcInstructionSettings } from "@agent-anything/helarc/configuration";
 import { randomUUID } from "node:crypto";
 import { canonicalEncode } from "@agent-anything/canonical-action/subject";
@@ -316,6 +318,9 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     now,
   });
   const product = await createHelarcProductComposition({
+    contextMaterials: input.executionStore?.contextMaterials,
+    contextPreparation: input.executionStore ? createHelarcContextPreparation(input.executionStore) : undefined,
+    materialHandoff: input.executionStore ? createHelarcMaterialHandoff(input.executionStore) : undefined,
     executionEvidence: input.executionStore,
     executionEvidenceAccess: executionAccess,
     executionMaterials: fileSupport?.materials,
@@ -326,7 +331,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     runId: input.productRunId,
     task: input.task,
     workspace: runWorkspace,
-    provider: input.provider,
+    provider: withHelarcProviderAdmission(input.provider, input.inspection?.executionFlow),
     providerProfile: input.providerProfile,
     qualificationCatalog: input.qualificationCatalog,
     executionFlow: input.inspection?.executionFlow,
@@ -360,6 +365,8 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       invocationId:s.origin?.invocationId ?? null,attemptId:s.origin?.attemptId ?? null});
   };
   const executionBindings = {
+      providerAdmission: HELARC_PROVIDER_ADMISSION,
+      contextPreparation: HELARC_CONTEXT_PREPARATION_BINDING,
       platform,
       enforcement,
       commandEnvironment: commandActions.environment,
@@ -589,6 +596,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       responseDelivery: input.responseDelivery ?? "buffered", environmentFingerprint: configurationFingerprint,
       executionBindings, commandEnvironment: input.executionStore.retainCommandEnvironment(commandActions.recoveryEnvironment)});
   }
+  if (input.executionStore) await input.inspection?.registerExecutionRecording(rootRunId, Boolean(input.recoveryAdmission), input.executionStore);
   let started = false;
   let releaseExecution: (() => void) | undefined;
 
@@ -875,3 +883,4 @@ function resolveHelarcRunTreeResources(
 }
 import { createHelarcFileSupport } from "../execution-storage/HelarcFileSupport.js";
 import { createHelarcExecutionHandoff } from "../execution-storage/HelarcExecutionHandoff.js";
+import {createHelarcMaterialHandoff} from "../execution-storage/HelarcMaterialHandoff.js";

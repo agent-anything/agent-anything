@@ -89,7 +89,8 @@ function collectPropertyPointers(
     if (key === "properties" && isJsonObject(child)) {
       for (const [propertyName, propertySchema] of Object.entries(child)) {
         const propertyPointer = `${childPointer}/${escapePointerSegment(propertyName)}`;
-        output.add(propertyPointer);
+        // Boolean schemas constrain presence; they have no annotation object.
+        if (isJsonObject(propertySchema)) output.add(propertyPointer);
         collectPropertyPointers(propertySchema, propertyPointer, output);
       }
     } else {

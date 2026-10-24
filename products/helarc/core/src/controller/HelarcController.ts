@@ -38,12 +38,13 @@ import type {
 } from "../model-qualification/index.js";
 
 import { resolveHelarcFinalReply, HELARC_ENDING_SIGNAL_FEEDBACK, type HelarcFinalReplyResolution } from "./HelarcFinalReply.js";
+import {snapshotContextMaterialRefs, type ContextMaterialRef} from "@agent-anything/context/material";
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
   "helarc.provider-native-tool-interaction.v4";
 export const HELARC_MODEL_CONTEXT_HEADROOM_TOKENS = 1_024;
-export type HelarcAgentOutput = { kind: "complete"; summary: string; source: import("../run/presentation/HelarcRunPresentation.js").HelarcOutputSource; finalReply?: HelarcFinalReplyResolution };
+export type HelarcAgentOutput = { kind: "complete"; summary: string; source: import("../run/presentation/HelarcRunPresentation.js").HelarcOutputSource; finalReply?: HelarcFinalReplyResolution; materialRefs?: readonly ContextMaterialRef[] };
 
 class HelarcInstructionModelMismatchError extends TypeError {
   readonly code = "agent_instruction_model_mismatch";
@@ -74,7 +75,9 @@ export function buildHelarcProviderRequest(
     step.check("settled_interaction", "passed");
     const compositionRef = flow.material("Model input composition", "composed", request.composition, "provider");
     step.output(compositionRef);
-    flow.advance("request", {compositionId:request.composition.id}, [compositionRef])
+    flow.advance("request", {compositionId:request.composition.id, workingViewId:request.composition.workingView.id,
+      selectedOccurrenceCount:request.composition.workingView.entries.length,
+      nativeExchangeGroupCount:request.composition.workingView.nativeGroups.length}, [compositionRef])
       .output({owner:"model-interaction",kind:"request",id:request.requestId,revision:null});
     flow.close("returned");
     return request;
@@ -229,12 +232,13 @@ export function parseHelarcProviderResponse(
   protocol: HelarcControllerProtocolComposition,
   qualification: HelarcModelQualificationResolution,
   executionFlow?: ExecutionFlowContext,
+  materialReferenceError: string | null = null,
 ): ControllerDecision<HelarcAgentOutput> {
   const flow = new ExecutionFlowPath(HELARC_RESPONSE_EXECUTION_FLOW, executionFlow ?? {}, input.runId);
   const interpretation = flow.advance("interpret", {controllerRequestId:input.toolExposure.controllerRequestId, responseKind:response.kind},
     [flow.material("Response to interpret", "received", response, "provider")]);
   try {
-    const decision = interpretResponse(response, input, protocol, qualification);
+    const decision = interpretResponse(response, input, protocol, qualification, materialReferenceError);
     const decisionRef = flow.material("Interpreted Controller decision", "interpreted", decision);
     interpretation.output(decisionRef);
     if (decision.kind === "propose_completion" && decision.output.finalReply) {
@@ -256,6 +260,7 @@ function interpretResponse(
   input: ControllerInput<HelarcAgentOutput>,
   protocol: HelarcControllerProtocolComposition,
   qualification: HelarcModelQualificationResolution,
+  materialReferenceError: string | null,
 ): ControllerDecision<HelarcAgentOutput> {
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
@@ -317,7 +322,7 @@ function interpretResponse(
     ? "Submit exactly one final_result call per turn."
     : hasSeparatePlan
       ? "Do not submit update_plan alongside final_result; include the complete final snapshot in final_result.plan instead."
-      : finals.length === 1 ? finalResultInputError(finals[0]!.input, input.plan !== null, input.planLimits) : null;
+      : finals.length === 1 ? finalResultInputError(finals[0]!.input, input.plan !== null, input.planLimits) ?? materialReferenceError : null;
   const final = finals.length === 1 && finalError === null
     ? finals[0]! : null;
   const candidates = calls.flatMap<ProgressionCandidate>(call => {
@@ -344,7 +349,8 @@ function interpretResponse(
       kind: "propose_completion",
       candidates: Object.freeze(candidates),
       completionSource: {kind: "model_call" as const, modelCallRef: final.modelCallRef},
-      output: Object.freeze({kind: "complete" as const, ...reply}),
+      output: Object.freeze({kind: "complete" as const, ...reply, ...(final.input.material_refs !== undefined
+        ? {materialRefs: snapshotContextMaterialRefs(final.input.material_refs)} : {})}),
       modelItems,
     });
   }

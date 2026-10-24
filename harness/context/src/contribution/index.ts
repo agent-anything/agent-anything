@@ -5,6 +5,7 @@ export type {
   ContextContributionScope,
   ContextDisclosure,
   ContextHandling,
+  ContextPreservation,
   ContextInstructionRole,
   ContextPayload,
   ContextPayloadAccounting,
@@ -24,4 +25,5 @@ export {
   snapshotContextContribution,
   snapshotContextContributionRef,
   snapshotContextDisclosure,
+  snapshotContextPreservation,
 } from "./ContextContribution.js";

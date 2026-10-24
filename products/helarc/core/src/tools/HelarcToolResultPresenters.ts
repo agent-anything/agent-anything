@@ -22,8 +22,10 @@ export function createHelarcToolResultPresenters(
     const operation = operationRevisionKey(descriptor.binding.operation);
     const shell = operation === operationRevisionKey(HELARC_SHELL_OPERATION);
     const outputQuery = operation === operationRevisionKey(HELARC_TASK_OUTPUT_OPERATION);
+    const contextAccess = descriptor.binding.operation.operation.namespace === "helarc" &&
+      ["context-read", "context-search"].includes(descriptor.binding.operation.operation.name);
     return [Object.freeze({tool: descriptor.ref,
-      ref: Object.freeze({id: shell || outputQuery ? "helarc.command-result" : "helarc.public-operation-result", revision: evidence ? "5" : "1"}),
+      ref: Object.freeze({id: contextAccess ? "helarc.context-access-result" : shell || outputQuery ? "helarc.command-result" : "helarc.public-operation-result", revision: evidence ? "5" : "1"}),
       ...(evidence ? {references(result: OperationResult) { return helarcExecutionReferences(result); }} : {}),
       present(result: OperationResult) {
         if ((!shell && !outputQuery) || !record(result.output) || !record(result.output.stdout) || !record(result.output.stderr)) {

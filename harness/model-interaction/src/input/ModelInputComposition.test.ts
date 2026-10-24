@@ -29,6 +29,11 @@ describe("semantic Model Input Composition", () => {
     }]);
     expect(composition).not.toHaveProperty("accounting");
     expect(composition).not.toHaveProperty("contextBudget");
+    expect(composition.workingView.entries.map(entry => entry.sectionId)).toEqual(["instructions", "task"]);
+    expect(() => snapshotModelInputComposition({...composition,
+      workingView: {...composition.workingView, entries: composition.workingView.entries.slice(1)}})).toThrow("binding mismatch");
+    expect(() => snapshotModelInputComposition({...composition, workingView: undefined} as unknown as typeof composition))
+      .toThrow("requires a request working view");
   });
 
   it("rejects empty input and duplicate semantic section identities", () => {
@@ -53,7 +58,7 @@ describe("semantic Model Input Composition", () => {
       ],
       lineage: lineage(),
       composedAt: "2026-08-16T00:00:00.000Z",
-    })).toThrow("section identities must be unique");
+    })).toThrow("repeats a source occurrence");
   });
 
   it("rejects Provider input that diverges from its semantic sections", () => {
