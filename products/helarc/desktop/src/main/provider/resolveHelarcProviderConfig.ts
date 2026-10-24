@@ -12,6 +12,7 @@ import {
 
 export interface HelarcProviderConfig {
   selectionFacts?: {
+    contextEvidence?: import("@agent-anything/model-interaction").DiscoveredModel["contextEvidence"];
     requested: import("@agent-anything/model-interaction").ModelThinkingSelection;
     effective: import("@agent-anything/model-interaction").ModelThinkingSelection;
     capability: import("@agent-anything/model-interaction").ModelThinkingCapability;

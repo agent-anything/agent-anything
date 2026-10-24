@@ -350,6 +350,7 @@ function createBlock(
     item: item.ref,
     contribution: item.contribution.ref,
     instructionRole: item.contribution.handling.instructionRole,
+    ...(item.contribution.handling.preservation === undefined ? {} : {preservation: item.contribution.handling.preservation}),
     payload,
     accounting: Object.freeze({ unit: request.estimator.unit, amount }),
     transformation,
@@ -362,6 +363,7 @@ function redactedCandidate(
   request: ContextProjectionRequest,
 ): { readonly payload: ContextPayload; readonly transformation: ContextProjectionTransformation } | null {
   if (
+    item.contribution.handling.preservation?.obligations.some(value => value.requirement === "exact") ||
     !item.contribution.handling.allowedTransformations.includes("redact") ||
     !request.profile.allowedTransformations.includes("redact")
   ) {
@@ -389,6 +391,7 @@ function truncateToFit(
 } | null {
   if (
     remaining < 0 ||
+    item.contribution.handling.preservation?.obligations.some(value => value.requirement === "exact") ||
     item.contribution.payload.kind !== "text" ||
     !item.contribution.handling.allowedTransformations.includes("truncate") ||
     !request.profile.allowedTransformations.includes("truncate")

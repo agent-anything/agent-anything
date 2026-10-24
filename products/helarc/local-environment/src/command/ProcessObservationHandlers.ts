@@ -35,9 +35,22 @@ export function createProcessObservationHandlers(input:{
       let executionId:string|null = null;
       try {
         if (!record(request) || typeof request.task_id !== "string" || !request.task_id ||
-            Object.keys(request).some(key=>!["task_id","cursor","wait_ms"].includes(key)) ||
+            Object.keys(request).some(key=>!["task_id","cursor","wait_ms","query","stream","search_cursor","limit"].includes(key)) ||
             (request.cursor !== undefined && typeof request.cursor !== "string")) throw new TypeError("TaskOutput requires an exact task_id, optional cursor and wait_ms.");
         executionId=request.task_id;
+        const search = ["query", "stream", "search_cursor", "limit"].some(key => Object.hasOwn(request, key));
+        if (search) {
+          if (initial || Object.hasOwn(request, "cursor") || Object.hasOwn(request, "wait_ms") || typeof request.query !== "string") {
+            throw new TypeError("TaskOutput search requires query and cannot combine cursor/wait_ms with stream/search_cursor/limit.");
+          }
+          const output = await input.manager.searchOutput({runId: context.runId, executionId, invocationId: context.binding.invocation.id,
+            search: {query: request.query, ...(request.stream !== undefined ? {stream: request.stream as "stdout" | "stderr"} : {}),
+              ...(request.search_cursor !== undefined ? {search_cursor: request.search_cursor as string} : {}),
+              ...(request.limit !== undefined ? {limit: request.limit as number} : {})}, signal: context.interruption.signal});
+          return createOperationResult({...base, finishedAt: input.now(), status: "succeeded", failure: null,
+            output: {...output, run_id: context.runId}, lowerRefs: [{owner: "helarc-command", kind: "process_output_search", id: context.binding.invocation.id, revision: "1"}],
+            metadata: {executionId, sourceFrontier: output.frontier, coordinate: output.coordinate}});
+        }
         // Only the trusted composite child has the initial-observation binding.
         if (initial && context.binding.parentInvocation === null) throw new TypeError("Initial observation requires a composite invocation.");
         const remaining=Math.max(0,Date.parse(context.deadlineAt)-Date.parse(input.now()));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderRequest } from "@agent-anything/model-interaction";
-import { modelInputSectionLocations } from "@agent-anything/model-interaction/input";
+import { modelInputSectionLocations, createExactModelWorkingView } from "@agent-anything/model-interaction/input";
 import { RunInputNotifications, type RunInputNotification } from "../runner/RunInputNotifications.js";
 import { createControllerInputDeliveryReceipt, createInputDeliverySections,
   createProviderInputDeliveryReceipt, snapshotInputDeliveryReceipt, retainInputPresentation } from "./ControllerInputDelivery.js";
@@ -57,9 +57,10 @@ describe("Controller input delivery", () => {
   it("requires exact actual composition membership and preserves host data, not instructions", () => {
     const {batch} = setup();
     const sections = createInputDeliverySections(batch);
-    const request = {requestId: "request-1", composition: {id: "composition-1", sections}} as ProviderRequest;
+    const workingView = createExactModelWorkingView({sections, recipientRunId: batch.runId, boundary: "request"});
+    const request = {requestId: "request-1", composition: {id: "composition-1", sections, workingView}} as ProviderRequest;
     const receipt = createProviderInputDeliveryReceipt(batch, request)!;
-    expect(receipt.via).toEqual({kind: "provider", requestId: "request-1", compositionId: "composition-1", sectionIds: [sections[0]!.id],
+    expect(receipt.via).toEqual({kind: "provider", requestId: "request-1", compositionId: "composition-1", workingViewId: workingView.id, sectionIds: [sections[0]!.id],
       presentations: sections.map(retainInputPresentation)});
     expect(modelInputSectionLocations(sections)[0]!.jsonPointers).toEqual(["/messages/0/content/0"]);
     expect(sections[0]).toMatchObject({role: "user", necessity: "mandatory", content: {kind: "model_message"}});
@@ -74,7 +75,8 @@ describe("Controller input delivery", () => {
     const {batch} = setup();
     const sections = createInputDeliverySections(batch);
     const receipt = createProviderInputDeliveryReceipt(batch,
-      {requestId: "request", composition: {id: "composition", sections}} as ProviderRequest)!;
+      {requestId: "request", composition: {id: "composition", sections,
+        workingView: createExactModelWorkingView({sections, recipientRunId: batch.runId, boundary: "request"})}} as ProviderRequest)!;
     if (receipt.via.kind !== "provider") throw new Error("Invalid fixture");
     const historical = retainInputPresentation({...sections[0]!, content: {kind: "model_message", message:
       {role: "user", content: [{kind: "text", text: "The retained historical presenter phrased this differently."}]}}});

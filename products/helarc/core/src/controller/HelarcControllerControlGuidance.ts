@@ -6,6 +6,7 @@ import {
   type ModelJsonSchema,
 } from "@agent-anything/model-interaction";
 import { HELARC_FINAL_REPLY_CONTENT_GUIDANCE, HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE } from "./HelarcFinalReply.js";
+import {MATERIAL_REFS_SCHEMA} from "../tools/HelarcContextAccess.js";
 
 export type HelarcControllerControlName = "update_plan" | "final_result";
 
@@ -71,6 +72,7 @@ export function createHelarcControllerControlDefinitions(
         type: "object",
         properties: {
           response: {type: "string", description: HELARC_FINAL_REPLY_CONTENT_GUIDANCE},
+          material_refs: MATERIAL_REFS_SCHEMA,
           plan: createPlanSchema(limits, !hasPlan),
         },
         required: hasPlan ? ["plan"] : [],

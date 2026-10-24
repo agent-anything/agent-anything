@@ -3,6 +3,9 @@ import { ControllerResponseDelivery, type ControllerResponseDeliveryOptions } fr
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { MODEL_TURN_EXECUTION_FLOW } from "./ModelTurnExecutionFlow.js";
 import { MODEL_CONTEXT_EXECUTION_FLOW } from "./ModelContextExecutionFlow.js";
+import {prepareControllerContext, freezePreparedProviderRequest, type ControllerContextPreparation} from "./ControllerContextPreparation.js";
+import {contextSemanticTargetDigest} from "./ControllerContextTransformation.js";
+import { planModelInput, observeModelInputUsage, type ModelInputPlanning, type ModelInputUsageObservation } from "@agent-anything/model-interaction/context";
 import { createProviderInputDeliveryReceipt, snapshotInputDeliveryReceipt,
   type ControllerInputDeliveryReceipt } from "./ControllerInputDelivery.js";
 import { createConversationOpeningReceipt, freezeConversationOpening, snapshotConversationOpeningReceipt,
@@ -33,6 +36,7 @@ import {
 } from "@agent-anything/model-interaction";
 import {
   snapshotModelInputComposition,
+  modelInputValueDigest,
   type ModelInputComposition,
 } from "@agent-anything/model-interaction/input";
 import {
@@ -49,7 +53,8 @@ import { ProviderControllerCheckpoint } from "./ProviderControllerCheckpoint.js"
 import type { RetryClassification, RetryFailure } from "../retry/index.js";
 import type { RetryExhaustedEvent } from "../retry/index.js";
 import type { RetryOperation } from "../retry/index.js";
-import type { ModelFailure } from "./ModelFailure.js";
+import { ControllerError, type ControllerFailure, type ControllerFailureCode, type ControllerOperationDeadline } from "./ControllerError.js";
+export { ControllerError, type ControllerFailure, type ControllerFailureCode, type ControllerOperationDeadline } from "./ControllerError.js";
 import { createModelOutputRecoverySection, type ModelOutputRecovery } from "./ModelOutputRecovery.js";
 import type { ModelInputRecoveryPort } from "./ModelInputRecovery.js";
 import { unsupportedModelInputRecovery } from "./ModelInputRecovery.js";
@@ -80,50 +85,6 @@ export type ParseProviderResponse<TOutput = unknown> = (
   executionFlow?: ExecutionFlowContext,
 ) => ControllerDecision<TOutput> | Promise<ControllerDecision<TOutput>>;
 
-export type ControllerFailureCode =
-  | "model_request_failed"
-  | "model_output_invalid"
-  | "model_output_limit_exhausted"
-  | "model_protocol_recovery_exhausted"
-  | "model_structured_output_retry_exhausted"
-  | "model_context_capacity_exceeded"
-  | "model_input_recovery_failed"
-  | "provider_context_window_exceeded"
-  | "provider_request_failed"
-  | "provider_timeout"
-  | "provider_retry_exhausted"
-  | "provider_operation_deadline_exceeded"
-  | "model_operation_deadline_exceeded"
-  | "provider_cancellation_unconfirmed";
-
-export type ControllerFailure =
-  | {
-      readonly kind: "model";
-      readonly failure: ModelFailure & { readonly code: ControllerFailureCode };
-    }
-  | {
-      readonly kind: "provider";
-      readonly failure: ProviderFailure & { readonly code: ControllerFailureCode };
-    };
-
-export type ControllerOperationDeadline = Readonly<{
-  operationId: string;
-  owner: "provider_request" | "structured_output";
-  deadlineAt: string;
-  exhaustedAt: string;
-}>;
-
-export class ControllerError extends Error {
-  constructor(
-    readonly failure: ControllerFailure,
-    readonly operationSettlement: "unsettled" | "settled_failure" = "unsettled",
-    readonly deadline: ControllerOperationDeadline | null = null,
-  ) {
-    super(failure.failure.message);
-    this.name = "ControllerError";
-  }
-}
-
 export interface ProviderBackedControllerInput<TOutput = unknown> {
   readonly provider: Provider;
   readonly buildRequest: BuildProviderRequest<TOutput>;
@@ -139,6 +100,7 @@ export interface ProviderBackedControllerInput<TOutput = unknown> {
   readonly retryClock: RetryClock;
   readonly continuation?: ModelContinuationLifecycle;
   readonly modelInputRecovery?: ModelInputRecoveryPort;
+  readonly contextPreparation?: ControllerContextPreparation;
   readonly delivery?: ControllerResponseDeliveryOptions;
 }
 
@@ -304,7 +266,7 @@ export class ProviderBackedController<TOutput = unknown>
         const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
         build.output(requestRef);
         const send = flow.advance("send", {requestId: request.requestId}, [requestRef]);
-        const {response, inputDeliveryReceipt, openingReceipt} = await this.sendRequest(
+        const {response, inputDeliveryReceipt, openingReceipt, contextPlanning, workingForms, workingAccounts} = await this.sendRequest(
           request,
           controllerInput,
           {...callContext, executionFlow: flow.callContext},
@@ -348,7 +310,7 @@ export class ProviderBackedController<TOutput = unknown>
           continue;
         }
         const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
-        const decision = validateControllerDecision(parsed, controllerInput);
+        const decision = withInputUsageObservation(validateControllerDecision(parsed, controllerInput), contextPlanning, workingForms, workingAccounts);
         parse.check("decision_contract", "passed", {kind: decision.kind});
         assertProviderBackedDecisionProvenance(
           decision,
@@ -430,11 +392,14 @@ export class ProviderBackedController<TOutput = unknown>
           let response: ProviderResponse;
           let inputDeliveryReceipt: ControllerInputDeliveryReceipt | null;
           let openingReceipt: ConversationOpeningReceipt | null;
+          let contextPlanning: ModelInputPlanning | null;
+          let workingForms: readonly import("@agent-anything/model-interaction/input").ModelInputOwnerForm[] | undefined;
+          let workingAccounts: readonly import("@agent-anything/model-interaction/input").ModelInputAccount[] | undefined;
           const requestRef = flow.material("Composed Provider request", "composed", request, "provider");
           build.output(requestRef);
           try {
             flow.advance("send", {requestId: request.requestId}, [requestRef]);
-            ({response, inputDeliveryReceipt, openingReceipt} = await this.sendRequest(
+            ({response, inputDeliveryReceipt, openingReceipt, contextPlanning, workingForms, workingAccounts} = await this.sendRequest(
               request,
               controllerInput,
               {...callContext, executionFlow: flow.callContext},
@@ -473,7 +438,7 @@ export class ProviderBackedController<TOutput = unknown>
             flow.current?.output(responseRef);
             const parse = flow.advance("parse", {}, [responseRef]);
             const parsed = await this.parseResponse(response, controllerInput, flow.callContext);
-            const decision = validateControllerDecision(parsed, controllerInput);
+            const decision = withInputUsageObservation(validateControllerDecision(parsed, controllerInput), contextPlanning, workingForms, workingAccounts);
             parse.check("decision_contract", "passed", {kind: decision.kind});
             assertProviderBackedDecisionProvenance(
               decision,
@@ -631,17 +596,49 @@ export class ProviderBackedController<TOutput = unknown>
     nextProviderRequestNumber: () => number,
     modelInputRecoveryAttempt = 0,
     delivery?: ControllerResponseDelivery,
+    rejectedInput?: {readonly digest: string; readonly code: "provider_context_window_exceeded"},
   ): Promise<{readonly response: ProviderResponse; readonly inputDeliveryReceipt: ControllerInputDeliveryReceipt | null;
-    readonly openingReceipt: ConversationOpeningReceipt | null}> {
+    readonly openingReceipt: ConversationOpeningReceipt | null; readonly contextPlanning: ModelInputPlanning | null;
+    readonly workingForms?: readonly import("@agent-anything/model-interaction/input").ModelInputOwnerForm[];
+    readonly workingAccounts?: readonly import("@agent-anything/model-interaction/input").ModelInputAccount[]}> {
     if (!controllerInput.interaction.opening) request = await freezeConversationOpening(request, controllerInput.runId, callContext.runCheckpoints);
-    const assessedRequest = snapshotProviderRequest(await new ProviderControllerCheckpoint(callContext.checkpoints)
+    const sourceRequest = request;
+    const previousUsage = controllerInput.interaction.inputUsageObservations?.find(value => value.purpose === request.purpose) ?? null;
+    const scopedContext = (signal?: AbortSignal): ControllerCallContext => signal ? {...callContext, cancellation: {
+      runId: callContext.cancellation.runId, signal, get request() {return callContext.cancellation.request;}}} : callContext;
+    const auxiliary = async (value: ProviderRequest, context: ControllerCallContext) => {
+      if (!value.composition.lineage.auxiliary || value.interaction.kind !== "structured_generation" || value.continuation) {
+        throw new TypeError("Auxiliary preparation requires a stateless typed data request.");
+      }
+      if (value.modelContext.assessment?.disposition === "proven_overflow") throw new TypeError("Auxiliary input exceeds its proven capacity.");
+      const result = await this.executeProviderRequest(value, controllerInput, context, nextProviderRequestNumber());
+      if (result.kind !== "response" || result.response.kind !== "structured_generation") throw new TypeError("Auxiliary response is not complete structured data.");
+      return result.response;
+    };
+    const assessedRequest = this.input.contextPreparation ? await prepareControllerContext({support: this.input.contextPreparation,
+      request: sourceRequest, controller: controllerInput, context: callContext, now: () => this.input.retryClock.now().getTime(),
+      ...(rejectedInput ? {rejectedInput} : {}),
+      measure: (value, signal) => this.prepareModelContextRequest(value, scopedContext(signal), modelInputRecoveryAttempt, controllerInput.runId, previousUsage, true),
+      admit: (value, signal) => this.prepareModelContextRequest(value, scopedContext(signal), modelInputRecoveryAttempt, controllerInput.runId, previousUsage),
+      ...(this.input.contextPreparation.semantic && this.input.provider.descriptor.capabilities.structuredGeneration.supported ? {
+        semanticTarget: contextSemanticTargetDigest(this.input.provider),
+        auxiliary: (value: ProviderRequest, signal?: AbortSignal) => auxiliary(value, scopedContext(signal)),
+        background: {send: auxiliary, measure: (value: ProviderRequest, context: ControllerCallContext) =>
+          this.prepareModelContextRequest(value, context, 0, controllerInput.runId, null, true)},
+      } : {}),
+    }) : snapshotProviderRequest(await new ProviderControllerCheckpoint(callContext.checkpoints)
       .once(`assessed-request:${request.requestId}:${modelInputRecoveryAttempt}`, () => this.prepareModelContextRequest(
       request,
       callContext,
       modelInputRecoveryAttempt,
       controllerInput.runId,
+      controllerInput.interaction.inputUsageObservations?.find(value => value.purpose === request.purpose) ?? null,
     )));
     request = assessedRequest;
+    if (request.composition.workingView.recipientRunId !== null &&
+        request.composition.workingView.recipientRunId !== controllerInput.runId) {
+      throw new TypeError("Prepared request working-view recipient does not match the executing Run.");
+    }
     const preparation = await this.continuation.prepare({
       capability: this.input.provider.descriptor.capabilities.continuation,
       lineage: continuationLineage(request, controllerInput),
@@ -660,6 +657,17 @@ export class ProviderBackedController<TOutput = unknown>
       );
     } catch (error) {
       await this.recordContinuationInterruption(preparation, callContext, error);
+      if (this.input.contextPreparation && modelInputRecoveryAttempt === 0 && error instanceof ControllerError &&
+          error.failure.kind === "provider" && error.failure.failure.code === "provider_context_window_exceeded") {
+        const rejected = {digest: modelInputValueDigest({instructions: request.instructions, messages: request.messages, interaction: request.interaction}),
+          code: "provider_context_window_exceeded" as const};
+        const recovered = snapshotProviderRequest(await new ProviderControllerCheckpoint(callContext.checkpoints)
+          .once(`context-rejection:${request.requestId}`, () => {
+            const id = `${sourceRequest.requestId}:context-rejection:${rejected.digest}`;
+            return {...sourceRequest, requestId: id, composition: {...sourceRequest.composition, id}, modelContext: {...sourceRequest.modelContext, assessment: null}};
+          }));
+        return this.sendRequest(recovered, controllerInput, callContext, nextProviderRequestNumber, 1, delivery, rejected);
+      }
       const recovered = await this.recoverAfterProviderContextRejection(
         request,
         error,
@@ -745,11 +753,13 @@ export class ProviderBackedController<TOutput = unknown>
         );
       }
       await this.advanceContinuation(resetPreparation, settlement.response);
-      return Object.freeze({response: settlement.response, inputDeliveryReceipt, openingReceipt});
+      return Object.freeze({response: settlement.response, inputDeliveryReceipt, openingReceipt, contextPlanning: request.modelContext.assessment?.planning ?? null,
+        ...(this.input.contextPreparation ? {workingForms: request.composition.workingView.forms ?? [], workingAccounts: request.composition.workingView.accounts ?? []} : {})});
     }
 
     await this.advanceContinuation(preparation, settlement.response);
-    return Object.freeze({response: settlement.response, inputDeliveryReceipt, openingReceipt});
+    return Object.freeze({response: settlement.response, inputDeliveryReceipt, openingReceipt, contextPlanning: request.modelContext.assessment?.planning ?? null,
+      ...(this.input.contextPreparation ? {workingForms: request.composition.workingView.forms ?? [], workingAccounts: request.composition.workingView.accounts ?? []} : {})});
   }
 
   private async prepareModelContextRequest(
@@ -757,12 +767,14 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
     recoveryAttempt: number,
     runId: string,
+    previous: ModelInputUsageObservation | null = null,
+    measureOnly = false,
   ): Promise<ProviderRequest> {
     const flow = new ExecutionFlowPath(MODEL_CONTEXT_EXECUTION_FLOW, callContext.executionFlow ?? {}, runId,
       [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
     try {
-      const result = await this.assessModelContextRequest(request, callContext, recoveryAttempt, flow);
-      flow.current?.output(flow.material("Admitted model context", "admitted", {requestId: result.requestId, compositionId: result.composition.id, modelContext: result.modelContext}, "provider"));
+      const result = await this.assessModelContextRequest(request, callContext, recoveryAttempt, flow, previous, measureOnly);
+      flow.current?.output(flow.material(measureOnly ? "Measured model context" : "Admitted model context", measureOnly ? "measured" : "admitted", {requestId: result.requestId, compositionId: result.composition.id, modelContext: result.modelContext}, "provider"));
       flow.close("returned");
       return result;
     } catch (error) { flow.close(callContext.cancellation.signal.aborted ? "cancelled" : "failed"); throw error; }
@@ -773,15 +785,25 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
     recoveryAttempt: number,
     flow: ExecutionFlowPath,
+    previous: ModelInputUsageObservation | null,
+    measureOnly = false,
   ): Promise<ProviderRequest> {
     const measurementStep = flow.advance("measure", {recoveryAttempt},
       [flow.material("Model context admission input", "received", {requestId: request.requestId, compositionId: request.composition.id,
         capacity: this.input.provider.modelContext.capacity, requestedOutput: request.modelContext.requestedOutput, headroom: request.modelContext.headroom}, "provider")]);
     const measuredAt = this.input.retryClock.now().toISOString();
     const modelContext = this.input.provider.modelContext;
-    const measurement = modelContext.measure(request.composition, measuredAt);
+    const priorAssessment = request.modelContext.assessment;
+    const nativeMeasurement = priorAssessment?.measurement ?? await measureWithCancellation(modelContext, request.composition, measuredAt, callContext.cancellation.signal);
+    const accounting = modelContext.accounting;
+    const planning = priorAssessment?.planning ?? (accounting ? planModelInput({requestId: request.requestId, runId: flow.runId, purpose: request.purpose,
+      accounting, footprint: accounting.project(request.composition), measurement: nativeMeasurement, capacity: modelContext.capacity,
+      sections: request.composition.sections, requestedOutput: request.modelContext.requestedOutput,
+      previous, growthPolicy: `working-view:${request.composition.workingView.version}:owner-forms`}) : null);
+    const measurement = planning?.measurement ?? nativeMeasurement;
     const assessment = assessModelContext({
       compositionId: request.composition.id,
+      ...(planning ? {planning} : {}),
       capacity: modelContext.capacity,
       measurement,
       requestedOutput: request.modelContext.requestedOutput,
@@ -794,9 +816,9 @@ export class ProviderBackedController<TOutput = unknown>
     measurementStep.output(assessmentRef);
     measurementStep.check("capacity", assessment.disposition === "unresolved" ? "not_evaluated" : assessment.disposition.endsWith("overflow") ? "not_satisfied" : "passed",
       {assessmentId: assessment.id, disposition: assessment.disposition, effectiveInputBudget: assessment.effectiveInputBudget});
-    if (assessment.disposition !== "proven_overflow" &&
+    if (measureOnly || assessment.disposition !== "proven_overflow" &&
         assessment.disposition !== "estimated_overflow") {
-      flow.advance("result", {disposition: assessment.disposition}, [assessmentRef]).check("proven_overflow", "passed");
+      flow.advance("result", {disposition: assessment.disposition}, [assessmentRef]).check("proven_overflow", measureOnly ? "not_evaluated" : "passed");
       return assessedRequest;
     }
 
@@ -815,7 +837,7 @@ export class ProviderBackedController<TOutput = unknown>
       );
       recoveryStep.check("recovery_result", recovered === null ? "not_satisfied" : "passed");
       if (recovered !== null) {
-        const result = await this.prepareModelContextRequest(recovered, {...callContext, executionFlow: flow.callContext}, recoveryAttempt + 1, flow.runId);
+        const result = await this.prepareModelContextRequest(recovered, {...callContext, executionFlow: flow.callContext}, recoveryAttempt + 1, flow.runId, previous);
         flow.advance("result", {disposition: result.modelContext.assessment?.disposition ?? null})
           .check("proven_overflow", "not_evaluated", {reason: "checked_by_recovered_request_admission"});
         return result;
@@ -940,13 +962,15 @@ export class ProviderBackedController<TOutput = unknown>
     providerRequestNumber: number,
     delivery?: ControllerResponseDelivery,
   ): Promise<ProviderRequestSettlement> {
+    callContext.auxiliaryUsage?.assertAvailable();
     const records = new ProviderControllerCheckpoint(callContext.checkpoints);
     const requestKey = JSON.stringify([request.requestId, request.continuation]);
+    if (this.input.contextPreparation && !request.composition.lineage.auxiliary) await freezePreparedProviderRequest(request, callContext, requestKey);
     const operations = records.read<readonly {key: string; operation: RetryOperation}[]>("provider-operations") ?? [];
     let operation = operations.find(entry => entry.key === requestKey)?.operation;
     if (!operation) {
       operation = createProviderRetryOperation(controllerInput, callContext.retry.deadlineAt,
-        callContext.checkpoints ? operations.length + 1 : providerRequestNumber, this.input.retryClock);
+        callContext.checkpoints ? operations.length + 1 : providerRequestNumber, this.input.retryClock, callContext.auxiliaryInvocationId);
       await records.save("provider-operations", [...operations, {key: requestKey, operation}]);
     }
     await records.once(`provider-request:${requestKey}`, () => request);
@@ -960,6 +984,16 @@ export class ProviderBackedController<TOutput = unknown>
       throw operationDeadlineError(operation, operation.startedAt, 0, 0, null, this.input.provider.descriptor.id);
     }
     const budgetId = `${operation.operationId}:budget:1`;
+    const auxiliaryUsage = (checkpoint: RetryCheckpoint<ProviderRequestSettlement, ProviderAttemptFailure, string> | null): import("./ControllerAuxiliaryUsage.js").ControllerAuxiliaryUsage | undefined => {
+      if (!request.composition.lineage.auxiliary || !checkpoint?.attempt || !checkpoint.attemptResult || !checkpoint.attemptFinishedAt) return;
+      const result = checkpoint.attemptResult;
+      const response = result.kind === "succeeded" && result.value.kind === "response" ? result.value.response : null;
+      const usage = response?.kind === "native_tool_turn" ? response.turn.usage : response?.usage ?? null;
+      return {attemptId: checkpoint.attempt.attemptId, requestId: request.requestId,
+        purpose: request.composition.lineage.auxiliary.purpose, outcome: result.kind, usage};
+    };
+    const retainedUsage = auxiliaryUsage(records.read<RetryCheckpoint<ProviderRequestSettlement, ProviderAttemptFailure, string>>(`retry:${operation.operationId}`));
+    if (retainedUsage) await callContext.auxiliaryUsage?.record(retainedUsage);
     let result;
     try {
       result = await this.input.retryExecutor.execute<
@@ -979,6 +1013,7 @@ export class ProviderBackedController<TOutput = unknown>
           waitControl: callContext.retry.waitControl,
         },
         async (attempt) => {
+          callContext.auxiliaryUsage?.assertAvailable();
           const providerResult = await this.input.provider.send(
             recreateProviderRequest(request),
             createInvocationInterruptionContext(callContext, attempt),
@@ -995,7 +1030,11 @@ export class ProviderBackedController<TOutput = unknown>
         },
         callContext.checkpoints ? {
           read: () => records.read<RetryCheckpoint<ProviderRequestSettlement, ProviderAttemptFailure, string>>(`retry:${operation.operationId}`),
-          commit: checkpoint => records.save(`retry:${operation.operationId}`, checkpoint),
+          commit: async checkpoint => {
+            const usage = auxiliaryUsage(checkpoint);
+            await records.save(`retry:${operation.operationId}`, checkpoint, usage);
+            if (usage && !callContext.checkpoints?.commitWithAuxiliaryUsage) await callContext.auxiliaryUsage?.record(usage);
+          },
           reconcile: async () => ({kind: "failed", error: {deadlineReason: null, failure: {
             code: "provider_attempt_interrupted", category: "transport", message: "The interrupted Provider attempt has no retained complete response.",
             retryable: true, metadata: {requestId: request.requestId, usage: "unknown"}, requestId: request.requestId,
@@ -2077,8 +2116,9 @@ function createProviderRetryOperation<TOutput>(
   deadlineAt: string,
   providerRequestNumber: number,
   clock: RetryClock,
+  auxiliaryInvocationId?: string,
 ): RetryOperation {
-  const controllerRequestId = input.toolExposure.controllerRequestId;
+  const controllerRequestId = auxiliaryInvocationId ?? input.toolExposure.controllerRequestId;
   return Object.freeze({
     operationId: `${controllerRequestId}:provider-request:${providerRequestNumber}`,
     owner: "provider_request",
@@ -2485,6 +2525,40 @@ function assertControllerCheckpointConfirmed(error: unknown): void {
 }
 
 type StructuredRetry<T> = RetryCheckpoint<ControllerDecision<T>, StructuredOutputAttemptFailure, string>;
+
+async function measureWithCancellation(context: import("@agent-anything/model-interaction").ProviderModelContext,
+  composition: import("@agent-anything/model-interaction/input").ModelInputComposition, measuredAt: string,
+  signal: AbortSignal): Promise<import("@agent-anything/model-interaction").ModelInputMeasurement> {
+  signal.throwIfAborted();
+  let remove = () => {};
+  const cancelled = new Promise<never>((_, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, {once: true});
+    remove = () => signal.removeEventListener("abort", abort);
+  });
+  try {
+    const result = await Promise.race([context.measureAsync ? context.measureAsync(composition, measuredAt, signal)
+      : Promise.resolve(context.measure(composition, measuredAt)), cancelled]);
+    signal.throwIfAborted();
+    return result;
+  } finally { remove(); }
+}
+
+function withInputUsageObservation<T>(decision: ControllerDecision<T>, planning: ModelInputPlanning | null,
+  workingForms?: readonly import("@agent-anything/model-interaction/input").ModelInputOwnerForm[],
+  workingAccounts?: readonly import("@agent-anything/model-interaction/input").ModelInputAccount[]): ControllerDecision<T> {
+  if (!planning && workingForms === undefined && workingAccounts === undefined) return decision;
+  const complete = decision.modelItems.some(item => item.kind === "model_turn_finish" &&
+    item.finish.kind === "normal");
+  return Object.freeze({...decision, modelItems: Object.freeze(decision.modelItems.map(item => {
+    if (item.kind !== "model_response_correlation" || planning && item.response.requestId !== planning.requestId) return item;
+    const observation = planning ? observeModelInputUsage(planning, item.usage, item.response.responseId, complete) : null;
+    return Object.freeze({...item, metadata: Object.freeze({...item.metadata, ...(planning ? {inputPlanningId: planning.id} : {}),
+      ...(workingForms === undefined ? {} : {workingForms}),
+      ...(workingAccounts === undefined ? {} : {workingAccounts}),
+      ...(observation ? {inputUsageObservation: observation} : {inputUsageExclusion: "incomplete_or_unqualified_usage"})})});
+  }))});
+}
 
 function encodeStructuredRetry<T>(checkpoint: StructuredRetry<T>): unknown {
   const encode = (value: StructuredOutputAttemptFailure) => value.kind !== "terminal" ? value : {

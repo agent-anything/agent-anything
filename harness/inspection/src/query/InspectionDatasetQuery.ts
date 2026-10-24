@@ -11,7 +11,7 @@ import { executeFlowQuery, validateFlowQueryFields } from "./InspectionFlowQuery
 import { readInspectionPageCursor, inspectionPageCursor } from "./InspectionPageCursor.js";
 import { readIntervals, resolveRunScope, summarizeObjects } from "./InspectionObjectQuery.js";
 
-const viewKinds = ["list_definitions", "list_runs", "list_records", "get_hierarchy", "get_lifecycle", "get_data_flow", "get_dependencies", "get_scheduling", "get_model_request", "get_conversation_delivery", "get_execution", "get_timeline", "get_telemetry"];
+const viewKinds = ["list_definitions", "list_runs", "list_records", "get_hierarchy", "get_lifecycle", "get_data_flow", "get_dependencies", "get_scheduling", "get_model_request", "get_conversation_delivery", "get_context_evidence", "get_execution", "get_timeline", "get_telemetry"];
 export function validateInspectionQuery(value: unknown): InspectionQuery {
   const copy = snapshotInspectionJson(value, 256 * 1024) as unknown as Record<string, unknown>;
   if (copy === null || typeof copy !== "object" || typeof copy.kind !== "string") throw new Error("inspection_query_invalid");
@@ -33,7 +33,7 @@ export function validateInspectionQuery(value: unknown): InspectionQuery {
   if (Number(copy.limit ?? 100) > 500 || Number(copy.length ?? 262144) > 262144) throw new Error("inspection_query_invalid");
   if (copy.kind === "get_subject" && !copy.subject || copy.kind === "get_record" && !copy.recordId || copy.kind === "get_content" && !copy.contentId) throw new Error("inspection_query_invalid");
   validateFlowQueryFields(copy);
-  if (copy.kind === "get_conversation_delivery" && (copy.subject as InspectionSubjectRef | undefined)?.kind !== "request") throw new Error("inspection_query_invalid");
+  if (["get_conversation_delivery", "get_context_evidence"].includes(copy.kind) && (copy.subject as InspectionSubjectRef | undefined)?.kind !== "request") throw new Error("inspection_query_invalid");
   if (copy.includeDescendants !== undefined && (typeof copy.includeDescendants !== "boolean" || !copy.runId || !viewKinds.includes(copy.kind))) throw new Error("inspection_query_invalid");
   for (const field of ["from", "to"]) if (copy[field] !== undefined && (copy.kind !== "get_timeline" || typeof copy[field] !== "string" || !Number.isFinite(Date.parse(String(copy[field]))))) throw new Error("inspection_query_invalid");
   if (copy.from && copy.to && Date.parse(String(copy.from)) > Date.parse(String(copy.to))) throw new Error("inspection_query_invalid");
@@ -144,6 +144,7 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
     let records = query.kind === "list_runs" || query.kind === "list_definitions"
       ? db.subjects(watermark, query.kind === "list_runs" ? "run" : "definition", after, limit + 1, query.kind === "list_runs" ? runScope.runIds : undefined)
       : query.kind === "get_conversation_delivery" ? db.conversationDeliveries(key!, watermark, after, limit + 1)
+      : query.kind === "get_context_evidence" ? db.contextEvidence(key!, watermark, after, limit + 1)
       : db.records({ watermark, after, limit: limit + 1, runId: schedulingRun, runIds: runScope.runIds, subjectKey: schedulingRun ? undefined : key ?? undefined, kind: query.kind === "get_scheduling" ? "scheduling" : query.kind === "get_timeline" ? "interval" : query.recordKind, intervalStarts: query.kind === "get_timeline" });
     const more = records.length > limit;
     records = records.slice(0, limit);

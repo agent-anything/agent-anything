@@ -1,4 +1,5 @@
 import type { RunnerContextProjection } from "@agent-anything/agent-runtime/runner";
+import { selectConversationPresentations } from "@agent-anything/agent-runtime/controller";
 import type {
   ContextProjectionEstimationInput,
   ContextProjectionEstimator,
@@ -46,7 +47,7 @@ export function createHelarcContextProjectionConfiguration(): RunnerContextProje
           maximum: HELARC_MAXIMUM_CONTEXT_INPUT_BYTES,
         }),
         estimator,
-        retainedCoverage: Object.freeze([...(input.interaction.opening?.presentations ?? []), ...(input.interaction.historyPresentations ?? [])].flatMap(presentation =>
+        retainedCoverage: Object.freeze(selectConversationPresentations(input.interaction).flatMap(presentation =>
           (presentation.section.provenance?.sources ?? []).filter(source => source.owner === "context" &&
             source.kind === "context_contribution" && (source.runId ?? presentation.section.provenance?.recipientRunId) === input.runId && source.revision !== null)
           .map(source => ({contribution: {id: source.id, revision: source.revision!},

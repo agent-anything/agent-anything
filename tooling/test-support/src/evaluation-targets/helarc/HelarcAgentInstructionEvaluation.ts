@@ -415,9 +415,11 @@ function compareConformancePair(
 function targetIdentity(
   material: HelarcEvaluationRunMaterial<HelarcEvaluationExecutableCase>,
 ): HelarcAgentInstructionTargetIdentity {
-  const request = material.providerRequests[0];
+  const request = material.providerRequests.find(value => !value.composition.lineage.auxiliary);
   if (request === undefined) throw new TypeError("Instruction Evaluation requires a model request.");
   const lineage = request.composition.lineage;
+  if (!lineage.agent || !lineage.instructionBinding || !lineage.instructions || !lineage.instructionRelease ||
+      !lineage.instructionResolver || !lineage.instructionContent) throw new TypeError("Working instruction target binding is incomplete.");
   return deepFreeze({
     instructionTarget: material.instructionTarget,
     agent: asRecordRef(lineage.agent),

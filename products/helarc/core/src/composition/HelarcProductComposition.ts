@@ -45,6 +45,7 @@ import {
 } from "../agent/HelarcAgent.js";
 import type { HelarcMainInstructionTarget } from "../instructions/index.js";
 import { createHelarcDescendantAgentContribution } from "../agent/HelarcDescendantAgent.js";
+import {validateHelarcFinalMaterials, type HelarcMaterialHandoff} from "../tools/HelarcMaterialHandoff.js";
 import {
   HelarcTracingController,
   projectHelarcControllerTraceForEvent,
@@ -102,6 +103,9 @@ type HelarcProductProjectionUpdatePayload =
     : never;
 
 export interface CreateHelarcProductCompositionInput {
+  readonly contextMaterials?: import("@agent-anything/context/material").ContextMaterialAccessPort;
+  readonly contextPreparation?: import("@agent-anything/agent-runtime/controller").ControllerContextPreparation;
+  readonly materialHandoff?: HelarcMaterialHandoff;
   readonly executionEvidenceAccess?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort;
   readonly executionHandoff?: import("../tools/HelarcExecutionHandoff.js").HelarcExecutionHandoff;
   readonly executionMaterials?: import("../tools/HelarcExecutionDetails.js").HelarcExecutionMaterialReader;
@@ -176,7 +180,7 @@ export async function createHelarcProductComposition(
   });
   const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId, instructionSettings });
   const clarification = createHelarcClarificationContribution(admittedAt);
-  const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt, input.executionHandoff);
+  const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt, input.executionHandoff, input.contextMaterials, input.materialHandoff);
   const taskFulfillment = createHelarcTaskFulfillmentHookComposition(
     input.provider,
     (instructionSettings ?? createDefaultHelarcInstructionSettings()).stop,
@@ -184,6 +188,7 @@ export async function createHelarcProductComposition(
   );
   const executionCallables = new Map<string, import("../controller/HelarcModelCallableCatalog.js").HelarcModelCallableCatalog>();
   const actions = createHelarcActionComposition({
+    contextMaterials: input.contextMaterials,
     executionEvidence: input.executionEvidence,
     executionEvidenceAccess: input.executionEvidenceAccess,
     executionMaterials: input.executionMaterials,
@@ -273,6 +278,7 @@ export async function createHelarcProductComposition(
   const tracedController = new HelarcTracingController(
     new HelarcProtocolRecoveryController(new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
+      contextPreparation: input.contextPreparation,
       delivery: {mode:input.responseDelivery ?? "buffered", observer:{observe:event => previews.observe(event)}},
       buildRequest: (controllerInput, context) => {
         executionCallables.set(controllerInput.runId, controllerProtocol.createCallableCatalog(
@@ -288,13 +294,14 @@ export async function createHelarcProductComposition(
           controllerProtocol.createCallableCatalog(controllerInput.toolExposure, controllerInput.planLimits, controllerInput.plan !== null));
         return request;
       },
-      parseResponse: (response, controllerInput, executionFlow) =>
+      parseResponse: async (response, controllerInput, executionFlow) =>
         parseHelarcProviderResponse(
           response,
           controllerInput,
           controllerProtocol,
           qualification,
           executionFlow,
+          await validateHelarcFinalMaterials(response, controllerInput.runId, input.contextMaterials),
         ),
       responseProtocol: Object.freeze({ kind: "native_tool_turn" }),
       retryExecutor: createSystemRetryExecutor(retryClock),

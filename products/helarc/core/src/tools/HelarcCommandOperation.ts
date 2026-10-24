@@ -32,7 +32,7 @@ export function createHelarcCommandOperationContribution(input: {
       operation("helarc.shell.admission.v3", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.composite", "code-agent.shell", "composite"),
       operation("helarc.process-start.admission.v1", input.admittedAt, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, "helarc.process.start", "command.start", "direct", false),
       operation("helarc.initial-observation.admission.v1", input.admittedAt, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, "helarc.process.initial", "command.observe", "internal", false),
-      operation("helarc.task-output.admission.v1", input.admittedAt, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, "helarc.process.output", "command.observe", "internal"),
+      operation("helarc.task-output.admission.v2", input.admittedAt, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, "helarc.process.output", "command.observe", "internal", true, "2"),
       operation("helarc.task-stop.admission.v2", input.admittedAt, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING, "helarc.task-stop.direct", "code-agent.task-stop"),
     ]),
     bindings: Object.freeze([
@@ -45,17 +45,17 @@ export function createHelarcCommandOperationContribution(input: {
     tools: Object.freeze([
       tool("helarc.tool.shell.admission.v2", {...findHelarcBaselineToolContract(input.shellTool), inputSchema: commandInputSchema(input.inputContract)}, HELARC_SHELL_BINDING, input.admittedAt, input.inputContract.ref.revision),
       tool("helarc.tool.task-stop.admission.v2", findHelarcBaselineToolContract("TaskStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
-      tool("helarc.tool.task-output.admission.v1", findHelarcBaselineToolContract("TaskOutput"), HELARC_TASK_OUTPUT_BINDING, input.admittedAt),
+      tool("helarc.tool.task-output.admission.v2", findHelarcBaselineToolContract("TaskOutput"), HELARC_TASK_OUTPUT_BINDING, input.admittedAt, "2"),
     ]),
     composite:createHelarcShellComposite(input.inputContract.constraints.wait.defaultForegroundMs),
   });
 }
 
-function operation(admissionId: string, admittedAt: string, ref: OperationRevisionRef, bindingRef: OperationBindingRevisionRef, resolverId: string, domainPurpose: string,kind:"direct"|"internal"|"composite"="direct",exposed=true): RegisteredOperation {
+function operation(admissionId: string, admittedAt: string, ref: OperationRevisionRef, bindingRef: OperationBindingRevisionRef, resolverId: string, domainPurpose: string,kind:"direct"|"internal"|"composite"="direct",exposed=true,requestSchemaRevision="1"): RegisteredOperation {
   return {
     admissionId,
     operation: {
-      ref, semanticOwner: "helarc", requestSchemaRevision: "1", resultSchemaRevision: ref.revision,
+      ref, semanticOwner: "helarc", requestSchemaRevision, resultSchemaRevision: ref.revision,
       roles: { requestOrigins: [exposed ? "tool_request":"trusted_workflow"], exposure: exposed ? "eager_tool":"workflow_only", runControl: kind, trust: kind === "internal" ? "effect_free":"canonical_external_effect", participation: "semantic_owner", domainPurpose },
     },
     binding: { ref: bindingRef, kind, resolverId, resolverRevision: bindingRef.revision },

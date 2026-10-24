@@ -52,6 +52,7 @@ import type { FetchLike } from "../http/ProviderHttpTransport.js";
 import { decodeStructuredGenerationOutput } from "../structured-generation/StructuredGenerationResponse.js";
 
 const PROVIDER_ID = "openai-compatible.chat-completions";
+import { nativeInputAccounting, normalizedUsageMetadata, isOfficialDeepSeek, deepSeekGenerationRoom, DEEPSEEK_ACCOUNTING_REVISION } from "../accounting/ProviderInputAccounting.js";
 const MAX_RESPONSE_TEXT_LENGTH = 64_000;
 
 interface OpenAICompatibleHttpErrorDiagnostic {
@@ -100,7 +101,11 @@ export class OpenAICompatibleProvider implements Provider {
       model: this.config.model,
       revision: `openai-compatible.chat-completions.target.v1:${this.config.model}`,
     });
-    const capacity = Object.freeze({ supported: false as const });
+    const official = this.config.service === "deepseek" && isOfficialDeepSeek(this.config.baseUrl);
+    const generationRoom = official ? deepSeekGenerationRoom(this.config.model, this.config.thinking?.type, this.config.reasoningEffort) : null;
+    const capacity = official && generationRoom !== null ? Object.freeze({supported: true as const, unit: "tokens" as const,
+      maximum: 1_048_576, semantics: "input_and_output" as const, source: "provider_reported" as const,
+      providerId: PROVIDER_ID, model: this.config.model, revision: DEEPSEEK_ACCOUNTING_REVISION}) : Object.freeze({ supported: false as const });
     const requestedOutput = this.config.maximumOutputTokens === undefined ? Object.freeze({
       unit: "tokens" as const,
       maximum: null,
@@ -115,7 +120,7 @@ export class OpenAICompatibleProvider implements Provider {
     const inputPreservation = Object.freeze({
       providerId: PROVIDER_ID,
       model: this.config.model,
-      adapterRevision: "openai-compatible.chat-completions.adapter.v8",
+      adapterRevision: "openai-compatible.chat-completions.adapter.v9",
       runtimeVersion: null,
       truncation: "unknown" as const,
       contextShift: "unknown" as const,
@@ -123,6 +128,18 @@ export class OpenAICompatibleProvider implements Provider {
       revision: "openai-compatible.input-preservation.unknown.v1",
     });
     const modelContext: ProviderModelContext = Object.freeze({
+      accounting: nativeInputAccounting({
+        basis: {endpoint: `${this.config.baseUrl}/chat/completions`, model: this.config.model,
+          service: this.config.service ?? "generic", adapter: inputPreservation.adapterRevision,
+          thinking: this.config.thinking?.type ?? null, effort: this.config.reasoningEffort ?? null,
+          declaration: official ? DEEPSEEK_ACCOUNTING_REVISION : null, preservation: inputPreservation.revision},
+        inputUsage: official ? "complete" : "unknown", outputUsage: official ? "complete" : "unknown",
+        defaultGenerationRoom: generationRoom,
+        limitations: ["hosted_revision_not_known_before_response", "input_preservation_unqualified",
+          ...(official ? [] : ["endpoint_usage_scope_unqualified"])],
+        encode: composition => encodeOpenAIRequest(this.config.model, undefined, composition.instructions, composition.messages,
+          composition.interaction, false, this.config.thinking, this.config),
+      }),
       target,
       capacity,
       requestedOutput,
@@ -671,7 +688,7 @@ function mapNativeChatCompletionResponse(
         turnId,
         assistant: { role: "assistant", content: assistantContent, ...(reasoning === undefined ? {} : { reasoning }) },
         finish,
-        usage: readUsage(isRecord(value) ? value.usage : null),
+        usage: readUsage(isRecord(value) ? value.usage : null, value),
         responseRef: {
           providerId: PROVIDER_ID,
           requestId: request.requestId,
@@ -767,6 +784,10 @@ function mapGeneratedChatCompletionResponse(
     if (choice.finish_reason === "length") {
       return failed("response", "provider_output_limit_exceeded", "Provider exhausted the output limit before completing the response.");
     }
+    if (request.composition.lineage.auxiliary && (choice.finish_reason !== "stop" || choice.message.refusal ||
+        choice.message.tool_calls !== undefined && (!Array.isArray(choice.message.tool_calls) || choice.message.tool_calls.length > 0))) {
+      return failed("response", "provider_response_incomplete", "Context transformation requires a confirmed complete, non-refused response without Tool Calls.");
+    }
     const reasoning = readProviderReasoning(choice.message.reasoning_content,
       "chat-completions.reasoning-content.v1", reasoningBinding(config.baseUrl, config.model, "chat-completions.reasoning-content.v1"));
     if (choice.message.content.length > MAX_RESPONSE_TEXT_LENGTH) {
@@ -794,7 +815,7 @@ function mapGeneratedChatCompletionResponse(
         ),
         output: decoded.output,
         ...(reasoning === undefined ? {} : { reasoning }),
-        usage: readUsage(isRecord(value) ? value.usage : null),
+        usage: readUsage(isRecord(value) ? value.usage : null, value),
         continuation: null,
         metadata: providerContextMetadata(request, inputPreservationRevision),
       });
@@ -807,7 +828,7 @@ function mapGeneratedChatCompletionResponse(
       ),
       output: choice.message.content,
       ...(reasoning === undefined ? {} : { reasoning }),
-      usage: readUsage(isRecord(value) ? value.usage : null),
+      usage: readUsage(isRecord(value) ? value.usage : null, value),
       continuation: null,
       metadata: providerContextMetadata(request, inputPreservationRevision),
     });
@@ -841,15 +862,21 @@ function readSingleChoice(value: unknown): Record<string, unknown> {
   return choice;
 }
 
-function readUsage(value: unknown): import("@agent-anything/model-interaction").ProviderUsage | null {
+function readUsage(value: unknown, response?: unknown): import("@agent-anything/model-interaction").ProviderUsage | null {
   if (!isRecord(value)) return null;
   return {
     inputTokens: readCount(value.prompt_tokens),
     outputTokens: readCount(value.completion_tokens),
     totalTokens: readCount(value.total_tokens),
     costUnits: null,
-    metadata: isRecord(value.completion_tokens_details) && readCount(value.completion_tokens_details.reasoning_tokens) !== null
-      ? { reasoningTokens: readCount(value.completion_tokens_details.reasoning_tokens) } : {},
+    metadata: normalizedUsageMetadata({input: readCount(value.prompt_tokens), output: readCount(value.completion_tokens),
+      cached: value.prompt_cache_hit_tokens ?? (isRecord(value.prompt_tokens_details) ? value.prompt_tokens_details.cached_tokens : undefined),
+      uncached: value.prompt_cache_miss_tokens,
+      reasoning: isRecord(value.completion_tokens_details) ? value.completion_tokens_details.reasoning_tokens : undefined,
+      reportedModel: isRecord(response) ? response.model : undefined, fingerprint: isRecord(response) ? response.system_fingerprint : undefined,
+      revision: "chat-completions.usage.v1", raw: {prompt_tokens: value.prompt_tokens, completion_tokens: value.completion_tokens,
+        prompt_cache_hit_tokens: value.prompt_cache_hit_tokens, prompt_cache_miss_tokens: value.prompt_cache_miss_tokens,
+        prompt_tokens_details: value.prompt_tokens_details, completion_tokens_details: value.completion_tokens_details}}),
   };
 }
 

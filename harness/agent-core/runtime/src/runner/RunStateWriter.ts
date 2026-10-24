@@ -1,5 +1,6 @@
 import type { RunItemPayload, RunState } from "../run/index.js";
 import type { CreateRunnerIdentity } from "./RunnerDependencies.js";
+import type {RunCommitBookkeeping} from "./RunCommitBookkeeping.js";
 
 export type RunStatePatch<TOutput> = { readonly [K in keyof RunState<TOutput>]?: RunState<TOutput>[K] };
 
@@ -7,7 +8,7 @@ export type RunStateTransition<TOutput> = (
   current: RunState<TOutput>,
 ) => RunStatePatch<TOutput>;
 
-type PreparedCommit<TOutput, T> = { readonly value: T; readonly bookkeepingInvocationId?: string | null } & (
+type PreparedCommit<TOutput, T> = { readonly value: T; readonly bookkeepingInvocationId?: RunCommitBookkeeping } & (
   | { readonly payloads: readonly RunItemPayload<TOutput>[]; readonly patch: RunStatePatch<TOutput> }
   | { readonly payloads?: never; readonly patch?: never }
 );
@@ -23,8 +24,8 @@ export class RunStateWriter<TOutput> {
     initial: RunState<TOutput>,
     private readonly now: () => string,
     private readonly createId: CreateRunnerIdentity,
-    private readonly onCommit: (state: RunState<TOutput>, previous: RunState<TOutput>, bookkeepingInvocationId: string | null) => void,
-    private readonly persist?: (state: RunState<TOutput>, previous: RunState<TOutput>, accept: () => void, bookkeepingInvocationId: string | null) => Promise<void>,
+    private readonly onCommit: (state: RunState<TOutput>, previous: RunState<TOutput>, bookkeepingInvocationId: RunCommitBookkeeping) => void,
+    private readonly persist?: (state: RunState<TOutput>, previous: RunState<TOutput>, accept: () => void, bookkeepingInvocationId: RunCommitBookkeeping) => Promise<void>,
   ) {
     this.state = deepFreeze(initial);
   }
@@ -69,6 +70,10 @@ export class RunStateWriter<TOutput> {
       const current = this.state;
       const { payloads, patch, value, bookkeepingInvocationId = null } = prepare(current);
       if (patch === undefined) return { state: current, value };
+      if (typeof bookkeepingInvocationId === "object" && bookkeepingInvocationId !== null &&
+          (bookkeepingInvocationId.kind !== "auxiliary" || !bookkeepingInvocationId.invocationId || payloads.length || Object.keys(patch).length)) {
+        throw new TypeError("Auxiliary bookkeeping cannot change business state.");
+      }
       this.assertWritable();
       const revision = current.revision + 1;
       const items = payloads.map((payload, index) => {
@@ -105,7 +110,7 @@ export class RunStateWriter<TOutput> {
 
   commitState(
     transition: RunStateTransition<TOutput>,
-    bookkeepingInvocationId: string | null = null,
+    bookkeepingInvocationId: RunCommitBookkeeping = null,
   ): Promise<RunState<TOutput>> {
     return this.mutate(current => ({ payloads: [], patch: transition(current), value: undefined, bookkeepingInvocationId }))
       .then(result => result.state);

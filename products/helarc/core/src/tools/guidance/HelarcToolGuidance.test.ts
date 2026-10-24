@@ -20,6 +20,12 @@ const DATE = "2026-08-28T00:00:00.000Z";
 const PROFILE = "helarc.complete-test-tools.v1";
 
 describe("Helarc Product Tool Guidance", () => {
+  it("preserves boolean presence constraints without inventing descriptions for forbidden fields", () => {
+    const schema = {type:"object",properties:{query:{type:"string"}},oneOf:[{properties:{wait_ms:false,query:{}}},{properties:{query:false}}]};
+    const annotated = annotateHelarcToolInputSchema({schema,fieldDescriptions:{"/properties/query":"Literal text","/oneOf/0/properties/query":"Required search query"}});
+    expect((annotated.schema.oneOf as any[])[0].properties.wait_ms).toBe(false);
+    expect((annotated.schema.oneOf as any[])[1].properties.query).toBe(false);
+  });
   it("creates deterministic immutable sources, releases, catalogs, profiles, and bindings", () => {
     const tools = registeredTools("Read", "Write");
     const sources = tools.map((tool) => guidanceSource(tool));

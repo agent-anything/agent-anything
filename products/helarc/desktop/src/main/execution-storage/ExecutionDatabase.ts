@@ -1,7 +1,12 @@
 import Database from "better-sqlite3";
+import {assertExecutionRecording, type ExecutionRecording, type ExecutionRecordingRegistration} from "./ExecutionRecording.js";
+import {ContextPreparationDatabase, CONTEXT_PREPARATION_SCHEMA, type ContextPreparationCommand} from "./ContextPreparationDatabase.js";
 import {unpackExecutionContent, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentScope, ExecutionContentStatistics, snapshotEncodedExecutionContent, EXECUTION_CONTENT_LIMITS,
   type ExecutionContentBlock, type ExecutionContentRoot} from "./ExecutionContent.js";
 import { FileMaterialDatabase, FILE_MATERIAL_SCHEMA } from "./FileMaterialDatabase.js";
+import {ContextMaterialDatabase, CONTEXT_MATERIAL_SCHEMA, type ContextMaterialCommand, type ContextMaterialValue} from "./ContextMaterialDatabase.js";
+import {projectContextMaterials} from "./ContextMaterialProjection.js";
+import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 import {snapshotExecutionReferenceTransfer, type ExecutionReferenceTransfer, type ExecutionReferencePage} from "@agent-anything/operation-catalog/evidence";
 import type { HelarcExecutionAdmission, HelarcExecutionDiscovery } from "./HelarcExecutionAdmission.js";
 import { createHash } from "node:crypto";
@@ -24,7 +29,7 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 16;
+const FORMAT = 20;
 const SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -60,6 +65,7 @@ CREATE TABLE shell_sessions (
 CREATE TABLE product_admissions (
   root_run_id TEXT PRIMARY KEY, digest TEXT NOT NULL, value TEXT NOT NULL, delivered INTEGER NOT NULL CHECK(delivered IN (0,1))
 );
+CREATE TABLE execution_recordings (root_run_id TEXT PRIMARY KEY, digest TEXT NOT NULL, value TEXT NOT NULL);
 CREATE TABLE execution_evidence (
   reference_key TEXT PRIMARY KEY, generation INTEGER NOT NULL, digest TEXT NOT NULL, value TEXT NOT NULL
 );
@@ -70,6 +76,8 @@ CREATE TABLE compensation_associations (
   invocation_id TEXT PRIMARY KEY, association_id TEXT UNIQUE NOT NULL, generation INTEGER NOT NULL, digest TEXT NOT NULL, value TEXT NOT NULL
 );
 ${FILE_MATERIAL_SCHEMA}
+${CONTEXT_MATERIAL_SCHEMA}
+${CONTEXT_PREPARATION_SCHEMA}
 `;
 interface ProcessRow { execution_id: string; run_id: string; revision: number; digest: string; value: string; }
 interface StoredActionRow {
@@ -83,6 +91,8 @@ export class ExecutionDatabase {
   private readonly ownership: Database.Database;
   private readonly data: Database.Database;
   private readonly fileMaterials: FileMaterialDatabase;
+  private readonly contextMaterials: ContextMaterialDatabase;
+  private readonly contextPreparations: ContextPreparationDatabase;
   private closed = false;
   private readonly statements = new Map<string, Database.Statement>();
   private readonly contentStatistics: ExecutionContentStatistics;
@@ -123,6 +133,8 @@ export class ExecutionDatabase {
       data = new Database(path, { timeout: 250 });
       this.data = data;
       this.fileMaterials = new FileMaterialDatabase(data);
+      this.contextMaterials = new ContextMaterialDatabase(data);
+      this.contextPreparations = new ContextPreparationDatabase(data, value => this.retainContent(value), root => this.hydrateContent(root));
       data.pragma("trusted_schema = OFF");
       data.pragma("journal_mode = WAL");
       data.pragma("synchronous = FULL");
@@ -149,6 +161,31 @@ export class ExecutionDatabase {
       this.ownership.close();
       throw error;
     }
+  }
+
+  registerRecording(generation: number, current: ExecutionRecording): ExecutionRecordingRegistration {
+    this.assertOwner(generation);
+    assertExecutionRecording(current);
+    return this.data.transaction(() => {
+      this.assertOwner(generation);
+      if (!this.statement("SELECT 1 FROM product_admissions WHERE root_run_id=?").get(current.runId)) {
+        throw new ExecutionStoreError("execution_recording_run_unavailable");
+      }
+      const row = this.statement("SELECT digest,value FROM execution_recordings WHERE root_run_id=?").get(current.runId) as {digest: string; value: string} | undefined;
+      const prior = row ? JSON.parse(row.value) as ExecutionRecordingRegistration : null;
+      if (prior) {
+        if (digest(prior) !== row!.digest) throw new ExecutionStoreError("execution_records_corrupt");
+        assertExecutionRecording(prior.current);
+        if (prior.previous) assertExecutionRecording(prior.previous);
+        if (prior.current.runId !== current.runId) throw new ExecutionStoreError("execution_records_corrupt");
+        if (prior.current.sourceId === current.sourceId && prior.current.datasetId === current.datasetId) return prior;
+      }
+      const next = {current, previous: prior?.current ?? null};
+      const encoded = encode(next);
+      this.statement("INSERT INTO execution_recordings VALUES (?,?,?) ON CONFLICT(root_run_id) DO UPDATE SET digest=excluded.digest,value=excluded.value")
+        .run(current.runId, encoded.digest, encoded.text);
+      return next;
+    })();
   }
 
   recordAction(generation: number, input: ActionOwnerRecord): ExecutionRecordReceipt {
@@ -187,6 +224,17 @@ export class ExecutionDatabase {
       case "release": return owner.release(command.reference, command.ownerId, command.at);
       case "expire": return owner.expire(command.at);
     }
+  }
+
+  contextMaterialCommand(generation: number, command: ContextMaterialCommand): ContextMaterialValue {
+    this.assertOwner(generation);
+    return this.timed(`context_material.${command.kind}`, () => this.contextMaterials.command(command));
+  }
+  takeContextMaterialObservations() {return this.contextMaterials.takeObservations();}
+
+  contextPreparationCommand(generation: number, command: ContextPreparationCommand): {preparationValue: unknown} {
+    this.assertOwner(generation);
+    return this.timed(`context_preparation.${command.kind}`, () => this.contextPreparations.command(command));
   }
 
   commitExecutionEvidence(generation: number, input: ExecutionEvidenceRecord): void {
@@ -355,6 +403,8 @@ export class ExecutionDatabase {
         throw new ExecutionStoreError("execution_delivery_not_terminal");
       }
       this.data.prepare("UPDATE product_admissions SET delivered=1 WHERE root_run_id=?").run(rootRunId);
+      const members = this.data.prepare("SELECT run_id FROM run_tree_members WHERE root_run_id=?").all(rootRunId) as {run_id: string}[];
+      for (const runId of new Set([rootRunId, ...members.map(member => member.run_id)])) this.contextMaterials.releaseRun(runId);
     })();
   }
 
@@ -391,6 +441,7 @@ export class ExecutionDatabase {
     this.assertOwner(this.generation);
     return this.data.transaction(() => {
       const pins: import("./ExecutionStoreProtocol.js").ExecutionRetentionPin[] = [];
+      for (const ownerId of this.contextMaterials.retainedOwners()) pins.push({ownerId, reason: "context_material"});
         for (const ownerId of this.fileMaterials.pinnedOwners()) pins.push({ownerId, reason: "file_material"});
       const owners = this.data.prepare("SELECT DISTINCT owner_id FROM execution_commits WHERE owner='run'").all() as {owner_id: string}[];
       for (const {owner_id} of owners) {
@@ -734,6 +785,36 @@ export class ExecutionDatabase {
       }
       this.statement("INSERT INTO execution_commits VALUES(?,?,?,?,?,?,?)").run(id, value.kind, ownerId,
         state.revision, generation, encoded.digest, encoded.text);
+      if (value.kind === "run") {
+        const before = previous?.kind === "run" ? previous.value.state.items.length : 0;
+        for (const material of projectContextMaterials(value.value, before)) this.contextMaterials.publish(material, ownerId);
+        const request = value.value.admission?.delegationRequest;
+        if (request) {
+          const taskInput = request.task.input as {material_refs?: unknown} | null;
+          const refs = snapshotContextMaterialRefs(taskInput?.material_refs ?? []);
+          if (refs.length) this.contextMaterials.accept({id: `${request.ref.id}:materials`, sourceRunId: request.origin.parent.run.id,
+            recipientRunId: ownerId, references: refs, basis: {kind: "assignment", id: request.ref.id}});
+          if (request.continuation) {
+            const source = request.continuation.sourceChild.id;
+            let after: string | null = null, page = 0;
+            for (;;) {
+              const references = this.contextMaterials.inheritedReferences(source, after);
+              if (!references.length) break;
+              this.contextMaterials.accept({id: `${request.ref.id}:continuation-materials:${page++}`, sourceRunId: source, recipientRunId: ownerId,
+                references, basis: {kind: "continuation", id: request.ref.id}});
+              after = references.at(-1)!.id;
+            }
+          }
+        }
+        if (value.value.state.status === "completed" && !(previous?.kind === "run" && previous.value.state.status === "completed")) {
+          const output = value.value.state.finalOutput as {materialRefs?: unknown} | null;
+          const refs = snapshotContextMaterialRefs(output?.materialRefs ?? []);
+          const initial = this.readOwnerCommit(`${ownerId}:commit:0`);
+          const delegation = initial?.kind === "run" ? initial.value.admission?.delegationRequest : null;
+          if (refs.length && delegation) this.contextMaterials.accept({id: `${ownerId}:result-materials`, sourceRunId: ownerId,
+            recipientRunId: delegation.origin.parent.run.id, references: refs, basis: {kind: "result", id: value.value.state.settlementCause.ref.id}});
+        }
+      }
       return {recordId: id, revision: state.revision};
     });
   }
@@ -1024,7 +1105,8 @@ export class ExecutionDatabase {
 
   private validateSchema(): void {
     const objects = this.data.prepare("SELECT name,type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all() as { name: string; type: string }[];
-    if (objects.length !== 18 || !objects.some(row => row.name === "execution_content" && row.type === "table") ||
+    if (objects.length !== 30 || !["execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
+        !objects.some(row => row.name === "execution_content" && row.type === "table") ||
         !objects.some(row => row.name === "run_tree_commits" && row.type === "table") ||
         !objects.some(row => row.name === "file_materials" && row.type === "table") ||
         !objects.some(row => row.name === "file_material_chunks" && row.type === "table") ||

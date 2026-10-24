@@ -11,6 +11,12 @@ or repeat completed work on recovery. Protocol validity alone is insufficient:
 verify actual encoded requests against independent expected facts. Keep source,
 authority, transformations and missing information explicit.
 
+For context selection and representation changes, also apply
+`../agent-anything-design/standards/context-transformation-correctness-and-effectiveness.md`
+when available. Check whole-input continuity, local responsibilities and known
+relationships, then repeated use and recovery before judging savings. Structural
+validation is not semantic preservation; do not add per-Turn semantic review.
+
 Core principle: model input is a truthful, coherent working conversation, not
 a mirror of internal state. Preserve truthfulness, coherence, and consistency
 before removing repetition without an independent interaction purpose. Read

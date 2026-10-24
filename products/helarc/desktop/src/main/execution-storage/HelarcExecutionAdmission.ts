@@ -40,12 +40,18 @@ export interface HelarcExecutionAdmission {
 
 export interface HelarcProviderRecoveryBinding {
   readonly descriptor: Provider["descriptor"];
-  readonly modelContext: Omit<Provider["modelContext"], "measure">;
+  readonly modelContext: Omit<Provider["modelContext"], "measure" | "measureAsync" | "accounting"> & {
+    readonly accounting?: Omit<NonNullable<Provider["modelContext"]["accounting"]>, "project">;
+  };
 }
 
 export function retainHelarcProviderBinding(provider: Provider): HelarcProviderRecoveryBinding {
-  const {target, capacity, requestedOutput, inputPreservation} = provider.modelContext;
-  return {descriptor: provider.descriptor, modelContext: {target, capacity, requestedOutput, inputPreservation}};
+  const {target, capacity, requestedOutput, inputPreservation, accounting} = provider.modelContext;
+  const facts = accounting ? {basis: accounting.basis, inputUsage: accounting.inputUsage, outputUsage: accounting.outputUsage,
+    defaultGenerationRoom: accounting.defaultGenerationRoom, limitations: accounting.limitations,
+    ...(accounting.evidence ? {evidence: accounting.evidence} : {})} : null;
+  return {descriptor: provider.descriptor, modelContext: {target, capacity, requestedOutput, inputPreservation,
+    ...(facts ? {accounting: facts} : {})}};
 }
 
 export interface HelarcExecutionDiscovery {

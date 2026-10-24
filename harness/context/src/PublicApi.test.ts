@@ -5,6 +5,8 @@ import * as contributionApi from "./contribution/index.js";
 import * as evidenceApi from "./evidence/index.js";
 import * as persistenceApi from "./persistence/index.js";
 import * as projectionApi from "./projection/index.js";
+import * as materialApi from "./material/index.js";
+import * as preparationApi from "./preparation/index.js";
 import type { ActiveContext } from "./active-context/index.js";
 import type { ContextContribution } from "./contribution/index.js";
 import type { ContextProjection } from "./projection/index.js";
@@ -21,6 +23,7 @@ describe("Context public API", () => {
       "snapshotContextContribution",
       "snapshotContextContributionRef",
       "snapshotContextDisclosure",
+      "snapshotContextPreservation",
     ]);
     expect(Object.keys(activeContextApi).sort()).toEqual([
       "admitContextContribution",
@@ -47,6 +50,11 @@ describe("Context public API", () => {
       "snapshotEvidenceContribution",
     ]);
     expect(Object.keys(persistenceApi)).toEqual([]);
+    expect(Object.keys(preparationApi).sort()).toEqual(["InMemoryContextPreparationStore", "contextPreparationDigest", "validateContextPreparationIntent"]);
+    expect(Object.keys(materialApi).sort()).toEqual([
+      "CONTEXT_MATERIAL_LIMITS", "ContextMaterialError", "contextMaterialDigest",
+      "readContextMaterialText", "snapshotContextMaterialRef", "snapshotContextMaterialRefs",
+    ]);
   });
 
   it("retains generic state and projection types on the Context subpath", () => {

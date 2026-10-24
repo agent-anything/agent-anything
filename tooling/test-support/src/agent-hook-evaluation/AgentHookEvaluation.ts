@@ -4,6 +4,7 @@ import {
   type AgentHookRegistration,
 } from "@agent-anything/agent-hooks/composition";
 import type { AgentStopEvent } from "@agent-anything/agent-hooks/events";
+import { projectModelInteraction } from "@agent-anything/agent-runtime/controller";
 import {
   AgentHookExecutionStore,
   dispatchAgentStopHooks,
@@ -132,14 +133,7 @@ function stopEvent(): AgentStopEvent<{ readonly summary: string }> {
       kind: "complete" as const,
       output: { summary: "Candidate output." },
     },
-    interaction: {
-      id: "interaction-1",
-      revision: "1",
-      messages: [],
-      unsettledCalls: [],
-      settledCallCount: 0,
-      latestTurn: null,
-    },
+    interaction: projectModelInteraction({runId: run.id, runRevision: 1, items: []}),
     plan: null,
     pending: [],
     emittedAt: NOW,

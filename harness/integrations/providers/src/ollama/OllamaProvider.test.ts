@@ -6,6 +6,7 @@ import type {
 import { assessModelContext } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
+  createExactModelWorkingView,
   modelInputFromComposition,
   type ModelOutputFormat,
 } from "@agent-anything/model-interaction/input";
@@ -20,6 +21,23 @@ import {
 import { OllamaProvider } from "./OllamaProvider.js";
 
 describe("OllamaProvider", () => {
+  it.each([
+    {done: true, done_reason: "stop", expected: "succeeded"},
+    {done: false, done_reason: "stop", expected: "failed"},
+    {done: true, done_reason: "length", expected: "failed"},
+    {done: true, done_reason: "content_filter", expected: "failed"},
+    {done: true, done_reason: "unknown", expected: "failed"},
+  ])("accepts auxiliary data only after complete generation ($done/$done_reason)", async ({done, done_reason, expected}) => {
+    const provider = new OllamaProvider(config(), async () => okResponse({response: '{"summary":"data"}', done, done_reason}));
+    const input = request(provider);
+    const method = {owner: "model-interaction", kind: "transformation_method", id: "test-method", revision: "1"};
+    const sections = input.composition.sections.map(section => section.kind === "agent_instruction" ? {...section, kind: "transformation_instruction"} : section);
+    const auxiliary = {...input, purpose: "context_generation", composition: {...input.composition, sections,
+      workingView: createExactModelWorkingView({sections, recipientRunId: input.composition.workingView.recipientRunId, boundary: "request"}), lineage: {...input.composition.lineage,
+      instructionBinding: null, agent: null, instructions: null, instructionRelease: null, instructionResolver: null, instructionContent: null,
+      instructionBlocks: [], auxiliary: {purpose: "context_generation" as const, method, basis: method}}}};
+    expect((await provider.send(auxiliary, context())).kind).toBe(expected);
+  });
   it("omits num_predict but keeps num_ctx and truncate=false for chat and generate", async () => {
     const bodies: Record<string, unknown>[] = [];
     const provider = new OllamaProvider({ ...config(), runtime: { contextWindowTokens: 16384 } }, async (url, init) => {

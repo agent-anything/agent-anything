@@ -3,6 +3,14 @@ import { discoverOllamaModels } from "../ollama/OllamaModelDiscovery.js";
 import { discoverChatCompletionModels } from "../openai-compatible/ChatCompletionModelDiscovery.js";
 
 describe("model discovery", () => {
+  it("keeps runtime allocation observations separate from advertised model capacity", async () => {
+    const fetch = async (url: string) => Response.json(url.endsWith("tags") ? {models: [{name: "m", digest: "sha256:m"}]}
+      : url.endsWith("show") ? {model_info: {"m.context_length": 131072}, template: "template"}
+      : url.endsWith("version") ? {version: "0.35.1"} : {models: [{name: "m", digest: "sha256:m", context_length: 16384}]});
+    const result = await discoverOllamaModels({baseUrl: "http://localhost:11435", model: "m", includeRuntimeContext: true}, fetch);
+    expect(result.models[0]).toMatchObject({contextWindowTokens: 131072,
+      contextEvidence: {runtimeVersion: "0.35.1", loadedContextWindowTokens: 16384, templateDigest: expect.stringMatching(/^sha256:/)}});
+  });
   it("queries Ollama booleans without manufacturing effort levels", async () => {
     const fetch = vi.fn(async (url: string) => Response.json(url.endsWith("tags") ? { models: [{ name: "model", digest: "sha256:artifact" }] }
       : { thinking: { values: [false, true], default: true }, model_info: { "architecture.context_length": 131072 } }));

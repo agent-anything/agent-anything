@@ -14,6 +14,7 @@ import type { FileMaterialPreparation, FileMaterialRecord, FileMaterialReservati
 import type { ExecutionErrorDetails } from "../diagnostics/ExecutionErrorDetails.js";
 import type {ExecutionContentBlock, ExecutionContentRoot} from "./ExecutionContent.js";
 import type {ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
+import type {ContextMaterialCommand, ContextMaterialValue} from "./ContextMaterialDatabase.js";
 
 export type ExecutionOwnerCommit =
   | {readonly kind: "run"; readonly value: RunCommit}
@@ -36,7 +37,7 @@ export interface ExecutionRecordReceipt {
 
 export interface ExecutionRetentionPin {
   readonly ownerId: string;
-  readonly reason: "unfinished_run" | "undelivered_result" | "unsettled_process" | "file_material";
+  readonly reason: "unfinished_run" | "undelivered_result" | "unsettled_process" | "file_material" | "context_material";
 }
 
 export type FileMaterialStoreCommand =
@@ -53,6 +54,9 @@ export type FileMaterialStoreCommand =
 export type FileMaterialStoreValue = FileMaterialRecord | readonly FileMaterialRecord[] | FileMaterialReservation | FileMaterialRead | null;
 
 export type ExecutionStoreCommand =
+  | {readonly kind: "register_recording"; readonly recording: import("./ExecutionRecording.js").ExecutionRecording}
+  | {readonly kind: "context_preparation"; readonly command: import("./ContextPreparationDatabase.js").ContextPreparationCommand}
+  | {readonly kind: "context_material"; readonly command: ContextMaterialCommand}
   | {readonly kind: "commit_reference_transfer"; readonly transfer: ExecutionReferenceTransfer}
   | {readonly kind: "read_reference_transfers"; readonly runId: string}
   | {readonly kind: "read_run_execution_refs"; readonly runId: string; readonly after: string | null; readonly limit: number}
@@ -98,8 +102,9 @@ export type ExecutionStoreWireCommand = ExecutionStoreCommand
   | {readonly kind: "read_content"; readonly ids: readonly string[]};
 
 export type FileMaterialFinalizationPage = {readonly records: readonly FileMaterialRecord[]; readonly next: string | null};
-export type ExecutionStoreValue = readonly ExecutionReferenceTransfer[] | ExecutionReferencePage | FileMaterialFinalizationPage | FileMaterialStoreValue | ExecutionEvidenceRecord | CompensationAssociation | ExecutionRecordReceipt | ActionRecoveryRecords | ExecutionOwnerCommit | RunCommitReceipt | RunTreeCommit | RunTreeCommitReceipt | RunTreeRecoveryRecords | AgentHookInvocationCheckpoint | readonly AgentHookInvocationCheckpoint[] | readonly ProcessCheckpoint[] | ShellSessionCommit | HelarcExecutionAdmission | readonly HelarcExecutionDiscovery[] | readonly ExecutionRetentionPin[] | null;
+export type ExecutionStoreValue = import("./ExecutionRecording.js").ExecutionRecordingRegistration | {preparationValue: unknown} | ContextMaterialValue | readonly ExecutionReferenceTransfer[] | ExecutionReferencePage | FileMaterialFinalizationPage | FileMaterialStoreValue | ExecutionEvidenceRecord | CompensationAssociation | ExecutionRecordReceipt | ActionRecoveryRecords | ExecutionOwnerCommit | RunCommitReceipt | RunTreeCommit | RunTreeCommitReceipt | RunTreeRecoveryRecords | AgentHookInvocationCheckpoint | readonly AgentHookInvocationCheckpoint[] | readonly ProcessCheckpoint[] | ShellSessionCommit | HelarcExecutionAdmission | readonly HelarcExecutionDiscovery[] | readonly ExecutionRetentionPin[] | null;
 export type ExecutionStoreReply =
+  | {readonly kind: "context_material_observation"; readonly observation: import("./ContextMaterialObservation.js").ContextMaterialObservation}
   | {readonly kind: "performance"; readonly event: ExecutionPerformanceEvent}
   | {readonly kind: "content_staged"; readonly id: number}
   | {readonly kind: "content_result"; readonly id: number; readonly root: ExecutionContentRoot}

@@ -1,7 +1,7 @@
 export type { Controller, ControllerCallContext, ControllerDecision, ControllerFeedback, ControllerInput, ControllerPreProjectionInput, ControllerModelItem, ModelCallRejectionCandidate, ModelInteractionProjection, ControllerRetryContext, ControllerResourceMetering, InteractionRequestCandidate, OperationRequestCandidate, ToolRequestCandidate, PlanUpdateCandidate, ProgressionCandidate, SameRunHandoffRequest, StateTransitionCandidate } from "./Controller.js";
 export type { ConversationOpeningReceipt, ModelConversationSeed } from "./ControllerConversation.js";
 export { createModelConversationSeed, snapshotModelConversationSeed, snapshotConversationOpeningReceipt,
-  createConversationOpeningReceipt, freezeConversationOpening, importModelConversationSeed } from "./ControllerConversation.js";
+  createConversationOpeningReceipt, freezeConversationOpening, importModelConversationSeed, selectConversationPresentations, canonicalConversationPresentations } from "./ControllerConversation.js";
 export { retainInputPresentation, snapshotInputPresentation } from "./ControllerInputDelivery.js";
 export type { RetainedInputPresentation } from "./ControllerInputDelivery.js";
 export type { CompletionSource, ControllerCompletionInput, ControllerCompletionDisposition } from "./Controller.js";
@@ -50,3 +50,4 @@ export type {
 export { unsupportedModelInputRecovery } from "./ModelInputRecovery.js";
 export type { ControllerCheckpointPort } from "./ControllerCheckpoint.js";
 export { ControllerCheckpointError } from "./ControllerCheckpoint.js";
+export type {ControllerContextPreparation} from "./ControllerContextPreparation.js";

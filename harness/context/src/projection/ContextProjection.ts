@@ -6,10 +6,12 @@ import type {
   ContextPayload,
   ContextSourceRef,
   ContextTransformationKind,
+  ContextPreservation,
 } from "../contribution/ContextContribution.js";
 import {
   measureContextPayload,
   snapshotContextContributionRef,
+  snapshotContextPreservation,
 } from "../contribution/ContextContribution.js";
 import {
   fail,
@@ -79,6 +81,7 @@ export interface ContextProjectionTransformation {
 }
 
 export interface ContextProjectionBlock {
+  readonly preservation?: ContextPreservation;
   readonly id: string;
   readonly item: ActiveContextItemRef;
   readonly contribution: ContextContributionRef;
@@ -414,7 +417,7 @@ function snapshotProfile(input: ContextProjectionProfile): ContextProjectionProf
 function snapshotBlock(input: ContextProjectionBlock, path: string): ContextProjectionBlock {
   strictRecord(input, path, [
     "id", "item", "contribution", "instructionRole", "payload", "accounting",
-    "transformation",
+    "transformation", "preservation",
   ], "context_projection_contract_invalid");
   const payload = snapshotProjectionPayload(input.payload, `${path}.payload`);
   measureContextPayload(payload);
@@ -439,6 +442,7 @@ function snapshotBlock(input: ContextProjectionBlock, path: string): ContextProj
     instructionRole: input.instructionRole,
     payload,
     accounting: Object.freeze({ unit: input.accounting.unit, amount }),
+    ...(input.preservation === undefined ? {} : {preservation: snapshotContextPreservation(input.preservation)}),
     transformation: input.transformation === null
       ? null
       : snapshotTransformation(input.transformation, `${path}.transformation`),

@@ -37,7 +37,7 @@ describe("Helarc descendant Agent contribution", () => {
     expect(result.preparation.task.metadata.description).toBe(description);
   });
 
-  it.each(["completed"] as const)("projects a %s Child result without inventing a Tool failure", (status) => {
+  it.each(["completed"] as const)("projects a %s Child result without inventing a Tool failure", async (status) => {
     const agent = createHelarcDelegatedWorkerAgent({
       providerId: "test-provider",
       modelId: "test-model",
@@ -47,7 +47,7 @@ describe("Helarc descendant Agent contribution", () => {
       "2026-09-01T00:00:00.000Z",
     );
 
-    const outcome = contribution.delegation.resultProjection.project({
+    const outcome = await contribution.delegation.resultProjection.project({
       result: {
         ref: { id: "delegation-result-1", revision: "result-revision-1" },
         correlation: { child: { run: { id: "child-run-1" } } },
@@ -93,7 +93,7 @@ describe("Helarc descendant Agent contribution", () => {
   it.each([null, "Useful findings collected before the failure."].flatMap(narrative =>
     ["model_output_limit_exhausted", "model_protocol_recovery_exhausted"].map(code => ({narrative, code}))))(
     "delivers a failed Child's actual cause without treating diagnostic text as narrative: %j",
-    ({narrative, code}) => {
+    async ({narrative, code}) => {
       const agent = createHelarcDelegatedWorkerAgent({ providerId: "test", modelId: "test" });
       const { delegation } = createHelarcDescendantAgentContribution(agent, "2026-09-01T00:00:00.000Z");
       const diagnostic = {
@@ -102,7 +102,7 @@ describe("Helarc descendant Agent contribution", () => {
           : "The model did not provide an ending signal after 2 correction opportunities.",
         messageTruncated: false, retryable: false, category: null, underlyingCode: null,
       };
-      const outcome = delegation.resultProjection.project({
+      const outcome = await delegation.resultProjection.project({
         result: {
           ref: { id: "failed-result", revision: "1" },
           correlation: { child: { run: { id: "child-run" } } },

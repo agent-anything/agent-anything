@@ -3,6 +3,7 @@ import type { RegisteredTool } from "@agent-anything/tools/registration";
 import { HELARC_COMPENSATION_GUIDANCE, HELARC_COMPENSATION_FIELD_GUIDANCE } from "../HelarcCompensationInput.js";
 import { EXECUTION_DETAILS_DESCRIPTION } from "../HelarcExecutionDetails.js";
 import { FILE_RESTORE_DESCRIPTION } from "../HelarcFileRestoration.js";
+import {CONTEXT_ACCESS_DEFINITIONS} from "../HelarcContextAccess.js";
 import {
   HELARC_BASELINE_TOOL_CONTRACTS,
   type HelarcBaselineToolName,
@@ -145,6 +146,19 @@ function sourceName(name: HelarcBaselineToolName): string {
 }
 
 const DEFINITIONS = Object.freeze({
+  ContextSearch: {description: CONTEXT_ACCESS_DEFINITIONS[0]!.description, fields: {
+    "/properties/query": "Optional case-sensitive literal, at most 1024 UTF-8 bytes. Omit to enumerate accessible material.",
+    "/properties/in": "content (default) or description. No semantic search or regex.",
+    "/properties/limit": "Maximum matches per page, 1-16; scan coverage is bounded separately.",
+    "/properties/cursor": "Exact nextCursor with the same query and mode; preserves the first page's membership frontier.",
+  }},
+  ContextRead: {description: CONTEXT_ACCESS_DEFINITIONS[1]!.description, fields: {
+    "/properties/reference": "Exact retained material reference disclosed to this Run, not a path.",
+    "/properties/reference/properties/id": "Copy the exact material identity.",
+    "/properties/reference/properties/revision": "Copy the exact immutable sha256 revision.",
+    "/properties/offset": "Zero-based UTF-8 byte offset. Prefer returned nextOffset; defaults to zero.",
+    "/properties/length": "Maximum text bytes, 4-16384; defaults to 16384 and never splits a UTF-8 character.",
+  }},
   RestoreFile: {description: FILE_RESTORE_DESCRIPTION, fields: {
     "/properties/change_ref": "Exact file effect reference to address. It selects the recorded target and prior state, not a replacement path.",
     "/properties/change_ref/properties/owner": "Copy the effect owner exactly.",
@@ -219,7 +233,12 @@ const DEFINITIONS = Object.freeze({
   }),
   TaskOutput: Object.freeze({
     description:"Read a managed command's retained stdout, stderr and lifecycle without starting a new command. Use task_id from Shell and pass next_cursor for later output; omitting cursor rereads from the beginning. Reads are independent and non-destructive. If no unread output exists, wait up to wait_ms for output, lifecycle change or completion. Successful retrieval does not mean the command succeeded: inspect phase, outcome, root_exit, containment, output quality and limitations. Reaching a wait limit does not kill the command, extend its timeout or diagnose a hang. Output remains available after command completion while retained by the owning Run.",
-    fields:Object.freeze({"/properties/task_id":"Exact command identity from a prior Shell result in this Run.","/properties/cursor":"Optional opaque next_cursor returned by a prior observation of this exact command.","/properties/wait_ms":"Observation wait only: default 10000ms; zero returns immediately; otherwise 1000 through 30000ms."}),
+    fields:Object.freeze({"/properties/task_id":"Exact command identity from a prior Shell result in this Run.","/properties/cursor":"Optional opaque next_cursor returned by a prior observation of this exact command.","/properties/wait_ms":"Observation wait only: default 10000ms; zero returns immediately; otherwise 1000 through 30000ms.",
+      "/properties/query":"Optional case-sensitive literal search, 1-1024 UTF-8 bytes. Searches captured decoded text without executing or waiting. Cannot combine with cursor/wait_ms. Each page scans at most 256 KiB plus query lookahead and returns at most 16 matches; incomplete no-match scans do not prove absence.",
+      "/oneOf/0/properties/query":"Required in search mode; omit cursor and wait_ms.",
+      "/properties/stream":"Search only: stdout (default) or stderr. Reported offsets are projected UTF-8 bytes, not raw process bytes.",
+      "/properties/search_cursor":"Search only: exact next_search_cursor, with the same task/stream/query. Freezes the captured prefix; omit for a new frontier.",
+      "/properties/limit":"Search only: maximum matches, 1-16 (default 8); scan coverage is independently bounded."}),
   }),
   AskUserQuestion: Object.freeze({
     description: "Request bounded missing information or a user decision when safe useful progress cannot be chosen from current evidence. This is clarification only: answers do not grant permission or change execution limits. Ask only questions whose answers materially change the next action; do not ask for facts available through active Tools, repeat answered questions, or use clarification as a routine progress update. Keep each prompt concrete, provide concise mutually distinct options when known, and allow free text where predefined options are insufficient. The Run blocks for the correlated answer, so combine related questions without collecting unrelated information.",
@@ -238,6 +257,9 @@ const DEFINITIONS = Object.freeze({
     fields: Object.freeze({
       "/properties/description": "Optional concise label for the delegated work, used for human-readable progress and diagnostics.",
       "/properties/execution_refs": "Optional bounded explicit handoff of references already accessible to this Run. Does not grant read or mutation authority.",
+      "/properties/material_refs": "Optional explicit handoff of at most 16 accessible retained context views. Does not share other history or file permissions.",
+      "/properties/material_refs/items/properties/id": "Copy the exact material identity returned by ContextSearch or a prior handoff.",
+      "/properties/material_refs/items/properties/revision": "Copy the exact immutable sha256 revision.",
       "/properties/execution_refs/items/properties/owner": "Copy the exact disclosed source owner.",
       "/properties/execution_refs/items/properties/kind": "Copy the exact execution, effect, support or material kind.",
       "/properties/execution_refs/items/properties/id": "Copy the exact disclosed identity; do not invent IDs.",

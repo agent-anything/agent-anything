@@ -313,13 +313,13 @@ describe("HelarcProductComposition", () => {
         dialect: "windows-powershell",
       },
     );
-    expect(baselineGuidance.release.tools).toHaveLength(14);
-    expect(baselineGuidance.release.sources).toHaveLength(14);
-    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(13);
+    expect(baselineGuidance.release.tools).toHaveLength(16);
+    expect(baselineGuidance.release.sources).toHaveLength(16);
+    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(15);
     expect(composition.controllerProtocol.toolGuidance.entries.map(({ name }) => name))
       .toEqual(expect.arrayContaining([
         "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
-        "AskUserQuestion", "Agent", "SendMessage",
+        "AskUserQuestion", "Agent", "SendMessage", "ContextRead", "ContextSearch",
       ]));
     const powerShellGuidance = composition.controllerProtocol.toolGuidance.entries.find(
       ({ name }) => name === "PowerShell",

@@ -8,7 +8,8 @@ import {
 } from "@agent-anything/model-interaction";
 import type { RunItem } from "../run/RunItem.js";
 import { createControllerModelItems } from "./ControllerModelItems.js";
-import { createModelConversationSeed } from "./ControllerConversation.js";
+import { createModelConversationSeed, selectConversationPresentations, canonicalConversationPresentations, importModelConversationSeed } from "./ControllerConversation.js";
+import {createExactModelWorkingView, modelInputOccurrenceDigest, type ModelInputOwnerForm} from "@agent-anything/model-interaction/input";
 import { createControllerInputDeliveryReceipt, createInputDeliverySections, inputNotificationMessage, retainInputPresentation } from "./ControllerInputDelivery.js";
 import {
   ModelInteractionProjectionError,
@@ -16,6 +17,28 @@ import {
 } from "./ModelInteractionProjection.js";
 
 describe("ModelInteractionProjection", () => {
+  it("exports the selected owner form to a continued Child without rewriting canonical source history", () => {
+    const source = {owner: "test-source", kind: "report", id: "finding", revision: "1", runId: "run-1"};
+    const presentation = retainInputPresentation({id: "finding", source, kind: "interaction_history", role: "user", necessity: "mandatory",
+      content: {kind: "text", text: "Account\nOriginal detail"},
+      preservation: {obligations: [{id: "finding", requirement: "account", basis: "Explicit owner account"}], relationships: []},
+      provenance: {purpose: "accepted_exchange", recipientRunId: "run-1", author: "host", sources: [source],
+        presenter: source, coverage: ["finding@1"], limitations: [], retainedPresentation: source}});
+    const form: ModelInputOwnerForm = {id: "finding-account", sectionId: "finding", sourceDigest: modelInputOccurrenceDigest(presentation.section),
+      owner: {...source, kind: "presenter"}, method: "exact_extract", content: {kind: "text", text: "Account"}, extract: {start: 0, end: 7},
+      satisfies: ["finding"], companions: [], dependencies: [], limitations: ["Owner-approved account"]};
+    const projection = {...projectModelInteraction({runId: "run-1", runRevision: 0, items: []}), historyPresentations: [presentation],
+      workingView: createExactModelWorkingView({sections: [presentation.section], recipientRunId: "run-1", boundary: "history"}), workingForms: [form]};
+    const selected = selectConversationPresentations(projection);
+    expect(selected[0]?.section.content).toEqual(form.content);
+    expect(canonicalConversationPresentations(projection)[0]?.section.content).toEqual({kind: "text", text: "Account\nOriginal detail"});
+    const seed = createModelConversationSeed("run-1", "3", selected);
+    const imported = importModelConversationSeed(JSON.parse(JSON.stringify(seed)), "continued-child");
+    expect(imported[0]?.section.content).toEqual(form.content);
+    expect(imported[0]?.section.provenance).toMatchObject({recipientRunId: "continued-child", originRunId: "run-1",
+      presenter: form.owner, limitations: form.limitations});
+    expect(imported[0]?.section.source).toEqual(source);
+  });
   it("keeps each delivered feedback occurrence at its consuming response, not at the current tail", () => {
     const feedback = {source: {owner: "controller", kind: "protocol", id: "protocol", revision: "1"},
       code: "ending_required", message: "Submit an ending proposal."};
@@ -27,7 +50,7 @@ describe("ModelInteractionProjection", () => {
         data: feedback, interpretation: {kind: "controller_feedback" as const, turn}};
       const batch = {id: `batch-${sequence}`, revision: "1", runId: "run-1", entries: [entry]};
       const receipt = {...createControllerInputDeliveryReceipt(batch, `request-${sequence + 1}`),
-        via: {kind: "provider" as const, requestId: `request-${sequence + 1}`, compositionId: `composition-${sequence}`,
+        via: {kind: "provider" as const, requestId: `request-${sequence + 1}`, compositionId: `composition-${sequence}`, workingViewId: `view-${sequence}`,
           sectionIds: createInputDeliverySections(batch).map(section => section.id), presentations: createInputDeliverySections(batch).map(retainInputPresentation)}};
       const next = controllerTurn(modelTurn([], `turn-${sequence + 1}`, `request-${sequence + 1}`));
       if (next.kind !== "controller_turn") throw new Error("Invalid fixture");
@@ -46,7 +69,7 @@ describe("ModelInteractionProjection", () => {
       source: {owner: "execution", kind: "process", id: "process-1", revision: "2"},
       occurredAt: "2026-10-13T00:00:00.000Z", data: {exitCode: 0}}]};
     const controllerReceipt = createControllerInputDeliveryReceipt(batch, "request-2");
-    const receipt = {...controllerReceipt, via: {kind: "provider" as const, requestId: "request-2", compositionId: "request-2",
+    const receipt = {...controllerReceipt, via: {kind: "provider" as const, requestId: "request-2", compositionId: "request-2", workingViewId: "view-2",
       sectionIds: createInputDeliverySections(batch).map(section => section.id), presentations: createInputDeliverySections(batch).map(retainInputPresentation)}};
     const next = controllerTurn(modelTurn([], "turn-2", "request-2"));
     if (next.kind !== "controller_turn") throw new Error("Invalid fixture");

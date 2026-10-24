@@ -57,8 +57,11 @@ it("records independent process lifetimes and immutable observations before Run 
     await expect.poll(()=>manager.get("run","a").phase).toBe("settled");
     const returned=await manager.observe({runId:"run",executionId:"a",invocationId:"later",waitMs:0,signal:controller.signal});
     expect(returned.stdout.text).toBe("captured-output");
+    await manager.searchOutput({runId:"run",executionId:"a",invocationId:"search",search:{query:"captured"},signal:controller.signal});
     await r.flush();
     const current=(await queries.query({kind:"get_snapshot",...ids})).selection!;
+    const searched=await queries.query({kind:"get_data_flow",...current,subject:r.ref("helarc-command","contribution","search","run","1")});
+    expect(searched.graph?.links).toContainEqual(expect.objectContaining({kind:"produces",from:expect.objectContaining({kind:"process",id:"a"})}));
     expect((await queries.query({kind:"get_subject",...before,subject})).records[0]?.payload).toMatchObject({kind:"process",phase:"running"});
     expect((await queries.query({kind:"get_subject",...current,subject})).records[0]?.payload).toMatchObject({kind:"process",phase:"settled"});
     const lifetime=await queries.query({kind:"get_timeline",...current,runId:"run",limit:500});

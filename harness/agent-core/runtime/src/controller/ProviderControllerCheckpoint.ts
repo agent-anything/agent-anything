@@ -15,11 +15,12 @@ export class ProviderControllerCheckpoint {
     return structuredClone(record.value) as T;
   }
 
-  async save(key: string, value: unknown): Promise<void> {
+  async save(key: string, value: unknown, usage?: import("./ControllerAuxiliaryUsage.js").ControllerAuxiliaryUsage): Promise<void> {
     if (!this.port) return;
     try {
       assertControllerCheckpointValue(value);
-      await this.port?.commit(`provider-controller:${key}`, {revision: 1, value});
+      if (usage && this.port.commitWithAuxiliaryUsage) await this.port.commitWithAuxiliaryUsage(`provider-controller:${key}`, {revision: 1, value}, usage);
+      else await this.port.commit(`provider-controller:${key}`, {revision: 1, value});
     } catch (cause) { throw new ControllerCheckpointError(key, {cause}); }
   }
 

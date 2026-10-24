@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { snapshotProviderRequest, modelCallRefKey, type ModelToolCall, type ProviderRequest } from "@agent-anything/model-interaction";
-import { modelInputFromSections, modelInputSectionLocations } from "@agent-anything/model-interaction/input";
+import { modelInputFromSections, modelInputSectionLocations, createExactModelWorkingView, selectModelWorkingView, applyModelInputOwnerForms, type ModelWorkingView } from "@agent-anything/model-interaction/input";
+import {applyModelInputAccounts} from "@agent-anything/model-interaction/input";
+import type { ModelInteractionProjection } from "./Controller.js";
 import type { ControllerCheckpointPort } from "./ControllerCheckpoint.js";
 import { retainInputPresentation, snapshotInputPresentation, type RetainedInputPresentation } from "./ControllerInputDelivery.js";
 
@@ -8,6 +10,7 @@ export interface ConversationOpeningReceipt {
   readonly runId: string;
   readonly requestId: string;
   readonly compositionId: string;
+  readonly workingViewId: string;
   readonly presentations: readonly RetainedInputPresentation[];
   readonly digest: string;
 }
@@ -16,6 +19,7 @@ export interface ModelConversationSeed {
   readonly sourceRunId: string;
   readonly sourceRevision: string;
   readonly presentations: readonly RetainedInputPresentation[];
+  readonly workingView: ModelWorkingView;
   readonly digest: string;
 }
 
@@ -34,7 +38,8 @@ export async function freezeConversationOpening(request: ProviderRequest, runId:
   const rest = request.composition.sections.filter(section => section.kind !== "conversation_opening");
   const sections = [...rest.slice(0, firstIndex), ...opening.presentations.map(value => value.section), ...rest.slice(firstIndex)];
   const modelInput = modelInputFromSections(sections);
-  return snapshotProviderRequest({...request, ...modelInput, composition: {...request.composition, sections, ...modelInput}});
+  const workingView = createExactModelWorkingView({sections, recipientRunId: runId, boundary: "request"});
+  return snapshotProviderRequest({...request, ...modelInput, composition: {...request.composition, sections, workingView, ...modelInput}});
 }
 
 function digest(value: unknown): string {
@@ -44,6 +49,8 @@ function digest(value: unknown): string {
 export function createConversationOpeningReceipt(runId: string, request: ProviderRequest): ConversationOpeningReceipt | null {
   const sections = request.composition.sections.filter(section => section.kind === "conversation_opening");
   if (sections.length === 0) return null;
+  if (request.composition.workingView?.recipientRunId !== runId) throw new TypeError("Conversation opening working-view recipient mismatch.");
+  selectModelWorkingView(request.composition.workingView, request.composition.sections);
   const first = request.composition.sections.indexOf(sections[0]!);
   if (request.composition.sections.slice(first, first + sections.length).some(section => section.kind !== "conversation_opening")) {
     throw new TypeError("Conversation opening must occupy a contiguous ordered request prefix after Instructions.");
@@ -56,19 +63,20 @@ export function createConversationOpeningReceipt(runId: string, request: Provide
     throw new TypeError("Conversation opening is missing from the actual request.");
   }
   const value = {runId, requestId: request.requestId, compositionId: request.composition.id,
+    workingViewId: request.composition.workingView.id,
     presentations: Object.freeze(sections.map(retainInputPresentation))};
   return snapshotConversationOpeningReceipt({...value, digest: digest(value)}, runId);
 }
 
 export function snapshotConversationOpeningReceipt(value: ConversationOpeningReceipt, runId: string): ConversationOpeningReceipt {
-  if (value.runId !== runId || !value.requestId || !value.compositionId || !Array.isArray(value.presentations) || !value.presentations.length) {
+  if (value.runId !== runId || !value.requestId || !value.compositionId || !value.workingViewId || !Array.isArray(value.presentations) || !value.presentations.length) {
     throw new TypeError("Conversation opening binding is invalid.");
   }
   const presentations = snapshotPresentations(value.presentations);
   if (presentations.some(({section}) => section.kind !== "conversation_opening" || section.provenance?.recipientRunId !== runId)) {
     throw new TypeError("Conversation opening recipient is invalid.");
   }
-  const retained = {runId, requestId: value.requestId, compositionId: value.compositionId, presentations};
+  const retained = {runId, requestId: value.requestId, compositionId: value.compositionId, workingViewId: value.workingViewId, presentations};
   if (value.digest !== digest(retained)) throw new TypeError("Conversation opening digest mismatch.");
   validateSettledConversation(presentations);
   return Object.freeze({...retained, digest: value.digest});
@@ -76,19 +84,40 @@ export function snapshotConversationOpeningReceipt(value: ConversationOpeningRec
 
 export function createModelConversationSeed(sourceRunId: string, sourceRevision: string,
   presentations: readonly RetainedInputPresentation[]): ModelConversationSeed {
-  const value = {sourceRunId, sourceRevision, presentations: snapshotPresentations(presentations)};
+  const value = {sourceRunId, sourceRevision, presentations: snapshotPresentations(presentations),
+    workingView: createExactModelWorkingView({sections: presentations.map(value => value.section), recipientRunId: sourceRunId, boundary: "request"})};
   return snapshotModelConversationSeed({...value, digest: digest(value)});
 }
 
 export function snapshotModelConversationSeed(value: ModelConversationSeed): ModelConversationSeed {
   if (!value.sourceRunId || !value.sourceRevision || !Array.isArray(value.presentations)) throw new TypeError("Conversation seed binding is invalid.");
-  const retained = {sourceRunId: value.sourceRunId, sourceRevision: value.sourceRevision, presentations: snapshotPresentations(value.presentations)};
+  const retained = {sourceRunId: value.sourceRunId, sourceRevision: value.sourceRevision, presentations: snapshotPresentations(value.presentations), workingView: value.workingView};
   if (retained.presentations.some(item => item.section.provenance?.recipientRunId !== value.sourceRunId)) {
     throw new TypeError("Conversation seed contains another recipient's exchanges.");
   }
   if (value.digest !== digest(retained)) throw new TypeError("Conversation seed digest mismatch.");
   validateSettledConversation(retained.presentations);
-  return Object.freeze({...retained, digest: value.digest});
+  if (value.workingView?.recipientRunId !== value.sourceRunId || value.workingView.boundary !== "request") throw new TypeError("Conversation seed view binding is invalid.");
+  selectModelWorkingView(value.workingView, retained.presentations.map(item => item.section));
+  return Object.freeze({...retained, workingView: createExactModelWorkingView({sections: retained.presentations.map(item => item.section),
+    recipientRunId: value.sourceRunId, boundary: "request"}), digest: value.digest});
+}
+
+/** Only selected coverage can suppress a source or become a continuation seed. */
+export function selectConversationPresentations(interaction: ModelInteractionProjection): readonly RetainedInputPresentation[] {
+  const available = canonicalConversationPresentations(interaction);
+  const forms = applyModelInputOwnerForms(available.map(value => value.section), interaction.workingForms ?? [],
+    interaction.workingView.recipientRunId!, "history");
+  return Object.freeze(applyModelInputAccounts(forms, interaction.workingAccounts ?? [],
+    interaction.workingView.recipientRunId!, "history").map(retainInputPresentation));
+}
+
+/** Immutable sources for preparation; this is not the selected working request. */
+export function canonicalConversationPresentations(interaction: ModelInteractionProjection): readonly RetainedInputPresentation[] {
+  const available = [...(interaction.opening?.presentations ?? []), ...(interaction.historyPresentations ?? [])];
+  const byId = new Map(available.map(value => [value.section.id, value]));
+  return Object.freeze(selectModelWorkingView(interaction.workingView, available.map(value => value.section))
+    .map(section => byId.get(section.id)!));
 }
 
 export function importModelConversationSeed(value: ModelConversationSeed, recipientRunId: string): readonly RetainedInputPresentation[] {

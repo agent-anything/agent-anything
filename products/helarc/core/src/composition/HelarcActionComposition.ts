@@ -43,6 +43,8 @@ import { withHelarcCompensationInput, withoutHelarcCompensationInput } from "../
 import { createHelarcCompensationBindings } from "../tools/HelarcCompensationBindings.js";
 import { createHelarcExecutionDetailsContribution, createHelarcExecutionDetailsHandler, type HelarcExecutionMaterialReader } from "../tools/HelarcExecutionDetails.js";
 import { createHelarcFileRestorationContribution } from "../tools/HelarcFileRestoration.js";
+import {createHelarcContextAccess} from "../tools/HelarcContextAccess.js";
+import type {ContextMaterialAccessPort} from "@agent-anything/context/material";
 
 export interface HelarcPhysicalActionContribution {
   readonly registrations: ActionRegistrationSnapshot;
@@ -81,6 +83,7 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
 }
 
 export interface CreateHelarcActionCompositionInput {
+  readonly contextMaterials?: ContextMaterialAccessPort;
   readonly executionEvidenceAccess?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort;
   readonly executionMaterials?: HelarcExecutionMaterialReader;
   readonly executionCollections?: import("../tools/HelarcExecutionDetails.js").HelarcExecutionCollectionReader;
@@ -128,7 +131,7 @@ export function createHelarcActionComposition(
     adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
     executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
     operationAvailability,
-    internalHandlers: Object.freeze([...input.command.internalHandlers, createHelarcExecutionDetailsHandler({records: input.executionEvidence,
+    internalHandlers: Object.freeze([...input.command.internalHandlers, ...createHelarcContextAccess(input.admittedAt, input.contextMaterials).map(value => value.handler), createHelarcExecutionDetailsHandler({records: input.executionEvidence,
       access: input.executionEvidenceAccess, materials: input.executionMaterials, collections: input.executionCollections, callable: input.executionCallable})]),
     composite: command.composite,
   });
@@ -143,6 +146,7 @@ export function createHelarcToolProfile(input: {
 }) {
   requireIsoDate(input.admittedAt);
   const details = createHelarcExecutionDetailsContribution(input.admittedAt);
+  const contextAccess = createHelarcContextAccess(input.admittedAt);
   const restoration = createHelarcFileRestorationContribution(input.admittedAt);
   const file = createCodeFileOperationContribution({
     actionAdapterIds: input.file.actionAdapterIds,
@@ -156,6 +160,7 @@ export function createHelarcToolProfile(input: {
     admittedAt: input.admittedAt,
   });
   const operationEntries = [
+    ...contextAccess.map(value => value.operation),
     details.operation,
     restoration.operation,
     ...file.operations,
@@ -168,10 +173,10 @@ export function createHelarcToolProfile(input: {
   });
   const operationBindings = createOperationBindingResolverSnapshot(
     "helarc.operation-bindings.v1",
-    [...file.bindings, ...command.bindings, details.resolver, restoration.resolver],
+    [...file.bindings, ...command.bindings, details.resolver, restoration.resolver, ...contextAccess.map(value => value.resolver)],
   );
   const resultContracts = createOperationResultContracts(operationCatalog, [
-    ...file.resultContracts, ...command.operations.map(commandResultContract), details.contract, restoration.contract,
+    ...file.resultContracts, ...command.operations.map(commandResultContract), details.contract, restoration.contract, ...contextAccess.map(value => value.contract),
   ]);
   const toolRegistrations = createToolRegistrationSnapshot(
     operationCatalog,
@@ -181,6 +186,7 @@ export function createHelarcToolProfile(input: {
       ...input.semanticTools,
       details.tool,
       restoration.tool,
+      ...contextAccess.map(value => value.tool),
     ].map(tool => {
       const participant = tool.descriptor.binding.kind === "operation" && [
         operationRefForCodeFileTool("Edit"), operationRefForCodeFileTool("Write"),

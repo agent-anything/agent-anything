@@ -49,6 +49,18 @@ export interface InspectionLifecycleDefinition {
 }
 
 export interface InspectionPayloadMap {
+  recording_link: {readonly stage: "recovery_prepared"; readonly target: {readonly sourceId: string; readonly datasetId: string; readonly runId: string} | null;
+    readonly limitation: string | null};
+  context_planning: {readonly requestId: string; readonly planningId: string; readonly disposition: string;
+    readonly measurement: string; readonly inputTokens: number | null; readonly proxyBytes: number;
+    readonly workingTarget: number | null; readonly anchorRequestId: string | null; readonly limitationCount: number};
+  working_view: {readonly requestId: string; readonly recipientRunId: string | null; readonly version: number;
+    readonly selectionCount: number; readonly groupCount: number; readonly stage: "included"};
+  working_selection: {readonly requestId: string; readonly sectionId: string; readonly position: number;
+    readonly digest: string; readonly representation: "exact" | "owner_form" | "semantic_account"; readonly obligationCount: number;
+    readonly relationshipCount: number; readonly protection: readonly string[]};
+  native_group: {readonly requestId: string; readonly turnId: string; readonly callCount: number;
+    readonly settledCallCount: number; readonly status: "settled" | "unsettled"; readonly protection: string};
   process: {readonly phase: string; readonly revision: number; readonly backend: string;
     readonly processId: number | null; readonly helperProcessId: number | null;
     readonly rootExit: {readonly code:number|null;readonly signal:string|null;readonly observedAt:string}|null;

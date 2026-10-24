@@ -2,6 +2,7 @@ import type { ToolAnnotations, ToolJsonObject } from "@agent-anything/tools/cata
 import {HELARC_PROCESS_OBSERVATION_SCHEMA, HELARC_PROCESS_WAIT_SCHEMA} from "./HelarcProcessSchemas.js";
 import { EXECUTION_DETAILS_DESCRIPTION, EXECUTION_DETAILS_SCHEMA, EXECUTION_REFERENCE_SCHEMA } from "./HelarcExecutionDetails.js";
 import { FILE_RESTORE_DESCRIPTION, FILE_RESTORE_SCHEMA } from "./HelarcFileRestoration.js";
+import {CONTEXT_ACCESS_DEFINITIONS, MATERIAL_REFS_SCHEMA} from "./HelarcContextAccess.js";
 
 export type HelarcShellToolName = "Bash" | "PowerShell";
 
@@ -32,6 +33,8 @@ export type HelarcBaselineToolName =
   | "TaskStop"
   | "TaskOutput"
   | "ExecutionDetails"
+  | "ContextSearch"
+  | "ContextRead"
   | "RestoreFile"
   | "AskUserQuestion"
   | "Agent"
@@ -74,7 +77,7 @@ export interface HelarcBaselineToolContract {
 }
 
 export const HELARC_BASELINE_TOOL_CONTRACT_REVISION =
-  "helarc.baseline-tool-contracts.v4";
+  "helarc.baseline-tool-contracts.v5";
 
 const POSITIVE_INTEGER = Object.freeze({
   type: "integer",
@@ -265,8 +268,13 @@ const TASK_STOP = contract({
 
 const TASK_OUTPUT = contract({
   name:"TaskOutput",description:"Observe retained output and lifecycle facts for one command owned by the current Run.",
-  inputSchema:objectSchema(["task_id"],{task_id:{type:"string",minLength:1,maxLength:1024},cursor:{type:"string",minLength:1,maxLength:4096},wait_ms:HELARC_PROCESS_WAIT_SCHEMA}),
-  outputSchema:HELARC_PROCESS_OBSERVATION_SCHEMA,annotations:{readOnlyHint:true},binding:operation("helarc.task.output",null),
+  inputSchema:{...objectSchema(["task_id"],{task_id:{type:"string",minLength:1,maxLength:1024},cursor:{type:"string",minLength:1,maxLength:4096},wait_ms:HELARC_PROCESS_WAIT_SCHEMA,
+    query:{type:"string",minLength:1,maxLength:1024,description:"Case-sensitive literal search, at most 1024 UTF-8 bytes; mutually exclusive with cursor/wait_ms."},
+    stream:{enum:["stdout","stderr"],description:"Search stream, default stdout."},search_cursor:{type:"string",minLength:1,maxLength:4096},limit:{type:"integer",minimum:1,maximum:16}}),
+    oneOf:[{required:["query"],properties:{query:{},cursor:false,wait_ms:false}},
+      {properties:{query:false,stream:false,search_cursor:false,limit:false}}]},
+  outputSchema:{anyOf:[HELARC_PROCESS_OBSERVATION_SCHEMA,{type:"object",required:["kind","task_id","run_id","matches","frontier","next_search_cursor"],properties:{kind:{const:"output_search"},task_id:{type:"string"},run_id:{type:"string"},matches:{type:"array"},frontier:{type:"object"},next_search_cursor:{type:["string","null"]}}}]},
+  annotations:{readOnlyHint:true},binding:operation("helarc.task.output",null),
 });
 
 const ASK_USER_QUESTION = contract({
@@ -334,6 +342,7 @@ const DELEGATION_TERMINAL_OUTPUT = objectSchema(["agent_id", "status", "summary"
   failure_code: { anyOf: [{ type: "string" }, { type: "null" }] },
   failure: {anyOf: [{type: "object"}, {type: "null"}]},
   execution_refs: {type: "array", maxItems: 16, items: EXECUTION_REFERENCE_SCHEMA},
+  material_refs: MATERIAL_REFS_SCHEMA,
   execution_lookup: {anyOf: [{type: "null"}, {type: "object", properties: {
     reference: EXECUTION_REFERENCE_SCHEMA, view: {const: "executions"}, after: {type: "string"}}}]},
 });
@@ -364,6 +373,7 @@ const AGENT = contract({
   inputSchema: objectSchema(["prompt"], {
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
     description: { type: "string", minLength: 1, maxLength: 1_024 },
+    material_refs: MATERIAL_REFS_SCHEMA,
     execution_refs: {type: "array", maxItems: 16, items: EXECUTION_REFERENCE_SCHEMA,
       description: "Optional exact accessible execution/effect/support/material references to hand to this Child; at most 16. Textual IDs alone do not transfer access."},
   }),
@@ -405,6 +415,9 @@ const BASH = shellContract("Bash");
 const POWERSHELL = shellContract("PowerShell");
 
 export const HELARC_BASELINE_TOOL_CONTRACTS = Object.freeze([
+  ...CONTEXT_ACCESS_DEFINITIONS.map(value => contract({name: value.name, description: value.description, inputSchema: value.inputSchema,
+    outputSchema: value.outputSchema, annotations: {readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false},
+    binding: operation(`helarc.${value.operation}`, null)})),
   contract({name: "RestoreFile", description: FILE_RESTORE_DESCRIPTION, inputSchema: FILE_RESTORE_SCHEMA,
     outputSchema: {type: "object"}, annotations: {readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false},
     binding: operation("helarc.file-restoration", "file_system.write")}),

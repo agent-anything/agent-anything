@@ -12,6 +12,8 @@ import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import { findHelarcBaselineToolContract } from "../tools/HelarcBaselineToolContracts.js";
 import {snapshotExecutionEvidenceRef, type ExecutionEvidenceRef} from "@agent-anything/operation-catalog/evidence";
 import type {HelarcExecutionHandoff} from "../tools/HelarcExecutionHandoff.js";
+import {snapshotContextMaterialRefs, type ContextMaterialAccessPort, type ContextMaterialRef} from "@agent-anything/context/material";
+import type {HelarcMaterialHandoff} from "../tools/HelarcMaterialHandoff.js";
 
 export interface HelarcDescendantAgentContribution {
   readonly tools: readonly ToolRegistrationInput[];
@@ -22,16 +24,18 @@ export function createHelarcDescendantAgentContribution(
   agent: Agent<HelarcAgentOutput>,
   admittedAt: string,
   executionHandoff?: HelarcExecutionHandoff,
+  contextMaterials?: ContextMaterialAccessPort,
+  materialHandoff?: HelarcMaterialHandoff,
 ): HelarcDescendantAgentContribution {
   const contract = findHelarcBaselineToolContract("Agent");
   const sendMessageContract = findHelarcBaselineToolContract("SendMessage");
   return Object.freeze({
     tools: Object.freeze([Object.freeze({
-      admissionId: "helarc.agent.v3",
+      admissionId: "helarc.agent.v4",
       descriptor: Object.freeze({
         ref: Object.freeze({
           tool: Object.freeze({ namespace: "helarc", name: "agent" }),
-          revision: "3",
+          revision: "4",
         }),
         name: contract.name,
         description: contract.description,
@@ -39,8 +43,8 @@ export function createHelarcDescendantAgentContribution(
         outputSchema: contract.outputSchema,
         schemaRevisions: Object.freeze({
           dialect: "json-schema-2020-12",
-          input: "2",
-          output: "3",
+          input: "3",
+          output: "4",
           translation: "native-1",
         }),
         annotations: contract.annotations,
@@ -61,11 +65,11 @@ export function createHelarcDescendantAgentContribution(
       allowedOrigins: Object.freeze(["model" as const]),
       admittedAt,
     }), Object.freeze({
-      admissionId: "helarc.send-message.v3",
+      admissionId: "helarc.send-message.v4",
       descriptor: Object.freeze({
         ref: Object.freeze({
           tool: Object.freeze({ namespace: "helarc", name: "send-message" }),
-          revision: "3",
+          revision: "4",
         }),
         name: sendMessageContract.name,
         description: sendMessageContract.description,
@@ -74,7 +78,7 @@ export function createHelarcDescendantAgentContribution(
         schemaRevisions: Object.freeze({
           dialect: "json-schema-2020-12",
           input: "1",
-          output: "3",
+          output: "4",
           translation: "native-1",
         }),
         annotations: sendMessageContract.annotations,
@@ -120,6 +124,10 @@ export function createHelarcDescendantAgentContribution(
             throw new TypeError("The requested descendant Agent revision is not admitted.");
           }
           const delegated = snapshotDelegatedInput(input.toolCall.input);
+          if (delegated.materialRefs.length) {
+            if (!contextMaterials) throw new TypeError("Retained material handoff is unavailable.");
+            await contextMaterials.validate(input.parent.run.id, delegated.materialRefs);
+          }
           if (delegated.executionRefs.length) {
             if (!executionHandoff) throw new TypeError("Execution-reference transfer is unavailable.");
             await executionHandoff.validate(input.parent.run.id, delegated.executionRefs);
@@ -144,7 +152,7 @@ export function createHelarcDescendantAgentContribution(
                 kind: "helarc.delegated-code-task",
                 input: Object.freeze({ prompt: delegated.prompt, ...(delegated.executionRefs.length ? {
                   execution_refs: delegated.executionRefs.map(ref => ({...ref})),
-                } : {}) }),
+                } : {}), ...(delegated.materialRefs.length ? {material_refs: delegated.materialRefs.map(ref => ({...ref}))} : {}) }),
                 metadata: Object.freeze({
                   product: "helarc",
                   description: delegated.description,
@@ -263,8 +271,10 @@ export function createHelarcDescendantAgentContribution(
         },
       }),
       resultProjection: Object.freeze({
-        project(input: Parameters<typeof projectDescendantResult>[0]) {
-          const outcome = projectDescendantResult(input);
+        async project(input: Parameters<typeof projectDescendantResult>[0]) {
+          let outcome = projectDescendantResult(input);
+          const materials = await materialHandoff?.project(input.result) ?? [];
+          if (materials.length && outcome.output !== null) outcome = {...outcome, output: {...outcome.output as object, material_refs: materials}};
           if (!executionHandoff) return outcome;
           return executionHandoff.project(input.result).then(page => {
             if (!page.references.length) return outcome;
@@ -287,12 +297,13 @@ function snapshotDelegatedInput(candidate: unknown): {
   readonly prompt: string;
   readonly description: string | null;
   readonly executionRefs: readonly ExecutionEvidenceRef[];
+  readonly materialRefs: readonly ContextMaterialRef[];
 } {
   if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
     throw new TypeError("Agent Tool input must be an object.");
   }
   const input = candidate as Record<string, unknown>;
-  if (Object.keys(input).some((key) => key !== "prompt" && key !== "description" && key !== "execution_refs")) {
+  if (Object.keys(input).some((key) => key !== "prompt" && key !== "description" && key !== "execution_refs" && key !== "material_refs")) {
     throw new TypeError("Agent Tool input contains an unsupported field.");
   }
   const prompt = boundedText(input.prompt, 64_000, "prompt");
@@ -301,7 +312,8 @@ function snapshotDelegatedInput(candidate: unknown): {
     : boundedText(input.description, 1_024, "description");
   const refs = input.execution_refs ?? [];
   if (!Array.isArray(refs) || refs.length > 16) throw new TypeError("execution_refs accepts at most 16 disclosed references.");
-  return Object.freeze({ prompt, description, executionRefs: Object.freeze(refs.map(ref => snapshotExecutionEvidenceRef(ref))) });
+  return Object.freeze({ prompt, description, executionRefs: Object.freeze(refs.map(ref => snapshotExecutionEvidenceRef(ref))),
+    materialRefs: snapshotContextMaterialRefs(input.material_refs ?? []) });
 }
 
 function projectDescendantResult(

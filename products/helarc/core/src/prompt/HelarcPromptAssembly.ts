@@ -2,7 +2,7 @@ import type {
   ControllerInput,
   ControllerPreProjectionInput,
 } from "@agent-anything/agent-runtime/controller";
-import { createInputDeliverySections } from "@agent-anything/agent-runtime/controller";
+import { createInputDeliverySections, canonicalConversationPresentations } from "@agent-anything/agent-runtime/controller";
 import type {
   ContextProjectionEstimationInput,
 } from "@agent-anything/context/projection";
@@ -107,9 +107,13 @@ function interactionHistorySections(
   input: ControllerPreProjectionInput | ControllerInput,
 ): readonly ModelInputSectionCandidate[] {
   if (!("interaction" in input)) return Object.freeze([]);
-  return Object.freeze(input.interaction.messages.map((message, index) => {
-    const retained = input.interaction.historyPresentations?.[index];
-    if (!retained || retained.section.content.kind !== "model_message" || JSON.stringify(retained.section.content.message) !== JSON.stringify(message)) {
+  const openingIds = new Set(input.interaction.opening?.presentations.map(value => value.section.id) ?? []);
+  const selected = canonicalConversationPresentations(input.interaction).filter(value => !openingIds.has(value.section.id));
+  const messages = new Map(input.interaction.historyPresentations?.map((value, index) =>
+    [value.section.id, input.interaction.messages[index]]));
+  return Object.freeze(selected.map(retained => {
+    const message = messages.get(retained.section.id);
+    if (retained.section.content.kind !== "model_message" || JSON.stringify(retained.section.content.message) !== JSON.stringify(message)) {
       throw new TypeError("Model history requires its exact retained presentation.");
     }
     return Object.freeze({...retained.section, kind: "interaction_history", provenance: {...retained.section.provenance!,

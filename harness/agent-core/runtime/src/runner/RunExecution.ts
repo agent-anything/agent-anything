@@ -1,4 +1,6 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
+import {AUXILIARY_USAGE_KEY, controllerAuxiliaryUsage, snapshotControllerAuxiliaryUsage} from "../controller/ControllerAuxiliaryUsage.js";
+import {RunAuxiliaryWork} from "./RunAuxiliaryWork.js";
 import { OperationCommitError } from "@agent-anything/operation-catalog/result";
 import { toolRevisionKey } from "@agent-anything/tools/identity";
 import type { ToolResultPresenter } from "./ToolResultPresenter.js";
@@ -132,6 +134,7 @@ import {
   snapshotControllerFeedback,
   projectModelInteraction,
   createModelConversationSeed,
+  selectConversationPresentations,
   snapshotModelConversationSeed,
   importModelConversationSeed,
   type ControllerDecision,
@@ -593,6 +596,7 @@ export class RunExecution<TOutput> {
   private acceptedDecision: RunControlCheckpoint["decision"] = null;
   private controllerInvocation: RunControlCheckpoint["controllerInvocation"] = null;
   private readonly controllerCheckpoints = new Map<string, unknown>();
+  private auxiliaryWork: RunAuxiliaryWork | null = null;
   private completionNotification: RunControlCheckpoint["completionNotification"] = null;
   private readonly retainedRetryEvents: import("../retry/index.js").RetryEvent[] = [];
   private stagedAgentBinding: {agent: Agent<TOutput>; binding: AgentInstructionBinding} | null = null;
@@ -798,6 +802,7 @@ export class RunExecution<TOutput> {
       }
       this.emittedItemCount = initial.items.length;
       this.accountedResourceItemCount = initial.items.length;
+      for (const value of controllerAuxiliaryUsage([...this.controllerCheckpoints], this.runId)) this.accountedAuxiliaryAttempts.add(value.attemptId);
       this.runStartedEventEmitted = this.initialized;
       const issue = this.interactions.getRecoveryIssues()[0];
       if (issue) throw new RunRecoveryError(runId, issue.code, issue.request.id);
@@ -1814,6 +1819,8 @@ export class RunExecution<TOutput> {
         const disposition = await this.interruptionCoordinator.execute("controller", () => invoke.call(controller, notification, {
           checkpoints: this.controllerCheckpointPort(turn.id, "completion"),
           runCheckpoints: this.controllerCheckpointPort(turn.id, "run"),
+          auxiliaryUsage: this.controllerAuxiliaryUsagePort(turn.id),
+          auxiliaryWork: this.controllerAuxiliaryWorkPort(turn.id),
           executionFlow: this.flow.context, cancellation: this.config.cancellation.context,
           retry: {waitControl: retry, providerRequest: this.config.retry.providerRequest, structuredOutput: this.config.retry.structuredOutput,
             deadlineAt: state.deadlineAt, events: this.retryEvents(turn.id)},
@@ -2400,7 +2407,9 @@ export class RunExecution<TOutput> {
           executionFlow: flow.callContext,
           checkpoints: this.controllerCheckpointPort(turn.id),
           runCheckpoints: this.controllerCheckpointPort(turn.id, "run"),
+          auxiliaryUsage: this.controllerAuxiliaryUsagePort(turn.id),
           recovering: resuming !== null,
+          auxiliaryWork: this.controllerAuxiliaryWorkPort(turn.id),
         }),
         state.deadlineAt,
       );
@@ -2562,8 +2571,78 @@ export class RunExecution<TOutput> {
     return scope;
   }
 
+  private controllerAuxiliaryWorkPort(invocationId: string): import("../controller/ControllerAuxiliaryWork.js").ControllerAuxiliaryWorkPort {
+    const conditional = this.controllerCheckpointPort(invocationId, "run");
+    return this.runAuxiliaryWork().port(async () => {
+      await conditional.compareAndCommit!([], []);
+      const basis = this.decisionBasis.revision(invocationId, this.writer.getSnapshot().revision);
+      return () => {
+        if (this.config.cancellation.context.signal.aborted || this.steeringQueue.length || this.interactionSettlements.length ||
+            this.decisionBasis.revision(invocationId, this.writer.getSnapshot().revision) !== basis ||
+            this.controllerInvocation?.turn.id !== invocationId || this.controllerInvocation.status !== "pending") throw new RetryInvocationInvalidatedError();
+      };
+    });
+  }
+
+  private runAuxiliaryWork(): RunAuxiliaryWork {
+    const key = (value: string) => JSON.stringify([this.runId, "run", value]);
+    this.auxiliaryWork ??= new RunAuxiliaryWork({runId: this.runId, cancellation: this.config.cancellation.context,
+      executionFlow: this.flow.context,
+      deadlineAt: this.writer.getSnapshot().deadlineAt, now: () => this.now(),
+      authority: () => JSON.stringify({permission: this.writer.getSnapshot().permission,
+        instructions: this.writer.getSnapshot().activeInstructionBinding, agent: this.writer.getSnapshot().activeAgent,
+        steering: this.steeringEpoch}),
+      read: value => this.controllerCheckpoints.get(key(value)) ?? null,
+      assertAdmission: () => this.controllerAuxiliaryUsagePort(null).assertAvailable(),
+      commit: async (id, writes, guard) => {
+        const retained = writes.map(value => ({key: key(value.key), value: retainControllerCheckpoint(value.value)}));
+        let rejected: unknown = null;
+        await this.writer.transaction(() => {
+          try {guard?.();} catch (error) {rejected = error; return {value: undefined};}
+          for (const value of retained) {
+            if (!JSON.parse(value.key)[2].startsWith(AUXILIARY_USAGE_KEY)) continue;
+            const previous = this.controllerCheckpoints.get(value.key);
+            if (previous !== undefined && !sameRunCommitValue(previous, value.value)) throw new ControllerCheckpointError(value.key);
+          }
+          if (retained.every(value => sameRunCommitValue(this.controllerCheckpoints.get(value.key) ?? null, value.value))) return {value: undefined};
+          for (const value of retained) this.controllerCheckpoints.set(value.key, value.value);
+          return {value: undefined, payloads: [], patch: {}, bookkeepingInvocationId: {kind: "auxiliary", invocationId: id}};
+        });
+        if (rejected) throw rejected;
+      },
+      context: (id, cancellation, deadlineAt) => ({auxiliaryUsage: this.controllerAuxiliaryUsagePort({kind: "auxiliary", invocationId: id}),
+        cancellation, executionFlow: this.flow.context,
+        retry: {providerRequest: this.config.retry.providerRequest, structuredOutput: this.config.retry.structuredOutput,
+          deadlineAt, events: this.retryEvents({kind: "auxiliary", invocationId: id})}}),
+    });
+    return this.auxiliaryWork;
+  }
+
+  private controllerAuxiliaryUsagePort(invocationId: import("./RunCommitBookkeeping.js").RunCommitBookkeeping): NonNullable<import("../controller/Controller.js").ControllerCallContext["auxiliaryUsage"]> {
+    return {
+      assertAvailable: () => {
+        this.config.cancellation.context.signal.throwIfAborted();
+        if (this.resourceFailure !== null) throw new Error("Auxiliary request cannot exceed the Run resource account.");
+      },
+      record: async value => {
+        const record = snapshotControllerAuxiliaryUsage(value);
+        const key = JSON.stringify([this.runId, "run", `${AUXILIARY_USAGE_KEY}${record.attemptId}`]);
+        await this.writer.transaction(() => {
+          const previous = this.controllerCheckpoints.get(key);
+          if (previous !== undefined) {
+            if (!sameRunCommitValue(previous, record)) throw new ControllerCheckpointError(key);
+            return {value: undefined};
+          }
+          this.controllerCheckpoints.set(key, record);
+          return {value: undefined, payloads: [], patch: {}, bookkeepingInvocationId: invocationId};
+        });
+      },
+    };
+  }
+
   private controllerCheckpointPort(invocationId: string, scope = "decision"): ControllerCheckpointPort {
     const identity = (key: string) => JSON.stringify([scope === "run" ? this.runId : invocationId, scope, key]);
+    const basis = this.decisionBasis.revision(invocationId, this.writer.getSnapshot().revision);
     return {
       read: key => structuredClone(this.controllerCheckpoints.get(identity(key)) ?? null),
       commit: async (key, value) => {
@@ -2574,6 +2653,32 @@ export class RunExecution<TOutput> {
             return {};
           }, invocationId);
         } catch (cause) { throw new ControllerCheckpointError(key, {cause}); }
+      },
+      commitWithAuxiliaryUsage: async (key, value, usage) => {
+        const retained = retainControllerCheckpoint(value), record = snapshotControllerAuxiliaryUsage(usage);
+        const usageKey = JSON.stringify([this.runId, "run", `${AUXILIARY_USAGE_KEY}${record.attemptId}`]);
+        await this.writer.transaction(() => {
+          const previous = this.controllerCheckpoints.get(usageKey);
+          if (previous !== undefined && !sameRunCommitValue(previous, record)) throw new ControllerCheckpointError(usageKey);
+          this.controllerCheckpoints.set(identity(key), retained);
+          this.controllerCheckpoints.set(usageKey, record);
+          return {value: undefined, payloads: [], patch: {}, bookkeepingInvocationId: invocationId};
+        });
+      },
+      compareAndCommit: async (expected, writes) => {
+        const checks = retainControllerCheckpoint(expected), values = retainControllerCheckpoint(writes);
+        const accepted = await this.writer.transaction(() => {
+          if (this.config.cancellation.context.signal.aborted || this.steeringQueue.length || this.interactionSettlements.length ||
+              this.decisionBasis.revision(invocationId, this.writer.getSnapshot().revision) !== basis ||
+              this.controllerInvocation?.turn.id !== invocationId || this.controllerInvocation.status !== "pending" ||
+              checks.some(check => JSON.stringify(this.controllerCheckpoints.get(identity(check.key)) ?? null) !== JSON.stringify(check.value))) {
+            return {value: false};
+          }
+          if (!values.length) return {value: true};
+          for (const value of values) this.controllerCheckpoints.set(identity(value.key), value.value);
+          return {value: true, payloads: [], patch: {}, bookkeepingInvocationId: invocationId};
+        });
+        if (!accepted) throw new RetryInvocationInvalidatedError();
       },
     };
   }
@@ -5169,10 +5274,10 @@ export class RunExecution<TOutput> {
       }),
       sourceRequest: request,
       sourceResult: result,
-      modelInteractionSeed: createModelConversationSeed(childResult.runId, interaction.revision, [
-        ...(interaction.opening?.presentations ?? (interaction.seed ? importModelConversationSeed(interaction.seed, childResult.runId) : [])),
-        ...(interaction.historyPresentations ?? []),
-      ]),
+      modelInteractionSeed: createModelConversationSeed(childResult.runId, interaction.revision,
+        !interaction.opening && interaction.seed ? [...importModelConversationSeed(interaction.seed, childResult.runId),
+          ...(interaction.historyPresentations ?? [])]
+          : selectConversationPresentations(interaction)),
       status: "available",
     };
     this.continuationRecords.set(correlation.ref.id, record);
@@ -6348,6 +6453,10 @@ export class RunExecution<TOutput> {
     (await this.settleCompletionCall(candidate.status === "cancelled" ? "cancelled" : "invalidated",
       candidate.status === "failed" ? candidate.failure.failure.code : "run_terminated_before_completion_acceptance"));
     let terminal = candidate;
+    if (!await this.runAuxiliaryWork().close(this.config.cancellationLimits.operationSettlementTimeoutMs)) {
+      terminal = {status: "failed", failure: runtimeFailure("runtime_resource_finalization_unconfirmed",
+        "Background preparation cancellation could not be confirmed.", {owner: "context_preparation"})};
+    }
     const stateBeforeFinalization = this.writer.getSnapshot();
     if (stateBeforeFinalization.plan?.status === "active") {
       const abandoned = abandonPlan({
@@ -6837,7 +6946,7 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private retryEvents(bookkeepingInvocationId: string | null = null): RetryEventSink {
+  private retryEvents(bookkeepingInvocationId: import("./RunCommitBookkeeping.js").RunCommitBookkeeping = null): RetryEventSink {
     return Object.freeze({
       emit: async (candidate: import("../retry/index.js").RetryEvent) => {
         const event = snapshotRetryEvent(candidate, this.runId);
@@ -6877,7 +6986,7 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private onStateCommitted(state: RunState<TOutput>, previous: RunState<TOutput>, bookkeepingInvocationId: string | null): void {
+  private onStateCommitted(state: RunState<TOutput>, previous: RunState<TOutput>, bookkeepingInvocationId: import("./RunCommitBookkeeping.js").RunCommitBookkeeping): void {
     if (this.stagedAgentBinding && sameInstructionBindingRef(this.stagedAgentBinding.binding.ref, state.activeInstructionBinding)) {
       this.activeAgent = this.stagedAgentBinding.agent;
       this.activeInstructionBinding = this.stagedAgentBinding.binding;
@@ -6885,6 +6994,7 @@ export class RunExecution<TOutput> {
       this.stagedAgentBinding = null;
     }
     this.decisionBasis.committed(state.revision, bookkeepingInvocationId ?? retryBookkeepingOwner(state, previous));
+    this.auxiliaryWork?.notifyAuthorityChanged();
     for (const scope of this.retryScopes.values()) scope.notifyStateChanged();
     if (!this.treeCommits && state.permission !== this.lastAuthorityPermission) {
       this.lastAuthorityPermission = state.permission;
@@ -6911,7 +7021,7 @@ export class RunExecution<TOutput> {
 
   private terminalResourceUsage: Parameters<RunTreeExecution["recordResources"]>[1] | null = null;
 
-  private async persistRunCommit(state: RunState<TOutput>, previous: RunState<TOutput> | null, accept?: () => void, bookkeepingInvocationId: string | null = null): Promise<void> {
+  private async persistRunCommit(state: RunState<TOutput>, previous: RunState<TOutput> | null, accept?: () => void, bookkeepingInvocationId: import("./RunCommitBookkeeping.js").RunCommitBookkeeping = null): Promise<void> {
     const port = this.dependencies.runCommits;
     if (!port && !this.treeCommits) return;
     const commitId = `${this.runId}:commit:${state.revision}`;
@@ -6933,6 +7043,9 @@ export class RunExecution<TOutput> {
           if (!Number.isSafeInteger(contextDelta) || contextDelta < 0) throw new TypeError("Run Context resource account moved backwards.");
           if (contextDelta > 0) record({contextBytes: {status: "measured", value: contextDelta}});
           this.accountResourceItems(state, previous?.items.length ?? 0, record);
+          const previousAuxiliary = controllerAuxiliaryUsage(members.find(member => member.head.state.run.id === this.runId)
+            ?.head.control.controllerCheckpoints ?? [], this.runId);
+          this.accountAuxiliaryUsage(previousAuxiliary.map(value => value.attemptId), record);
           const cancellation = this.config.cancellation.context.request;
           if (cancellation !== null) tree.recordCancellation(this.runId, cancellation);
           for (const transfer of commit.control.descendantTransfers) {
@@ -6962,7 +7075,7 @@ export class RunExecution<TOutput> {
     }
   }
 
-  private createRunCommit(state: RunState<TOutput>, previous: RunState<TOutput> | null, bookkeepingInvocationId: string | null = null): RunCommit {
+  private createRunCommit(state: RunState<TOutput>, previous: RunState<TOutput> | null, bookkeepingInvocationId: import("./RunCommitBookkeeping.js").RunCommitBookkeeping = null): RunCommit {
     const notifications = new Map<number, import("./RunInputNotifications.js").RunInputNotification>();
     let cursor = 0;
     let admissionSequence = 0;
@@ -7029,6 +7142,20 @@ export class RunExecution<TOutput> {
   private accountCommittedResources(state: RunState<TOutput>): void {
     this.accountResourceItems(state, this.accountedResourceItemCount, usage => this.recordTreeResources(usage));
     this.accountedResourceItemCount = state.items.length;
+    this.accountAuxiliaryUsage([...this.accountedAuxiliaryAttempts], usage => this.recordTreeResources(usage));
+    for (const value of controllerAuxiliaryUsage([...this.controllerCheckpoints], this.runId)) this.accountedAuxiliaryAttempts.add(value.attemptId);
+  }
+
+  private readonly accountedAuxiliaryAttempts = new Set<string>();
+
+  private accountAuxiliaryUsage(previous: readonly string[], record: (usage: Parameters<RunTreeExecution["recordResources"]>[1]) => void): void {
+    const metering = this.dependencies.controller.resourceMetering;
+    for (const value of controllerAuxiliaryUsage([...this.controllerCheckpoints], this.runId)) {
+      if (previous.includes(value.attemptId)) continue;
+      record({modelInputTokens: providerUsageMeasurement(value.usage?.inputTokens ?? null, metering.modelInputTokens),
+        modelOutputTokens: providerUsageMeasurement(value.usage?.outputTokens ?? null, metering.modelOutputTokens),
+        costUnits: providerUsageMeasurement(value.usage?.costUnits ?? null, metering.costUnits)});
+    }
   }
 
   private accountResourceItems(state: RunState<TOutput>, from: number,

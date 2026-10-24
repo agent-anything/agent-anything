@@ -279,6 +279,8 @@ const TOOL_SCOPE: Readonly<Record<HelarcBaselineToolName, HelarcModelQualificati
   Object.freeze({
     Read: "workspace_observation",
   ExecutionDetails: "workspace_observation",
+  ContextSearch: "workspace_observation",
+  ContextRead: "workspace_observation",
   RestoreFile: "workspace_mutation",
     Glob: "workspace_observation",
     Grep: "workspace_observation",

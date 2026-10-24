@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import {ContextMaterialError, type ContextMaterialAccessPort, type ContextMaterialPage, type ContextMaterialSearchPage} from "@agent-anything/context/material";
 import { restoreExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
 import { reportExecutionFailure, type ExecutionDiagnosticSink, type ExecutionDiagnosticContext } from "../diagnostics/HelarcExecutionDiagnostics.js";
 import {beginExecutionTiming, measureExecutionSync, type ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
@@ -54,6 +55,9 @@ interface PendingRequest {
 
 /** Bounded acknowledgement-based writer; queue admission is not persistence. */
 export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRecordPort, RunCommitPort, CompositeCommitPort, RunTreeCommitPort, AgentHookRecordPort, ProcessRecordPort, ShellSessionRecordPort, ExecutionEvidenceRecordPort, FileMaterialRecordPort {
+  async registerRecording(recording: import("./ExecutionRecording.js").ExecutionRecording): Promise<import("./ExecutionRecording.js").ExecutionRecordingRegistration> {
+    return await this.request({kind: "register_recording", recording}) as import("./ExecutionRecording.js").ExecutionRecordingRegistration;
+  }
   private readonly queue: PendingRequest[] = [];
   private flight: PendingRequest | null = null;
   private bytes = 0;
@@ -72,7 +76,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   private readonly workerTimings = new Map<string, {event: ExecutionPerformanceEvent; receivedAt: number}>();
 
   private constructor(private readonly worker: Worker, readonly generation: number, private readonly evidenceObserver?: ExecutionEvidenceObserver,
-    private readonly fileMaterialObserver?: FileMaterialObserver, private readonly diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher) {
+    private readonly fileMaterialObserver?: FileMaterialObserver, private readonly diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher,
+    private readonly contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver) {
     this.contentEncoder = new ExecutionContentEncoder(undefined, new ExecutionContentStatistics(Boolean(diagnostics?.performance)));
     this.environments = new ExecutionEnvironmentProtection(environmentCipher);
     this.exited = new Promise(resolve => worker.once("exit", code => {
@@ -82,6 +87,10 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     }));
     worker.on("error", error => this.fail("execution_storage_acknowledgement_unknown", error, "storage_worker_error"));
     worker.on("message", (reply: ExecutionStoreReply) => {
+      if (reply.kind === "context_material_observation") {
+        try {this.contextMaterialObserver?.observe(reply.observation);} catch { /* Observation cannot invalidate a durable commit. */ }
+        return;
+      }
       if (reply.kind === "performance") {
         const event = reply.event;
         if (event.kind === "started") {
@@ -154,7 +163,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   }
 
   static async open(directory: string, workerUrl = new URL("./ExecutionStoreWorker.js", import.meta.url), evidenceObserver?: ExecutionEvidenceObserver,
-    fileMaterialObserver?: FileMaterialObserver, diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher): Promise<HelarcExecutionStore> {
+    fileMaterialObserver?: FileMaterialObserver, diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher,
+    contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver): Promise<HelarcExecutionStore> {
     const endStartup = beginExecutionTiming(diagnostics, "storage.host.startup");
     let worker: Worker;
     try {worker = new Worker(workerUrl, { workerData: { directory, performanceDiagnostics: Boolean(diagnostics?.performance) } });}
@@ -172,7 +182,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       const message = (reply: ExecutionStoreReply) => {
         if (reply.kind === "startup_failed") { failed(new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)})); return; }
         if (reply.kind !== "ready") { failed(new ExecutionStoreError("execution_storage_protocol_invalid")); return; }
-        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher);
+        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher, contextMaterialObserver);
         endStartup();
         cleanup();
         resolve(store);
@@ -195,6 +205,45 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
 
   recordPreparedAction(value: Parameters<ActionRecordPort["recordPreparedAction"]>[0]): Promise<ExecutionRecordReceipt> {
     return this.record({kind: "prepared_action", value});
+  }
+
+  readonly contextMaterials: ContextMaterialAccessPort = {
+    read: async (runId, input, signal, invocationId) => {
+      signal.throwIfAborted();
+      const value = await this.contextMaterialRequest({kind: "read", runId, input, invocationId});
+      signal.throwIfAborted();
+      return value as ContextMaterialPage;
+    },
+    search: async (runId, input, signal, invocationId) => {
+      signal.throwIfAborted();
+      const value = await this.contextMaterialRequest({kind: "search", runId, input, invocationId});
+      signal.throwIfAborted();
+      return value as ContextMaterialSearchPage;
+    },
+    validate: async (runId, references) => {await this.contextMaterialRequest({kind: "validate", runId, references});},
+  };
+  readonly contextPreparations: import("@agent-anything/context/preparation").ContextPreparationStore = {
+    open: async intent => await this.contextPreparationRequest({kind: "open", intent}) as import("@agent-anything/context/preparation").ContextPreparationHead,
+    read: (id, stage) => this.contextPreparationRequest({kind: "read", id, stage}),
+    write: async (id, stage, value) => {await this.contextPreparationRequest({kind: "write", id, stage, value});},
+    retire: async (id, reason) => {await this.contextPreparationRequest({kind: "retire", id, reason});},
+  };
+  private async contextPreparationRequest(command: import("./ContextPreparationDatabase.js").ContextPreparationCommand): Promise<unknown> {
+    const result = await this.request({kind: "context_preparation", command});
+    if (!result || !("preparationValue" in result)) throw new ExecutionStoreError("execution_storage_protocol_invalid");
+    return result.preparationValue;
+  }
+  readonly contextMaterialRetention = {
+    prepare: async (transfer: import("./ContextMaterialDatabase.js").ContextMaterialTransfer) => {await this.contextMaterialRequest({kind:"prepare",transfer});},
+    accept: async (transfer: import("./ContextMaterialDatabase.js").ContextMaterialTransfer) => {await this.contextMaterialRequest({kind:"accept",transfer});},
+    release: async (consumerId: string) => {await this.contextMaterialRequest({kind:"release",consumerId});},
+  };
+  private async contextMaterialRequest(command: import("./ContextMaterialDatabase.js").ContextMaterialCommand) {
+    try {return await this.request({kind: "context_material", command});}
+    catch (error) {
+      if (error instanceof ExecutionStoreError && error.code.startsWith("context_")) throw new ContextMaterialError(error.code, error.cause instanceof Error ? error.cause.message : error.code);
+      throw error;
+    }
   }
   recordPreEffect(value: Parameters<ActionRecordPort["recordPreEffect"]>[0]): Promise<ExecutionRecordReceipt> {
     return this.record({ kind: "preparation", value });

@@ -1,6 +1,8 @@
 import type { ProcessSnapshot, ProcessObservation, ProcessInputNotification } from "./ProcessObservation.js";
 import type { ProcessOutputCheckpoint, ProcessOutputPaths } from "./ProcessOutputStore.js";
 import { OperationCommitError } from "@agent-anything/operation-catalog/result";
+import type {ProcessOutputSearchInput, ProcessOutputSearchResult} from "./ProcessOutputSearch.js";
+export interface ProcessOutputSearchReceipt {readonly invocationId: string; readonly input: ProcessOutputSearchInput; readonly output: ProcessOutputSearchResult;}
 
 export interface ProcessCheckpoint<Environment = Readonly<Record<string, string>>> {
   readonly version: 1;
@@ -28,6 +30,7 @@ export interface ProcessCheckpoint<Environment = Readonly<Record<string, string>
   readonly observationSequence: number;
   readonly initialSnapshot: ProcessObservation | null;
   readonly observations: readonly ProcessObservation[];
+  readonly searches: readonly ProcessOutputSearchReceipt[];
   readonly initialDelivery: string | null;
   readonly deliveryCursor: string | null;
   readonly deliveryState: string | null;
@@ -62,6 +65,8 @@ export function validateProcessCheckpoint<Environment>(next: ProcessCheckpoint<E
   }
   if (next.observations.some(item => !same(item.execution, next.snapshot.ref)) ||
       new Set(next.observations.map(item => item.invocationId)).size !== next.observations.length) throw new ProcessRecordError(next.input.executionId);
+  if (!Array.isArray(next.searches) || next.searches.some(item => !item.invocationId || item.output.task_id !== next.input.executionId) ||
+      new Set(next.searches.map(item => item.invocationId)).size !== next.searches.length) throw new ProcessRecordError(next.input.executionId);
   if (!previous) {
     if (next.revision !== 0 || next.launchIntent || next.snapshot.process !== null) throw new ProcessRecordError(next.input.executionId);
     return;
@@ -71,5 +76,6 @@ export function validateProcessCheckpoint<Environment>(next: ProcessCheckpoint<E
       next.observationSequence < previous.observationSequence ||
       previous.initialDelivery !== null && previous.initialDelivery !== next.initialDelivery ||
       !same(previous.notifications, next.notifications.slice(0, previous.notifications.length)) ||
-      !same(previous.observations, next.observations.slice(0, previous.observations.length))) throw new ProcessRecordError(next.input.executionId);
+      !same(previous.observations, next.observations.slice(0, previous.observations.length)) ||
+      !same(previous.searches, next.searches.slice(0, previous.searches.length))) throw new ProcessRecordError(next.input.executionId);
 }

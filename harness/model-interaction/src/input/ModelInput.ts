@@ -1,4 +1,5 @@
 import type { ModelJsonValue } from "../ModelInteractionContractValidation.js";
+import { selectModelWorkingView, snapshotModelInputPreservation, type ModelInputPreservation, type ModelWorkingView } from "./ModelWorkingView.js";
 import {
   modelInstructionsEqual,
   snapshotModelInstructions,
@@ -71,15 +72,18 @@ export interface ModelInputSection {
   readonly necessity: "mandatory" | "optional";
   readonly content: ModelInputContent;
   readonly provenance?: ModelInputProvenance;
+  readonly preservation?: ModelInputPreservation;
 }
 
 export interface ModelInputLineage {
-  readonly instructionBinding: ModelInputSourceRef;
-  readonly agent: ModelInputSourceRef;
-  readonly instructions: ModelInputSourceRef;
-  readonly instructionRelease: ModelInputSourceRef;
-  readonly instructionResolver: ModelInputSourceRef;
-  readonly instructionContent: ModelInputSourceRef;
+  readonly auxiliary?: {readonly purpose: "context_generation" | "context_assessment";
+    readonly method: ModelInputSourceRef; readonly basis: ModelInputSourceRef};
+  readonly instructionBinding: ModelInputSourceRef | null;
+  readonly agent: ModelInputSourceRef | null;
+  readonly instructions: ModelInputSourceRef | null;
+  readonly instructionRelease: ModelInputSourceRef | null;
+  readonly instructionResolver: ModelInputSourceRef | null;
+  readonly instructionContent: ModelInputSourceRef | null;
   readonly instructionModel: {
     readonly providerId: string;
     readonly model: string;
@@ -107,6 +111,7 @@ export interface ModelInputComposition {
   readonly model: string;
   readonly interaction: ProviderInteraction;
   readonly sections: readonly ModelInputSection[];
+  readonly workingView: ModelWorkingView;
   readonly instructions: ModelInstructions;
   readonly messages: readonly ModelMessage[];
   readonly lineage: ModelInputLineage;
@@ -118,7 +123,7 @@ export function snapshotModelInputComposition(
 ): ModelInputComposition {
   strictRecord(input, "ModelInputComposition", [
     "id", "providerId", "model", "interaction", "sections", "instructions", "messages",
-    "lineage", "composedAt",
+    "lineage", "composedAt", "workingView",
   ]);
   const interaction = snapshotProviderInteraction(input.interaction);
   if (!Array.isArray(input.sections) || input.sections.length === 0) {
@@ -130,6 +135,8 @@ export function snapshotModelInputComposition(
   if (new Set(sections.map((section) => section.id)).size !== sections.length) {
     throw new TypeError("ModelInputComposition section identities must be unique.");
   }
+  if (input.workingView?.boundary !== "request") throw new TypeError("Composition requires a request working view.");
+  selectModelWorkingView(input.workingView, sections);
   const projectedInput = modelInputFromSections(sections);
   const instructions = snapshotModelInstructions(input.instructions);
   const messages = snapshotModelMessages(input.messages);
@@ -152,6 +159,7 @@ export function snapshotModelInputComposition(
     model: token(input.model, "ModelInputComposition.model"),
     interaction,
     sections: Object.freeze(sections),
+    workingView: snapshotJsonValue(input.workingView, "workingView") as unknown as ModelWorkingView,
     instructions,
     messages,
     lineage,
@@ -205,7 +213,7 @@ export function snapshotModelInputSection(
   path = "ModelInputSection",
 ): ModelInputSection {
   strictRecord(input, path, [
-    "id", "source", "kind", "role", "necessity", "content", "provenance",
+    "id", "source", "kind", "role", "necessity", "content", "provenance", "preservation",
   ]);
   if (!isRole(input.role)) throw new TypeError(`${path}.role is invalid.`);
   if (input.necessity !== "mandatory" && input.necessity !== "optional") {
@@ -219,6 +227,7 @@ export function snapshotModelInputSection(
     necessity: input.necessity,
     content: snapshotContent(input.content, `${path}.content`),
     ...(input.provenance === undefined ? {} : {provenance: snapshotProvenance(input.provenance, `${path}.provenance`)}),
+    ...(input.preservation === undefined ? {} : {preservation: snapshotModelInputPreservation(input.preservation)}),
   });
 }
 
@@ -268,15 +277,28 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     "toolExposureContent", "toolExposureBasis", "toolExposureProof", "toolGuidance",
     "controllerControlGuidance", "callableDefinitions", "modelQualification",
     "interactionHistory",
-    "protocol", "policy",
+    "protocol", "policy", "auxiliary",
   ]);
+  const agentBindings = [input.instructionBinding, input.agent, input.instructions, input.instructionRelease,
+    input.instructionResolver, input.instructionContent];
+  if (input.auxiliary) {
+    strictRecord(input.auxiliary, "auxiliary lineage", ["purpose", "method", "basis"]);
+    if (!["context_generation", "context_assessment"].includes(input.auxiliary.purpose) ||
+        agentBindings.some(value => value !== null) || input.instructionBlocks.length) {
+      throw new TypeError("Auxiliary context work cannot impersonate Agent instruction bindings.");
+    }
+  } else if (agentBindings.some(value => value === null)) {
+    throw new TypeError("Working model input requires complete Agent instruction bindings.");
+  }
   return Object.freeze({
-    instructionBinding: snapshotSource(input.instructionBinding, "ModelInputComposition.lineage.instructionBinding"),
-    agent: snapshotSource(input.agent, "ModelInputComposition.lineage.agent"),
-    instructions: snapshotSource(input.instructions, "ModelInputComposition.lineage.instructions"),
-    instructionRelease: snapshotSource(input.instructionRelease, "ModelInputComposition.lineage.instructionRelease"),
-    instructionResolver: snapshotSource(input.instructionResolver, "ModelInputComposition.lineage.instructionResolver"),
-    instructionContent: snapshotSource(input.instructionContent, "ModelInputComposition.lineage.instructionContent"),
+    ...(input.auxiliary ? {auxiliary: Object.freeze({purpose: input.auxiliary.purpose,
+      method: snapshotSource(input.auxiliary.method, "auxiliary method"), basis: snapshotSource(input.auxiliary.basis, "auxiliary basis")})} : {}),
+    instructionBinding: snapshotNullableSource(input.instructionBinding, "ModelInputComposition.lineage.instructionBinding"),
+    agent: snapshotNullableSource(input.agent, "ModelInputComposition.lineage.agent"),
+    instructions: snapshotNullableSource(input.instructions, "ModelInputComposition.lineage.instructions"),
+    instructionRelease: snapshotNullableSource(input.instructionRelease, "ModelInputComposition.lineage.instructionRelease"),
+    instructionResolver: snapshotNullableSource(input.instructionResolver, "ModelInputComposition.lineage.instructionResolver"),
+    instructionContent: snapshotNullableSource(input.instructionContent, "ModelInputComposition.lineage.instructionContent"),
     instructionModel: snapshotInstructionModel(input.instructionModel),
     instructionBlocks: snapshotSourceList(
       input.instructionBlocks,
@@ -323,7 +345,7 @@ function snapshotNullableSource(input: ModelInputSourceRef | null, path: string)
   return input === null ? null : snapshotSource(input, path);
 }
 
-function snapshotSource(input: ModelInputSourceRef, path: string): ModelInputSourceRef {
+export function snapshotModelInputSourceRef(input: ModelInputSourceRef, path = "source"): ModelInputSourceRef {
   strictRecord(input, path, ["owner", "kind", "id", "revision", "runId"]);
   return Object.freeze({
     owner: token(input.owner, `${path}.owner`),
@@ -333,6 +355,8 @@ function snapshotSource(input: ModelInputSourceRef, path: string): ModelInputSou
     ...(input.runId === undefined ? {} : {runId: token(input.runId, `${path}.runId`)}),
   });
 }
+
+const snapshotSource = snapshotModelInputSourceRef;
 
 function isRole(value: unknown): value is ModelInputSectionRole {
   return value === "instruction" || value === "user" || value === "assistant" || value === "tool";

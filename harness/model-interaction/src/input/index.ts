@@ -1,4 +1,9 @@
-export { modelInputSectionLocations } from "./ModelInput.js";
+export { modelInputSectionLocations, snapshotModelInputSourceRef } from "./ModelInput.js";
+export {applyModelInputOwnerForms, modelInputOccurrenceDigest} from "./ModelInputForms.js";
+export type {ModelInputOwnerForm} from "./ModelInputForms.js";
+export {modelInputValueDigest} from "./ModelWorkingView.js";
+export { createExactModelWorkingView, createOwnerModelWorkingView, selectModelWorkingView, snapshotModelInputPreservation } from "./ModelWorkingView.js";
+export type { ModelWorkingView, ModelWorkingViewEntry, ModelNativeExchangeGroup, ModelInputPreservation } from "./ModelWorkingView.js";
 export type { ModelInputSectionLocation } from "./ModelInput.js";
 export type {
   ModelInputComposition,
@@ -32,3 +37,4 @@ export {
   ModelInputCompositionError,
   modelInputFromComposition,
 } from "./ModelInputComposition.js";
+export * from "./ModelInputAccounts.js";

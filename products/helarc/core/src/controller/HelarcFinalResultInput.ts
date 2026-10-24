@@ -1,4 +1,5 @@
 import { validatePlanUpdate, type PlanLimits } from "@agent-anything/agent-runtime/plan";
+import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 
 export function finalResultInputError(
   value: unknown,
@@ -9,8 +10,11 @@ export function finalResultInputError(
     return "final_result input must be an object with optional response and, when required, plan.";
   }
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some(key => key !== "response" && key !== "plan")) {
-    return "final_result accepts only response and plan; remove the other fields.";
+  if (Object.keys(input).some(key => key !== "response" && key !== "plan" && key !== "material_refs")) {
+    return "final_result accepts only response, plan and material_refs; remove the other fields.";
+  }
+  if (Object.hasOwn(input, "material_refs")) {
+    try {snapshotContextMaterialRefs(input.material_refs);} catch (error) {return (error as Error).message;}
   }
   if (Object.hasOwn(input, "response") && typeof input.response !== "string") {
     return "final_result.response must be a string when supplied; omit it to adopt existing text, or use an empty string for no final reply.";

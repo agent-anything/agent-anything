@@ -29,6 +29,7 @@ describe("Host public API", () => {
       "resolveHostRunContext",
     ]);
     expect(Object.keys(compositionApi).sort()).toEqual([
+      "ProviderRequestAdmission",
       "resolveHostRunPermissionConfig",
     ]);
     expect(Object.keys(runApi).sort()).toEqual([

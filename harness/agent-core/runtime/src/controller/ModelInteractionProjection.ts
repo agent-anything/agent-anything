@@ -7,10 +7,11 @@ import {
   type ModelToolCall,
   type ModelToolResult,
 } from "@agent-anything/model-interaction";
+import { snapshotModelInputUsageObservation, type ModelInputUsageObservation } from "@agent-anything/model-interaction/context";
 import type { RunItem } from "../run/RunItem.js";
 import { retainInputPresentation, snapshotInputDeliveryReceipt } from "./ControllerInputDelivery.js";
 import { snapshotConversationOpeningReceipt, snapshotModelConversationSeed, type ModelConversationSeed } from "./ControllerConversation.js";
-import type { ModelInputSourceRef } from "@agent-anything/model-interaction/input";
+import { createExactModelWorkingView, type ModelInputSourceRef } from "@agent-anything/model-interaction/input";
 import type {
   ControllerModelItem,
   ModelInteractionProjection,
@@ -31,11 +32,16 @@ export function projectModelInteraction(input: {
 }): ModelInteractionProjection {
   const seed = input.seed ? snapshotModelConversationSeed(input.seed) : null;
   const messages: ModelMessage[] = [];
+  const inputUsageObservations = new Map<string, ModelInputUsageObservation>();
+  let workingForms: readonly import("@agent-anything/model-interaction/input").ModelInputOwnerForm[] = [];
+  let workingAccounts: readonly import("@agent-anything/model-interaction/input").ModelInputAccount[] = [];
   let opening: ModelInteractionProjection["opening"] = null;
   const historyPresentations: NonNullable<ModelInteractionProjection["historyPresentations"]>[number][] = [];
   const append = (message: ModelMessage, sources: readonly ModelInputSourceRef[]) => {
     const section = {id: `${input.runId}:history:${messages.length}`, source: sources[0]!, kind: "interaction_history",
       role: message.role, necessity: "mandatory" as const, content: {kind: "model_message" as const, message},
+      preservation: {obligations: [{id: "accepted-exchange", requirement: "account" as const,
+        basis: "Preserve the accepted exchange and its correlated outcomes."}], relationships: []},
       provenance: {purpose: "accepted_exchange", recipientRunId: input.runId, author: message.role === "assistant" ? "model" : "capability",
         sources, presenter: {owner: "agent-runtime", kind: "presenter", id: "model-interaction-history", revision: "1"},
         coverage: sources.map(source => `${source.id}@${source.revision}`), limitations: []}};
@@ -113,6 +119,21 @@ export function projectModelInteraction(input: {
         continue;
       }
       const projected = projectControllerTurn(item.payload.modelItems);
+      for (const model of item.payload.modelItems) if (model.kind === "model_response_correlation" && model.metadata.workingAccounts !== undefined) {
+        if (!Array.isArray(model.metadata.workingAccounts)) throw projectionFailure("working_accounts_invalid", "Accepted account receipt is invalid.");
+        workingAccounts = model.metadata.workingAccounts as typeof workingAccounts;
+      }
+      for (const model of item.payload.modelItems) if (model.kind === "model_response_correlation" && model.metadata.workingForms !== undefined) {
+        if (!Array.isArray(model.metadata.workingForms)) throw projectionFailure("working_forms_invalid", "Accepted view receipt is invalid.");
+        workingForms = model.metadata.workingForms as typeof workingForms;
+      }
+      for (const model of item.payload.modelItems) if (model.kind === "model_response_correlation" && model.metadata.inputUsageObservation) {
+        const observation = snapshotModelInputUsageObservation(model.metadata.inputUsageObservation as ModelInputUsageObservation);
+        if (observation.runId !== input.runId || observation.requestId !== model.response.requestId) {
+          throw projectionFailure("input_usage_observation_mismatch", "Usage observation must belong to its accepted local response.");
+        }
+        inputUsageObservations.set(observation.purpose, observation);
+      }
       latestTurn = Object.freeze({
         runId: input.runId,
         runItemId: item.ref.id,
@@ -167,6 +188,11 @@ export function projectModelInteraction(input: {
   flushResults();
   return Object.freeze({
     id: `${input.runId}:model-interaction`,
+    inputUsageObservations: Object.freeze([...inputUsageObservations.values()]),
+    workingForms: Object.freeze([...workingForms]),
+    workingAccounts: Object.freeze([...workingAccounts]),
+    workingView: createExactModelWorkingView({recipientRunId: input.runId, boundary: "history",
+      sections: [...(opening?.presentations ?? []), ...historyPresentations].map(value => value.section)}),
     revision: String(input.runRevision),
     messages: Object.freeze(messages),
     unsettledCalls: Object.freeze([...unsettled.values()]),

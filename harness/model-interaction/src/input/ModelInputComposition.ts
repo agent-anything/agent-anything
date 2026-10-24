@@ -13,6 +13,7 @@ import {
 } from "./ModelInput.js";
 import type { ProviderInteraction } from "../ProviderInteraction.js";
 import { snapshotProviderInteraction } from "../ProviderInteraction.js";
+import { createExactModelWorkingView, type ModelInputPreservation } from "./ModelWorkingView.js";
 
 export interface ModelInputSectionCandidate {
   readonly id: string;
@@ -22,6 +23,7 @@ export interface ModelInputSectionCandidate {
   readonly necessity: "mandatory" | "optional";
   readonly content: ModelInputContent;
   readonly provenance?: ModelInputProvenance;
+  readonly preservation?: ModelInputPreservation;
 }
 
 export type ModelInputCompositionFailureCode = "model_input_sections_invalid";
@@ -64,6 +66,7 @@ export function composeModelInput(input: {
     necessity: section.necessity,
     content: section.content,
     ...(section.provenance === undefined ? {} : {provenance: section.provenance}),
+    ...(section.preservation === undefined ? {} : {preservation: section.preservation}),
   }));
   const projectedInput = modelInputFromSections(sections);
   return snapshotModelInputComposition({
@@ -72,6 +75,8 @@ export function composeModelInput(input: {
     model: input.model,
     interaction: snapshotProviderInteraction(input.interaction),
     sections,
+    workingView: createExactModelWorkingView({sections, boundary: "request",
+      recipientRunId: sections.find(section => section.provenance)?.provenance?.recipientRunId ?? null}),
     instructions: projectedInput.instructions,
     messages: projectedInput.messages,
     lineage: input.lineage,

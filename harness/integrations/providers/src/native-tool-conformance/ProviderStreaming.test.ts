@@ -101,6 +101,19 @@ it("preserves explicit non-thinking mode in streamed OpenAI-compatible requests"
   expect(JSON.parse(fetch.mock.calls[0]![1].body)).toMatchObject({ stream: true, thinking: { type: "disabled" } });
 });
 
+it("preserves streamed model identity and inclusive cache/reasoning counters", async () => {
+  const value = `data: ${JSON.stringify({id: "response-1", model: "model-revision", system_fingerprint: "fp-1",
+    choices: [{index: 0, delta: {role: "assistant", content: "Done"}, finish_reason: "stop"}]})}\n\n` +
+    `data: ${JSON.stringify({id: "response-1", choices: [], usage: {prompt_tokens: 100, completion_tokens: 20,
+      total_tokens: 120, prompt_tokens_details: {cached_tokens: 80}, completion_tokens_details: {reasoning_tokens: 10}}})}\n\n` +
+    "data: [DONE]\n\n";
+  const provider = factories.openai(async () => response(body(value)));
+  const result = await provider.send(createNativeProviderRequest(provider), context(), {mode: "streaming", invocationId: "usage"});
+  expect(result).toMatchObject({kind: "succeeded", response: {turn: {usage: {inputTokens: 100, outputTokens: 20,
+    totalTokens: 120, metadata: {cachedInputTokens: 80, reasoningTokens: 10, accountingConsistent: true,
+      reportedIdentity: JSON.stringify({model: "model-revision", fingerprint: "fp-1"})}}}}});
+});
+
 describe.each(["ollama", "openai"] as const)("%s streaming", (format) => {
   const create = factories[format];
   it("normalizes split UTF-8 and protocol frames identically to buffered native Tools", async () => {

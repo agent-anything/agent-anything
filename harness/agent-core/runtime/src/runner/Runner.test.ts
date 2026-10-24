@@ -181,6 +181,59 @@ class ScriptedController implements Controller<TestOutput> {
 }
 
 describe("Runner semantic integration", () => {
+  it.each([false, true])("charges auxiliary attempts once, without creating working Turns (durable=%s)", async durable => {
+    const operations = createOperationFixture([]), store = createTreeCommitFixture();
+    const controller = new ScriptedController([async (_input, context) => {
+      const record = {attemptId: "aux-attempt-1", requestId: "aux-request-1", purpose: "context_generation" as const,
+        outcome: "succeeded" as const, usage: {inputTokens: 120, outputTokens: 15, totalTokens: 135, costUnits: 3, metadata: {}}};
+      await context.auxiliaryUsage!.record(record);
+      await context.auxiliaryUsage!.record(structuredClone(record));
+      context.auxiliaryUsage!.assertAvailable();
+      return complete("Done");
+    }]);
+    const handle = createRunner(controller, operations, durable ? {runTreeCommits: store.port} : {})
+      .start(createAgent(), createRunInput(), createRunConfig(operations));
+    expect((await handle.wait()).status).toBe("completed");
+    expect(handle.getSnapshot().runTree.nodes[0]!.resources.usage).toMatchObject({
+      controllerTurns: {value: 1}, actions: {value: 0}, modelInputTokens: {value: 120}, modelOutputTokens: {value: 15}, costUnits: {value: 3}});
+    if (durable) expect(store.records.at(-1)!.checkpoint.resources.nodes[0]!.measured.modelInputTokens).toBe(120);
+  });
+  it("rejects stale conditional preparation without poisoning the Run writer", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([async (_input, context) => {
+      const port = context.runCheckpoints!;
+      await port.compareAndCommit!([{key: "selected", value: null}], [{key: "selected", value: {epoch: 1}}]);
+      await expect(port.compareAndCommit!([{key: "selected", value: null}], [{key: "selected", value: {epoch: 2}}]))
+        .rejects.toMatchObject({name: "RetryInvocationInvalidatedError"});
+      expect(port.read("selected")).toEqual({epoch: 1});
+      await port.compareAndCommit!([{key: "selected", value: {epoch: 1}}], [{key: "selected", value: {epoch: 3}}]);
+      return complete("The valid selection can still complete");
+    }]);
+    const result = await createRunner(controller, operations).run(createAgent(), createRunInput(), createRunConfig(operations));
+    expect(result.status, JSON.stringify(result.cause)).toBe("completed");
+  });
+
+  it("invalidates preparation on accepted steering before any dispatch or selection", async () => {
+    const operations = createOperationFixture([]);
+    const registered = deferred<void>(), proceed = deferred<void>();
+    const controller = new ScriptedController([async (_input, context) => {
+      await context.runCheckpoints!.compareAndCommit!([{key: "selected", value: null}], []);
+      registered.resolve(); await proceed.promise;
+      await context.runCheckpoints!.compareAndCommit!([{key: "selected", value: null}], [{key: "selected", value: {epoch: 1}}]);
+      throw new Error("Must not dispatch stale preparation");
+    }, (_input, context) => {
+      expect(context.runCheckpoints!.read("selected")).toBeNull();
+      return complete("Fresh decision after steering");
+    }]);
+    const handle = createRunner(controller, operations).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await registered.promise;
+    expect(await handle.steer({commandId: "prepare-steering", expectedRunRevision: handle.getSnapshot().runRevision,
+      instruction: "Use updated input", attribution: {origin: "user", actorId: "user-1"}, submittedAt: NOW}))
+      .toMatchObject({status: "accepted_for_application"});
+    proceed.resolve();
+    expect((await handle.wait()).status).toBe("completed");
+    expect(controller.calls).toHaveLength(2);
+  });
   it("joins a live suspended Child's final transfer before committing Parent cancellation", async () => {
     const handles = captureRunHandles();
     const child = createAgent("child", "1", "Child");
@@ -3800,9 +3853,13 @@ describe("Runner semantic integration", () => {
     const tools = createToolSelection(operations, operation, "codeAgent.readFile");
     const facts: RunInputNotification[] = [];
     const controller = new ScriptedController([
-      input => {
+      async (input, context) => {
+        const frozen = structuredClone(input.inputDelivery);
+        await context.runCheckpoints!.compareAndCommit!([{key: "selected", value: null}], [{key: "selected", value: {epoch: 1}}]);
         facts.push({runId: "run_001", sequence: 1, occurredAt: NOW,
           source: {owner: "execution", kind: "command_completed", id: "background", revision: "3"}, data: {exitCode: 0}});
+        await context.runCheckpoints!.compareAndCommit!([{key: "selected", value: {epoch: 1}}], []);
+        expect(input.inputDelivery).toEqual(frozen);
         return advance([{kind: "tool_request", tool: {name: "codeAgent.readFile", revision: "1", input: {path: "README.md"},
           origin: "model", controllerRequestId: input.toolExposure.controllerRequestId}}], "read-while-notified");
       },

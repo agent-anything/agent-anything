@@ -94,6 +94,29 @@ describe("RunProcessManager", () => {
     } finally { await t.cleanup(); }
   });
 
+  it("restores exact bounded search receipts without advancing the source frontier or launching again", async () => {
+    let latest: ProcessCheckpoint | null = null;
+    const records: ProcessRecordPort = {async commitProcess(value) {validateProcessCheckpoint(value, latest); latest = structuredClone(value);},
+      async readProcesses() {return latest ? [structuredClone(latest)] : [];}};
+    const t = await setup({records});
+    let originalClosed = false;
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind:"output", stream:"stdout", bytes:Buffer.from("first MATCH")});
+      const request = {runId:t.input.runId,executionId:t.input.executionId,invocationId:"search-1",search:{query:"MATCH"},signal:new AbortController().signal};
+      const page = await t.manager.searchOutput(request);
+      t.emit({kind:"output", stream:"stdout", bytes:Buffer.from(" second MATCH")});
+      t.finish(); await t.cleanup(); originalClosed = true;
+      const restored = new RunProcessManager({backend:t.backend,maximumActive:2,maximumSettled:2,records});
+      await restored.restoreRun(t.input.runId);
+      expect(await restored.searchOutput(request)).toEqual(page);
+      expect((await restored.searchOutput({...request,invocationId:"search-2"})).matches).toHaveLength(2);
+      await expect(restored.searchOutput({...request,search:{query:"other"}})).rejects.toMatchObject({code:"process_search_invocation_conflict"});
+      await expect(restored.searchOutput({...request,runId:"sibling"})).rejects.toThrow();
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    } finally {if (!originalClosed) await t.cleanup();}
+  });
+
   it("keeps interrupted process effects and containment unknown without controlling a retained PID", async () => {
     let latest: ProcessCheckpoint | null = null;
     const records: ProcessRecordPort = {async commitProcess(value) {validateProcessCheckpoint(value, latest); latest = structuredClone(value);},

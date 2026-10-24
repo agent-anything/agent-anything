@@ -46,12 +46,39 @@ export interface ContextDisclosure {
 }
 
 export interface ContextHandling {
+  readonly preservation?: ContextPreservation;
   readonly retention: ContextRetentionClass;
   readonly replacementKey: string | null;
   readonly instructionRole: ContextInstructionRole;
   readonly necessity: "mandatory" | "optional";
   readonly precedence: number;
   readonly allowedTransformations: readonly ContextTransformationKind[];
+}
+
+export interface ContextPreservation {
+  readonly obligations: readonly {readonly id: string; readonly requirement: "exact" | "account"; readonly basis: string}[];
+  readonly relationships: readonly {readonly kind: "requires" | "qualifies" | "supersedes"; readonly source: ContextSourceRef}[];
+}
+
+export function snapshotContextPreservation(input: ContextPreservation): ContextPreservation {
+  strictRecord(input, "preservation", ["obligations", "relationships"]);
+  if (!Array.isArray(input.obligations) || !input.obligations.length || !Array.isArray(input.relationships)) {
+    throw new TypeError("Preservation requires explicit obligations and relationships.");
+  }
+  const ids = new Set<string>();
+  const obligations = input.obligations.map((value: ContextPreservation["obligations"][number]) => {
+    strictRecord(value, "obligation", ["id", "requirement", "basis"]);
+    const id = token(value.id, "obligation.id");
+    if (ids.has(id) || (value.requirement !== "exact" && value.requirement !== "account")) throw new TypeError("Invalid preservation obligation.");
+    ids.add(id);
+    return Object.freeze({id, requirement: value.requirement, basis: token(value.basis, "obligation.basis")});
+  });
+  const relationships = input.relationships.map((value: ContextPreservation["relationships"][number]) => {
+    strictRecord(value, "relationship", ["kind", "source"]);
+    if (value.kind !== "requires" && value.kind !== "qualifies" && value.kind !== "supersedes") throw new TypeError("Invalid preservation relationship.");
+    return Object.freeze({kind: value.kind, source: snapshotSourceRef(value.source, "relationship.source")});
+  });
+  return Object.freeze({obligations: Object.freeze(obligations), relationships: Object.freeze(relationships)});
 }
 
 export interface ContextProvenanceRef {
@@ -236,7 +263,7 @@ function snapshotScope(input: ContextContributionScope): ContextContributionScop
 function snapshotHandling(input: ContextHandling): ContextHandling {
   strictRecord(input, "ContextContribution.handling", [
     "retention", "replacementKey", "instructionRole", "necessity",
-    "precedence", "allowedTransformations",
+    "precedence", "allowedTransformations", "preservation",
   ]);
   if (input.retention !== "history" && input.retention !== "current") {
     fail(
@@ -301,6 +328,7 @@ function snapshotHandling(input: ContextHandling): ContextHandling {
       "ContextContribution.handling.precedence",
     ),
     allowedTransformations: transformations as readonly ContextTransformationKind[],
+    ...(input.preservation === undefined ? {} : {preservation: snapshotContextPreservation(input.preservation)}),
   });
 }
 
