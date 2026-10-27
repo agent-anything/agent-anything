@@ -9,8 +9,8 @@ import {
 describe("Helarc baseline Tool Contracts", () => {
   it("exposes the complete catalog with one Host-selected Shell", () => {
     expect(createHelarcBaselineToolContracts("PowerShell").map((item) => item.name)).toEqual([
-      "ContextSearch",
-      "ContextRead",
+      "ContextMaterialSearch",
+      "ContextMaterialRead",
       "RestoreFile",
       "ExecutionDetails",
       "Read",
@@ -19,8 +19,8 @@ describe("Helarc baseline Tool Contracts", () => {
       "Edit",
       "Write",
       "PowerShell",
-      "TaskStop",
-      "TaskOutput",
+      "CommandStop",
+      "CommandObserve",
       "AskUserQuestion",
       "Agent",
       "SendMessage",
@@ -98,7 +98,7 @@ describe("Helarc baseline Tool Contracts", () => {
         run_in_background: { type: "boolean" },
       },
     });
-    expect(findHelarcBaselineToolContract("TaskStop").binding).toMatchObject({
+    expect(findHelarcBaselineToolContract("CommandStop").binding).toMatchObject({
       canonicalEffect: "process.signal",
     });
     expect(findHelarcBaselineToolContract("Read").outputSchema).toHaveProperty(

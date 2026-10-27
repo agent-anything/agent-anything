@@ -6,9 +6,9 @@ import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@
 import type {
   ApprovalApplicabilityKey,
   RunPermissionGrant,
-  SessionAuthorityProposal,
-  SessionAuthorityRecord,
-  ValidatedActionAuthority,
+  SessionAuthorizationProposal,
+  SessionAuthorizationBasis,
+  ValidatedActionAuthorizationBasis,
 } from "../authority/AuthorityContracts.js";
 import type { ApprovalCategory, ApprovalScope } from "./ApprovalCategory.js";
 import type {
@@ -144,7 +144,7 @@ export type ApprovalTrustedProposal =
   | {
       readonly kind: "session_authority";
       readonly ref: string;
-      readonly proposal: SessionAuthorityProposal;
+      readonly proposal: SessionAuthorizationProposal;
     }
   | {
       readonly kind: "exec_policy_amendment";
@@ -248,19 +248,19 @@ export type ValidatedApprovalDecision =
   | {
       readonly kind: "accept";
       readonly optionId: string;
-      readonly actionAuthority: ValidatedActionAuthority;
+      readonly actionAuthority: ValidatedActionAuthorizationBasis;
     }
   | {
       readonly kind: "acceptForSession";
       readonly optionId: string;
-      readonly sessionAuthority: SessionAuthorityRecord;
+      readonly sessionAuthority: SessionAuthorizationBasis;
     }
   | {
       readonly kind: "grantPermissions";
       readonly optionId: string;
       readonly authority:
         | { readonly scope: "run"; readonly grant: RunPermissionGrant }
-        | { readonly scope: "session"; readonly record: SessionAuthorityRecord };
+        | { readonly scope: "session"; readonly record: SessionAuthorizationBasis };
     }
   | {
       readonly kind: "acceptWithExecpolicyAmendment";

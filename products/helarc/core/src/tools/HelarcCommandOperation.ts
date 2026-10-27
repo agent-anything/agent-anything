@@ -1,24 +1,24 @@
 import type { OperationBindingResolutionInput, OperationBindingResolverRegistration } from "@agent-anything/operation-catalog/binding";
 import { snapshotResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
-import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
-import type { OperationBindingRevisionRef, OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import type { RegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
+import type { OperationBindingRevisionRef, OperationDefinitionRevisionRef } from "@agent-anything/operation-catalog/identity";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import { findHelarcBaselineToolContract, type HelarcShellToolName } from "./HelarcBaselineToolContracts.js";
 import {createHelarcShellComposite} from "./HelarcShellComposite.js";
-import type {CompositeOperationResolverPort} from "@agent-anything/agent-runtime/runner";
+import type {CompositeOperationResolverPort} from "@agent-anything/agent-runtime/execution-coordinator";
 import { commandInputSchema, type HelarcCommandInputContract } from "./HelarcCommandInputContract.js";
 
-export const HELARC_TASK_STOP_TOOL = "TaskStop";
+export const HELARC_TASK_STOP_TOOL = "CommandStop";
 
 export interface HelarcCommandOperationContribution {
-  readonly operations: readonly RegisteredOperation[];
+  readonly operations: readonly RegisteredOperationDefinition[];
   readonly bindings: readonly OperationBindingResolverRegistration[];
   readonly tools: readonly ToolRegistrationInput[];
   readonly composite: CompositeOperationResolverPort;
 }
 
-import {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER, HELARC_TASK_OUTPUT_HANDLER, HELARC_SHELL_COMPOSITE, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING} from "./HelarcCommandIdentity.js";
-export {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER, HELARC_TASK_OUTPUT_HANDLER, HELARC_SHELL_COMPOSITE, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING} from "./HelarcCommandIdentity.js";
+import {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, HELARC_COMMAND_OBSERVE_OPERATION, HELARC_COMMAND_OBSERVE_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER, HELARC_COMMAND_OBSERVE_HANDLER, HELARC_SHELL_COMPOSITE, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING} from "./HelarcCommandIdentity.js";
+export {HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, HELARC_COMMAND_OBSERVE_OPERATION, HELARC_COMMAND_OBSERVE_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER, HELARC_COMMAND_OBSERVE_HANDLER, HELARC_SHELL_COMPOSITE, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING} from "./HelarcCommandIdentity.js";
 
 export function createHelarcCommandOperationContribution(input: {
   readonly inputContract: HelarcCommandInputContract;
@@ -29,29 +29,29 @@ export function createHelarcCommandOperationContribution(input: {
 }): HelarcCommandOperationContribution {
   return Object.freeze({
     operations: Object.freeze([
-      operation("helarc.shell.admission.v3", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.composite", "code-agent.shell", "composite"),
+      operation("helarc.shell.admission.v4", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.composite", "code-agent.shell", "composite"),
       operation("helarc.process-start.admission.v1", input.admittedAt, HELARC_PROCESS_START_OPERATION, HELARC_PROCESS_START_BINDING, "helarc.process.start", "command.start", "direct", false),
-      operation("helarc.initial-observation.admission.v1", input.admittedAt, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, "helarc.process.initial", "command.observe", "internal", false),
-      operation("helarc.task-output.admission.v2", input.admittedAt, HELARC_TASK_OUTPUT_OPERATION, HELARC_TASK_OUTPUT_BINDING, "helarc.process.output", "command.observe", "internal", true, "2"),
+      operation("helarc.initial-observation.admission.v2", input.admittedAt, HELARC_INITIAL_OBSERVATION_OPERATION, HELARC_INITIAL_OBSERVATION_BINDING, "helarc.process.initial", "command.observe", "internal", false),
+      operation("helarc.command-observe.admission.v1", input.admittedAt, HELARC_COMMAND_OBSERVE_OPERATION, HELARC_COMMAND_OBSERVE_BINDING, "helarc.process.observe", "command.observe", "internal"),
       operation("helarc.task-stop.admission.v2", input.admittedAt, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING, "helarc.task-stop.direct", "code-agent.task-stop"),
     ]),
     bindings: Object.freeze([
       binding("helarc.shell.composite", HELARC_SHELL_BINDING, HELARC_SHELL_COMPOSITE,"composite"),
       binding("helarc.process.start", HELARC_PROCESS_START_BINDING, input.shellActionAdapterId),
       binding("helarc.process.initial", HELARC_INITIAL_OBSERVATION_BINDING, HELARC_INITIAL_OBSERVATION_HANDLER,"internal"),
-      binding("helarc.process.output", HELARC_TASK_OUTPUT_BINDING, HELARC_TASK_OUTPUT_HANDLER,"internal"),
+      binding("helarc.process.observe", HELARC_COMMAND_OBSERVE_BINDING, HELARC_COMMAND_OBSERVE_HANDLER,"internal"),
       binding("helarc.task-stop.direct", HELARC_TASK_STOP_BINDING, input.taskStopActionAdapterId),
     ]),
     tools: Object.freeze([
       tool("helarc.tool.shell.admission.v2", {...findHelarcBaselineToolContract(input.shellTool), inputSchema: commandInputSchema(input.inputContract)}, HELARC_SHELL_BINDING, input.admittedAt, input.inputContract.ref.revision),
-      tool("helarc.tool.task-stop.admission.v2", findHelarcBaselineToolContract("TaskStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
-      tool("helarc.tool.task-output.admission.v2", findHelarcBaselineToolContract("TaskOutput"), HELARC_TASK_OUTPUT_BINDING, input.admittedAt, "2"),
+      tool("helarc.tool.task-stop.admission.v2", findHelarcBaselineToolContract("CommandStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
+      tool("helarc.tool.command-observe.admission.v1", findHelarcBaselineToolContract("CommandObserve"), HELARC_COMMAND_OBSERVE_BINDING, input.admittedAt),
     ]),
     composite:createHelarcShellComposite(input.inputContract.constraints.wait.defaultForegroundMs),
   });
 }
 
-function operation(admissionId: string, admittedAt: string, ref: OperationRevisionRef, bindingRef: OperationBindingRevisionRef, resolverId: string, domainPurpose: string,kind:"direct"|"internal"|"composite"="direct",exposed=true,requestSchemaRevision="1"): RegisteredOperation {
+function operation(admissionId: string, admittedAt: string, ref: OperationDefinitionRevisionRef, bindingRef: OperationBindingRevisionRef, resolverId: string, domainPurpose: string,kind:"direct"|"internal"|"composite"="direct",exposed=true,requestSchemaRevision="1"): RegisteredOperationDefinition {
   return {
     admissionId,
     operation: {

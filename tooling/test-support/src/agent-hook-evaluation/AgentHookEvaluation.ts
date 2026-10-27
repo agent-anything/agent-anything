@@ -4,7 +4,7 @@ import {
   type AgentHookRegistration,
 } from "@agent-anything/agent-hooks/composition";
 import type { AgentStopEvent } from "@agent-anything/agent-hooks/events";
-import { projectModelInteraction } from "@agent-anything/agent-runtime/controller";
+import { projectModelInteraction } from "@agent-anything/agent-runtime/decision";
 import {
   AgentHookExecutionStore,
   dispatchAgentStopHooks,

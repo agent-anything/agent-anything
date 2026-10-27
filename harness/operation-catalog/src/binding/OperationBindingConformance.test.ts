@@ -7,12 +7,12 @@ import {
   type ResolvedOperationBinding,
 } from "./index.js";
 import {
-  createOperationCatalogSnapshot,
-  type RegisteredOperation,
+  createOperationDefinitionCatalog,
+  type RegisteredOperationDefinition,
 } from "../catalog/index.js";
 import type {
   OperationInvocationContext,
-  OperationRevisionRef,
+  OperationDefinitionRevisionRef,
 } from "../identity/index.js";
 import { describe, expect, it } from "vitest";
 
@@ -55,7 +55,7 @@ describe("Operation binding conformance", () => {
 
   it("resolves every binding form with exact identity, revision, and fingerprint", async () => {
     const entries = KINDS.map(registration);
-    const catalog = createOperationCatalogSnapshot({
+    const catalog = createOperationDefinitionCatalog({
       id: "operation.binding-conformance",
       revision: "1",
       entries,
@@ -120,7 +120,7 @@ describe("Operation binding conformance", () => {
   });
 });
 
-function registration(kind: OperationBindingKind): RegisteredOperation {
+function registration(kind: OperationBindingKind): RegisteredOperationDefinition {
   const operation = operationRef(kind);
   return {
     admissionId: `operation.${kind}.admission`,
@@ -191,14 +191,14 @@ function resolved(
   }
 }
 
-function operationRef(kind: OperationBindingKind): OperationRevisionRef {
+function operationRef(kind: OperationBindingKind): OperationDefinitionRevisionRef {
   return {
     operation: { namespace: "operation.conformance", name: kind },
     revision: "1",
   };
 }
 
-function invocationContext(operation: OperationRevisionRef): OperationInvocationContext {
+function invocationContext(operation: OperationDefinitionRevisionRef): OperationInvocationContext {
   return {
     invocation: { id: `invocation-${operation.operation.name}`, operation },
     correlation: {

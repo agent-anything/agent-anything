@@ -1,9 +1,9 @@
 import {describe, expect, it, vi} from "vitest";
 import type {ToolRegistrationSnapshot} from "@agent-anything/tools/registration";
 import type {OperationResult} from "@agent-anything/operation-catalog/result";
-import type {ToolResultPresenter} from "@agent-anything/agent-runtime/runner";
+import type {ToolResultPresenter} from "@agent-anything/agent-runtime/execution-coordinator";
 import {createHelarcToolResultPresenters} from "./HelarcToolResultPresenters.js";
-import {HELARC_SHELL_OPERATION, HELARC_TASK_OUTPUT_OPERATION} from "./HelarcCommandIdentity.js";
+import {HELARC_SHELL_OPERATION, HELARC_COMMAND_OBSERVE_OPERATION} from "./HelarcCommandIdentity.js";
 
 function setup(operation = HELARC_SHELL_OPERATION) {
   const commitInitialDelivery = vi.fn();
@@ -22,25 +22,26 @@ describe("Helarc Tool result presentation", () => {
       observation_id: "observation", outcome: "failed"};
     const result = {output, status: "failed"} as unknown as OperationResult;
     expect(presenter.tool).toEqual(tool);
-    expect(presenter.present(result)).toEqual({disposition: "bounded", output: {...output,
+    expect(presenter.present(result)).toEqual({disposition: "bounded", output: {observation_id:"observation",outcome:"failed",has_more:true, execution: "unknown",
       stdout: {text: "error", byte_start: 0, byte_end: 5, encoding: "utf8", integrity: "lossy"},
       stderr: {text: "error", byte_start: 0, byte_end: 5, encoding: "utf8", integrity: "lossy"}}});
     expect(result.output).toBe(output);
     expect(stream.segments).toHaveLength(1);
   });
 
-  it.each(["complete", "unavailable"])("commits only ranges in the actual %s initial presentation", disposition => {
+  it.each(["complete", "unavailable", "modified"])("commits only ranges in the actual %s initial presentation", disposition => {
     const {presenter, commitInitialDelivery} = setup();
-    presenter.committed!({runId: "run", call: {parentRunAction: {id: "action"}}, result: {output: {task_id: "process"}},
-      presentation: {modelCallRef: {id: "call"}, presentation: {disposition},
-        content: {output: {observation_id: "observation", next_cursor: "cursor"}}}} as unknown as Parameters<NonNullable<ToolResultPresenter["committed"]>>[0]);
+    presenter.committed!({runId: "run", call: {parentRunAction: {id: "action"}}, result: {output: {task_id: "process",
+      observation_id:"observation",next_cursor:"cursor",stdout:{text:"preview",segments:[]},stderr:{text:"",segments:[]}}},
+      presentation: {modelCallRef: {id: "call"}, presentation: {disposition:disposition==="modified" ? "bounded" : disposition},
+        content: {output: {observation_id: "observation",stdout:{text:disposition==="modified" ? "" : "preview"},stderr:{text:""}}}}} as unknown as Parameters<NonNullable<ToolResultPresenter["committed"]>>[0]);
     expect(commitInitialDelivery).toHaveBeenCalledTimes(1);
     expect(commitInitialDelivery).toHaveBeenCalledWith({runId: "run", executionId: "process", runActionId: "action", settlementId: "call",
       observationId: disposition === "complete" ? "observation" : null,
       cursor: disposition === "complete" ? "cursor" : null});
   });
 
-  it("does not let an explicit TaskOutput read acknowledge initial Shell delivery", () => {
-    expect(setup(HELARC_TASK_OUTPUT_OPERATION).presenter.committed).toBeUndefined();
+  it("does not let an explicit CommandObserve read acknowledge initial Shell delivery", () => {
+    expect(setup(HELARC_COMMAND_OBSERVE_OPERATION).presenter.committed).toBeUndefined();
   });
 });

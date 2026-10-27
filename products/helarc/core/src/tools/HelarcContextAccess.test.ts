@@ -16,6 +16,18 @@ it("requires actual consistent bounded read bodies, not just a locator or a succ
   expect(valid({...result,nextOffset:0})).toBe(false);
 });
 
+it("distinguishes complete search coverage from an empty budget-limited page",()=>{
+  const contract=createHelarcContextAccess("2026-10-26T00:00:00.000Z")[0]!.contract;
+  const valid=(output:unknown)=>contract.validateOutput({status:"succeeded",output} as OperationResult);
+  const partial={matches:[],nextCursor:"cursor",exhausted:false,scannedBytes:262144,scannedDescriptions:1,frontier:2,
+    limitations:["partial_scan","no_match_is_not_absence"],stopReason:"execution_budget"};
+  expect(valid(partial)).toBe(true);
+  expect(valid({...partial,stopReason:undefined})).toBe(false);
+  expect(valid({...partial,stopReason:"scope_exhausted"})).toBe(false);
+  expect(valid({...partial,stopReason:"result_limit"})).toBe(false);
+  expect(valid({...partial,nextCursor:null,exhausted:true,limitations:[],stopReason:"scope_exhausted"})).toBe(true);
+});
+
 it("returns correctable attachment errors before ending and never swallows a storage failure",async()=>{
   const refs=[{id:"shared",revision:contextMaterialDigest("body")}];
   const response={kind:"native_tool_turn",turn:{assistant:{content:[{kind:"model_tool_call",call:{name:"final_result",input:{material_refs:refs}}}]}}} as ProviderResponse;

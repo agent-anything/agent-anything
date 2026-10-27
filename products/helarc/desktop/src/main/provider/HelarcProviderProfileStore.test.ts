@@ -21,6 +21,22 @@ function input(patch: Partial<SaveHelarcProviderProfileInput> = {}): SaveHelarcP
     apiKeyUpdate: "set", apiKey: "secret-key", ...patch };
 }
 describe("named Provider profiles", () => {
+  it("retires only the obsolete policy while preserving identities and credentials", async () => {
+    const { path, store, credentials } = await setup();
+    const saved = await store.saveActiveProfile(input(), credentials);
+    if (!saved.ok) throw Error("save failed");
+    const current = JSON.parse(await readFile(path, "utf8"));
+    const legacy = { ...current, formatVersion: 6, profiles: current.profiles.map((p: object) => ({ ...p, qualificationPolicy: "require_qualified" })) };
+    await writeFile(path, JSON.stringify(legacy));
+    const resolved = await new FileHelarcProviderProfileStore(path).resolveActiveProfile(credentials);
+    expect(resolved).toMatchObject({ ok: true, profile: { id: saved.profile.id, revision: saved.profile.revision }, config: { apiKey: "secret-key" } });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(current);
+    legacy.profiles[0].baseUrl = "https://user:secret@provider.test";
+    const malformed = JSON.stringify(legacy);
+    await writeFile(path, malformed);
+    await expect(store.resolveActiveProfile(credentials)).rejects.toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
+    expect(await readFile(path, "utf8")).toBe(malformed);
+  });
   it("saves a credential before model discovery and keeps it when a model is selected later", async () => {
     const { path, store, credentials, persistence } = await setup();
     const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ data: [{ id: "selected-model" }] })));

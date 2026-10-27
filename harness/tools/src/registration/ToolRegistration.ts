@@ -1,5 +1,5 @@
-import type { OperationCatalogSnapshot, RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
-import { findRegisteredOperation } from "@agent-anything/operation-catalog/catalog";
+import type { OperationDefinitionCatalog, RegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
+import { findRegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
 import type { ToolCatalogSnapshot, ToolDescriptor, ToolDescriptorInput } from "../catalog/index.js";
 import { createToolCatalogSnapshot } from "../catalog/index.js";
 import { createToolContractIdentity, toolRevisionKey, type ToolRevisionRef } from "../identity/index.js";
@@ -8,7 +8,7 @@ export interface RegisteredTool {
   readonly admissionId: string;
   readonly descriptor: ToolDescriptor;
   readonly binding:
-    | { readonly kind: "operation"; readonly operation: RegisteredOperation }
+    | { readonly kind: "operation"; readonly operation: RegisteredOperationDefinition }
     | { readonly kind: "interaction"; readonly ref: Extract<ToolDescriptor["binding"], { readonly kind: "interaction" }> }
     | { readonly kind: "descendant_agent"; readonly ref: Extract<ToolDescriptor["binding"], { readonly kind: "descendant_agent" }> }
     | { readonly kind: "descendant_message"; readonly ref: Extract<ToolDescriptor["binding"], { readonly kind: "descendant_message" }> };
@@ -41,7 +41,7 @@ export class ToolRegistrationValidationError extends TypeError {
 }
 
 export function createToolRegistrationSnapshot(
-  operationCatalog: OperationCatalogSnapshot,
+  operationCatalog: OperationDefinitionCatalog,
   inputs: readonly ToolRegistrationInput[],
 ): ToolRegistrationSnapshot {
   const catalog = createToolCatalogSnapshot(inputs.map((input) => input.descriptor));
@@ -85,12 +85,12 @@ export function createToolRegistrationSnapshot(
 }
 
 function resolveBinding(
-  operationCatalog: OperationCatalogSnapshot,
+  operationCatalog: OperationDefinitionCatalog,
   descriptor: ToolDescriptor,
 ): RegisteredTool["binding"] {
   switch (descriptor.binding.kind) {
     case "operation": {
-      const operation = findRegisteredOperation(operationCatalog, descriptor.binding.operation);
+      const operation = findRegisteredOperationDefinition(operationCatalog, descriptor.binding.operation);
       if (operation === undefined || operation.binding.ref.revision !== descriptor.binding.revision) {
         throw invalid("tool_operation_binding_missing", `Tool '${descriptor.name}' does not bind an admitted Operation revision.`);
       }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentDefinition } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type {
   InteractionSubmissionOutcome,
@@ -18,8 +18,8 @@ import {
 import type {
   RootRunConfig,
   RunHandle,
-  Runner,
-} from "@agent-anything/agent-runtime/runner";
+  RunExecutionCoordinator,
+} from "@agent-anything/agent-runtime/execution-coordinator";
 import type {
   DelegationResumeReceipt,
   DelegationResumeRoute,
@@ -43,7 +43,7 @@ export type HostSessionId = string;
 
 export interface HostRunStartInput<TOutput = unknown> {
   readonly sessionId: HostSessionId;
-  readonly agent: Agent<TOutput>;
+  readonly agent: AgentDefinition<TOutput>;
   readonly runInput: RunInput;
   readonly runConfig: RootRunConfig;
 }
@@ -109,7 +109,7 @@ export interface HostRunRecoveryInput {
   readonly taskId: string;
   readonly startedAt: string;
   readonly enforcement: RootRunConfig["permissions"]["permissionProfile"]["enforcement"];
-  readonly bindings: import("@agent-anything/agent-runtime/runner").RunRecoveryBindings;
+  readonly bindings: import("@agent-anything/agent-runtime/execution-coordinator").RunRecoveryBindings;
 }
 
 export interface HostRunRegistryEntry {
@@ -129,7 +129,7 @@ interface HostRunRegistration<TOutput> {
 }
 
 export interface CreateHostRunManagerInput {
-  readonly runner: Runner;
+  readonly runner: RunExecutionCoordinator;
   readonly terminalRetentionLimit?: number;
   readonly now?: () => string;
   readonly onProjectionListenerFailure?: (
@@ -174,7 +174,7 @@ export function createHostRunManager(input: CreateHostRunManagerInput): HostRunM
 }
 
 function startHostRun<TOutput>(
-  runner: Runner,
+  runner: RunExecutionCoordinator,
   now: () => string,
   input: HostRunStartInput<TOutput>,
   onListenerFailure: CreateHostRunManagerInput["onProjectionListenerFailure"],

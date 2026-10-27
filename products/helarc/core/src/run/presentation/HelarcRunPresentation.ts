@@ -435,7 +435,7 @@ export function appendHelarcRunPresentation(
       payload.kind === "model_call_settlement"
         ? payload.result.modelCallRef.id
         : payload.action.provenance.kind === "controller"
-          ? payload.action.provenance.modelCallRef.id
+          ? payload.action.provenance.modelCallRef?.id ?? null
           : null;
     const updateCall = (entry: HelarcRunPresentationRecord): HelarcRunPresentationRecord => {
       if (payload.kind === "model_call_settlement" && entry.runId === record.runId && entry.content.kind === "final_response" && entry.content.callId === callId) {

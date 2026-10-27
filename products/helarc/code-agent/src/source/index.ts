@@ -14,6 +14,7 @@ export type {
   CodeFileGrepContentEntry,
   CodeFileGrepEntry,
   CodeFileGrepOutput,
+  CodeFileSearchCoverage,
   CodeFileReadOutput,
   CodeFileWriteOutput,
   RehydrateCodeSourceInput,

@@ -3,6 +3,7 @@ import { TextDecoder } from "node:util";
 import type { ProcessStream } from "./ProcessBackend.js";
 import type { ProcessOutputSlice } from "./ProcessObservation.js";
 import { projectProcessOutputText, type ProcessTextProjection } from "./ProcessOutputText.js";
+import {decodeProcessOutputCursor, encodeProcessOutputCursor} from "./ProcessOutputCursor.js";
 
 const SEGMENT_BYTES = 4096;
 const MAX_SEGMENTS = 4096;
@@ -38,7 +39,6 @@ export class ProcessOutputStore {
   private closePromise: Promise<void> | null = null;
   private failure: string | null = null;
   private closed = false;
-  private readonly generation = 1;
 
   private constructor(
     readonly executionId: string,
@@ -143,6 +143,15 @@ export class ProcessOutputStore {
     return this.read(cursor, 49_152, true);
   }
 
+  captureCursor(): string {
+    for (const stream of ["stdout", "stderr"] as const) {
+      if (this.streams[stream].pending.length) this.project(stream, this.streams[stream].pending.length, this.closed);
+    }
+    return encodeProcessOutputCursor(this.executionId, {
+      stdout: this.streams.stdout.segments.length, stderr: this.streams.stderr.segments.length,
+    });
+  }
+
   read(cursor?: string, maximumInlineBytes = 32_768, encodedJson = false) {
     if (!Number.isSafeInteger(maximumInlineBytes) || maximumInlineBytes < 24_576 || maximumInlineBytes > 131_072) {
       throw new TypeError("Process inline limit must be between 24576 and 131072 bytes.");
@@ -153,10 +162,9 @@ export class ProcessOutputStore {
     }
     const stdout = this.slice("stdout", position.stdout, Math.floor(maximumInlineBytes / 2), encodedJson);
     const stderr = this.slice("stderr", position.stderr, Math.floor(maximumInlineBytes / 2), encodedJson);
-    const next = { version: 1, executionId: this.executionId, generation: this.generation,
-      stdout: stdout.next, stderr: stderr.next };
+    const next = {stdout: stdout.next, stderr: stderr.next};
     return Object.freeze({ stdout: stdout.value, stderr: stderr.value,
-      nextCursor: Buffer.from(JSON.stringify(next)).toString("base64url"),
+      nextCursor: encodeProcessOutputCursor(this.executionId, next),
       hasMore: stdout.next < this.streams.stdout.segments.length || stderr.next < this.streams.stderr.segments.length });
   }
 
@@ -173,7 +181,7 @@ export class ProcessOutputStore {
     this.closePromise = (async () => {
       await this.writeQueue;
       try {
-        await this.manifest!.writeFile(JSON.stringify({ executionId: this.executionId, generation: this.generation,
+        await this.manifest!.writeFile(JSON.stringify({ executionId: this.executionId, generation: 1,
           streams: Object.fromEntries((["stdout", "stderr"] as const).map((stream) => {
             const state = this.streams[stream];
             return [stream, { receivedBytes: state.received, retainedBytes: state.retained,
@@ -265,15 +273,9 @@ export class ProcessOutputStore {
 
   private decodeCursor(cursor?: string): { stdout: number; stderr: number } {
     if (cursor === undefined) return { stdout: 0, stderr: 0 };
-    try {
-      if (cursor.length > 4096 || !/^[A-Za-z0-9_-]+$/u.test(cursor)) throw new Error();
-      const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-      if (parsed.version !== 1 || parsed.executionId !== this.executionId || parsed.generation !== this.generation) throw new Error();
-      for (const stream of ["stdout", "stderr"] as const) {
-        if (!Number.isSafeInteger(parsed[stream]) || parsed[stream] < 0 || parsed[stream] > this.streams[stream].segments.length) throw new Error();
-      }
-      return parsed;
-    } catch { throw new Error("process_output_cursor_invalid"); }
+    return decodeProcessOutputCursor(cursor, this.executionId, {
+      stdout: this.streams.stdout.segments.length, stderr: this.streams.stderr.segments.length,
+    });
   }
 
   private handles(): FileHandle[] { return [this.streams.stdout.raw, this.streams.stderr.raw, this.streams.stdout.text, this.streams.stderr.text, this.manifest].filter((handle): handle is FileHandle => handle !== null); }

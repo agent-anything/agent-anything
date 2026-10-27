@@ -1,4 +1,4 @@
-import { retainedRunResult, type RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/runner";
+import { retainedRunResult, type RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import { createHostTerminalRunProjection } from "@agent-anything/host/projection";
 import { projectHelarcProductResult } from "@agent-anything/helarc/composition";
@@ -13,6 +13,6 @@ export function restoreHelarcTerminalResult(saved: HelarcExecutionAdmission, rec
   if (!runResult || runResult.taskId !== saved.task.id) throw new Error("Retained terminal result is unavailable.");
   return {kind: "run_result", productRunId: saved.productRunId, harnessRunId: saved.rootRunId, runResult,
     terminal: createHostTerminalRunProjection({runResult, completedAt: runResult.completedAt}),
-    product: projectHelarcProductResult(saved.task, saved.workspace, runResult, saved.enforcement, saved.qualification),
+    product: projectHelarcProductResult(saved.task, saved.workspace, runResult, saved.enforcement),
     activity: []};
 }

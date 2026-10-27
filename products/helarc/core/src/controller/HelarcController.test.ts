@@ -2,18 +2,8 @@ import type { InvocationInterruptionContext } from "@agent-anything/agent-core/c
 import { createAgentInstructions } from "@agent-anything/agent-core/agent";
 import { validHelarcFinalReply } from "./HelarcFinalReply.js";
 import {createExactModelWorkingView, type ModelInputSection} from "@agent-anything/model-interaction/input";
-import {
-  ControllerError,
-  ProviderBackedController,
-  createConversationOpeningReceipt,
-  snapshotConversationOpeningReceipt,
-  createModelConversationSeed,
-  freezeConversationOpening,
-  retainInputPresentation,
-  validateControllerDecision,
-  type ControllerCallContext,
-  type ControllerInput,
-} from "@agent-anything/agent-runtime/controller";
+import { TaskDecisionActivityError, createConversationOpeningReceipt, snapshotConversationOpeningReceipt, createModelConversationSeed, freezeConversationOpening, retainInputPresentation, validateTaskDecisionProposal, type AgentActivityExecutionContext, type TaskDecisionInputSources } from "@agent-anything/agent-runtime/decision";
+import { ModelTaskDecisionCoordinator } from "@agent-anything/agent-runtime/execution-coordinator";
 import { createAgentInstructionBinding } from "@agent-anything/agent-runtime/instructions";
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
 import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
@@ -51,9 +41,6 @@ import {
 import type { ResolvedHelarcToolGuidance } from "../tools/guidance/index.js";
 import { createHelarcProviderProfile } from "../configuration/index.js";
 import { helarcConversationOpening } from "../prompt/HelarcConversationOpening.js";
-import {
-  resolveHelarcModelQualification,
-} from "../composition/HelarcModelUseAdmission.js";
 
 const TEST_MODEL_CONTEXT = createTestProviderModelContext(
   "fake-provider",
@@ -66,7 +53,7 @@ const TEST_TRANSPORT_LIMIT: ProviderTransportLimit = Object.freeze({
 });
 
 function buildHelarcProviderRequest(
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   context: ReturnType<typeof requestBuildContext>,
 ) {
   const protocol = createTestControllerProtocol(input);
@@ -74,88 +61,25 @@ function buildHelarcProviderRequest(
     input,
     context,
     protocol,
-    createTestQualification(input, protocol),
   );
 }
 
 function parseHelarcProviderResponse(
   response: ProviderResponse,
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
 ) {
   const protocol = createTestControllerProtocol(input);
   return parseProviderResponse(
     response,
     input,
     protocol,
-    createTestQualification(input, protocol),
   );
-}
-
-function createTestQualification(
-  input: ControllerInput<HelarcAgentOutput>,
-  protocol: ReturnType<typeof createTestControllerProtocol>,
-) {
-  const profile = createHelarcProviderProfile({
-    id: "test-provider",
-    displayName: "Test Provider",
-    baseUrl: "https://provider.local/v1",
-    model: input.agent.instructions.model.modelId,
-    timeoutMs: 30_000,
-    credentialStatus: "empty_allowed",
-    qualificationPolicy: "allow_experimental",
-    isActive: true,
-  });
-  if (!profile.ok) throw new TypeError("Test Provider profile is invalid.");
-  return resolveHelarcModelQualification({
-    provider: testQualificationProvider(input),
-    providerProfile: profile.profile,
-    agent: input.agent,
-    controllerProtocol: protocol,
-  });
-}
-
-function testQualificationProvider(
-  input: ControllerInput<HelarcAgentOutput>,
-): Provider {
-  const modelContext = createTestProviderModelContext(
-    input.agent.instructions.model.providerId,
-    input.agent.instructions.model.modelId,
-  );
-  return Object.freeze({
-    descriptor: Object.freeze({
-      id: input.agent.instructions.model.providerId,
-      name: "Test Provider",
-      capabilities: Object.freeze({
-        nativeToolInteraction: Object.freeze({
-          supported: true as const,
-          callableDefinitions: true as const,
-          modelCalls: true as const,
-          resultMessages: true as const,
-          multipleCalls: true,
-          callCorrelation: "provider_supplied" as const,
-        }),
-        structuredGeneration: Object.freeze({ supported: true as const }),
-        streaming: Object.freeze({ supported: false as const }),
-        modelContext: providerModelContextCapability(modelContext),
-        continuation: Object.freeze({ supported: false as const }),
-        compaction: Object.freeze({ supported: false as const }),
-        usageMetering: unavailableUsageMetering(),
-      }),
-      requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
-      metadata: Object.freeze({}),
-    }),
-    modelContext,
-    requestBodyTransportLimit: TEST_TRANSPORT_LIMIT,
-    async send() {
-      throw new Error("Test qualification Provider does not send requests.");
-    },
-  });
 }
 
 function createHelarcModelCallableCatalog(input: {
   readonly toolExposure: ToolExposureProof;
-  readonly planLimits: ControllerInput<HelarcAgentOutput>["planLimits"];
-  readonly plan?: ControllerInput<HelarcAgentOutput>["plan"];
+  readonly planLimits: TaskDecisionInputSources<HelarcAgentOutput>["planLimits"];
+  readonly plan?: TaskDecisionInputSources<HelarcAgentOutput>["plan"];
 }) {
   const controllerInput = {
     ...createControllerInput(),
@@ -175,7 +99,7 @@ describe("Helarc native Tool controller", () => {
     const observations: import("@agent-anything/observability/execution-flow").ExecutionFlowObservation[] = [];
     const request = buildProviderRequest(input, {...requestBuildContext(), executionFlow: {
       observer: {observe: value => observations.push(value)},
-    }}, protocol, createTestQualification(input, protocol));
+    }}, protocol);
     const section = request.composition.sections.find(value => value.provenance?.purpose === "initial_background")!;
     const material = observations.find(value => value.kind === "material" && value.subject.id === section.source.id);
     expect(material?.kind).toBe("material");
@@ -282,7 +206,6 @@ describe("Helarc native Tool controller", () => {
       input,
       requestBuildContext(),
       protocol,
-      createTestQualification(input, protocol),
     );
 
     expect(request.metadata.modelCallableCatalogRevision).toBe(
@@ -438,7 +361,7 @@ describe("Helarc native Tool controller", () => {
     const protocol = createHelarcControllerProtocolComposition({
       toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance, instructionSettings: settings,
     });
-    const request = buildProviderRequest(input, requestBuildContext(), protocol, createTestQualification(input, protocol));
+    const request = buildProviderRequest(input, requestBuildContext(), protocol);
     const baselineRequest = buildHelarcProviderRequest(input, requestBuildContext());
     expect(request.instructions.content).toEqual([]);
     expect(request.messages).toEqual(baselineRequest.messages);
@@ -454,11 +377,11 @@ describe("Helarc native Tool controller", () => {
     });
     expect(request.composition?.sections.some(({ role }) => role === "instruction")).toBe(false);
     const environment = {shell: {toolName: "Bash", executable: "bash", dialect: "bash"} as const, cwd: "/workspace"};
-    const withEnvironment = buildProviderRequest(input, requestBuildContext(), protocol, createTestQualification(input, protocol), environment);
+    const withEnvironment = buildProviderRequest(input, requestBuildContext(), protocol, environment);
     expect(requestText(withEnvironment)).toContain('"initialCwd":"/workspace"');
     expect(withEnvironment.instructions.content).toEqual([]);
     expect(withEnvironment.interaction).toEqual(request.interaction);
-    const deliveryInput: ControllerInput<HelarcAgentOutput> = {...input, inputDelivery: {
+    const deliveryInput: TaskDecisionInputSources<HelarcAgentOutput> = {...input, inputDelivery: {
       id: "feedback-batch", revision: "1", runId: input.runId, entries: [{
         runId: input.runId, sequence: 1, occurredAt: "2026-10-20T00:00:00Z",
         source: {owner: "agent-runtime", kind: "controller_feedback", id: "turn-1:feedback", revision: "1"},
@@ -467,8 +390,7 @@ describe("Helarc native Tool controller", () => {
           code: "ending_required", message: "Submit an ending proposal."},
       }],
     }};
-    const deliveredRequest = buildProviderRequest(deliveryInput, requestBuildContext(), protocol,
-      createTestQualification(input, protocol), environment);
+    const deliveredRequest = buildProviderRequest(deliveryInput, requestBuildContext(), protocol, environment);
     expect(deliveredRequest.composition.sections.at(-1)?.kind).toBe("input_notification");
     expect(deliveredRequest.composition.sections.some(section => section.kind === "command_state")).toBe(false);
     expect(deliveredRequest.messages.at(-1)?.role).toBe("user");
@@ -483,7 +405,7 @@ describe("Helarc native Tool controller", () => {
         ...section, enabled: index === 0, content: "Exact custom protocol text.",
       })) },
     });
-    const customRequest = buildProviderRequest(input, requestBuildContext(), customProtocol, createTestQualification(input, customProtocol));
+    const customRequest = buildProviderRequest(input, requestBuildContext(), customProtocol);
     expect(customRequest.instructions.content).toEqual([{ kind: "text", text: "Exact custom protocol text." }]);
     expect(customRequest.interaction).toEqual(request.interaction);
     expect(customProtocol.revision).not.toBe(protocol.revision);
@@ -491,7 +413,7 @@ describe("Helarc native Tool controller", () => {
       toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance,
       instructionSettings: {...settings, protocol: defaults.protocol.map(section => ({...section, enabled: true}))},
     });
-    const enabledRequest = buildProviderRequest(input, requestBuildContext(), enabledProtocol, createTestQualification(input, enabledProtocol));
+    const enabledRequest = buildProviderRequest(input, requestBuildContext(), enabledProtocol);
     expect(requestText(enabledRequest)).toContain("When multiple calls do not require results from one another, issue them together in the same response.");
     expect(requestText(enabledRequest)).toContain("When a call requires another call's result, wait for that result and issue the dependent call in a later response.");
     expect(enabledRequest.interaction).toEqual(request.interaction);
@@ -796,7 +718,7 @@ describe("Helarc native Tool controller", () => {
     if (result.kind !== "advance") throw new Error("Expected a locally rejected final call.");
     expect(result.candidates.map(item => item.kind)).toEqual(finalFirst
       ? ["model_call_rejection", "state_transition"] : ["state_transition", "model_call_rejection"]);
-    expect(validateControllerDecision(result, input)).toEqual(result);
+    expect(validateTaskDecisionProposal(result, input)).toEqual(result);
     expect(result.modelItems.filter(item => item.kind === "assistant_text")).toHaveLength(0);
   });
 
@@ -810,10 +732,22 @@ describe("Helarc native Tool controller", () => {
     expect(missing).toMatchObject({kind: "advance", candidates: [{kind: "model_call_rejection", message: expect.stringContaining("final_result.plan is required")}]});
     const final = parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: {response: "", plan: input.plan.steps}}]), input);
     expect(final).toMatchObject({kind: "propose_completion", candidates: [{kind: "state_transition", transition: "plan_update", input: {plan: input.plan.steps}}], output: {summary: ""}});
-    expect(validateControllerDecision(final, input)).toEqual(final);
+    expect(validateTaskDecisionProposal(final, input)).toEqual(final);
     if (final.kind !== "propose_completion" || final.completionSource.kind !== "model_call") throw new Error("Expected explicit final.");
     expect(final.candidates[0]?.modelCallRef).toEqual(final.completionSource.modelCallRef);
     expect(final.modelItems.filter(item => item.kind === "model_tool_call")).toHaveLength(1);
+  });
+
+  it.each([false, true])("constructs ending feedback from the current Plan presence (%s), not a completion judgement", hasPlan => {
+    const input = {...createControllerInput(), plan: hasPlan ? {id: "plan", version: 1, status: "active" as const,
+      steps: [{step: "Unfinished work", status: "in_progress" as const}]} : null};
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [{kind: "text", text: "Observed facts, not a completion claim."}]), input);
+    expect(decision.kind).toBe("continue_with_feedback");
+    if (decision.kind !== "continue_with_feedback") throw new Error("Expected protocol feedback");
+    expect(decision.feedback.message).toContain("without response");
+    expect(decision.feedback.message.includes("arguments {}")).toBe(!hasPlan);
+    expect(decision.feedback.message.includes("include its complete final snapshot")).toBe(hasPlan);
+    expect(decision.feedback.message).toContain("If further work is needed");
   });
 
   it.each([undefined, "", "  ", "New report"])("resolves final reply by presence, not truthiness: %j", response => {
@@ -830,7 +764,7 @@ describe("Helarc native Tool controller", () => {
     if (decision.kind !== "propose_completion") throw new Error("Expected candidate.");
     expect(decision.output.summary).toBe(response ?? " First block \n\nSecond block");
     expect(decision.output.finalReply?.disposition).toBe(response === undefined ? "adopted_current" : response === "" ? "explicit_empty" : "supplied");
-    expect(validateControllerDecision(decision, input)).toEqual(decision);
+    expect(validateTaskDecisionProposal(decision, input)).toEqual(decision);
     const call = decision.modelItems.find(item => item.kind === "model_tool_call");
     expect(call?.kind === "model_tool_call" && Object.hasOwn(call.call.input, "response")).toBe(response !== undefined);
   });
@@ -846,7 +780,7 @@ describe("Helarc native Tool controller", () => {
       source: {kind: "model_text", turnId: "prior-turn", adopted: {runItem: {id: "prior-item", sequence: 2}}},
       finalReply: {disposition: "adopted_previous"}}});
     if (decision.kind !== "propose_completion") throw new Error("Expected candidate.");
-    expect(validateControllerDecision(decision, input)).toEqual(decision);
+    expect(validateTaskDecisionProposal(decision, input)).toEqual(decision);
     expect(validHelarcFinalReply("Invented report", decision.output.source, decision.output.finalReply)).toBe(false);
     prior.textBlocks[0]!.text = "Later mutation";
     expect(decision.output.summary).toBe("Earlier report");
@@ -864,7 +798,7 @@ describe("Helarc native Tool controller", () => {
     const final: NativeBlock = {kind: "call", name: "final_result", input: {response: "Report", plan: [{step: "Unfinished", status: "pending"}]}};
     const read: NativeBlock = {kind: "call", name: toolCallable(catalog, "Read"), input: {file_path: "README.md"}};
     const decision = parseHelarcProviderResponse(nativeResponse(input, finalFirst ? [final, read] : [read, final]), input);
-    expect(validateControllerDecision(decision, input)).toEqual(decision);
+    expect(validateTaskDecisionProposal(decision, input)).toEqual(decision);
     if (decision.kind !== "propose_completion") throw new Error("Expected completion proposal.");
     expect(decision.candidates.map(item => item.kind)).toEqual(finalFirst ? ["state_transition", "tool_request"] : ["tool_request", "state_transition"]);
   });
@@ -877,7 +811,7 @@ describe("Helarc native Tool controller", () => {
     expect(schema.properties?.plan).toMatchObject({minItems: 0});
     const decision = parseHelarcProviderResponse(nativeResponse(input, [{kind: "call", name: "final_result", input: finalInput}]), input);
     expect(decision).toMatchObject({kind: "propose_completion", candidates: [], output: {summary: "Done"}});
-    expect(validateControllerDecision(decision, input)).toEqual(decision);
+    expect(validateTaskDecisionProposal(decision, input)).toEqual(decision);
   });
 
   it("rejects an empty final snapshot when a Plan exists without clearing it", () => {
@@ -917,7 +851,7 @@ describe("Helarc native Tool controller", () => {
       input: name === "final_result" ? { response: "Work remains unfinished", plan } : { plan } }]), input);
     expect(decision).toMatchObject({ kind: name === "final_result" ? "propose_completion" : "advance",
       candidates: [{ kind: "state_transition", transition: "plan_update", input: { plan } }] });
-    expect(validateControllerDecision(decision, input)).toEqual(decision);
+    expect(validateTaskDecisionProposal(decision, input)).toEqual(decision);
   });
 
   it.each([{response: 42}, {response: "ok", extra: true}, {response: "ok", plan: null}, {response: "ok", plan: "complete"}, {response: null}])("rejects malformed final output locally: %j", invalid => {
@@ -1056,9 +990,9 @@ describe("Helarc native Tool controller", () => {
     );
   });
 
-  it("drives ProviderBackedController through native turns without structured correction", async () => {
+  it("drives the model task coordinator through native turns without structured correction", async () => {
     const provider = new FakeProvider((request) => nativeFinalResponseFromRequest(request, "Done."));
-    const controller = new ProviderBackedController<HelarcAgentOutput>({
+    const controller = new ModelTaskDecisionCoordinator<HelarcAgentOutput>({
       provider,
       buildRequest: buildHelarcProviderRequest,
       parseResponse: parseHelarcProviderResponse,
@@ -1089,7 +1023,6 @@ describe("Helarc native Tool controller", () => {
     const protocol = createHelarcControllerProtocolComposition({
       toolGuidance: baseline.toolGuidance, controlGuidance: baseline.controlGuidance, instructionSettings: settings,
     });
-    const qualification = createTestQualification(input, protocol);
     const provider = new FakeProvider((request) => {
       const response = nativeFinalResponseFromRequest(request, provider.requests.length === 1 ? "Rejected answer." : "Done.");
       if (response.kind !== "native_tool_turn") throw new Error("Expected native response.");
@@ -1097,10 +1030,10 @@ describe("Helarc native Tool controller", () => {
         ? { ...response, turn: { ...response.turn, finish: { kind: "output_limit" } } }
         : response;
     });
-    const controller = new ProviderBackedController<HelarcAgentOutput>({
+    const controller = new ModelTaskDecisionCoordinator<HelarcAgentOutput>({
       provider,
-      buildRequest: (input, context) => buildProviderRequest(input, context, protocol, qualification),
-      parseResponse: (response, input) => parseProviderResponse(response, input, protocol, qualification),
+      buildRequest: (input, context) => buildProviderRequest(input, context, protocol),
+      parseResponse: (response, input) => parseProviderResponse(response, input, protocol),
       responseProtocol: { kind: "native_tool_turn" },
       retryExecutor: createSystemRetryExecutor(), retryClock: systemRetryClock,
     });
@@ -1133,7 +1066,7 @@ const FILE_TOOLS = [
 function createControllerInput(
   providerId = "fake-provider",
   modelId = "helarc-controller-test-model",
-): ControllerInput<HelarcAgentOutput> {
+): TaskDecisionInputSources<HelarcAgentOutput> {
   const agent = {
     id: "helarc",
     revision: "1",
@@ -1350,7 +1283,7 @@ function createToolExposure(tools: readonly ToolDescriptorInput[]): ToolExposure
 }
 
 function createTestControllerProtocol(
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
 ) {
   return createHelarcControllerProtocolComposition({
     toolGuidance: createTestToolGuidance(input),
@@ -1359,7 +1292,7 @@ function createTestControllerProtocol(
 }
 
 function createTestToolGuidance(
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
 ): ResolvedHelarcToolGuidance {
   const entries = Object.freeze(input.toolExposure.catalog.tools.map((descriptor) => {
     const inputFieldDescriptions = Object.freeze(Object.fromEntries(
@@ -1488,7 +1421,7 @@ function requestBuildContext() {
   };
 }
 
-function controllerCallContext(): ControllerCallContext {
+function controllerCallContext(): AgentActivityExecutionContext {
   const policy = {
     maxRetries: 0,
     delay: {
@@ -1521,7 +1454,7 @@ type NativeBlock =
     };
 
 function nativeResponse(
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   blocks: readonly NativeBlock[],
   finish: ModelTurnFinish = { kind: "normal" },
   branchId = `${input.runId}:main`,
@@ -1615,8 +1548,8 @@ function expectControllerFailure(action: () => unknown, helarcCode: string): voi
   try {
     action();
   } catch (error) {
-    expect(error).toBeInstanceOf(ControllerError);
-    expect((error as ControllerError).failure.failure).toMatchObject({
+    expect(error).toBeInstanceOf(TaskDecisionActivityError);
+    expect((error as TaskDecisionActivityError).failure.failure).toMatchObject({
       code: "model_output_invalid",
       metadata: { helarcCode },
     });

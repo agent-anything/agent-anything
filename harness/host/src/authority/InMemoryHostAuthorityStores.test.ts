@@ -2,9 +2,9 @@ import type {
   PersistentPolicyAmendmentCommit,
 } from "@agent-anything/governance";
 import type {
-  SessionAuthorityCommit,
-  SessionAuthorityContext,
-  SessionAuthorityRecord,
+  SessionAuthorizationCommit,
+  SessionAuthorizationScope,
+  SessionAuthorizationBasis,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import { describe, expect, it } from "vitest";
@@ -94,7 +94,7 @@ describe("in-memory Host authority stores", () => {
   });
 });
 
-function sessionContext(): SessionAuthorityContext {
+function sessionContext(): SessionAuthorizationScope {
   return {
     hostSessionId: "session.1",
     authorityContextKey: "context.1",
@@ -105,8 +105,8 @@ function sessionContext(): SessionAuthorityContext {
 }
 
 function sessionRecord(
-  overrides: Partial<SessionAuthorityRecord> = {},
-): SessionAuthorityRecord {
+  overrides: Partial<SessionAuthorizationBasis> = {},
+): SessionAuthorizationBasis {
   return {
     id: "authority.1",
     ...sessionContext(),
@@ -120,7 +120,7 @@ function sessionRecord(
   };
 }
 
-function sessionCommit(): SessionAuthorityCommit {
+function sessionCommit(): SessionAuthorizationCommit {
   return { commitId: "commit.1", record: sessionRecord() };
 }
 

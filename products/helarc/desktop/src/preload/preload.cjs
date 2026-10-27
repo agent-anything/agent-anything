@@ -34,11 +34,6 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
-  getQualification: () => ipcRenderer.invoke("helarc:get-qualification"),
-  readQualificationEvidence: input => ipcRenderer.invoke("helarc:read-qualification-evidence", { campaignId: input?.campaignId, trialId: input?.trialId }),
-  startQualification: input => ipcRenderer.invoke("helarc:start-qualification", productCommand("qualification.start", input?.commandId, { targetId: input?.targetId })),
-  cancelQualification: input => ipcRenderer.invoke("helarc:cancel-qualification", productCommand("qualification.cancel", input?.commandId, { campaignId: input?.campaignId })),
-  publishQualification: input => ipcRenderer.invoke("helarc:publish-qualification", productCommand("qualification.publish", input?.commandId, { campaignId: input?.campaignId, targetId: input?.targetId, reviewed: input?.reviewed })),
   saveProject: (input) => ipcRenderer.invoke(channels.saveProject, productCommand("project.save", input?.commandId, {
     id: input?.id, expectedRevision: input?.expectedRevision, name: input?.name,
     primaryProfileId: input?.primaryProfileId, additionalProfileIds: input?.additionalProfileIds,
@@ -120,7 +115,6 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
         : {
             contextWindowTokens: input.ollamaRuntime.contextWindowTokens,
           },
-      qualificationPolicy: input?.qualificationPolicy,
       apiKeyUpdate: input?.apiKeyUpdate,
       apiKey: input?.apiKey,
     }),

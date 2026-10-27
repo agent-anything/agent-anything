@@ -19,12 +19,12 @@ import type {
 } from "@agent-anything/action-execution/sandbox";
 import { createRunFailureCause, type ApprovalReviewerBinding, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
 import {
-  Runner,
+  RunExecutionCoordinator,
   type RunLimits,
   type RunTreeLimits,
   type RunConfig,
   type RetainedRunConfig,
-} from "@agent-anything/agent-runtime/runner";
+} from "@agent-anything/agent-runtime/execution-coordinator";
 import type { RunTranscriptPort } from "@agent-anything/agent-runtime/transcript";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
@@ -71,7 +71,7 @@ import {
   HELARC_PROCESS_START_BINDING,
   HELARC_PROCESS_START_OPERATION,
   HELARC_INITIAL_OBSERVATION_HANDLER,
-  HELARC_TASK_OUTPUT_HANDLER,
+  HELARC_COMMAND_OBSERVE_HANDLER,
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
@@ -87,10 +87,9 @@ import {
 import { createHelarcLocalSandboxGateway } from "@agent-anything/helarc-local-environment/sandbox";
 import type { Provider } from "@agent-anything/model-interaction";
 import type { HelarcProviderProfile } from "@agent-anything/helarc/configuration";
-import type { HelarcModelQualificationCatalog } from "@agent-anything/helarc/model-qualification";
 import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
-import type { SessionAuthorityPort } from "@agent-anything/permission";
+import type { SessionAuthorizationStore } from "@agent-anything/permission";
 import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
 import {
   listSelectedWorkspaces,
@@ -150,7 +149,6 @@ export interface PrepareHelarcHostRunInput {
   readonly identitySelection: HostIdentitySelection;
   readonly provider: Provider;
   readonly providerProfile: HelarcProviderProfile;
-  readonly qualificationCatalog?: HelarcModelQualificationCatalog;
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly contextManifestPersistence?: ContextManifestPersistencePort;
   readonly runTranscriptPort?: RunTranscriptPort;
@@ -158,7 +156,7 @@ export interface PrepareHelarcHostRunInput {
   readonly automaticApprovalReviewer?: ApprovalReviewerBinding & {
     readonly kind: "auto_review";
   };
-  readonly sessionAuthorityPort?: SessionAuthorityPort;
+  readonly sessionAuthorityPort?: SessionAuthorizationStore;
   readonly persistentPolicyAmendments?: PersistentPolicyAmendmentPort;
   readonly enforcement?: SandboxEnforcement;
   readonly sandboxProviders?: readonly SandboxProvider[];
@@ -306,7 +304,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     shellOperation: HELARC_PROCESS_START_OPERATION,
     shellBinding: HELARC_PROCESS_START_BINDING,
     initialObservationHandlerId: HELARC_INITIAL_OBSERVATION_HANDLER,
-    taskOutputHandlerId: HELARC_TASK_OUTPUT_HANDLER,
+    commandObserveHandlerId: HELARC_COMMAND_OBSERVE_HANDLER,
     taskStopOperation: HELARC_TASK_STOP_OPERATION,
     taskStopBinding: HELARC_TASK_STOP_BINDING,
     limits: input.commandLimits,
@@ -333,7 +331,6 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     workspace: runWorkspace,
     provider: withHelarcProviderAdmission(input.provider, input.inspection?.executionFlow),
     providerProfile: input.providerProfile,
-    qualificationCatalog: input.qualificationCatalog,
     executionFlow: input.inspection?.executionFlow,
     instructionTarget: "production",
     instructionSettings,
@@ -431,7 +428,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       retryable: false, metadata: Object.freeze({runId: context.runId, cleanup}),
     }));
   };
-  const runner = new Runner({
+  const runner = new RunExecutionCoordinator({
     createRunId: () => {
       if (!rootIdentityAllocated) {rootIdentityAllocated = true; return rootRunId;}
       return `run_${randomUUID()}`;
@@ -462,7 +459,9 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       },
     },
     executionFlow: input.inspection?.executionFlow,
-    controller: product.controller,
+    taskDecisions: product.taskDecisions,
+    extensions: product.extensions,
+    preparations: product.preparations,
     inputNotifications: {read: (runId, afterSequence) => commandActions.processes.readInputNotifications(runId, afterSequence)},
     contextProjection,
     operations: {
@@ -590,8 +589,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       sessionId: input.sessionId, createdAt: now(), task: input.task, inputItems: input.inputItems,
       workspace: runWorkspace, identity: runContext.identity, providerProfile: input.providerProfile,
       providerBinding: retainHelarcProviderBinding(input.provider),
-      instructionSettings, qualificationCatalog: input.qualificationCatalog ?? null, permissionPreset: input.permissionPreset,
-      qualification: product.qualification.safeProjection,
+      instructionSettings, permissionPreset: input.permissionPreset,
       enforcement, commandLimits: input.commandLimits ?? null, runLimits, runTreeLimits,
       responseDelivery: input.responseDelivery ?? "buffered", environmentFingerprint: configurationFingerprint,
       executionBindings, commandEnvironment: input.executionStore.retainCommandEnvironment(commandActions.recoveryEnvironment)});
@@ -844,7 +842,7 @@ function resolveHelarcRunTreeLimits(
 function resolveHelarcRunTreeResources(
   runLimits: RunLimits,
   treeLimits: RunTreeLimits,
-): import("@agent-anything/agent-runtime/runner").RunTreeResourceEnvelope {
+): import("@agent-anything/agent-runtime/execution-coordinator").RunTreeResourceEnvelope {
   const runCapacity = treeLimits.maxTotalDescendantRuns + 1;
   return Object.freeze({
     controllerTurns: Object.freeze({

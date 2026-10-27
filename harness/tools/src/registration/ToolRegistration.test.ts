@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createOperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
-import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import { createOperationDefinitionCatalog } from "@agent-anything/operation-catalog/catalog";
+import type { OperationDefinitionRevisionRef } from "@agent-anything/operation-catalog/identity";
 import {
   createToolRegistrationSnapshot,
   findToolRegistration,
@@ -86,12 +86,12 @@ describe("ToolRegistration", () => {
   });
 });
 
-function operationRevision(name: string): OperationRevisionRef {
+function operationRevision(name: string): OperationDefinitionRevisionRef {
   return { operation: { namespace: "code", name }, revision: "1" };
 }
 
-function operationCatalog(operations: readonly OperationRevisionRef[]) {
-  return createOperationCatalogSnapshot({
+function operationCatalog(operations: readonly OperationDefinitionRevisionRef[]) {
+  return createOperationDefinitionCatalog({
     id: "operation-catalog-1",
     revision: "1",
     entries: operations.map((ref) => ({
@@ -127,7 +127,7 @@ function operationCatalog(operations: readonly OperationRevisionRef[]) {
 function registration(
   name: string,
   keyName: string,
-  operation: OperationRevisionRef,
+  operation: OperationDefinitionRevisionRef,
 ): ToolRegistrationInput {
   return {
     admissionId: `tool-admission-${keyName}`,

@@ -8,8 +8,28 @@ import {
   collectHelarcToolInputFieldPointers,
 } from "./HelarcToolGuidanceSchema.js";
 import { createHelarcBaselineToolGuidanceSource } from "./HelarcBaselineToolGuidance.js";
+import {commandInputSchema, type HelarcCommandInputContract} from "../HelarcCommandInputContract.js";
+import {HELARC_COMPENSATION_GUIDANCE, withHelarcCompensationInput} from "../HelarcCompensationInput.js";
+import type {ToolRegistrationInput} from "@agent-anything/tools/registration";
 
 describe("Helarc baseline Tool Guidance", () => {
+  it.each(["Bash", "PowerShell"] as const)("assembles %s constraints and extension guidance once", name => {
+    const schema = commandInputSchema({constraints: {timeout: {minimumMs: 1, maximumMs: 98765, defaultMs: 4567},
+      wait: {minimumPositiveMs: 25, maximumMs: 8765, defaultForegroundMs: 3210, backgroundMs: 0},
+      command: {maximumUtf8Bytes: 12345}, description: {maximumUtf16CodeUnits: 567}, capacity: {maximumActive: 3}}} as HelarcCommandInputContract);
+    const registration = withHelarcCompensationInput({descriptor: {ref: toolRef(name), inputSchema: schema,
+      schemaRevisions: {input: "1"}}} as ToolRegistrationInput);
+    const source = createHelarcBaselineToolGuidanceSource(name, registration.descriptor.ref, shellRuntime(name), registration.descriptor.inputSchema);
+    expect(source.inputFieldDescriptions["/properties/compensation_of"]).toBe(HELARC_COMPENSATION_GUIDANCE);
+    const annotated = annotateHelarcToolInputSchema({schema: registration.descriptor.inputSchema, fieldDescriptions: source.inputFieldDescriptions});
+    for (const field of ["wait_ms", "timeout_ms", "run_in_background"]) {
+      expect(source.inputFieldDescriptions[`/properties/${field}`]).toBe((schema.properties as any)[field].description);
+    }
+    expect(source.inputFieldDescriptions["/properties/wait_ms"]).toContain("3210");
+    expect(source.inputFieldDescriptions["/properties/command"]).toContain("12345");
+    expect(JSON.stringify(source)).not.toContain("10000");
+    expect(annotated.canonicalShapeDigest).not.toBe(annotated.annotatedShapeDigest);
+  });
   it("completely describes every baseline Tool and every accepted input field", () => {
     expect(HELARC_BASELINE_TOOL_CONTRACTS).toHaveLength(16);
     for (const contract of HELARC_BASELINE_TOOL_CONTRACTS) {
@@ -77,6 +97,16 @@ describe("Helarc baseline Tool Guidance", () => {
       .toContain("Self-contained delegated objective");
     expect(sendMessage.inputFieldDescriptions["/properties/agent_id"])
       .toContain("Opaque continuation identity");
+  });
+
+  it("states search coverage and pagination before a call without optional instructions", () => {
+    const output = guidanceSource("ContextMaterialSearch");
+    expect(output.modelDescription).toContain("multiple internal chunks");
+    expect(output.modelDescription).toContain("at most 16 matches");
+    expect(output.modelDescription).toContain("execution budget");
+    expect(output.modelDescription).toContain("do not prove absence");
+    expect(output.inputFieldDescriptions["/properties/references"]).toContain("explicit scope");
+    expect(guidanceSource("CommandObserve").modelDescription).toContain("without starting, stopping or reading its output");
   });
 
   it("keeps clarification answers separate from permission and execution limits", () => {

@@ -16,6 +16,7 @@ it("connects retained sources, transfers and reads without claiming that a read 
       label:"Report",role:"tool",position:2,bytes:4,format:"text",relationships:[],limitations:[]}});
     observer.observe({kind:"retention",state:"accepted",transfer:{id:"transfer",sourceRunId:"child",recipientRunId:"parent",references:[reference],basis:{kind:"result",id:"ending"}}});
     observer.observe({kind:"access",runId:"parent",invocationId:"read",mode:"read",reused:false,references:[reference],coverage:{byteStart:0,byteEnd:4,nextOffset:null}});
+    observer.observe({kind:"access",runId:"parent",invocationId:"search",mode:"search",reused:false,references:[reference],coverage:{state:"prepared",frontier:1}});
     await r.flush();
     expect(r.health().rejected).toBe(0);
     const selected=(await queries.query({kind:"get_snapshot",sourceId:r.source.sourceId,datasetId:r.manifest.datasetId})).selection!;
@@ -25,6 +26,8 @@ it("connects retained sources, transfers and reads without claiming that a read 
     const access=await queries.query({kind:"get_data_flow",...selected,subject:r.ref("context","contribution","read:material-read:saved","parent")});
     expect(access.graph?.links).toContainEqual(expect.objectContaining({kind:"produces",to:expect.objectContaining({owner:"operations",id:"read:context-result"})}));
     expect(access.graph?.links.some(link=>link.to.kind === "request")).toBe(false);
+    const prepared=await queries.query({kind:"get_data_flow",...selected,subject:r.ref("context","contribution","search:material-search:prepared","parent")});
+    expect(prepared.graph?.links.some(link=>link.kind==="delivers" || link.to.id==="search:context-result")).toBe(false);
   } finally {await inspection.close();await queries.close();await rm(directory,{recursive:true,force:true});}
 },30000);
 

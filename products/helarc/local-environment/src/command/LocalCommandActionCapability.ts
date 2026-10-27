@@ -38,7 +38,7 @@ import {
   type TargetStateAssertion,
 } from "@agent-anything/canonical-action/subject";
 import type { CanonicalActionSettlement } from "@agent-anything/canonical-action/settlement";
-import type { OperationBindingRevisionRef, OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import type { OperationBindingRevisionRef, OperationDefinitionRevisionRef } from "@agent-anything/operation-catalog/identity";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { CommandInputError, parseCommandInput } from "./CommandInput.js";
 import { createCommandInputContract, type CommandInputContract } from "./CommandInputContract.js";
@@ -96,9 +96,9 @@ export interface CreateHelarcLocalCommandActionCapabilityInput {
   readonly retainCommandOutput?: (runId: string, executionId: string, paths: ProcessOutputPaths) => Promise<void>;
   readonly workspace: WorkspaceSelection;
   readonly platform: "win32" | "posix";
-  readonly shellOperation: OperationRevisionRef;
+  readonly shellOperation: OperationDefinitionRevisionRef;
   readonly shellBinding: OperationBindingRevisionRef;
-  readonly taskStopOperation: OperationRevisionRef;
+  readonly taskStopOperation: OperationDefinitionRevisionRef;
   readonly taskStopBinding: OperationBindingRevisionRef;
   readonly limits?: Partial<CodeAgentCommandLimits>;
   readonly environment?: Readonly<Record<string, string>>;
@@ -108,7 +108,7 @@ export interface CreateHelarcLocalCommandActionCapabilityInput {
   readonly processObserver?: ProcessExecutionObserver;
   readonly constraintObserver?: CommandConstraintObserver;
   readonly initialObservationHandlerId: string;
-  readonly taskOutputHandlerId: string;
+  readonly commandObserveHandlerId: string;
 }
 
 export interface HelarcLocalCommandActionCapability {
@@ -227,15 +227,15 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     registrations,
     adapters: Object.freeze([
       Object.freeze({ adapter: createShellAdapter(input.workspace, sessionFor, shell, limits, environment, inputContract, processTasks.scopeId, input.constraintObserver) }),
-      Object.freeze({ adapter: createTaskStopAdapter(processTasks) }),
+      Object.freeze({ adapter: createCommandStopAdapter(processTasks) }),
     ]),
     executors: Object.freeze([
       createShellExecutor(environment, processTasks, outputs, sessionFor, commandSemantics, now),
-      createTaskStopExecutor(processTasks, now),
+      createCommandStopExecutor(processTasks, now),
     ]),
     processes: processTasks,
     internalHandlers: createProcessObservationHandlers({manager:processTasks, semantics:commandSemantics, now,
-      initialHandlerId:input.initialObservationHandlerId, outputHandlerId:input.taskOutputHandlerId}),
+      initialHandlerId:input.initialObservationHandlerId, observationHandlerId:input.commandObserveHandlerId}),
     taskStopBinding: input.taskStopBinding,
     taskAvailability: processTasks,
     taskState: processTasks,
@@ -251,7 +251,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
 
 function registration(
   id: string,
-  operation: OperationRevisionRef,
+  operation: OperationDefinitionRevisionRef,
   binding: OperationBindingRevisionRef,
   adapter: ActionAdapterDescriptor,
   executor: ActionExecutorDescriptor,
@@ -457,7 +457,7 @@ function createShellExecutor(
   } satisfies ActionExecutor);
 }
 
-function createTaskStopAdapter(tasks: RunProcessManager): OperationActionAdapter<unknown, StopBasis> {
+function createCommandStopAdapter(tasks: RunProcessManager): OperationActionAdapter<unknown, StopBasis> {
   const adapter: OperationActionAdapter<unknown, StopBasis> = {
     descriptor: STOP_ADAPTER,
     async prepare(binding, context) {
@@ -469,13 +469,13 @@ function createTaskStopAdapter(tasks: RunProcessManager): OperationActionAdapter
         const data: ActionAdapterPreparedData<StopBasis> = {
           effectSet: { kind: "effects", values: [{ kind: "process", operation: "signal", target: task.process }] },
           requestedAuthority: null, targetAssertions: [],
-          approval: approval(task.process.environmentId, task.process.startFingerprint, "Stop one Run-owned command.", ["TaskStop", task.ref.executionId], `TaskStop ${task.ref.executionId}`, task.initialCwd, task.initialCwd, "Signal one exact owned process", context.now()),
-          safeSummary: { kind: "process", headline: "Stop Run-owned command", commandDisplay: `TaskStop ${task.ref.executionId}`, cwdDisplay: task.initialCwd },
+          approval: approval(task.process.environmentId, task.process.startFingerprint, "Stop one Run-owned command.", ["CommandStop", task.ref.executionId], `CommandStop ${task.ref.executionId}`, task.initialCwd, task.initialCwd, "Signal one exact owned process", context.now()),
+          safeSummary: { kind: "process", headline: "Stop Run-owned command", commandDisplay: `CommandStop ${task.ref.executionId}`, cwdDisplay: task.initialCwd },
           preparedInvocation: { contractVersion: "1", executorId: STOP_EXECUTOR.id, executorVersion: STOP_EXECUTOR.version, payload: { identity: task.process } as unknown as SerializableValue },
           replayBasis: "none", semanticBasis: { taskId, cwdDisplay: task.initialCwd },
         };
         return Object.freeze({ status: "prepared" as const, prepared: await createPreparedAction(binding, context, data) });
-      } catch (error) { return invalidPreparation("task_stop_invalid", safeMessage(error, "TaskStop input is invalid.")); }
+      } catch (error) { return invalidPreparation("task_stop_invalid", safeMessage(error, "CommandStop input is invalid.")); }
     },
     async revalidate(prepared, _assertions, context) {
       if (context.interruption.signal.aborted) return interruptedRevalidation("task_stop_interrupted");
@@ -489,7 +489,7 @@ function createTaskStopAdapter(tasks: RunProcessManager): OperationActionAdapter
   return Object.freeze(adapter);
 }
 
-function createTaskStopExecutor(tasks: RunProcessManager, now: () => string): ActionExecutor {
+function createCommandStopExecutor(tasks: RunProcessManager, now: () => string): ActionExecutor {
   const executor: ActionExecutor = {
     descriptor: STOP_EXECUTOR,
     validatePayload(candidate): candidate is unknown { return isRecord(candidate); },
@@ -574,13 +574,13 @@ function readShellPayload(invocation: PreparedActionInvocation): ShellPayload {
 
 function readStopPayload(invocation: PreparedActionInvocation): StopPayload {
   const payload = invocation.payload as unknown;
-  if (invocation.executorId !== STOP_EXECUTOR.id || !isRecord(payload) || !isRecord(payload.identity)) throw new TypeError("Prepared TaskStop invocation is invalid.");
+  if (invocation.executorId !== STOP_EXECUTOR.id || !isRecord(payload) || !isRecord(payload.identity)) throw new TypeError("Prepared CommandStop invocation is invalid.");
   const value = payload.identity as Record<string, any>;
   return Object.freeze({ identity: Object.freeze({ runId: text(value.runId), taskId: text(value.taskId), processId: integer(value.processId), environmentId: text(value.environmentId), startFingerprint: text(value.startFingerprint) }) });
 }
 
 function parseTaskId(input: unknown): string {
-  if (!isRecord(input) || Object.keys(input).some((key) => key !== "task_id")) throw new TypeError("TaskStop input must contain only task_id.");
+  if (!isRecord(input) || Object.keys(input).some((key) => key !== "task_id")) throw new TypeError("CommandStop input must contain only task_id.");
   return text(input.task_id);
 }
 

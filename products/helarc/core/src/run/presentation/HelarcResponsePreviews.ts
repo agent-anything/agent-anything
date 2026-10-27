@@ -1,4 +1,4 @@
-import type { ControllerResponseObservation } from "@agent-anything/agent-runtime/controller";
+import type { ModelResponseObservation } from "@agent-anything/agent-runtime/model-access";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import { boundedPresentationText } from "./HelarcRunPresentation.js";
 import { HelarcFinalResponsePreview } from "./HelarcFinalResponsePreview.js";
@@ -80,7 +80,7 @@ export class HelarcResponsePreviewStore {
       this.listeners.delete(listener);
     };
   }
-  observe(event: ControllerResponseObservation): void {
+  observe(event: ModelResponseObservation): void {
     if (this.closed) return;
     const e = event.kind === "delivery" ? event.progress : event;
     const old = this.state.attempts.find(

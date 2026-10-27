@@ -1,4 +1,4 @@
-import type { RunOperationSnapshot, RunRetryProjection } from "@agent-anything/agent-runtime/runner";
+import type { RunOperationSnapshot, RunRetryProjection } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { RetryEvent } from "@agent-anything/agent-runtime/retry";
 import type { ActionExecutionNotification } from "@agent-anything/action-execution/enforcement";
 import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";

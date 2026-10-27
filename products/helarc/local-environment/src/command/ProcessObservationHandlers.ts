@@ -5,6 +5,7 @@ import {RunProcessManager, ProcessManagerError} from "./RunProcessManager.js";
 import {readProcessWait} from "./CommandInput.js";
 import {interpretShellCommandOutcome} from "./ShellCommandOutcome.js";
 import type {ProcessObservation, ProcessOutputSlice} from "./ProcessObservation.js";
+import type {CommandObservation, CommandObservationCondition} from "./CommandObservation.js";
 
 export interface ProcessObservationHandler {
   readonly id:string;
@@ -21,11 +22,11 @@ export function createProcessObservationHandlers(input:{
   manager:RunProcessManager;
   semantics:ReadonlyMap<string,{shell:"Bash"|"PowerShell";command:string}>;
   initialHandlerId:string;
-  outputHandlerId:string;
+  observationHandlerId:string;
   now:()=>string;
 }):readonly ProcessObservationHandler[] {
   const handler = (initial:boolean):ProcessObservationHandler => ({
-    id:initial ? input.initialHandlerId : input.outputHandlerId,
+    id:initial ? input.initialHandlerId : input.observationHandlerId,
     async reconcile(context) { return this.execute(context); },
     async execute(context) {
       const startedAt = input.now();
@@ -35,21 +36,15 @@ export function createProcessObservationHandlers(input:{
       let executionId:string|null = null;
       try {
         if (!record(request) || typeof request.task_id !== "string" || !request.task_id ||
-            Object.keys(request).some(key=>!["task_id","cursor","wait_ms","query","stream","search_cursor","limit"].includes(key)) ||
-            (request.cursor !== undefined && typeof request.cursor !== "string")) throw new TypeError("TaskOutput requires an exact task_id, optional cursor and wait_ms.");
+            Object.keys(request).some(key=>!(initial ? ["task_id","cursor","wait_ms"] : ["task_id","until","after","wait_ms"]).includes(key)) ||
+            (request.cursor !== undefined && typeof request.cursor !== "string")) throw new TypeError("Use an exact task_id and only the fields declared by this command capability.");
         executionId=request.task_id;
-        const search = ["query", "stream", "search_cursor", "limit"].some(key => Object.hasOwn(request, key));
-        if (search) {
-          if (initial || Object.hasOwn(request, "cursor") || Object.hasOwn(request, "wait_ms") || typeof request.query !== "string") {
-            throw new TypeError("TaskOutput search requires query and cannot combine cursor/wait_ms with stream/search_cursor/limit.");
-          }
-          const output = await input.manager.searchOutput({runId: context.runId, executionId, invocationId: context.binding.invocation.id,
-            search: {query: request.query, ...(request.stream !== undefined ? {stream: request.stream as "stdout" | "stderr"} : {}),
-              ...(request.search_cursor !== undefined ? {search_cursor: request.search_cursor as string} : {}),
-              ...(request.limit !== undefined ? {limit: request.limit as number} : {})}, signal: context.interruption.signal});
+        if (!initial) {
+          const observed = await input.manager.observeCommand({runId:context.runId,executionId,invocationId:context.binding.invocation.id,
+            request:{until:(request.until ?? "snapshot") as CommandObservationCondition,waitMs:readProcessWait(request.wait_ms),
+              ...(request.after === undefined ? {} : {after:request.after as string})},signal:context.interruption.signal,deadlineAt:context.deadlineAt});
           return createOperationResult({...base, finishedAt: input.now(), status: "succeeded", failure: null,
-            output: {...output, run_id: context.runId}, lowerRefs: [{owner: "helarc-command", kind: "process_output_search", id: context.binding.invocation.id, revision: "1"}],
-            metadata: {executionId, sourceFrontier: output.frontier, coordinate: output.coordinate}});
+            output:projectCommandObservation(observed),lowerRefs:[{owner:"helarc-command",kind:"command_observation",id:observed.id,revision:"1"}],metadata:{executionId}});
         }
         // Only the trusted composite child has the initial-observation binding.
         if (initial && context.binding.parentInvocation === null) throw new TypeError("Initial observation requires a composite invocation.");
@@ -93,11 +88,16 @@ export function projectProcessObservation(value:ProcessObservation) {
   return Object.freeze({task_id:s.ref.executionId,run_id:s.ref.runId,observation_id:value.id,invocation_id:value.invocationId,
     snapshot_revision:s.revision,action_id:s.actionId,phase:s.phase,outcome:s.outcome,
     requested_wait_ms:value.requestedWaitMs,effective_wait_ms:value.effectiveWaitMs,elapsed_wait_ms:value.elapsedWaitMs,
-    return_reason:value.returnReason,stdout:stream(value.stdout),stderr:stream(value.stderr),
+    return_reason:value.returnReason,stdout:stream(value.stdout),stderr:stream(value.stderr),output_materials:value.materials ?? [],
     next_cursor:value.nextCursor,has_more:value.hasMore,process_id:s.process?.processId ?? null,helper_process_id:s.helperProcessId,
     started_at:s.startedAt,finished_at:s.finishedAt,deadline_at:s.deadlineAt,root_exit:s.rootExit,
     termination:s.termination,containment:{...s.containment,kind:s.backend.kind},output:s.output,
     initial_cwd:s.initialCwd,final_cwd:s.finalCwd,session_cwd:s.sessionCwd,cwd_disposition:s.cwdDisposition,limitations:s.limitations});
+}
+export function projectCommandObservation(value:CommandObservation) {
+  return {task_id:value.snapshot.ref.executionId,run_id:value.snapshot.ref.runId,observation_id:value.id,snapshot:value.snapshot,
+    output_materials:value.materials,until:value.request.until,after:value.request.after ?? null,return_reason:value.returnReason,
+    requested_wait_ms:value.request.waitMs,effective_wait_ms:value.effectiveWaitMs,elapsed_wait_ms:value.elapsedWaitMs};
 }
 function stream(value:ProcessOutputSlice) {return {text:value.text,encoding:value.encoding,encoding_source:value.encodingSource,
   integrity:value.integrity,replacement_count:value.replacementCount,byte_start:value.byteStart,byte_end:value.byteEnd,

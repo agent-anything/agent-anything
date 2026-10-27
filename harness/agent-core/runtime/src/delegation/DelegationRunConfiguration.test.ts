@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { DelegationAuthorityDimensionInput } from "./DelegationAuthority.js";
-import { assertDelegationAuthorityRestrictionWithinCeiling } from "./DelegationRunConfiguration.js";
+import type { DelegationExecutionConstraintInput } from "./DelegationExecutionConstraints.js";
+import { assertDelegationRestrictionWithinCeiling } from "./DelegationRunConfiguration.js";
 
 describe("delegated Run authority", () => {
   it("admits an equal or narrower request", () => {
@@ -13,7 +13,7 @@ describe("delegated Run authority", () => {
       required: Object.freeze([...dimension.required, "request-restriction"]),
     }));
 
-    expect(() => assertDelegationAuthorityRestrictionWithinCeiling({
+    expect(() => assertDelegationRestrictionWithinCeiling({
       restriction,
       ceiling,
     })).not.toThrow();
@@ -34,7 +34,7 @@ describe("delegated Run authority", () => {
         })
       : dimension);
 
-    expect(() => assertDelegationAuthorityRestrictionWithinCeiling({
+    expect(() => assertDelegationRestrictionWithinCeiling({
       restriction,
       ceiling,
     })).toThrow(`widens '${kind}'`);
@@ -46,14 +46,14 @@ describe("delegated Run authority", () => {
       ? Object.freeze({ ...dimension, required: Object.freeze([]) })
       : dimension);
 
-    expect(() => assertDelegationAuthorityRestrictionWithinCeiling({
+    expect(() => assertDelegationRestrictionWithinCeiling({
       restriction,
       ceiling,
     })).toThrow("weakens 'permission'");
   });
 });
 
-function authorityDimensions(): readonly DelegationAuthorityDimensionInput[] {
+function authorityDimensions(): readonly DelegationExecutionConstraintInput[] {
   return Object.freeze([
     dimension("workspace", ["workspace-a", "workspace-b"]),
     dimension("tool", ["tool-a"]),
@@ -64,10 +64,10 @@ function authorityDimensions(): readonly DelegationAuthorityDimensionInput[] {
 }
 
 function dimension(
-  kind: DelegationAuthorityDimensionInput["kind"],
+  kind: DelegationExecutionConstraintInput["kind"],
   allowed: readonly string[],
   required: readonly string[] = [],
-): DelegationAuthorityDimensionInput {
+): DelegationExecutionConstraintInput {
   return Object.freeze({
     kind,
     allowed: Object.freeze([...allowed]),

@@ -4,7 +4,7 @@ import {
   type HelarcProviderKind,
   type HelarcProviderProfile,
 } from "@agent-anything/helarc/configuration";
-import type { HelarcModelUsePolicy } from "@agent-anything/helarc/configuration";
+import type { } from "@agent-anything/helarc/configuration";
 import {
   HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE,
   HELARC_DEFAULT_PROVIDER_SETTINGS,
@@ -73,8 +73,7 @@ export function resolveHelarcProviderConfig(
   const apiKey = readEnv(env, "HELARC_PROVIDER_API_KEY") ?? "";
   const timeoutMs = readTimeoutMs(env);
   const ollamaRuntime = readOllamaRuntime(env, providerKind);
-  const qualificationPolicy = readQualificationPolicy(env);
-  if (qualificationPolicy === null || (providerKind === "ollama" && ollamaRuntime === null)) {
+  if (providerKind === "ollama" && ollamaRuntime === null) {
     return {
       ok: false,
       error: {
@@ -93,7 +92,6 @@ export function resolveHelarcProviderConfig(
     timeoutMs,
     ollamaRuntime,
     credentialStatus: apiKey.length > 0 ? "present" : "empty_allowed",
-    qualificationPolicy,
     isActive: true,
   });
 
@@ -147,14 +145,6 @@ function readPositiveInteger(
   if (raw === undefined) return defaultValue;
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function readQualificationPolicy(
-  env: NodeJS.ProcessEnv,
-): HelarcModelUsePolicy | null {
-  const value = readEnv(env, "HELARC_MODEL_QUALIFICATION_POLICY");
-  if (value === undefined) return HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy;
-  return value === "require_qualified" || value === "allow_experimental" ? value : null;
 }
 
 function readProviderKind(env: NodeJS.ProcessEnv): HelarcProviderKind {

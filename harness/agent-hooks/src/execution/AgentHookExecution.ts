@@ -1,5 +1,5 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import { ControllerCheckpointError, type ControllerCheckpointPort } from "@agent-anything/agent-runtime/controller";
+import { ActivityCheckpointError, type ActivityCheckpointPort } from "@agent-anything/agent-runtime/activity";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { AGENT_HOOK_HANDLER_FLOW } from "./AgentHookExecutionFlow.js";
 import { hookInvocationId, interruptedAgentHook, type AgentHookInvocationCheckpoint,
@@ -113,7 +113,7 @@ export interface AgentStopDispatchResult {
 
 export async function dispatchAgentStopHooks(input: {
   readonly invocationRecords?: AgentHookRecordPort;
-  readonly checkpoints?: ControllerCheckpointPort;
+  readonly checkpoints?: ActivityCheckpointPort;
   readonly executionFlow?: ExecutionFlowContext;
   readonly composition: AgentHookComposition;
   readonly event: AgentStopEvent;
@@ -125,7 +125,7 @@ export async function dispatchAgentStopHooks(input: {
   const matches = matchingAgentHooks(input.composition, "Stop", input.event.runKind);
   const blocking = matches.filter((match) => match.registration.mode === "blocking");
   const background = matches.filter((match) => match.registration.mode === "background");
-  if (input.checkpoints && !input.invocationRecords && background.length > 0) throw new ControllerCheckpointError("background_hook_recovery_port_unavailable");
+  if (input.checkpoints && !input.invocationRecords && background.length > 0) throw new ActivityCheckpointError("background_hook_recovery_port_unavailable");
   for (const match of background) {
     await startBackgroundObserver(match, input);
   }
@@ -157,7 +157,7 @@ export async function dispatchAgentStopHooks(input: {
 
 export async function dispatchAgentStopFailureHooks(input: {
   readonly invocationRecords?: AgentHookRecordPort;
-  readonly checkpoints?: ControllerCheckpointPort;
+  readonly checkpoints?: ActivityCheckpointPort;
   readonly executionFlow?: ExecutionFlowContext;
   readonly composition: AgentHookComposition;
   readonly event: AgentStopFailureEvent;
@@ -169,7 +169,7 @@ export async function dispatchAgentStopFailureHooks(input: {
   const matches = matchingAgentHooks(input.composition, "StopFailure", input.event.runKind);
   const blocking = matches.filter((match) => match.registration.mode === "blocking");
   const background = matches.filter((match) => match.registration.mode === "background");
-  if (input.checkpoints && !input.invocationRecords && background.length > 0) throw new ControllerCheckpointError("background_hook_recovery_port_unavailable");
+  if (input.checkpoints && !input.invocationRecords && background.length > 0) throw new ActivityCheckpointError("background_hook_recovery_port_unavailable");
   for (const match of background) {
     await startBackgroundObserver(match, input);
   }
@@ -185,7 +185,7 @@ async function invokeStopHandler(
   store: AgentHookExecutionStore,
   now: () => string,
   executionFlow?: ExecutionFlowContext,
-  checkpoints?: ControllerCheckpointPort,
+  checkpoints?: ActivityCheckpointPort,
   records?: AgentHookRecordPort,
 ): Promise<AgentStopHandlerResult | null> {
   const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, executionFlow ?? {}, event.run.id, []);
@@ -230,7 +230,7 @@ async function invokeObserver(
   store: AgentHookExecutionStore,
   now: () => string,
   executionFlow?: ExecutionFlowContext,
-  checkpoints?: ControllerCheckpointPort,
+  checkpoints?: ActivityCheckpointPort,
   records?: AgentHookRecordPort,
   prepared?: AgentHookInvocationCheckpoint,
 ): Promise<void> {
@@ -264,20 +264,20 @@ type InvocationResult = AgentHookInvocationOutcome;
 
 async function checkpointInvocation(
   match: ReturnType<typeof matchingAgentHooks>[number], event: AgentStopEvent | AgentStopFailureEvent,
-  port: ControllerCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
+  port: ActivityCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
   records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint,
 ): Promise<InvocationResult> {
   try {
     return await invokeRecorded(match, event, port, now, invoke, records, prepared);
   } catch (error) {
-    if (error instanceof ControllerCheckpointError) throw error;
-    throw new ControllerCheckpointError(hookInvocationId(event, match.registration), {cause: error});
+    if (error instanceof ActivityCheckpointError) throw error;
+    throw new ActivityCheckpointError(hookInvocationId(event, match.registration), {cause: error});
   }
 }
 
 async function invokeRecorded(
   match: ReturnType<typeof matchingAgentHooks>[number], event: AgentStopEvent | AgentStopFailureEvent,
-  port: ControllerCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
+  port: ActivityCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
   records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint,
 ): Promise<InvocationResult> {
   if (!port && !records) return invoke();
@@ -285,7 +285,7 @@ async function invokeRecorded(
   const saved = prepared ? null : records ? await records.readHookInvocation(hookInvocationId(event, match.registration))
     : port!.read(key) as AgentHookInvocationCheckpoint | null;
   if (saved && (JSON.stringify(saved.event) !== JSON.stringify(event) || JSON.stringify(saved.registration) !== JSON.stringify(match.registration))) {
-    throw new ControllerCheckpointError(key);
+    throw new ActivityCheckpointError(key);
   }
   if (saved?.outcome) return saved.outcome;
   const intent: AgentHookInvocationCheckpoint = saved ?? prepared ?? {id: hookInvocationId(event, match.registration), version: 1,
@@ -312,11 +312,11 @@ async function startBackgroundObserver(match: ReturnType<typeof matchingAgentHoo
     const id = hookInvocationId(input.event, match.registration);
     let saved: AgentHookInvocationCheckpoint | null;
     try { saved = await input.invocationRecords.readHookInvocation(id); }
-    catch (error) { throw new ControllerCheckpointError(id, {cause: error}); }
+    catch (error) { throw new ActivityCheckpointError(id, {cause: error}); }
     if (!saved) {
       prepared = {id, version: 1, event: input.event, registration: match.registration, startedAt: input.now(), outcome: null};
       try { await input.invocationRecords.commitHookInvocation(prepared); }
-      catch (error) { throw new ControllerCheckpointError(id, {cause: error}); }
+      catch (error) { throw new ActivityCheckpointError(id, {cause: error}); }
     } else {
       await invokeObserver(match, input.event, input.interruption, input.deadlineAt, input.store, input.now,
         input.executionFlow, undefined, input.invocationRecords);

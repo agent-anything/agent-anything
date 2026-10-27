@@ -1,5 +1,5 @@
-import type { Agent } from "@agent-anything/agent-core/agent";
-import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
+import type { AgentDefinition } from "@agent-anything/agent-core/agent";
+import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/execution-coordinator";
 import {
   createDelegationContextPlan,
   createDelegationLimits,
@@ -21,7 +21,7 @@ export interface HelarcDescendantAgentContribution {
 }
 
 export function createHelarcDescendantAgentContribution(
-  agent: Agent<HelarcAgentOutput>,
+  agent: AgentDefinition<HelarcAgentOutput>,
   admittedAt: string,
   executionHandoff?: HelarcExecutionHandoff,
   contextMaterials?: ContextMaterialAccessPort,
@@ -65,11 +65,11 @@ export function createHelarcDescendantAgentContribution(
       allowedOrigins: Object.freeze(["model" as const]),
       admittedAt,
     }), Object.freeze({
-      admissionId: "helarc.send-message.v4",
+      admissionId: "helarc.send-message.v5",
       descriptor: Object.freeze({
         ref: Object.freeze({
           tool: Object.freeze({ namespace: "helarc", name: "send-message" }),
-          revision: "4",
+          revision: "5",
         }),
         name: sendMessageContract.name,
         description: sendMessageContract.description,
@@ -77,7 +77,7 @@ export function createHelarcDescendantAgentContribution(
         outputSchema: sendMessageContract.outputSchema,
         schemaRevisions: Object.freeze({
           dialect: "json-schema-2020-12",
-          input: "1",
+          input: "2",
           output: "4",
           translation: "native-1",
         }),
@@ -197,6 +197,20 @@ export function createHelarcDescendantAgentContribution(
             throw new TypeError("The requested descendant continuation is incompatible.");
           }
           boundedText(input.message, 64_000, "message");
+          if (typeof input.toolCall.input !== "object" || input.toolCall.input === null || Array.isArray(input.toolCall.input)) {
+            throw new TypeError("Descendant message input must be an object.");
+          }
+          const {agent_id: _target, ...newInput} = input.toolCall.input as Record<string, unknown>;
+          const delegated = snapshotDelegatedInput(newInput);
+          if (delegated.prompt !== input.message) throw new TypeError("Continuation prompt does not match the accepted message.");
+          if (delegated.materialRefs.length) {
+            if (!contextMaterials) throw new TypeError("Retained material handoff is unavailable.");
+            await contextMaterials.validate(input.parentRunId, delegated.materialRefs);
+          }
+          if (delegated.executionRefs.length) {
+            if (!executionHandoff) throw new TypeError("Execution-reference transfer is unavailable.");
+            await executionHandoff.validate(input.parentRunId, delegated.executionRefs);
+          }
           const limits = createDelegationLimits({
             maxControllerTurns: input.limitCeiling.maxControllerTurns,
             maxActions: input.limitCeiling.maxActions,
@@ -213,7 +227,10 @@ export function createHelarcDescendantAgentContribution(
             preparation: Object.freeze({
               schemaVersion: 1 as const,
               childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
-              task: input.sourceRequest.task,
+              task: Object.freeze({...input.sourceRequest.task, input: Object.freeze({prompt: delegated.prompt,
+                ...(delegated.materialRefs.length ? {material_refs: delegated.materialRefs.map(ref => ({...ref}))} : {}),
+                ...(delegated.executionRefs.length ? {execution_refs: delegated.executionRefs.map(ref => ({...ref}))} : {}),
+              })}),
               objective: Object.freeze({...input.sourceRequest.objective, text: input.message}),
               expectedResult: input.sourceRequest.expectedResult,
               contextPlan: createDelegationContextPlan({
@@ -321,7 +338,7 @@ function projectDescendantResult(
     readonly result: DelegationResult;
     readonly continuation: Readonly<{ readonly id: string; readonly revision: string }> | null;
   },
-): import("@agent-anything/agent-runtime/runner").DescendantOperationOutcome {
+): import("@agent-anything/agent-runtime/execution-coordinator").DescendantOperationOutcome {
   const result = input.result;
   const artifacts = result.artifacts.refs;
   const output = Object.freeze({

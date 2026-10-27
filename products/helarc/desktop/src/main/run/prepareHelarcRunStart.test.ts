@@ -135,7 +135,6 @@ function input() {
         timeoutMs: 1000,
         ollamaRuntime: null,
         credentialStatus: "present" as const,
-        qualificationPolicy: "allow_experimental" as const,
         isActive: true,
       },
     ],

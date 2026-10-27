@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   createAgentInstructions,
-  snapshotAgent,
-  type Agent,
+  snapshotAgentDefinition,
+  type AgentDefinition,
 } from "./agent/index.js";
 import {
   snapshotRunInput,
@@ -15,7 +15,7 @@ import type { AgentTask } from "./task/index.js";
 
 describe("Agent Core contracts", () => {
   it("keeps Agent identity independent from Tool exposure", () => {
-    const input: Agent<{ summary: string }> = {
+    const input: AgentDefinition<{ summary: string }> = {
       id: "agent",
       revision: "1",
       name: "Agent",
@@ -30,7 +30,7 @@ describe("Agent Core contracts", () => {
       metadata: { source: "test" },
     };
 
-    const agent = snapshotAgent(input);
+    const agent = snapshotAgentDefinition(input);
 
     expect(agent).not.toHaveProperty("tools");
     expect(Object.isFrozen(agent)).toBe(true);

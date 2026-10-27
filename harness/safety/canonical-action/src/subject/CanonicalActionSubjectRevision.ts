@@ -3,7 +3,7 @@ import type {
   OperationBindingRevisionRef,
   OperationCorrelation,
   OperationInvocationRef,
-  OperationRevisionRef,
+  OperationDefinitionRevisionRef,
 } from "@agent-anything/operation-catalog/identity";
 import type {
   CanonicalActorIdentity,
@@ -44,7 +44,7 @@ export interface CanonicalActionSubjectRevision {
   readonly ref: ActionSubjectRevisionRef;
   readonly previousRevision: ActionSubjectRevisionRef | null;
   readonly parentRunAction: RunActionRef | null;
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
   readonly operationInvocation: OperationInvocationRef;
   readonly binding: OperationBindingRevisionRef;
   readonly correlation: OperationCorrelation;

@@ -10,15 +10,15 @@ import {
   canonicalizePermissionAbsolutePath,
   canonicalizePermissionDomains,
   canonicalizePermissionFileSystemTarget,
-  validateSessionAuthorityRecord,
+  validateSessionAuthorizationBasis,
   type ApprovalPolicy,
   type ApprovalReviewerDescriptor,
   type ApprovalReviewerPort,
   type ApprovalsReviewer,
   type ResolvedPermissionProfile,
-  type SessionAuthorityContext,
-  type SessionAuthorityPort,
-  type SessionAuthorityRecord,
+  type SessionAuthorizationScope,
+  type SessionAuthorizationStore,
+  type SessionAuthorizationBasis,
 } from "@agent-anything/permission";
 import type { IdentityRef } from "@agent-anything/agent-core/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -47,9 +47,9 @@ export interface AuthorityApplicationLimits {
 }
 
 export interface ResolvedSessionAuthorityConfig {
-  readonly context: SessionAuthorityContext;
-  readonly initialRecords: readonly SessionAuthorityRecord[];
-  readonly port: SessionAuthorityPort;
+  readonly context: SessionAuthorizationScope;
+  readonly initialRecords: readonly SessionAuthorizationBasis[];
+  readonly port: SessionAuthorizationStore;
 }
 
 export interface ResolvedRunPermissionConfig {
@@ -606,7 +606,7 @@ function snapshotSessionAuthority(input: {
     (input.profile.platform === "win32" ? "C:/" : "/");
   const ids = new Set<string>();
   const initialRecords = config.initialRecords.map((record) => {
-    const validated = validateSessionAuthorityRecord({
+    const validated = validateSessionAuthorizationBasis({
       record,
       expectedContext: context,
       cwd,
@@ -630,8 +630,8 @@ function snapshotSessionAuthority(input: {
 }
 
 function snapshotSessionAuthorityContext(
-  context: SessionAuthorityContext,
-): SessionAuthorityContext {
+  context: SessionAuthorizationScope,
+): SessionAuthorizationScope {
   if (!context || typeof context !== "object") {
     throw new TypeError("SessionAuthorityContext must be an object.");
   }

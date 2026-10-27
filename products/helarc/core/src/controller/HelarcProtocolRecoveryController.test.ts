@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { ControllerCheckpointError, type Controller, type ControllerCallContext,
-  type ControllerCheckpointPort, type ControllerDecision, type ControllerInput } from "@agent-anything/agent-runtime/controller";
+import { ActivityCheckpointError, type ActivityCheckpointPort } from "@agent-anything/agent-runtime/activity";
+import { type TaskDecisionActivity, type AgentActivityExecutionContext, type TaskDecisionProposal, type TaskDecisionInputSources } from "@agent-anything/agent-runtime/decision";
 import { HELARC_NATIVE_TOOL_PROTOCOL_REVISION } from "./HelarcController.js";
 import { HelarcProtocolRecoveryController } from "./HelarcProtocolRecoveryController.js";
 import { HELARC_PROTOCOL_RECOVERY_POLICY } from "./HelarcControllerProtocolComposition.js";
 import type { ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 
 const key = HELARC_PROTOCOL_RECOVERY_POLICY.id;
-function input(iteration: number, runId = "root"): ControllerInput<string> {
-  return {runId, iteration, toolExposure: {controllerRequestId: `${runId}:request:${iteration}`}} as ControllerInput<string>;
+function input(iteration: number, runId = "root"): TaskDecisionInputSources<string> {
+  return {runId, iteration, toolExposure: {controllerRequestId: `${runId}:request:${iteration}`}} as TaskDecisionInputSources<string>;
 }
-function decision(i: ControllerInput<string>, kind: "missing" | "advance" | "final" | "other" = "missing"): ControllerDecision<string> {
+function decision(i: TaskDecisionInputSources<string>, kind: "missing" | "advance" | "final" | "other" = "missing"): TaskDecisionProposal<string> {
   const modelItems = [{id: `item:${i.iteration}`, metadata: {}, kind: "model_turn_finish" as const,
     turnId: `${i.runId}:turn:${i.iteration}`, finish: {kind: "normal" as const}}];
   if (kind === "final") return {kind: "propose_completion", completionSource: {kind: "controller"}, candidates: [], output: "Done", modelItems};
@@ -23,15 +23,15 @@ function decision(i: ControllerInput<string>, kind: "missing" | "advance" | "fin
 }
 function fixture() {
   const saved = new Map<string, unknown>();
-  const port: ControllerCheckpointPort = {
+  const port: ActivityCheckpointPort = {
     read: key => structuredClone(saved.get(key) ?? null),
     commit: vi.fn(async (key, value) => {saved.set(key, structuredClone(value));}),
   };
-  const context = {runCheckpoints: port, cancellation: {signal: new AbortController().signal}} as ControllerCallContext;
-  const next = vi.fn(async (i: ControllerInput<string>) => decision(i));
+  const context = {runCheckpoints: port, cancellation: {signal: new AbortController().signal}} as AgentActivityExecutionContext;
+  const next = vi.fn(async (i: TaskDecisionInputSources<string>) => decision(i));
   const inner = {next, recover: next, resourceMetering: {
     modelInputTokens: "unavailable", modelOutputTokens: "unavailable", costUnits: "unavailable",
-  }} satisfies Controller<string>;
+  }} satisfies TaskDecisionActivity<string>;
   return {saved, port, context, next, inner, controller: new HelarcProtocolRecoveryController(inner)};
 }
 
@@ -87,7 +87,7 @@ describe("Helarc protocol recovery", () => {
     const f = fixture();
     const commit = f.port.commit;
     f.port.commit = vi.fn(async (key, value) => {await commit(key, value); throw new Error("lost ACK");});
-    await expect(f.controller.next(input(1), f.context)).rejects.toBeInstanceOf(ControllerCheckpointError);
+    await expect(f.controller.next(input(1), f.context)).rejects.toBeInstanceOf(ActivityCheckpointError);
     f.port.commit = commit;
     await new HelarcProtocolRecoveryController(f.inner).recover(input(1), f.context);
     expect(f.saved.get(key)).toMatchObject({consecutiveMissing: 1});
@@ -97,7 +97,7 @@ describe("Helarc protocol recovery", () => {
   it("does not retain uncommitted counts and keeps in-memory Runs independent", async () => {
     const f = fixture();
     f.port.commit = async () => {throw new Error("not committed");};
-    await expect(f.controller.next(input(1), f.context)).rejects.toBeInstanceOf(ControllerCheckpointError);
+    await expect(f.controller.next(input(1), f.context)).rejects.toBeInstanceOf(ActivityCheckpointError);
     expect(f.saved.size).toBe(0);
     const context = {...f.context, runCheckpoints: undefined};
     await f.controller.next(input(1), context);
@@ -114,7 +114,7 @@ describe("Helarc protocol recovery", () => {
     const f = fixture();
     await f.controller.next(input(1), f.context);
     f.saved.set(key, {...f.saved.get(key) as object, ...change});
-    await expect(new HelarcProtocolRecoveryController(f.inner).recover(input(1), f.context)).rejects.toBeInstanceOf(ControllerCheckpointError);
+    await expect(new HelarcProtocolRecoveryController(f.inner).recover(input(1), f.context)).rejects.toBeInstanceOf(ActivityCheckpointError);
     expect(f.next).toHaveBeenCalledTimes(1);
   });
 
@@ -123,7 +123,7 @@ describe("Helarc protocol recovery", () => {
     await f.controller.next(input(1), f.context);
     f.next.mockImplementationOnce(async i => ({...decision(i), modelItems: [{id: "changed", kind: "model_turn_finish",
       turnId: "another-turn", finish: {kind: "normal"}, metadata: {}}]}));
-    await expect(new HelarcProtocolRecoveryController(f.inner).recover(input(1), f.context)).rejects.toBeInstanceOf(ControllerCheckpointError);
+    await expect(new HelarcProtocolRecoveryController(f.inner).recover(input(1), f.context)).rejects.toBeInstanceOf(ActivityCheckpointError);
   });
 
   it("records actual correction counts and exhaustion for Inspector", async () => {

@@ -4,12 +4,12 @@ import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { DelegationRequest } from "./DelegationRequest.js";
 import { createDelegationLimits, type DelegationLimits } from "./DelegationRequest.js";
 import type {
-  DelegationAuthorityDerivation,
-  DelegationAuthorityDimension,
-  DelegationAuthorityDimensionInput,
-} from "./DelegationAuthority.js";
+  DelegationExecutionConstraints,
+  DelegationExecutionConstraint,
+  DelegationExecutionConstraintInput,
+} from "./DelegationExecutionConstraints.js";
 import { createDelegationContractIdentity, deepFreeze } from "./DelegationContract.js";
-import type { RunConfig } from "../runner/RunConfig.js";
+import type { RunConfig } from "../execution-coordinator/RunConfig.js";
 
 const DISCLOSURE_ALLOWED = Object.freeze(["model", "runtime"]);
 const DISCLOSURE_REQUIRED = Object.freeze([
@@ -19,7 +19,7 @@ const DISCLOSURE_REQUIRED = Object.freeze([
 
 export function projectDelegationRunAuthority(
   config: RunConfig,
-): readonly DelegationAuthorityDimensionInput[] {
+): readonly DelegationExecutionConstraintInput[] {
   const workspace = config.workspace === null
     ? []
     : [config.workspace.primary, ...config.workspace.additional].map(({ id }) => id);
@@ -120,9 +120,9 @@ export function projectDelegationRunLimits(input: {
   });
 }
 
-export function assertDelegationAuthorityRestrictionWithinCeiling(input: {
-  readonly restriction: readonly DelegationAuthorityDimensionInput[];
-  readonly ceiling: readonly DelegationAuthorityDimensionInput[];
+export function assertDelegationRestrictionWithinCeiling(input: {
+  readonly restriction: readonly DelegationExecutionConstraintInput[];
+  readonly ceiling: readonly DelegationExecutionConstraintInput[];
 }): void {
   for (const ceiling of input.ceiling) {
     const restriction = input.restriction.find(({ kind }) => kind === ceiling.kind);
@@ -151,7 +151,7 @@ export interface DelegationToolSelectionDerivation {
 export function deriveDelegatedRunConfig(input: {
   readonly parent: RunConfig;
   readonly request: DelegationRequest;
-  readonly authority: DelegationAuthorityDerivation;
+  readonly authority: DelegationExecutionConstraints;
 }): RunConfig {
   if (
     input.request.authorityDerivation.id !== input.authority.ref.id ||
@@ -302,7 +302,7 @@ function restrictTools(
 
 function assertConfigurationWithinEffectiveAuthority(
   config: RunConfig,
-  dimensions: readonly DelegationAuthorityDimension[],
+  dimensions: readonly DelegationExecutionConstraint[],
 ): void {
   const projected = projectDelegationRunAuthority(config);
   for (const dimension of dimensions) {
@@ -317,9 +317,9 @@ function assertConfigurationWithinEffectiveAuthority(
 }
 
 function effective(
-  derivation: DelegationAuthorityDerivation,
-  kind: DelegationAuthorityDimension["kind"],
-): DelegationAuthorityDimension {
+  derivation: DelegationExecutionConstraints,
+  kind: DelegationExecutionConstraint["kind"],
+): DelegationExecutionConstraint {
   const dimension = derivation.effective.find((candidate) => candidate.kind === kind);
   if (dimension === undefined) {
     throw new TypeError(`Delegation authority omits '${kind}'.`);

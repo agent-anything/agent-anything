@@ -70,7 +70,7 @@ describe("Host public API", () => {
       authorityApi,
     ];
     for (const api of publicApis) {
-      expect(api).not.toHaveProperty("Runner");
+      expect(api).not.toHaveProperty("RunExecutionCoordinator");
       expect(api).not.toHaveProperty("RunState");
       expect(api).not.toHaveProperty("RunResult");
       expect(api).not.toHaveProperty("HelarcProductResult");

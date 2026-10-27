@@ -1,4 +1,4 @@
-import type { RunTreeExecutionSnapshot } from "@agent-anything/agent-runtime/runner";
+import type { RunTreeExecutionSnapshot } from "@agent-anything/agent-runtime/execution-coordinator";
 
 export function createTestRootRunTreeSnapshot(
   runId: string,

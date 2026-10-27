@@ -1,20 +1,27 @@
-import { SerializedAtomicFile } from "./SerializedAtomicFile.js";
+import { SerializedAtomicFile, type AtomicFileWriteReport } from "./SerializedAtomicFile.js";
+import type { ExecutionErrorDetails } from "../diagnostics/ExecutionErrorDetails.js";
 
-export interface HelarcPersistenceFailure {
-  readonly operation: "run_projection" | "run_terminal";
+export interface HelarcPersistenceDiagnostic {
+  readonly operation: "run_start" | "run_projection" | "run_terminal";
   readonly threadId: string;
   readonly runId: string;
   readonly projectionSequence: number;
   readonly expectedRevision: number;
   readonly occurredAt: string;
   readonly code: string;
+  readonly outcome?: "failed" | "recovered" | "replacement_recovered";
+  readonly commitId?: string;
+  readonly attempt?: number;
+  readonly firstFailedSequence?: number;
+  readonly error?: ExecutionErrorDetails;
+  readonly writeReport?: AtomicFileWriteReport;
 }
 
 export class HelarcPersistenceDiagnostics {
   private readonly file: SerializedAtomicFile;
   constructor(path: string) { this.file = new SerializedAtomicFile(path); }
 
-  async record(failure: HelarcPersistenceFailure): Promise<void> {
+  async record(diagnostic: HelarcPersistenceDiagnostic): Promise<void> {
     await this.file.transact(async file => {
       const text = await file.readText();
       if ((text?.length ?? 0) > 128_000) throw new Error("persistence_diagnostics_invalid");
@@ -22,7 +29,10 @@ export class HelarcPersistenceDiagnostics {
       if (!Array.isArray(previous) || previous.length > 100) {
         throw new Error("persistence_diagnostics_invalid");
       }
-      await file.replaceText(JSON.stringify([...previous.slice(-99), failure]));
+      const entries = [...previous.slice(-99), diagnostic];
+      while (JSON.stringify(entries).length > 128_000 && entries.length > 1) entries.shift();
+      if (JSON.stringify(entries).length > 128_000) throw new Error("persistence_diagnostic_too_large");
+      await file.replaceText(JSON.stringify(entries));
     });
   }
 }

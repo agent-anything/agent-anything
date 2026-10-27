@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from "vitest";
-import type {ToolResultPresenter} from "@agent-anything/agent-runtime/runner";
+import type {ToolResultPresenter} from "@agent-anything/agent-runtime/execution-coordinator";
 import type {OperationResult} from "@agent-anything/operation-catalog/result";
 import type {ExecutionEvidenceRecord, ExecutionEvidenceRecordPort} from "@agent-anything/operation-catalog/evidence";
 import type {ToolRegistrationSnapshot} from "@agent-anything/tools/registration";

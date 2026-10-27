@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentInstructions, type Agent } from "@agent-anything/agent-core/agent";
+import { createAgentInstructions, type AgentDefinition } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
@@ -12,8 +12,8 @@ import type {
   RunHandle,
   RunInvocationOptions,
   RunOperationSnapshot,
-  Runner,
-} from "@agent-anything/agent-runtime/runner";
+  RunExecutionCoordinator,
+} from "@agent-anything/agent-runtime/execution-coordinator";
 import { createHostRunManager } from "./HostRunManager.js";
 import { createTestRootRunTreeSnapshot } from "../testing/RunTreeTestSnapshot.js";
 
@@ -177,7 +177,7 @@ function createFakeRunner() {
   const fixture = createFakeHandle("run-1");
   let options: RunInvocationOptions | null = null;
   const start = vi.fn((
-    _agent: Agent,
+    _agent: AgentDefinition,
     _input: RunInput,
     _config: RunConfig,
     invocation: RunInvocationOptions,
@@ -188,7 +188,7 @@ function createFakeRunner() {
   return {
     ...fixture,
     start,
-    runner: { start } as unknown as Runner,
+    runner: { start } as unknown as RunExecutionCoordinator,
     publishRuntimeEvent(event: RuntimeEvent) {
       options?.runtimeEventPublisher?.publish(event);
     },

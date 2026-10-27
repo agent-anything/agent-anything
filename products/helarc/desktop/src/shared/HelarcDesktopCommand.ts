@@ -4,9 +4,6 @@ export const HELARC_PRODUCT_COMMAND_VERSION = 1 as const;
 export const HELARC_PRODUCT_COMMAND_RECEIPT_LIMIT = 4_096;
 
 export type HelarcProductCommandKind =
-  | "qualification.start"
-  | "qualification.cancel"
-  | "qualification.publish"
   | "project.save"
   | "project.select"
   | "project.chooseFolder"
@@ -31,9 +28,6 @@ export type HelarcProductRunStartTarget =
 export interface HelarcProductCommandPayloadMap {
   readonly "provider.select": { readonly profileId: string };
   readonly "provider.delete": { readonly profileId: string; readonly expectedRevision: string };
-  readonly "qualification.start": { readonly targetId: string };
-  readonly "qualification.cancel": { readonly campaignId: string };
-  readonly "qualification.publish": { readonly campaignId: string; readonly targetId: string; readonly reviewed: boolean };
   readonly "project.save": {
     readonly id: string | null;
     readonly expectedRevision: number | null;
@@ -62,7 +56,6 @@ export interface HelarcProductCommandPayloadMap {
     readonly ollamaRuntime: {
       readonly contextWindowTokens: number;
     } | null;
-    readonly qualificationPolicy: "require_qualified" | "allow_experimental";
     readonly apiKeyUpdate: "keep" | "set" | "clear" | "reference";
     readonly credential?: import("./HelarcProviderCredentials.js").HelarcCredentialSelection;
     readonly apiKey: string;

@@ -25,26 +25,18 @@ import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
 import { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 import { HelarcInspection } from "./inspection/HelarcInspection.js";
 import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
-import { HelarcQualificationStore } from "./qualification/HelarcQualificationStore.js";
-import { HelarcQualificationService } from "./qualification/HelarcQualificationService.js";
-import { DEFAULT_HELARC_RUN_LIMITS } from "./run/HelarcHostRunComposition.js";
-import { HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS } from "@agent-anything/helarc-local-environment/filesystem";
-import { HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID,
-  selectNativeShell, projectNativeShellRuntimeProfile, createCommandInputContract } from "@agent-anything/helarc-local-environment/command";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 let inspection: Promise<HelarcInspection> | null = null;
 let inspectionClosed = false;
 let executionStore: Promise<HelarcExecutionStore> | null = null;
 let executionDiagnostics: HelarcExecutionDiagnostics | null = null;
-const qualifications = new Set<HelarcQualificationService>();
 
 app.on("before-quit", (event) => {
   if (!inspection || inspectionClosed) return;
   event.preventDefault();
   inspectionClosed = true;
   void (async () => {
-    for (const qualification of qualifications) await qualification.close();
     await executionStore?.then(store => store.close());
     await inspection!.then((source) => source.close());
   })().catch(() => {}).finally(async () => {
@@ -92,7 +84,7 @@ async function createWindow(): Promise<void> {
   const providerConfig = storedProviderConfig ?? resolveHelarcProviderConfig();
   const providerReady = providerConfig.ok && providerConfig.config.model.trim().length > 0;
   const providerConfigError = !providerConfig.ok ? providerConfig.error : providerReady ? null : {
-    code: "provider_config_missing" as const, message: "Select a model before starting work or verification.",
+    code: "provider_config_missing" as const, message: "Select a model before starting work.",
   };
   const provider = providerReady ? createHelarcProvider(providerConfig.config, inspectionSource.providerObserver) : null;
   const workspaceProfileStore = new FileHelarcWorkspaceProfileStore(
@@ -146,27 +138,8 @@ async function createWindow(): Promise<void> {
     const profiles = await providerProfileStore.listProfiles(providerCredentialStore);
     controller.configureProvider({ provider, profile: profiles.find(p => p.isActive) ?? null, profiles, error: providerConfigError });
   }
-  const shellRuntime = projectNativeShellRuntimeProfile(await selectNativeShell({
-    platform: process.platform === "win32" ? "win32" : "posix", cwd: userDataPath,
-    environment: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-  }));
-  const qualification = new HelarcQualificationService({
-    store: new HelarcQualificationStore(join(userDataPath, "model-qualification.json")),
-    configuration() {
-      const current = controller.getQualificationConfiguration();
-      return current ? { ...current, shellRuntime, inputContract: createCommandInputContract(), planLimits: DEFAULT_HELARC_RUN_LIMITS.plan,
-        fileActionAdapterIds: HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS,
-        shellActionAdapterId: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID,
-        taskStopActionAdapterId: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID } : null;
-    },
-    publishCatalog: catalog => controller.configureQualificationCatalog(catalog),
-  });
-  await qualification.initialize();
-  qualifications.add(qualification);
-  window.once("closed", () => { void qualification.close().finally(() => qualifications.delete(qualification)); });
   registerHelarcIpc({
     storage,
-    qualification,
     projectStore,
     inspection: inspectionSource,
     instructionSettingsStore,

@@ -1,14 +1,14 @@
 export type {
-  DelegationAuthorityDerivation,
-  DelegationAuthorityDerivationRef,
-  DelegationAuthorityDimension,
-  DelegationAuthorityDimensionInput,
-  DelegationAuthorityDimensionKind,
-  DelegationAuthoritySource,
-  DelegationAuthoritySourceInput,
-  DelegationAuthoritySourceRef,
-  DelegationAuthoritySourceRole,
-} from "./DelegationAuthority.js";
+  DelegationExecutionConstraints,
+  DelegationExecutionConstraintsRef,
+  DelegationExecutionConstraint,
+  DelegationExecutionConstraintInput,
+  DelegationExecutionConstraintKind,
+  DelegationExecutionConstraintSource,
+  DelegationExecutionConstraintSourceInput,
+  DelegationExecutionConstraintSourceRef,
+  DelegationExecutionConstraintSourceRole,
+} from "./DelegationExecutionConstraints.js";
 export {
   createDescendantContinuationTargetProjection,
   snapshotDescendantMessageRequest,
@@ -20,10 +20,10 @@ export type {
   DescendantMessageRequest,
 } from "./DelegationContinuation.js";
 export {
-  deriveDelegationAuthority,
-  snapshotDelegationAuthorityDimensions,
-  snapshotDelegationAuthorityDerivation,
-} from "./DelegationAuthority.js";
+  deriveDelegationExecutionConstraints,
+  snapshotDelegationExecutionConstraintDimensions,
+  snapshotDelegationExecutionConstraints,
+} from "./DelegationExecutionConstraints.js";
 export type {
   DelegationLimitDerivation,
   DelegationLimitDerivationRef,

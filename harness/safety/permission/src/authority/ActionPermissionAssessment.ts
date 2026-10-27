@@ -17,12 +17,12 @@ import {
 import type {
   ActionApprovalCoverage,
   RunPermissionGrant,
-  SessionAuthorityContext,
-  SessionAuthorityRecord,
+  SessionAuthorizationScope,
+  SessionAuthorizationBasis,
 } from "./AuthorityContracts.js";
 import {
   isActionApprovalCoverageApplicable,
-  isSessionAuthorityApplicable,
+  isSessionAuthorizationApplicable,
 } from "./validateAuthority.js";
 
 export type ActionPermissionReviewCause =
@@ -36,8 +36,8 @@ export interface ActionPermissionContext {
   readonly approvalPolicy: ApprovalPolicy;
   readonly actionCoverage: readonly ActionApprovalCoverage[];
   readonly runGrants: readonly RunPermissionGrant[];
-  readonly sessionAuthority: readonly SessionAuthorityRecord[];
-  readonly sessionAuthorityContext: SessionAuthorityContext | null;
+  readonly sessionAuthority: readonly SessionAuthorizationBasis[];
+  readonly sessionAuthorityContext: SessionAuthorizationScope | null;
 }
 
 export interface ActionPermissionAssessmentInput {
@@ -289,7 +289,7 @@ function approvalRunId(input: ActionPermissionAssessmentInput): string {
 
 function hasApplicableSessionAuthority(input: ActionPermissionAssessmentInput): boolean {
   if (input.requirement === null || input.context.sessionAuthorityContext === null) return false;
-  return input.context.sessionAuthority.some((record) => isSessionAuthorityApplicable(record, {
+  return input.context.sessionAuthority.some((record) => isSessionAuthorizationApplicable(record, {
     context: input.context.sessionAuthorityContext!,
     category: input.requirement!.category,
     applicabilityKeys: input.requirement!.subject.applicabilityKeys,

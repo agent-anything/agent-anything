@@ -10,12 +10,28 @@ const endingRecovery = scenario.startsWith("ending_");
 const interactionRecovery = scenario.startsWith("interaction_");
 const materialRecovery = scenario.startsWith("material_");
 const contextRecovery = scenario.startsWith("context_");
+const capacityRecovery = scenario === "provider_capacity_saved";
+const providerRecovery = scenario === "provider_failure_saved" || capacityRecovery;
 const semanticRecovery = scenario.startsWith("semantic_");
 const stagedSemantic = ["semantic_leaf", "semantic_merge"].includes(scenario);
 const backgroundSemantic = scenario.startsWith("semantic_background");
 const backgroundAdopt = scenario === "semantic_background_adopt";
 let backgroundReady;
 const backgroundReturned = new Promise(resolve => {backgroundReady = resolve;});
+async function waitForBackground(signal) {
+  signal.throwIfAborted();
+  let timer, abort;
+  try {
+    await Promise.race([backgroundReturned, new Promise((_resolve, reject) => {
+      abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, {once: true});
+      timer = setTimeout(() => reject(new Error("Background generation did not reach its durable response boundary")), 30_000);
+    })]);
+  } finally {
+    clearTimeout(timer);
+    if (abort) signal.removeEventListener("abort", abort);
+  }
+}
 app.setPath("userData", join(directory, "electron-user-data"));
 app.disableHardwareAcceleration();
 globalThis.fetch = async () => {throw new Error("This recovery verification must not call a network Provider");};
@@ -32,14 +48,20 @@ async function main() {
   const {createHelarcProviderProfile} = await import("@agent-anything/helarc/configuration");
   const {createFakeProviderContext} = await import("@agent-anything/test-support");
   const {OpenAICompatibleProvider} = await import("@agent-anything/provider-integrations/openai-compatible");
-  const {createModelCallRef, createModelTurnId, snapshotModelToolCall, snapshotProviderResponse, createUnknownModelInputMeasurement} = await import("@agent-anything/model-interaction");
+  const {createModelCallRef, createModelTurnId, snapshotModelCallableRequest, snapshotProviderResponse, createUnknownModelInputMeasurement} = await import("@agent-anything/model-interaction");
   const {snapshotModelInputPlanning, CONTEXT_ASSESSMENT_CRITERIA} = await import("@agent-anything/model-interaction/context");
-  const {selectModelWorkingView} = await import("@agent-anything/model-interaction/input");
+  const {selectModelWorkingView, modelInputValueDigest} = await import("@agent-anything/model-interaction/input");
   const workspaceRoot = join(directory, "workspace"), marker = join(workspaceRoot, "executions.txt");
   await mkdir(workspaceRoot, {recursive: true});
   const {HelarcExecutionDiagnostics} = await import("../../dist/main/diagnostics/HelarcExecutionDiagnostics.js");
   const diagnostics = new HelarcExecutionDiagnostics(join(directory, `diagnostics-${stage}`, "execution-diagnostics.json"));
-  const store = await HelarcExecutionStore.open(join(directory, "execution"), undefined, undefined, undefined, diagnostics, new ElectronSafeStorageCredentialCipher());
+  const inspectionRoot = join(directory, "inspection");
+  const {HelarcInspection} = await load("inspection/HelarcInspection.js");
+  const inspection = process.env.HELARC_RECOVERY_INSPECTION === "1" && stage === "resume"
+    ? await HelarcInspection.create(join(directory, "inspection-settings.json"), inspectionRoot) : null;
+  if (inspection) assert.equal(inspection.snapshot().health.available, true);
+  const store = await HelarcExecutionStore.open(join(directory, "execution"), undefined, inspection?.evidenceObserver,
+    inspection?.fileMaterialObserver, diagnostics, new ElectronSafeStorageCredentialCipher(), inspection?.contextMaterialObserver);
   const seedFile = join(directory, "seed.json");
   let rootRunId, calls = 0, seedExecution, materialRef, preparationId;
   const requests = [];
@@ -54,11 +76,12 @@ async function main() {
     timeoutMs: 30000, nativeToolInteraction: {supported: true}, requestBodyTransportLimit: {
       maximumBytes: 16 * 1024 * 1024, source: "host_configured", revision: "verification-v1"}}, async (_url, init) => {
     encodedRequest = JSON.parse(init.body);
-    return new Response(JSON.stringify({error: {message: "No network: serialization verification only"}}), {status: 503});
+    return new Response(JSON.stringify({error: capacityRecovery ? {message: "The input exceeds the context window", code: "context_length_exceeded"}
+      : {message: "No network: serialization verification only"}}), {status: capacityRecovery ? 400 : 503});
   });
   const provider = {modelContext: {...context.modelContext, accounting: {...wireAdapter.modelContext.accounting,
       basis: {fixture: "deterministic-usage.v1"}, inputUsage: "complete", outputUsage: "complete", limitations: ["synthetic_usage_not_endpoint_qualification"],
-      ...(semanticRecovery ? {defaultGenerationRoom: backgroundSemantic ? 168500 : stagedSemantic ? 110000 : 173000} : {})},
+      ...(semanticRecovery ? {defaultGenerationRoom: backgroundSemantic ? 169500 : stagedSemantic ? 110000 : 173000} : {})},
       ...(semanticRecovery ? {capacity: semanticCapacity, requestedOutput: semanticOutput} : {}),
       measure(composition, measuredAt) {return semanticRecovery ? {status: "measured", amount: JSON.stringify(composition.messages).length,
         estimator: {id: "synthetic-character-cost", revision: "1", unit: "tokens", accuracy: "exact"}, uncertainty: {kind: "none"},
@@ -123,9 +146,17 @@ async function main() {
       }
       const runCall = (runCalls.get(request.metadata.runId) ?? 0) + 1;
       runCalls.set(request.metadata.runId, runCall);
+      if (providerRecovery && stage === "seed" && runCall === 2) {
+        assert.equal(wire.kind, "failed");
+        assert.equal(await readFile(marker, "utf8"), "x");
+        return {...wire, failure: {...wire.failure, retryAfterMs: undefined, requestId: undefined}};
+      }
       if (backgroundSemantic && stage === "seed" && runCall === 4) {
         // Leave an ordinary request pending while the independent producer commits.
-        if (backgroundAdopt) await backgroundReturned;
+        assert(planning.measurement.amount <= planning.workingTarget &&
+          planning.measurement.amount + planning.growthAllowance > planning.workingTarget,
+          `Background fixture needs fit-now/pressure-next: ${JSON.stringify({amount: planning.measurement.amount, target: planning.workingTarget, growth: planning.growthAllowance})}`);
+        if (backgroundAdopt) await waitForBackground(interruption.signal);
         else await new Promise((_resolve, reject) => interruption.signal.addEventListener("abort", () => reject(interruption.signal.reason), {once: true}));
       }
       const child = request.metadata.runId !== rootRunId;
@@ -145,25 +176,25 @@ async function main() {
         const results = request.messages.flatMap(message => message.content).filter(block => block.kind === "model_tool_result").map(block => block.result.content.output);
         if (stage === "seed") {
           if (!child && runCall === 1) requested = originalCommand();
-          else if (!child && runCall === 2) requested = [{name: "ContextSearch", input: {query: "Append one marker", in: "content"}}];
+          else if (!child && runCall === 2) requested = [{name: "ContextMaterialSearch", input: {query: "Append one marker", in: "content"}}];
           else if (!child && runCall === 3) {
             materialRef = results.find(output => output?.matches?.length)?.matches[0].description.reference;
             assert(materialRef, "The actual search result must disclose the retained assignment");
-            requested = [{name: "ContextRead", input: {reference: materialRef}}];
+            requested = [{name: "ContextMaterialRead", input: {reference: materialRef}}];
           } else if (!child) {
             assert(results.some(output => output?.text?.includes("Append one marker")), "Read body must reach the first consuming request");
             requested = [{name: "Agent", input: {prompt: "Inspect the explicitly transferred assignment and return its material reference. Do not execute a command.", material_refs: [materialRef]}}];
           } else {
             assert(JSON.stringify(request.messages).includes(materialRef.id), "Child opening must disclose the exact grant");
             await assert.rejects(store.contextMaterials.read("unrelated-sibling", {reference: materialRef}, new AbortController().signal, "forbidden-read"), /not disclosed/);
-            requested = [{name: "update_plan", input: {plan: [{step: "Read transferred material", status: "in_progress"}]}}, {name: "ContextRead", input: {reference: materialRef}}];
+            requested = [{name: "update_plan", input: {plan: [{step: "Read transferred material", status: "in_progress"}]}}, {name: "ContextMaterialRead", input: {reference: materialRef}}];
           }
         } else if (child) {
           assert(results.some(output => output?.text?.includes("Append one marker")), "Recovered Child read must deliver real retained bytes");
           requested = [{name: "final_result", input: {response: "Retained material read without another command.", material_refs: [materialRef], plan: [{step: "Read transferred material", status: "completed"}]}}];
         } else if (runCall === 1) {
           assert(results.some(output => output?.material_refs?.some(ref => ref.id === materialRef.id)), "Parent must receive the explicit Child attachment");
-          requested = [{name: "ContextRead", input: {reference: materialRef}}];
+          requested = [{name: "ContextMaterialRead", input: {reference: materialRef}}];
         } else requested = [{name: "final_result", input: {response: "Root completed once.", plan: [{step: "Append the execution marker", status: "completed"}]}}];
       } else if (contextRecovery && stage === "seed" && calls > 1) {
         requested = [{name: "final_result", input: {response: "Root completed once.", plan: [{step: "Append the execution marker", status: "completed"}]}}];
@@ -174,13 +205,24 @@ async function main() {
           {name: "update_plan", input: {plan: [{step: "Append the execution marker", status: "in_progress"}]}},
           {name: "Agent", input: {prompt: "Append the execution marker exactly once, then report.", description: "Original child assignment"}},
         ];
+        else if (!child && runCall === 2) requested = [{name: "ContextMaterialSearch", input: {query: "Append one marker", in: "content"}}];
         else if (!child) {
+          const results = request.messages.flatMap(message => message.content).filter(block => block.kind === "model_tool_result").map(block => block.result.content.output);
+          materialRef = results.find(output => output?.matches?.length)?.matches[0].description.reference;
+          assert(materialRef, "Continuation must receive a newly discovered Parent material");
           const agentId = request.messages.flatMap(message => message.content).find(block =>
             block.kind === "model_tool_result" && block.result.content.output?.agent_id)?.result.content.output.agent_id;
           assert(agentId, "Continuation must use the actual delivered child reference");
-          requested = [{name: "SendMessage", input: {agent_id: agentId, prompt: "Explain the retained finding. Do not execute the command again."}}];
+          requested = [{name: "SendMessage", input: {agent_id: agentId, prompt: "Explain the retained finding. Read the newly attached material. Do not execute the command again.", material_refs: [materialRef]}}];
         } else if (runCall === 1) requested = originalCommand();
         else requested = [{name: "final_result", input: {response: "Child completed once.", plan: [{step: "Append the execution marker", status: "completed"}]}}];
+      } else if (scenario === "continued_child" && stage === "resume" && child && runCall === 1) {
+        assert(JSON.stringify(request.messages).includes(materialRef.id), "Recovered continuation opening must disclose its new reference");
+        requested = [{name: "ContextMaterialRead", input: {reference: materialRef}}];
+      } else if (scenario === "continued_child" && stage === "resume" && child) {
+        const results = request.messages.flatMap(message => message.content).filter(block => block.kind === "model_tool_result").map(block => block.result.content.output);
+        assert(results.some(output => output?.text?.includes("Append one marker")), "Continuation must read real retained bytes after restart");
+        requested = [{name: "final_result", input: {response: "Child completed once.", plan: [{step: "Append the execution marker", status: "completed"}]}}];
       } else if (interactionRecovery && stage === "seed" && calls === 2) {
         if (scenario === "interaction_steering") {
           const receipt = await seedExecution.activeRun.steer({commandId: "steer-recovery",
@@ -210,7 +252,7 @@ async function main() {
       }
       const responseId = `verification:${stage}:${calls}`, turnId = createModelTurnId({providerId: provider.descriptor.id, requestId: request.requestId, responseId});
       const padding = semanticRecovery && stage === "seed" && (runCall <= (stagedSemantic ? 3 : 1) || backgroundAdopt && runCall === 4);
-      const content = requested.map((call, index) => {const ordinal = index + (padding ? 1 : 0); return {kind: "model_tool_call", call: snapshotModelToolCall({
+      const content = requested.map((call, index) => {const ordinal = index + (padding ? 1 : 0); return {kind: "model_tool_call", call: snapshotModelCallableRequest({
         modelCallRef: createModelCallRef({providerRequestId: request.requestId, controllerRequestId: request.correlation.controllerRequestId, turnId,
           contentBlockOrdinal: ordinal, branchId: request.correlation.branchId}),
         providerCallRef: {providerId: provider.descriptor.id, id: `${responseId}:${ordinal}`}, ordinal,
@@ -228,8 +270,9 @@ async function main() {
   const workspace = {primary: {id: "workspace", name: "workspace", rootRef: workspaceRoot, trustState: "trusted", source: "test", policyRefs: [], metadata: {}}, additional: []};
   const identity = {id: "test-anonymous", kind: "anonymous", displayName: "Test user", metadata: {}};
   const profile = createHelarcProviderProfile({id: "test-provider", providerKind: "openai-compatible", displayName: "Test Provider", baseUrl: "https://provider.local/v1",
-    model: context.modelContext.target.model, timeoutMs: 30000, credentialStatus: "empty_allowed", qualificationPolicy: "allow_experimental", isActive: true}).profile;
+    model: context.modelContext.target.model, timeoutMs: 30000, credentialStatus: "empty_allowed", isActive: true}).profile;
   const common = {provider, task, sessionId: "test-session", productRunId: "test-product-run", inputItems: [],
+    ...(inspection ? {inspection} : {}),
     permissionPreset: scenario.startsWith("approval") ? "ask_for_approval" : "full_access", providerProfile: profile,
     executionStore: store, commandOutputDirectory: join(directory, "command-output"),
     workspaceResolver: createStaticHostWorkspaceResolver(workspace), workspaceSelection: {kind: "references", primaryRef: "workspace", additionalRefs: []},
@@ -296,10 +339,20 @@ async function main() {
         return page;
       };
     }
-    if (scenario === "accepted" || scenario === "opening_prepared" || scenario === "continued_child" || scenario.startsWith("approval") || endingRecovery || interactionRecovery || contextRecovery || semanticRecovery) {
+    if (scenario === "accepted" || scenario === "opening_prepared" || scenario === "continued_child" || scenario.startsWith("approval") || endingRecovery || interactionRecovery || contextRecovery || semanticRecovery || providerRecovery) {
       const commit = store.commitRunTree.bind(store);
       store.commitRunTree = async value => {
         const receipt = await commit(value);
+        if (providerRecovery) {
+          const failed = value.runs.flatMap(run => run.control.controllerCheckpoints)
+            .find(([key, record]) => JSON.parse(key)[2].startsWith("provider-controller:retry:") && record.value?.attemptResult?.kind === "failed");
+          if (failed) {
+            assert.equal(failed[1].value.attemptResult.error.failure.statusCode, capacityRecovery ? 400 : 503);
+            if (capacityRecovery) assert.equal(failed[1].value.attemptResult.error.failure.code, "provider_context_window_exceeded");
+            assert.equal(Object.hasOwn(failed[1].value.attemptResult.error.failure, "retryAfterMs"), false);
+            await interrupt({failureCheckpoint: failed});
+          }
+        }
         if (contextRecovery && preparationId) {
           const entries = value.runs.flatMap(run => run.control.controllerCheckpoints).map(([key, record]) => [JSON.parse(key)[2], record]);
           if (scenario === "context_selected" && entries.some(([key, record]) => key === "context-preparation:selected.v1" && record.id === preparationId)) await interrupt({preparationId});
@@ -314,7 +367,7 @@ async function main() {
             .find(([key]) => JSON.parse(key)[2] === "working-conversation-opening.v1");
           if (opening) await interrupt({opening: opening[1]});
         }
-        if (scenario === "continued_child" && value.runs.some(run => run.admission?.modelInteractionSeed)) await interrupt();
+        if (scenario === "continued_child" && value.runs.some(run => run.admission?.modelInteractionSeed)) await interrupt({materialRef});
         if (interactionRecovery) {
           const runs = value.runs;
           const entries = runs.flatMap(run => run.state.items.map(item => item.payload));
@@ -382,7 +435,11 @@ async function main() {
   materialRef = seed.materialRef;
   const admission = await store.readProductRun(rootRunId);
   const recording = await store.registerRecording({sourceId:"recovery-test",datasetId:"resume",runId:rootRunId});
-  assert.deepEqual(recording.previous,{sourceId:"recovery-test",datasetId:"seed",runId:rootRunId});
+  const recordedResume = stage === "verify" && process.env.HELARC_RECOVERY_INSPECTION === "1"
+    ? JSON.parse(await readFile(join(directory, "resume.json"), "utf8")).inspection : null;
+  assert.deepEqual(recording.previous, recordedResume
+    ? {sourceId: recordedResume.sourceId, datasetId: recordedResume.datasetId, runId: rootRunId}
+    : {sourceId:"recovery-test",datasetId:"seed",runId:rootRunId});
   assert.deepEqual(await store.registerRecording(recording.current),recording);
   assert(store.generation > seed.generation);
   const original = store.restoreCommandEnvironment(admission.commandEnvironment);
@@ -392,6 +449,11 @@ async function main() {
   const savedInput = {...common, task: admission.task, providerProfile: admission.providerProfile, instructionSettings: admission.instructionSettings, recoveryAdmission: admission};
   if (stage === "resume") {
     const before = await store.readRunTree(rootRunId);
+    if (providerRecovery) {
+      assert.deepEqual(before.members.flatMap(member => member.head.control.controllerCheckpoints)
+        .find(([key]) => key === seed.failureCheckpoint[0]), seed.failureCheckpoint,
+        "The failure must survive before its retry disposition is processed");
+    }
     if (scenario === "material_read_prepared") {
       const child = before.members.find(member=>member.head.state.run.id !== rootRunId);
       assert.deepEqual(await store.contextMaterials.read(child.head.state.run.id,{reference:materialRef},new AbortController().signal,seed.readInvocationId),seed.readPage);
@@ -426,7 +488,8 @@ async function main() {
       await writeFile(join(directory, "submitted-approval.json"), JSON.stringify(submitted, null, 2));
     }
     const outcome = await result;
-    assert.equal(outcome.runResult.status, scenario === "ending_exhausted" ? "failed" : "completed", JSON.stringify(outcome.runResult.cause));
+    assert.equal(outcome.runResult.status, scenario === "ending_exhausted" || capacityRecovery ? "failed" : "completed", JSON.stringify(outcome.runResult.cause));
+    if (capacityRecovery) assert.equal(outcome.runResult.cause.failure.failure.code, "model_context_capacity_exceeded", JSON.stringify(outcome.runResult.cause));
     if (scenario === "ending_exhausted") assert.equal(outcome.runResult.cause.failure.failure.code,
       "model_protocol_recovery_exhausted", JSON.stringify(outcome.runResult.cause));
     assert.equal(await readFile(marker, "utf8"), "x");
@@ -447,35 +510,51 @@ async function main() {
         appended.filter(item => item.payload.kind === "run_action").length);
       assert.equal(next.head.state.counters.observations, previous.head.state.counters.observations +
         appended.filter(item => item.payload.kind === "observation").length);
-      const replayedTurn = endingRecovery || scenario === "context_returned" ? 1 : 0;
+      const replayedTurn = endingRecovery || scenario === "context_returned" || capacityRecovery ? 1 : 0;
       assert.equal(next.head.state.counters.controllerTurns, previous.head.state.counters.controllerTurns +
         requests.filter(request => request.metadata.runId === previous.head.state.run.id && !request.composition.lineage.auxiliary).length + replayedTurn);
       assert.equal(next.head.state.startedAt, previous.head.state.startedAt);
       assert.equal(next.head.state.deadlineAt, previous.head.state.deadlineAt);
-      assert.equal(next.head.state.plan.steps[0].status, scenario === "ending_exhausted" ? "in_progress" : "completed");
+      assert.equal(next.head.state.plan.steps[0].status, scenario === "ending_exhausted" || capacityRecovery ? "in_progress" : "completed");
       if (previous.head.state.plan) assert.equal(next.head.state.plan.id, previous.head.state.plan.id);
     }
     const processes = (await Promise.all(after.members.map(member => store.readProcesses(member.head.state.run.id)))).flat();
     assert.equal(processes.length, 1);
     assert.equal(processes[0].input.environment.HELARC_NEW_HOST_ONLY, undefined);
     assert.deepEqual(processes[0].input.environment, original.environment);
-    const recordedRequests = contextRecovery || semanticRecovery ? [...(await readFile(join(directory, "seed-provider-requests.jsonl"), "utf8")).trim().split("\n").map(JSON.parse), ...requests] : requests;
+    const recordedRequests = contextRecovery || semanticRecovery || capacityRecovery ? [...(await readFile(join(directory, "seed-provider-requests.jsonl"), "utf8")).trim().split("\n").map(JSON.parse), ...requests] : requests;
     const shellRequest = recordedRequests.find(request => JSON.stringify(request.messages.filter(message => message.role === "tool")).includes("completed once"));
     assert(shellRequest, "The completed command result must reach the model after restart");
-    if (!backgroundSemantic) assert.equal(calls, semanticRecovery ? scenario === "semantic_leaf" ? 5 : ["semantic_generated", "semantic_merge"].includes(scenario) ? 2 : 1 : ["context_returned", "context_accepted"].includes(scenario) ? 0 : materialRecovery ? 3 : ["child", "continued_child", "opening_prepared"].includes(scenario) ? 2 : 1);
+    if (!backgroundSemantic) assert.equal(calls, capacityRecovery ? 0 : semanticRecovery ? scenario === "semantic_leaf" ? 5 : ["semantic_generated", "semantic_merge"].includes(scenario) ? 2 : 1 : ["context_returned", "context_accepted"].includes(scenario) ? 0 : materialRecovery || scenario === "continued_child" ? 3 : ["child", "opening_prepared"].includes(scenario) ? 2 : 1);
+    if (capacityRecovery) {
+      const rejected = seed.failureCheckpoint[1].value.attemptResult;
+      const saved = after.members.flatMap(member => member.head.control.controllerCheckpoints)
+        .find(([key]) => key === seed.failureCheckpoint[0])[1];
+      assert.deepEqual(saved.value.attemptResult, rejected);
+      assert.equal(saved.value.outcome.kind, "failed");
+      assert.equal(requests.length, 0, "A saved capacity rejection must not resend the rejected request");
+    }
     if (semanticRecovery) {
       assert.deepEqual(await store.contextPreparations.read(seed.semanticPreparationId, seed.savedStage), seed.savedValue);
       const auxiliary = recordedRequests.filter(request => request.composition.lineage.auxiliary);
-      const expectedAuxiliary = backgroundSemantic && !backgroundAdopt ? 1 : stagedSemantic ? 6 : 2;
-      assert.equal(auxiliary.length, expectedAuxiliary, "Retained completed auxiliary responses must not be regenerated");
+      const expectedAuxiliary = backgroundAdopt ? auxiliary.length : backgroundSemantic ? 1 : stagedSemantic ? 6 : 2;
+      if (!backgroundAdopt) assert.equal(auxiliary.length, expectedAuxiliary, "Retained completed auxiliary responses must not be regenerated");
       assert.equal(new Set(auxiliary.map(request => request.requestId)).size, expectedAuxiliary);
+      if (backgroundAdopt) {
+        assert.equal(requests.filter(request => request.composition.lineage.auxiliary).length, 0, "Saved generation and assessment must not run again after restart");
+        const generation = auxiliary.filter(request => request.purpose === "context_generation");
+        assert(generation.length >= 1);
+        const scopes = generation.map(request => JSON.stringify(JSON.parse(request.messages[0].content[0].text).replacementSources));
+        assert.equal(new Set(scopes).size, scopes.length, "Different generations must replace different frozen source scopes");
+        assert.equal(auxiliary.filter(request => request.purpose === "context_assessment").length, 1);
+      }
       const final = requests.find(request => !request.composition.lineage.auxiliary);
       if (backgroundSemantic) {
         assert.equal(auxiliary[0].metadata.contextPreparationPriority, "background");
         assert.equal(final.composition.workingView.accounts?.length ?? 0, backgroundAdopt ? 1 : 0, "Adoption follows current need, not sunk cost");
         if (backgroundAdopt) {
           assert.notEqual(auxiliary[0].metadata.transformationBasis, auxiliary[1].metadata.transformationBasis, "Generation and final adoption have different frozen backgrounds");
-          assert.equal(auxiliary.filter(value => value.purpose === "context_generation").length, 1);
+          assert(final.composition.workingView.accounts[0].sources.length > 0);
         }
       } else assert.equal(final.composition.workingView.accounts.length, 1);
       if (!stagedSemantic && !backgroundSemantic) {
@@ -484,8 +563,14 @@ async function main() {
         const assessed = auxiliary.find(request => request.purpose === "context_assessment");
         const basis = JSON.parse(assessed.messages[0].content[0].text);
         const selectedIds = new Set(final.composition.workingView.accounts[0].sources.map(source => source.sectionId));
-        assert.deepEqual([...selectedIds], basis.replacementSources.map(section => section.id));
-        for (const section of basis.readOnlyBackground) assert.deepEqual(final.composition.sections.find(value => value.id === section.id), section);
+        const projection = assessed.metadata.evidenceProjection;
+        const resolveId = label => projection.mapping.find(entry => entry.label === label).sectionId;
+        assert.deepEqual([...selectedIds], basis.replacementSources.map(section => resolveId(section.id)));
+        for (const section of basis.readOnlyBackground) {
+          const id = resolveId(section.id);
+          assert.equal(modelInputValueDigest(final.composition.sections.find(value => value.id === id)),
+            projection.sections.find(entry => entry.sectionId === id).digest);
+        }
         assert(final.composition.sections.every(section => !selectedIds.has(section.id)));
       } else if (stagedSemantic) {
         assert(final.composition.workingView.accounts[0].limitations.includes("assessment_uses_derived_accounts_not_original_reread"));
@@ -559,6 +644,10 @@ async function main() {
         section.provenance.originRunId !== request.metadata.runId && section.provenance.originRunId !== rootRunId));
       assert.equal(request.composition.sections.filter(section => section.provenance?.purpose === "assignment").length, 1);
       assert(request.composition.sections.find(section => section.provenance?.purpose === "assignment").content.text.includes("Explain the retained finding"));
+      assert.deepEqual((continued.admission ?? continued.head.admission).delegationRequest.task.input.material_refs, [materialRef]);
+      const page = await store.contextMaterials.read(continued.head.state.run.id, {reference: materialRef}, new AbortController().signal, "verify-continuation-material");
+      assert(page.text.includes("Append one marker"));
+      await assert.rejects(store.contextMaterials.read("unrelated-sibling", {reference: materialRef}, new AbortController().signal, "forbidden-continuation-material"), /not disclosed/);
     }
     if (endingRecovery) {
       const state = after.members[0].head.control.controllerCheckpoints.find(([key]) =>
@@ -621,7 +710,67 @@ async function main() {
       const records = await store.readAction({runId: seed.actionRunId, action: {id: seed.actionId}});
       assert.equal(records.attempts.length, 1);
     }
+    let inspectionEvidence = null;
+    if (inspection) {
+      await inspection.close();
+      const health = inspection.recorder.health();
+      assert.equal(health.dropped, 0); assert.equal(health.rejected, 0);
+      assert.equal(health.unpersisted, 0); assert.equal(health.unconfirmed, 0);
+      const {InspectionQueryService} = await import("@agent-anything/inspection/query");
+      const query = new InspectionQueryService(inspectionRoot);
+      try {
+        const selection = (await query.query({kind: "get_snapshot", sourceId: inspection.recorder.source.sourceId,
+          datasetId: inspection.recorder.manifest.datasetId})).selection;
+        const records = [];
+        let next;
+        do {
+          const page = await query.query({...selection, kind: "list_records", runId: rootRunId,
+            includeDescendants: true, limit: 500, ...(next ? {after: next} : {})});
+          records.push(...page.records); next = page.next;
+        } while (next);
+        if (scenario === "continued_child" || materialRecovery) {
+          const reads = records.filter(record => record.payload.kind === "event" && record.payload.name === "context.material.read");
+          assert(reads.some(record => record.links.some(link => link.kind === "delivers" && link.from.id === materialRef.id)),
+            "Inspector must correlate the recovered material read with its immutable source");
+          const content = reads.flatMap(record => record.contents).find(value => value.name === "Material access coverage");
+          assert(content && content.availability === "present");
+          const value = JSON.parse((await query.query({...selection, kind: "get_content", contentId: content.id})).content.text);
+          assert(value.references.some(ref => ref.id === materialRef.id && ref.revision === materialRef.revision));
+        }
+        const bindings = records.filter(record => record.payload.kind === "event" && record.payload.name === "Model activity binding");
+        assert(bindings.length > 0, "Actual recovered model access must be recorded");
+        for (const record of bindings) {
+          const content = record.contents.find(value => value.name === "Model activity binding");
+          assert.equal(content.availability, "present");
+          const value = JSON.parse((await query.query({...selection, kind: "get_content", contentId: content.id})).content.text);
+          assert.equal(value.runId, record.subject.runId);
+          assert.equal(value.id, record.subject.id);
+        }
+        const allocations = records.flatMap(record => record.contents).filter(content => content.name === "Model input allocation");
+        // Restoring already-frozen input does not repeat its earlier measurement.
+        if (backgroundAdopt) assert(allocations.length > 0, "Fresh adoption must expose its allocation material");
+        for (const content of allocations) {
+          const value = JSON.parse((await query.query({...selection, kind: "get_content", contentId: content.id})).content.text);
+          assert.equal(value.unit, "tokens");
+          assert.equal(typeof value.estimator.accuracy, "string");
+          assert(value.uncertainty);
+          assert(value.groups.every(group => typeof group.allocatedAmount === "number" && !Object.hasOwn(group, "grant")));
+        }
+        const step = records.find(record => record.payload.kind === "flow_step" && record.payload.observation.kind === "step_entered" &&
+          record.payload.observation.definition.id === "model-activity-access" && record.payload.observation.stepId === "binding");
+        assert(step);
+        const fact = step.payload.observation;
+        const detail = await query.query({...selection, kind: "get_flow_occurrence", runId: fact.runId,
+          invocationId: fact.invocationId, occurrenceId: fact.stepExecutionId});
+        assert(detail.flow.occurrence.references.some(ref => ref.role === "output" && ref.availability === "present" &&
+          ref.reference.kind === "model_activity"), "Activity material must resolve through the Inspector query path");
+        assert(records.some(record => record.payload.kind === "recording_link" && record.payload.target?.datasetId === "resume"));
+        inspectionEvidence = {...selection, recordCount: records.length, modelActivityBindings: bindings.length,
+          allocationMaterials: allocations.length, resolvedActivity: true};
+      } finally { await query.close(); }
+    }
     await writeFile(join(directory, "resume.json"), JSON.stringify({scenario, status: outcome.runResult.status, effects: 1, modelCalls: calls,
+      ...(inspectionEvidence ? {inspection: inspectionEvidence} : {}),
       members: after.members.length, originalItemsPreserved: true, countersAndDeadlinesPreserved: true,
       environmentRestoredExactly: true, electron: process.versions.electron, sqliteWorkerGeneration: store.generation}));
   } else {
@@ -665,7 +814,7 @@ async function main() {
     const bytes = await readFile(join(directory, "execution", name)).catch(error => {if (error.code === "ENOENT") return Buffer.alloc(0); throw error;});
     assert.equal(bytes.includes(Buffer.from(process.env.HELARC_RECOVERY_SECRET_TEST)), false, "Environment plaintext leaked to SQLite");
   }
-  app.exit(0);
+  app.quit();
 }
 main().catch(async error => {
   const details = inspect(error, {depth: 8});

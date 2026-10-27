@@ -1,11 +1,11 @@
-import type { ModelCallRejectionCandidate } from "@agent-anything/agent-runtime/controller";
-import type { ModelToolCall } from "@agent-anything/model-interaction";
+import type { ModelCallRejectionCandidate } from "@agent-anything/agent-runtime/decision";
+import type { ModelCallableRequest } from "@agent-anything/model-interaction";
 import type { HelarcModelCallableCatalog } from "./HelarcModelCallableCatalog.js";
 
 const MAX_REJECTED_NAME_PREVIEW_LENGTH = 256;
 
 export function createHelarcUnknownCallableRejection(
-  call: ModelToolCall,
+  call: ModelCallableRequest,
   catalog: Pick<HelarcModelCallableCatalog, "definitions">,
 ): ModelCallRejectionCandidate {
   const displayedName = JSON.stringify(call.name.slice(0, MAX_REJECTED_NAME_PREVIEW_LENGTH));

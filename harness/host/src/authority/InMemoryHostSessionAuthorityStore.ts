@@ -1,32 +1,32 @@
 import {
-  isSessionAuthorityApplicable,
-  type SessionAuthorityCommit,
-  type SessionAuthorityCommitResult,
-  type SessionAuthorityLookup,
-  type SessionAuthorityPort,
-  type SessionAuthorityRecord,
+  isSessionAuthorizationApplicable,
+  type SessionAuthorizationCommit,
+  type SessionAuthorizationCommitResult,
+  type SessionAuthorizationLookup,
+  type SessionAuthorizationStore,
+  type SessionAuthorizationBasis,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 
-export interface InMemoryHostSessionAuthorityStore extends SessionAuthorityPort {
-  listRecords(): readonly SessionAuthorityRecord[];
+export interface InMemoryHostSessionAuthorityStore extends SessionAuthorizationStore {
+  listRecords(): readonly SessionAuthorizationBasis[];
 }
 
 export interface CreateInMemoryHostSessionAuthorityStoreInput {
   readonly maxRecords: number;
-  readonly initialRecords?: readonly SessionAuthorityRecord[];
+  readonly initialRecords?: readonly SessionAuthorizationBasis[];
 }
 
 interface CommitLedgerEntry {
   readonly fingerprint: string;
-  readonly result: SessionAuthorityCommitResult;
+  readonly result: SessionAuthorizationCommitResult;
 }
 
 export function createInMemoryHostSessionAuthorityStore(
   input: CreateInMemoryHostSessionAuthorityStoreInput,
 ): InMemoryHostSessionAuthorityStore {
   assertLimit(input.maxRecords, "Session authority maxRecords");
-  const records = new Map<string, SessionAuthorityRecord>();
+  const records = new Map<string, SessionAuthorizationBasis>();
   const commits = new Map<string, CommitLedgerEntry>();
 
   for (const record of input.initialRecords ?? []) {
@@ -41,21 +41,21 @@ export function createInMemoryHostSessionAuthorityStore(
 
   return Object.freeze({
     async listApplicable(
-      lookup: SessionAuthorityLookup,
+      lookup: SessionAuthorizationLookup,
       context: InvocationInterruptionContext,
     ) {
       if (context.signal.aborted) return Object.freeze([]);
       return Object.freeze(
         [...records.values()]
-          .filter((record) => isSessionAuthorityApplicable(record, lookup))
+          .filter((record) => isSessionAuthorizationApplicable(record, lookup))
           .map(snapshot),
       );
     },
 
     async commit(
-      commit: SessionAuthorityCommit,
+      commit: SessionAuthorizationCommit,
       context: InvocationInterruptionContext,
-    ): Promise<SessionAuthorityCommitResult> {
+    ): Promise<SessionAuthorizationCommitResult> {
       if (context.signal.aborted && context.interruption !== null) {
         return Object.freeze({
           kind: "interrupted" as const,
@@ -95,11 +95,11 @@ export function createInMemoryHostSessionAuthorityStore(
 function notApplied(
   code: "session_authority_conflict" | "session_authority_storage_failed",
   message: string,
-): SessionAuthorityCommitResult {
+): SessionAuthorizationCommitResult {
   return Object.freeze({ kind: "not_applied", code, message });
 }
 
-function snapshot(record: SessionAuthorityRecord): SessionAuthorityRecord {
+function snapshot(record: SessionAuthorizationBasis): SessionAuthorizationBasis {
   return deepFreeze(structuredClone(record));
 }
 

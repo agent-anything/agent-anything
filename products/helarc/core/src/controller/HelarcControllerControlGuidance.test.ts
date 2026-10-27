@@ -4,7 +4,7 @@ import {
   HELARC_CONTROLLER_CONTROL_GUIDANCE,
 } from "./HelarcControllerControlGuidance.js";
 import {
-  HELARC_ENDING_SIGNAL_FEEDBACK,
+  createHelarcEndingSignalFeedback,
   HELARC_FINAL_REPLY_CONTENT_GUIDANCE,
   HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE,
 } from "./HelarcFinalReply.js";
@@ -68,13 +68,23 @@ describe("Helarc Controller Control Guidance", () => {
     expect(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE).toContain("not the Child's conversation history");
     expect(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE).toContain("Do not assume the Parent has read earlier Child messages");
     expect(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE).not.toContain("self-contained");
-    for (const text of [definition!.description, HELARC_ENDING_SIGNAL_FEEDBACK]) {
-      expect(text).toContain(HELARC_FINAL_REPLY_CONTENT_GUIDANCE);
-      expect(text).toContain(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE);
-    }
+    expect(definition!.description).toContain(HELARC_FINAL_REPLY_CONTENT_GUIDANCE);
+    expect(definition!.description).toContain(HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE);
     expect(definition!.inputSchema.properties?.response?.description).toBe(HELARC_FINAL_REPLY_CONTENT_GUIDANCE);
     expect(definition!.inputSchema.required).toEqual([]);
   });
+
+  it.each([false, true].flatMap(hasText => [false, true].map(hasPlan => ({hasText, hasPlan}))))(
+    "gives protocol-state-specific feedback without classifying text: %j", input => {
+      const feedback = createHelarcEndingSignalFeedback(input);
+      expect(feedback).toContain("native final_result call");
+      expect(feedback).toContain("not your private conversation history");
+      expect(feedback).toContain("If further work is needed");
+      expect(feedback.includes("text from this turn is retained")).toBe(input.hasText);
+      expect(feedback.includes("arguments {}")).toBe(!input.hasPlan);
+      expect(feedback.includes("complete final snapshot")).toBe(input.hasPlan);
+      expect(feedback).not.toContain("task is complete");
+    });
 
   it("requires a final snapshot only when a Plan exists", () => {
     const limits = { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 };

@@ -1,5 +1,5 @@
 import type { OperationBindingKind } from "@agent-anything/operation-catalog/binding";
-import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import type { OperationDefinitionRevisionRef } from "@agent-anything/operation-catalog/identity";
 
 export interface CompositeDefinitionRef {
   readonly id: string;
@@ -8,7 +8,7 @@ export interface CompositeDefinitionRef {
 
 export interface CompositeNodeDefinition {
   readonly id: string;
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
   readonly allowedBindings: readonly OperationBindingKind[];
   readonly dependencies: readonly CompositeDependency[];
   readonly transformId: string;

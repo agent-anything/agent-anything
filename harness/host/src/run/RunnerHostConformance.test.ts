@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAgentInstructions, type Agent } from "@agent-anything/agent-core/agent";
+import { createAgentInstructions, type AgentDefinition } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import {
   createInteractionProtocolRegistrySnapshot,
@@ -8,7 +8,7 @@ import {
   createOperationBindingResolverSnapshot,
 } from "@agent-anything/operation-catalog/binding";
 import {
-  createOperationCatalogSnapshot,
+  createOperationDefinitionCatalog,
 } from "@agent-anything/operation-catalog/catalog";
 import { createOperationResultContracts } from "@agent-anything/operation-catalog/result";
 import {
@@ -23,16 +23,16 @@ import {
 } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type {
-  Controller,
-  ControllerDecision,
-  ControllerInput,
-} from "@agent-anything/agent-runtime/controller";
-import { createControllerModelItems } from "@agent-anything/agent-runtime/controller";
+  TaskDecisionActivity,
+  TaskDecisionProposal,
+  TaskDecisionInputSources,
+} from "@agent-anything/agent-runtime/decision";
+import { createControllerModelItems } from "@agent-anything/agent-runtime/decision";
 import {
-  Runner,
+  RunExecutionCoordinator,
   type RunConfig,
-  type RunnerOperationComposition,
-} from "@agent-anything/agent-runtime/runner";
+  type RunOperationComposition,
+} from "@agent-anything/agent-runtime/execution-coordinator";
 import {createTestContextProjection} from "@agent-anything/test-support";
 import { createHostRunManager } from "./HostRunManager.js";
 
@@ -64,7 +64,7 @@ describe("Runner and generic Host conformance", () => {
   it("preserves accepted cancellation through Runner and terminal Host projection", async () => {
     const entered = deferred<void>();
     const release = deferred<void>();
-    const controller: Controller<TestOutput> = {
+    const controller: TaskDecisionActivity<TestOutput> = {
       resourceMetering: TEST_RESOURCE_METERING,
       async next(input) {
         entered.resolve();
@@ -99,10 +99,10 @@ describe("Runner and generic Host conformance", () => {
   });
 });
 
-class CompletionController implements Controller<TestOutput> {
+class CompletionController implements TaskDecisionActivity<TestOutput> {
   readonly resourceMetering = TEST_RESOURCE_METERING;
 
-  async next(input: ControllerInput<TestOutput>): Promise<ControllerDecision<TestOutput>> {
+  async next(input: TaskDecisionInputSources<TestOutput>): Promise<TaskDecisionProposal<TestOutput>> {
     return completionDecision(input, "Done");
   }
 }
@@ -113,9 +113,9 @@ const TEST_RESOURCE_METERING = Object.freeze({
   costUnits: "not_applicable" as const,
 });
 
-function createManager(controller: Controller<TestOutput>) {
-  const runner = new Runner({
-    controller,
+function createManager(controller: TaskDecisionActivity<TestOutput>) {
+  const runner = new RunExecutionCoordinator({
+    taskDecisions: controller,
     contextProjection: createTestContextProjection(),
     operations: emptyOperations(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
@@ -125,8 +125,8 @@ function createManager(controller: Controller<TestOutput>) {
   return createHostRunManager({ runner, now: () => NOW });
 }
 
-function emptyOperations(): RunnerOperationComposition {
-  const catalog = createOperationCatalogSnapshot({
+function emptyOperations(): RunOperationComposition {
+  const catalog = createOperationDefinitionCatalog({
     id: "operation-catalog-1",
     revision: "1",
     entries: [],
@@ -154,7 +154,7 @@ function startInput() {
   };
 }
 
-function createAgent(): Agent<TestOutput> {
+function createAgent(): AgentDefinition<TestOutput> {
   return {
     id: "agent-1",
     revision: "1",
@@ -208,7 +208,7 @@ function createRunInput(): RunInput {
   };
 }
 
-function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/agent-runtime/runner").RootRunConfig {
+function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/agent-runtime/execution-coordinator").RootRunConfig {
   return {
     workspace: {
       primary: {
@@ -327,9 +327,9 @@ function disabledRetryPolicy() {
 }
 
 function completionDecision(
-  input: ControllerInput<TestOutput>,
+  input: TaskDecisionInputSources<TestOutput>,
   summary: string,
-): ControllerDecision<TestOutput> {
+): TaskDecisionProposal<TestOutput> {
   const turnId = `${input.runId}:scripted-model-turn:${input.iteration}`;
   return { candidates: [], completionSource: {kind: "controller" as const},
     kind: "propose_completion",

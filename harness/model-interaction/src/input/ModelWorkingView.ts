@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { modelCallRefKey, type ModelToolCall } from "../ModelCall.js";
+import { modelCallRefKey, type ModelCallableRequest } from "../ModelCall.js";
 import { snapshotJsonValue, strictRecord, token } from "../ModelInteractionContractValidation.js";
 import { snapshotModelInputSection, snapshotModelInputSourceRef, type ModelInputSection, type ModelInputSourceRef } from "./ModelInput.js";
 import type {ModelInputOwnerForm} from "./ModelInputForms.js";
@@ -167,7 +167,7 @@ export function createOwnerModelWorkingView(input: {readonly sections: readonly 
 
 function nativeExchangeGroups(sections: readonly ModelInputSection[], boundary: ModelWorkingView["boundary"]): readonly ModelNativeExchangeGroup[] {
   const groups: Array<{turnId: string; originRunId: string | null; sectionIds: string[]; callIds: string[]; settledCallIds: string[]; lastIndex: number}> = [];
-  const pending = new Map<string, ModelToolCall>();
+  const pending = new Map<string, ModelCallableRequest>();
   const seen = new Set<string>(), turns = new Set<string>();
   let active: (typeof groups)[number] | undefined;
   let lastAssistant = -1;

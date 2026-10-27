@@ -1,6 +1,6 @@
 import { invalidOperationBinding, snapshotResolvedOperationBinding, type OperationBindingResolverSnapshot } from "@agent-anything/operation-catalog/binding";
 import { snapshotExecutionEvidenceRef, ExecutionEvidenceUnavailableError, resolveCompensationAssociation, type ExecutionEvidenceRecordPort, type ExecutionEvidenceAccessPort } from "@agent-anything/operation-catalog/evidence";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import { OperationCommitError } from "@agent-anything/operation-catalog/result";
 import type { ToolCall } from "@agent-anything/tools/invocation";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
@@ -15,15 +15,15 @@ export function createHelarcCompensationBindings(input: {
 }): OperationBindingResolverSnapshot {
   const participants = new Set(input.tools.flatMap(({descriptor}) => descriptor.binding.kind === "operation" &&
     descriptor.metadata?.compensationInputRevision === HELARC_COMPENSATION_INPUT_REVISION
-    ? [operationRevisionKey(descriptor.binding.operation)] : []));
+    ? [operationDefinitionRevisionKey(descriptor.binding.operation)] : []));
   const derived = new Set(input.tools.flatMap(({descriptor}) => descriptor.binding.kind === "operation" && descriptor.metadata?.compensationTargetInput === "change_ref"
-    ? [operationRevisionKey(descriptor.binding.operation)] : []));
+    ? [operationDefinitionRevisionKey(descriptor.binding.operation)] : []));
   return Object.freeze({...input.bindings, revision: `${input.bindings.revision}.${HELARC_COMPENSATION_INPUT_REVISION}`,
     async resolve(request: Parameters<OperationBindingResolverSnapshot["resolve"]>[0]) {
-      if (!participants.has(operationRevisionKey(request.operation.operation.ref))) return input.bindings.resolve(request);
+      if (!participants.has(operationDefinitionRevisionKey(request.operation.operation.ref))) return input.bindings.resolve(request);
       let proposal: ReturnType<typeof readHelarcCompensationInput>;
       try {
-        if (derived.has(operationRevisionKey(request.operation.operation.ref))) {
+        if (derived.has(operationDefinitionRevisionKey(request.operation.operation.ref))) {
           const value = request.request as {change_ref: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceRef<"effect">};
           proposal = {targets: [snapshotExecutionEvidenceRef(value.change_ref, "effect")], explanation: null};
         } else proposal = readHelarcCompensationInput(request.request);
@@ -36,7 +36,7 @@ export function createHelarcCompensationBindings(input: {
           !call || call.origin !== "model" || !call.attempt?.modelCall ||
           call.parentRunAction?.run.id !== correlation.run.id || call.parentRunAction.id !== correlation.runAction.id ||
           call.parentRunAction.sequence !== correlation.runAction.sequence ||
-          call.binding?.kind !== "operation" || operationRevisionKey(call.binding.operation) !== operationRevisionKey(request.operation.operation.ref)) {
+          call.binding?.kind !== "operation" || operationDefinitionRevisionKey(call.binding.operation) !== operationDefinitionRevisionKey(request.operation.operation.ref)) {
         return rejected("compensation_caller_invalid", "Compensation association requires an accepted model Tool Call in this Run.");
       }
       if (!input.records) return rejected("execution_reference_unavailable", "Execution evidence storage is unavailable; no operation was executed. Ordinary work can omit compensation_of.");

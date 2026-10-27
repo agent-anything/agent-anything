@@ -7,7 +7,7 @@ test("named profiles, metadata-backed thinking and credentials stay independent"
     const profiles: any[] = [{
       id: "local", revision: "1", providerKind: "ollama", displayName: "Local Ollama",
       baseUrl: "http://localhost:11435/", model: "gemma4:e4b", timeoutMs: 300000000,
-      credentialStatus: "empty_allowed", qualificationPolicy: "allow_experimental", isActive: true,
+      credentialStatus: "empty_allowed", isActive: true,
       ollamaRuntime: { contextWindowTokens: 163840 },
       modelSettings: { service: "ollama", thinking: { mode: "default" } },
     }];
@@ -25,9 +25,6 @@ test("named profiles, metadata-backed thinking and credentials stay independent"
       getSnapshot: async () => structuredClone(snapshot), subscribeSnapshot: () => () => {},
       getProviderCredentialSettings: async ({ profileId }: any) => ({ windowsAvailable: true,
         selection: profiles.find(p => p.id === profileId)?.credential ?? { source: "safe-storage" } }),
-      getQualification: async () => ({ available: false, error: null, campaigns: [], activeCampaignId: null,
-        targetId: null, model: snapshot.provider.activeProfile.model, disposition: "experimental", scopes: [],
-        protocol: { revision: "fixture", totalTrials: 21, maximumRequests: 63, requestTimeoutMs: 120000, limitations: [] } }),
       discoverModels: async (query: any) => ({ ok: true, profileId: query.profileId, profileRevision: query.profileRevision,
         catalog: { observedAt: new Date().toISOString(), source: "fixture", declarationRevision: null,
           models: [{ id: query.model || "deepseek-flash", name: query.model || "deepseek-flash", artifact: null, contextWindowTokens: null, maximumOutputTokens: null,
@@ -41,13 +38,12 @@ test("named profiles, metadata-backed thinking and credentials stay independent"
         const previous = profiles.find(p => p.id === input.profileId);
         const profile = { id: input.profileId ?? "remote", revision: String(Number(previous?.revision ?? 0) + 1),
           providerKind: input.providerKind, displayName: input.displayName, baseUrl: new URL(input.baseUrl).href,
-          model: input.model, timeoutMs: input.timeoutMs, ollamaRuntime: input.ollamaRuntime, modelSettings: input.modelSettings,
-          qualificationPolicy: input.qualificationPolicy, credentialStatus: input.apiKeyUpdate === "clear" ? "empty_allowed" : "present" };
+          model: input.model, timeoutMs: input.timeoutMs, ollamaRuntime: input.ollamaRuntime, modelSettings: input.modelSettings, credentialStatus: input.apiKeyUpdate === "clear" ? "empty_allowed" : "present" };
         (profile as any).credential = input.credential;
         if (previous) profiles.splice(profiles.indexOf(previous), 1, profile); else profiles.push(profile);
         snapshot.provider.activeProfile = profile;
         snapshot.provider.configured = !!profile.model;
-        snapshot.provider.error = profile.model ? null : { code: "provider_config_missing", message: "Select a model before starting work or verification." };
+        snapshot.provider.error = profile.model ? null : { code: "provider_config_missing", message: "Select a model before starting work." };
         return receipt();
       },
     };

@@ -19,11 +19,6 @@ import { HelarcResponseProgress } from "./workbench/HelarcResponseProgress.js";
 import { readToken, workScopeValid } from "./workbench/WorkbenchReadLimits.js";
 
 export const HELARC_IPC_CHANNELS = {
-  getQualification: "helarc:get-qualification",
-  readQualificationEvidence: "helarc:read-qualification-evidence",
-  startQualification: "helarc:start-qualification",
-  cancelQualification: "helarc:cancel-qualification",
-  publishQualification: "helarc:publish-qualification",
   saveProject: "helarc:save-project",
   selectProject: "helarc:select-project",
   chooseProjectFolder: "helarc:choose-project-folder",
@@ -67,7 +62,6 @@ export const HELARC_IPC_CHANNELS = {
 } as const;
 
 export interface RegisterHelarcIpcInput {
-  qualification?: import("./qualification/HelarcQualificationService.js").HelarcQualificationService;
   projectStore?: FileHelarcProjectStore;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   storage?: import("./storage/HelarcStorageService.js").HelarcStorageService;
@@ -97,7 +91,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     }
     const profiles = await input.providerProfileStore.listProfiles(input.providerCredentialStore);
     if (refreshSequence !== providerRefreshSequence) return input.controller.getSnapshot();
-    const previous = input.controller.getQualificationConfiguration();
+    const previous = input.controller.getModelConfiguration();
     const provider = resolved ? createHelarcProvider(resolved.config, input.inspection?.providerObserver) : null;
     if (previous && resolved && JSON.stringify([previous.provider.descriptor, previous.providerProfile, input.controller.getSnapshot().provider.profiles]) ===
         JSON.stringify([provider!.descriptor, resolved.profile, profiles])) return input.controller.getSnapshot();
@@ -117,25 +111,12 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       : await input.providerProfileStore.credentialSelection(query.profileId, query.profileRevision);
     return { windowsAvailable: await input.providerCredentialStore.windowsAvailable(), selection };
   });
-  ipcMain.handle(HELARC_IPC_CHANNELS.getQualification, async (event) => {
-    if (!trustedSender(event) || !input.qualification) throw new Error("Qualification is unavailable.");
-    if (selection) {
-      const saved = await input.providerProfileStore!.resolveActiveProfile(input.providerCredentialStore!);
-      if (saved) await refreshProvider();
-    }
-    return input.qualification.snapshot();
-  });
   ipcMain.handle(HELARC_IPC_CHANNELS.discoverModels, async (event, query) => {
     if (!trustedSender(event) || !selection || !query || Object.keys(query).sort().join() !== "model,profileId,profileRevision,refresh" ||
       !readToken(query.profileId) || !readToken(query.profileRevision) || typeof query.model !== "string" || query.model.length > 512 || typeof query.refresh !== "boolean") {
       return { ok: false, error: "Invalid model discovery request." };
     }
     return selection.discover(query);
-  });
-  ipcMain.handle(HELARC_IPC_CHANNELS.readQualificationEvidence, (event, query) => {
-    if (!trustedSender(event) || !input.qualification || !query || Object.keys(query).length !== 2 ||
-      !readToken(query.campaignId) || (query.trialId !== null && !readToken(query.trialId))) return { ok: false, error: "Invalid evidence request." };
-    return input.qualification.evidence(query.campaignId, query.trialId);
   });
   for (const method of ["listThreadRuns", "readCommandDetails", "readWorkbenchItem", "readCommandOutput",
     "readConversation", "readConversationTurn", "readCurrentWork", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
@@ -186,15 +167,6 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   const productCommands = createHelarcProductCommandDispatcher({
     handlers: {
-      "qualification.start": async ({ targetId }) => {
-        if (selection && await input.providerProfileStore!.resolveActiveProfile(input.providerCredentialStore!)) await refreshProvider();
-        return input.qualification?.start(targetId) ?? { ok: false, error: "Qualification is unavailable." };
-      },
-      "qualification.cancel": ({ campaignId }) => input.qualification?.cancel(campaignId) ?? { ok: false, error: "Qualification is unavailable." },
-      "qualification.publish": async ({ campaignId, targetId, reviewed }) => {
-        if (selection && await input.providerProfileStore!.resolveActiveProfile(input.providerCredentialStore!)) await refreshProvider();
-        return input.qualification?.publish(campaignId, targetId, reviewed) ?? { ok: false, error: "Qualification is unavailable." };
-      },
       "project.select": ({ projectId }) => projectHelarcDesktopSnapshot(input.controller.selectProject(projectId)),
       "project.chooseFolder": async () => {
         if (!input.workspaceProfileStore) throw new Error("Folder storage is unavailable.");
@@ -368,9 +340,6 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     },
   });
   for (const [channel, kind] of [
-    [HELARC_IPC_CHANNELS.startQualification, "qualification.start"],
-    [HELARC_IPC_CHANNELS.cancelQualification, "qualification.cancel"],
-    [HELARC_IPC_CHANNELS.publishQualification, "qualification.publish"],
     [HELARC_IPC_CHANNELS.saveProject, "project.save"],
     [HELARC_IPC_CHANNELS.selectProject, "project.select"],
     [HELARC_IPC_CHANNELS.chooseProjectFolder, "project.chooseFolder"],

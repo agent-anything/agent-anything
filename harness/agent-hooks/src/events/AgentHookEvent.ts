@@ -1,10 +1,10 @@
-import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type {
-  ControllerInput,
+  TaskDecisionInputSources,
   ModelInteractionProjection,
-} from "@agent-anything/agent-runtime/controller";
+} from "@agent-anything/agent-runtime/decision";
 
 export type AgentHookPoint = "Stop" | "StopFailure";
 
@@ -32,14 +32,14 @@ export interface AgentStopEvent<TOutput = unknown> {
   readonly point: "Stop";
   readonly run: RunRef;
   readonly runKind: "root" | "descendant";
-  readonly agent: AgentRevisionRef;
+  readonly agent: AgentDefinitionRevisionRef;
   readonly task: AgentTask;
   readonly controllerRequestId: string;
   readonly iteration: number;
   readonly candidate: AgentTerminalCandidate<TOutput>;
   readonly interaction: ModelInteractionProjection;
-  readonly plan: ControllerInput<TOutput>["plan"];
-  readonly pending: ControllerInput<TOutput>["pending"];
+  readonly plan: TaskDecisionInputSources<TOutput>["plan"];
+  readonly pending: TaskDecisionInputSources<TOutput>["pending"];
   readonly emittedAt: string;
 }
 
@@ -54,7 +54,7 @@ export interface AgentStopFailureEvent {
   readonly point: "StopFailure";
   readonly run: RunRef;
   readonly runKind: "root" | "descendant";
-  readonly agent: AgentRevisionRef;
+  readonly agent: AgentDefinitionRevisionRef;
   readonly task: AgentTask;
   readonly controllerRequestId: string;
   readonly iteration: number;
@@ -69,7 +69,7 @@ export type AgentHookEvent<TOutput = unknown> =
 export function createAgentStopEvent<TOutput>(input: {
   readonly sequence: number;
   readonly runKind: "root" | "descendant";
-  readonly controllerInput: ControllerInput<TOutput>;
+  readonly controllerInput: TaskDecisionInputSources<TOutput>;
   readonly output: TOutput;
   readonly emittedAt: string;
 }): AgentStopEvent<TOutput> {
@@ -103,7 +103,7 @@ export function createAgentStopEvent<TOutput>(input: {
 export function createAgentStopFailureEvent<TOutput>(input: {
   readonly sequence: number;
   readonly runKind: "root" | "descendant";
-  readonly controllerInput: ControllerInput<TOutput>;
+  readonly controllerInput: TaskDecisionInputSources<TOutput>;
   readonly error: unknown;
   readonly emittedAt: string;
 }): AgentStopFailureEvent {

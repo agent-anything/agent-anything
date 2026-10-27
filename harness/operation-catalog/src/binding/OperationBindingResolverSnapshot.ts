@@ -1,4 +1,4 @@
-import type { RegisteredOperation } from "../catalog/index.js";
+import type { RegisteredOperationDefinition } from "../catalog/index.js";
 import type { OperationInvocationContext } from "../identity/index.js";
 import type {
   OperationBindingResolution,
@@ -13,7 +13,7 @@ export interface OperationBindingResolverSnapshot {
   readonly revision: string;
   readonly resolverIds: readonly string[];
   resolve(input: {
-    readonly operation: RegisteredOperation;
+    readonly operation: RegisteredOperationDefinition;
     readonly context: OperationInvocationContext;
     readonly request: unknown;
     readonly basis: unknown;
@@ -52,7 +52,7 @@ export function createOperationBindingResolverSnapshot(
     revision,
     resolverIds: Object.freeze([...resolvers.keys()].sort()),
     async resolve(input: {
-      readonly operation: RegisteredOperation;
+      readonly operation: RegisteredOperationDefinition;
       readonly context: OperationInvocationContext;
       readonly request: unknown;
       readonly basis: unknown;

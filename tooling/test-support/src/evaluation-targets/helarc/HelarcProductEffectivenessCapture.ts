@@ -333,7 +333,7 @@ function observedEffects(
   if (settledEffect && material.actionNames.some((name) => name === "Bash" || name === "PowerShell")) {
     effects.add("process.spawn");
   }
-  if (settledEffect && material.actionNames.includes("TaskStop")) effects.add("process.signal");
+  if (settledEffect && material.actionNames.includes("CommandStop")) effects.add("process.signal");
   if (material.interactionSubmissionCount > 0) effects.add("interaction.request");
   return Object.freeze([...effects].sort());
 }

@@ -30,11 +30,11 @@ export type HelarcBaselineToolName =
   | "Edit"
   | "Write"
   | HelarcShellToolName
-  | "TaskStop"
-  | "TaskOutput"
+  | "CommandStop"
+  | "CommandObserve"
   | "ExecutionDetails"
-  | "ContextSearch"
-  | "ContextRead"
+  | "ContextMaterialSearch"
+  | "ContextMaterialRead"
   | "RestoreFile"
   | "AskUserQuestion"
   | "Agent"
@@ -102,7 +102,7 @@ const BASELINE = objectSchema(
 
 const READ = contract({
   name: "Read",
-  description: "Read bounded textual content from one exact Workspace file.",
+  description: "Read complete source lines from one exact Workspace file, preserving UTF-8 text and original line endings. Page using offset/limit and returned next_offset. The response byte limit is separate from the file inspection limit; an oversized single line is rejected rather than cut.",
   inputSchema: objectSchema(["file_path"], {
     file_path: PATH,
     offset: POSITIVE_INTEGER,
@@ -116,6 +116,7 @@ const READ = contract({
       "start_line",
       "end_line",
       "total_lines",
+      "next_offset",
       "byte_length",
       "content_digest",
       "truncated",
@@ -127,6 +128,7 @@ const READ = contract({
       start_line: POSITIVE_INTEGER,
       end_line: { type: "integer", minimum: 0 },
       total_lines: { type: "integer", minimum: 0 },
+      next_offset: { anyOf: [POSITIVE_INTEGER, {type: "null"}] },
       byte_length: { type: "integer", minimum: 0 },
       content_digest: { type: "string", minLength: 1, maxLength: 256 },
       truncated: { type: "boolean" },
@@ -136,17 +138,27 @@ const READ = contract({
   binding: operation("helarc.file.read", "file_system.read"),
 });
 
+const SEARCH_COVERAGE = objectSchema(["complete", "entries_visited", "files_searched", "bytes_read", "skipped_count", "skipped", "skipped_details_truncated", "stop_reason"], {
+  complete: {type: "boolean"}, entries_visited: {type: "integer", minimum: 0},
+  files_searched: {type: "integer", minimum: 0}, bytes_read: {type: "integer", minimum: 0},
+  skipped_count: {type: "integer", minimum: 0}, skipped_details_truncated: {type: "boolean"},
+  skipped: {type: "array", maxItems: 32, items: objectSchema(["file_path", "reason"], {file_path: PATH, reason: {type: "string"}})},
+  stop_reason: {anyOf: [{type: "string"}, {type: "null"}]},
+});
+const OMITTED_COUNT = {anyOf: [{type: "integer", minimum: 0}, {type: "null"}]} as const;
+
 const GLOB = contract({
   name: "Glob",
-  description: "Find Workspace paths with one bounded glob pattern.",
+  description: "Find Workspace paths with one bounded glob pattern. Inspect scan.complete, skipped details and stop_reason: incomplete traversal is not proof of absence. omitted_count is null when the scan is incomplete. Narrow the scope when limited.",
   inputSchema: objectSchema(["pattern"], {
     pattern: { type: "string", minLength: 1, maxLength: 4_096 },
     path: PATH,
   }),
-  outputSchema: objectSchema(["matches", "truncated", "omitted_count"], {
+  outputSchema: objectSchema(["matches", "truncated", "omitted_count", "scan"], {
     matches: { type: "array", items: PATH },
     truncated: { type: "boolean" },
-    omitted_count: { type: "integer", minimum: 0 },
+    omitted_count: OMITTED_COUNT,
+    scan: SEARCH_COVERAGE,
   }),
   annotations: { readOnlyHint: true },
   binding: operation("helarc.path.glob", "file_system.read"),
@@ -154,7 +166,7 @@ const GLOB = contract({
 
 const GREP = contract({
   name: "Grep",
-  description: "Search Workspace text with one bounded regular expression.",
+  description: "Search Workspace text with one bounded regular expression. Inspect scan.complete, skipped details and stop_reason; oversized, unsupported or unreadable files and limits do not prove absence. Scanning can stop after the requested page. omitted_count is null for incomplete scans; narrow the scope or read an exact file to investigate.",
   inputSchema: objectSchema(["pattern"], {
     pattern: { type: "string", minLength: 1, maxLength: 4_096 },
     path: PATH,
@@ -168,7 +180,7 @@ const GREP = contract({
     multiline: { type: "boolean" },
   }),
   outputSchema: objectSchema(
-    ["output_mode", "entries", "truncated", "omitted_count"],
+    ["output_mode", "entries", "truncated", "omitted_count", "scan"],
     {
       output_mode: { enum: ["content", "files_with_matches", "count"] },
       entries: {
@@ -192,7 +204,8 @@ const GREP = contract({
         },
       },
       truncated: { type: "boolean" },
-      omitted_count: { type: "integer", minimum: 0 },
+      omitted_count: OMITTED_COUNT,
+      scan: SEARCH_COVERAGE,
     },
   ),
   annotations: { readOnlyHint: true },
@@ -252,7 +265,7 @@ const WRITE = contract({
 });
 
 const TASK_STOP = contract({
-  name: "TaskStop",
+  name: "CommandStop",
   description: "Request termination of one exact managed command owned by the current Run.",
   inputSchema: objectSchema(["task_id"], {
     task_id: { type: "string", minLength: 1, maxLength: 1_024 },
@@ -266,15 +279,17 @@ const TASK_STOP = contract({
   binding: operation("helarc.task.stop", "process.signal"),
 });
 
-const TASK_OUTPUT = contract({
-  name:"TaskOutput",description:"Observe retained output and lifecycle facts for one command owned by the current Run.",
-  inputSchema:{...objectSchema(["task_id"],{task_id:{type:"string",minLength:1,maxLength:1024},cursor:{type:"string",minLength:1,maxLength:4096},wait_ms:HELARC_PROCESS_WAIT_SCHEMA,
-    query:{type:"string",minLength:1,maxLength:1024,description:"Case-sensitive literal search, at most 1024 UTF-8 bytes; mutually exclusive with cursor/wait_ms."},
-    stream:{enum:["stdout","stderr"],description:"Search stream, default stdout."},search_cursor:{type:"string",minLength:1,maxLength:4096},limit:{type:"integer",minimum:1,maximum:16}}),
-    oneOf:[{required:["query"],properties:{query:{},cursor:false,wait_ms:false}},
-      {properties:{query:false,stream:false,search_cursor:false,limit:false}}]},
-  outputSchema:{anyOf:[HELARC_PROCESS_OBSERVATION_SCHEMA,{type:"object",required:["kind","task_id","run_id","matches","frontier","next_search_cursor"],properties:{kind:{const:"output_search"},task_id:{type:"string"},run_id:{type:"string"},matches:{type:"array"},frontier:{type:"object"},next_search_cursor:{type:["string","null"]}}}]},
-  annotations:{readOnlyHint:true},binding:operation("helarc.task.output",null),
+const COMMAND_OBSERVE = contract({
+  name:"CommandObserve",description:"Observe one exact current-Run command, optionally waiting for a specified condition. Returns lifecycle facts and frozen stdout/stderr material references, not output text. Read or search those references with ContextMaterialRead/ContextMaterialSearch. Waiting never terminates the command, and a successful observation does not mean command success.",
+  inputSchema:objectSchema(["task_id"],{task_id:{type:"string",minLength:1,maxLength:1024},
+    until:{enum:["snapshot","change","outcome","settled"],description:"Default snapshot returns immediately. change waits for lifecycle/output changes since after; outcome waits for a known command outcome; settled waits for containment and capture settlement."},
+    after:{type:"string",minLength:1,maxLength:2048,description:"Required only for change: an observation_id returned by CommandObserve for this exact command."},
+    wait_ms:HELARC_PROCESS_WAIT_SCHEMA}),
+  outputSchema:objectSchema(["task_id","run_id","observation_id","snapshot","output_materials","until","after","return_reason","requested_wait_ms","effective_wait_ms","elapsed_wait_ms"],{
+    task_id:{type:"string"},run_id:{type:"string"},observation_id:{type:"string"},snapshot:{type:"object"},output_materials:{type:"array"},
+    until:{enum:["snapshot","change","outcome","settled"]},after:{type:["string","null"]},return_reason:{type:"string"},
+    requested_wait_ms:{type:"integer",minimum:0},effective_wait_ms:{type:"integer",minimum:0},elapsed_wait_ms:{type:"number",minimum:0}}),
+  annotations:{readOnlyHint:true},binding:operation("helarc.command.observe",null),
 });
 
 const ASK_USER_QUESTION = contract({
@@ -392,6 +407,9 @@ const SEND_MESSAGE = contract({
   inputSchema: objectSchema(["agent_id", "prompt"], {
     agent_id: { type: "string", minLength: 1, maxLength: 1_024 },
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
+    material_refs: MATERIAL_REFS_SCHEMA,
+    execution_refs: {type: "array", maxItems: 16, items: EXECUTION_REFERENCE_SCHEMA,
+      description: "Exact accessible execution references for a retained continuation. Active-Child steering accepts text only."},
   }),
   outputSchema: DELEGATION_RESULT_OUTPUT,
   annotations: {},
@@ -432,7 +450,7 @@ export const HELARC_BASELINE_TOOL_CONTRACTS = Object.freeze([
   BASH,
   POWERSHELL,
   TASK_STOP,
-  TASK_OUTPUT,
+  COMMAND_OBSERVE,
   ASK_USER_QUESTION,
   AGENT,
   SEND_MESSAGE,

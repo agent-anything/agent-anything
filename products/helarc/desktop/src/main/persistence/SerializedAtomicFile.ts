@@ -8,6 +8,30 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { captureExecutionError, type ExecutionErrorDetails } from "../diagnostics/ExecutionErrorDetails.js";
+
+export type AtomicFileStage = "read" | "mkdir" | "write" | "flush" | "replace" | "remove";
+
+export interface AtomicFileWriteReport {
+  readonly replacementAttempts: number;
+  readonly elapsedMs: number;
+  readonly failures: readonly ExecutionErrorDetails[];
+}
+
+export class AtomicFileError extends Error {
+  readonly code: string | undefined;
+  constructor(readonly stage: AtomicFileStage, cause: unknown, readonly writeReport?: AtomicFileWriteReport) {
+    super(`Atomic file ${stage} failed.`, { cause });
+    this.name = "AtomicFileError";
+    this.code = fileSystemCode(cause);
+  }
+}
+
+export function isTransientFileAccessFailure(error: unknown): boolean {
+  return process.platform === "win32" &&
+    ["EPERM", "EACCES", "EBUSY"].includes(fileSystemCode(error) ?? "");
+}
 
 export interface AtomicFileOperations {
   readText(path: string): Promise<string>;
@@ -88,11 +112,12 @@ export class SerializedAtomicFile {
 
   transact<T>(
     operation: (file: AtomicFileTransaction) => Promise<T>,
+    observeWrite?: (report: AtomicFileWriteReport) => void,
   ): Promise<T> {
     return serializeFileOperation(this.operationQueueKey, () =>
       operation({
         readText: () => this.readText(),
-        replaceText: (contents) => this.replaceText(contents),
+        replaceText: (contents) => this.replaceText(contents, observeWrite),
         remove: () => this.remove(),
       })
     );
@@ -105,11 +130,11 @@ export class SerializedAtomicFile {
       if (isFileSystemError(error, "ENOENT")) {
         return null;
       }
-      throw error;
+      throw new AtomicFileError("read", error);
     }
   }
 
-  private async replaceText(contents: string): Promise<void> {
+  private async replaceText(contents: string, observeWrite?: (report: AtomicFileWriteReport) => void): Promise<void> {
     const temporaryId = this.createTemporaryId();
     if (!/^[A-Za-z0-9_-]+$/.test(temporaryId)) {
       throw new TypeError("Atomic file temporary identity is invalid.");
@@ -117,8 +142,15 @@ export class SerializedAtomicFile {
 
     const temporaryPath = `${this.filePath}.tmp-${process.pid}-${temporaryId}`;
     let temporaryCreated = false;
+    let stage: AtomicFileStage = "mkdir";
+    let replacementAttempts = 0;
+    const startedAt = performance.now();
+    const failures: ExecutionErrorDetails[] = [];
+    const report = (): AtomicFileWriteReport => ({ replacementAttempts,
+      elapsedMs: performance.now() - startedAt, failures: [...failures] });
     try {
       await this.operations.mkdir(dirname(this.filePath));
+      stage = "write";
       try {
         await this.operations.writeExclusive(temporaryPath, contents);
         temporaryCreated = true;
@@ -126,9 +158,26 @@ export class SerializedAtomicFile {
         temporaryCreated = !isFileSystemError(error, "EEXIST");
         throw error;
       }
+      stage = "flush";
       await this.operations.syncFile(temporaryPath);
-      await this.operations.replace(temporaryPath, this.filePath);
+      stage = "replace";
+      const retryDelays = [25, 50, 100, 200, 400];
+      for (;;) {
+        replacementAttempts += 1;
+        try {
+          await this.operations.replace(temporaryPath, this.filePath);
+          break;
+        } catch (error) {
+          failures.push(captureExecutionError(error));
+          const wait = retryDelays[replacementAttempts - 1];
+          if (!isTransientFileAccessFailure(error) || wait === undefined) throw error;
+          await delay(wait);
+        }
+      }
       temporaryCreated = false;
+      try { observeWrite?.(report()); } catch { /* Observation cannot undo a committed replacement. */ }
+    } catch (error) {
+      throw new AtomicFileError(stage, error, report());
     } finally {
       if (temporaryCreated) {
         try {
@@ -145,7 +194,7 @@ export class SerializedAtomicFile {
       await this.operations.remove(this.filePath);
     } catch (error) {
       if (!isFileSystemError(error, "ENOENT")) {
-        throw error;
+        throw new AtomicFileError("remove", error);
       }
     }
   }
@@ -167,6 +216,10 @@ function serializeFileOperation<T>(
 }
 
 function isFileSystemError(error: unknown, code: string): boolean {
-  return error !== null && typeof error === "object" &&
-    (error as { code?: unknown }).code === code;
+  return fileSystemCode(error) === code;
+}
+
+function fileSystemCode(error: unknown): string | undefined {
+  const code = error !== null && typeof error === "object" ? (error as {code?: unknown}).code : undefined;
+  return typeof code === "string" ? code : undefined;
 }

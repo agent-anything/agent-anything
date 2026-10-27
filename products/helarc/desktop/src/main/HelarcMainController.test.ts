@@ -14,7 +14,7 @@ import {
   createModelCallRef,
   createModelTurnId,
   snapshotModelJsonValue,
-  snapshotModelToolCall,
+  snapshotModelCallableRequest,
   snapshotProviderResponse,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
@@ -399,7 +399,6 @@ describe("HelarcMainController", () => {
         timeoutMs: 1500,
         ollamaRuntime: null,
         credentialStatus: "present",
-        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
     });
@@ -419,7 +418,6 @@ describe("HelarcMainController", () => {
         timeoutMs: 1500,
         ollamaRuntime: null,
         credentialStatus: "present",
-        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
       profiles: [
@@ -434,7 +432,6 @@ describe("HelarcMainController", () => {
           timeoutMs: 1500,
           ollamaRuntime: null,
           credentialStatus: "present",
-          qualificationPolicy: "allow_experimental",
           isActive: true,
         },
       ],
@@ -542,68 +539,6 @@ describe("HelarcMainController", () => {
     });
   });
 
-  it("fails strict model qualification before Provider transport", async () => {
-    const provider = new CountingCompleteProvider();
-    const controller = new HelarcMainController({ commandOutputDirectory,
-      provider,
-      providerProfile: desktopProviderProfile("require_qualified"),
-    });
-    controller.selectWorkspacePath("D:/projects/agent-anything");
-
-    const result = await controller.startRun({
-      taskText: "Inspect the workspace",
-      target: { kind: "new_thread" },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "model_qualification_required",
-        message: "The configured model lacks current qualification for the requested Helarc Tool profile.",
-      },
-    });
-    expect(provider.callCount).toBe(0);
-    expect(controller.getSnapshot().run).toBeNull();
-  });
-
-  it("keeps active Run qualification immutable when later settings change", async () => {
-    const provider = new DeferredCompleteProvider();
-    const controller = new HelarcMainController({ commandOutputDirectory,
-      provider,
-      providerProfile: desktopProviderProfile("allow_experimental"),
-    });
-    controller.selectWorkspacePath("D:/projects/agent-anything");
-
-    const started = await controller.startRun({
-      taskText: "Inspect the workspace",
-      target: { kind: "new_thread" },
-    });
-    expect(started).toMatchObject({ ok: true });
-    await vi.waitFor(() => expect(provider.callCount).toBe(1));
-    const activeQualification = controller.getSnapshot().run?.product.qualification;
-    expect(activeQualification).toMatchObject({
-      status: "experimental",
-      policy: "allow_experimental",
-    });
-
-    controller.configureProvider({
-      provider: new CompleteProvider(),
-      profile: desktopProviderProfile("require_qualified"),
-    });
-    expect(controller.getSnapshot()).toMatchObject({
-      provider: { activeProfile: { qualificationPolicy: "require_qualified" } },
-      run: { product: { qualification: activeQualification } },
-    });
-
-    const completed = waitForSnapshot(
-      controller,
-      (snapshot) => snapshot.status === "completed" && snapshot.run?.product.result !== null,
-    );
-    provider.complete();
-    const terminal = await completed;
-    expect(terminal.run?.product.result?.qualification).toEqual(activeQualification);
-  });
-
   it("persists completed Runs in Thread work context for history review", async () => {
     const storePath = await threadFilePath();
     const threadStore = new FileHelarcThreadStore(storePath);
@@ -620,7 +555,6 @@ describe("HelarcMainController", () => {
         timeoutMs: 1000,
         ollamaRuntime: null,
         credentialStatus: "present",
-        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
       threadStore,
@@ -670,7 +604,7 @@ describe("HelarcMainController", () => {
     });
   });
 
-  it("does not let persistence failure replace the authoritative RunResult", async () => {
+  it.each(["sync", "async"])("does not let persistence or %s diagnostic failure replace the authoritative RunResult", async mode => {
     const threadStore = new InMemoryHelarcThreadStore();
     vi.spyOn(threadStore, "commitRunTerminal").mockRejectedValue(
       new Error("sentinel-thread-store-secret"),
@@ -678,6 +612,10 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({ commandOutputDirectory,
       provider: new CompleteProvider(),
       threadStore,
+      persistenceDiagnostics: {record() {
+        if (mode === "sync") throw new Error("Diagnostic sink failed");
+        return Promise.reject(new Error("Diagnostic sink failed"));
+      }} as never,
     });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
@@ -806,9 +744,10 @@ describe("HelarcMainController", () => {
     expect(commits.find(commit => commit.status === "applied")?.expected).toBe(commits[0]?.expected);
     expect(commits.some(commit => commit.status === "rejected")).toBe(false);
     expect(terminal).toHaveBeenCalledOnce();
-    expect(diagnostics.record).toHaveBeenCalledOnce();
+    expect(diagnostics.record).toHaveBeenCalledTimes(2);
     expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({ code: "EIO", operation: "run_projection" }));
-    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private disk detail");
+    expect(diagnostics.record).toHaveBeenCalledWith(expect.objectContaining({outcome: "recovered"}));
+    expect(JSON.stringify(controller.getSnapshot())).not.toContain("private disk detail");
     expect(controller.getSnapshot().error).toBeNull();
   });
 
@@ -872,7 +811,6 @@ describe("HelarcMainController", () => {
         timeoutMs: 1000,
         ollamaRuntime: null,
         credentialStatus: "present",
-        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
       threadStore,
@@ -2090,7 +2028,7 @@ function createDesktopNativeResult(
   const turnId = createModelTurnId({ providerId, requestId: request.requestId, responseId });
   const content = [Object.freeze({
         kind: "model_tool_call" as const,
-        call: snapshotModelToolCall({
+        call: snapshotModelCallableRequest({
           modelCallRef: createModelCallRef({
             providerRequestId: request.requestId,
             controllerRequestId: request.correlation.controllerRequestId,
@@ -2185,7 +2123,6 @@ function providerModelContextCapability(modelContext: Provider["modelContext"]) 
 }
 
 function desktopProviderProfile(
-  qualificationPolicy: "require_qualified" | "allow_experimental",
 ) {
   return {
     id: "desktop-test-provider",
@@ -2198,7 +2135,6 @@ function desktopProviderProfile(
     timeoutMs: 30_000,
     ollamaRuntime: null,
     credentialStatus: "empty_allowed" as const,
-    qualificationPolicy,
     isActive: true,
   };
 }

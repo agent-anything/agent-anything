@@ -1,5 +1,5 @@
-import type { RegisteredOperation } from "../catalog/index.js";
-import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { RegisteredOperationDefinition } from "../catalog/index.js";
+import type { AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
 import type {
   OperationBindingRevisionRef,
   OperationCorrelation,
@@ -7,7 +7,7 @@ import type {
   OperationInvocationRef,
 } from "../identity/index.js";
 import {
-  operationRevisionKey,
+  operationDefinitionRevisionKey,
   snapshotOperationBindingRevisionRef,
   snapshotOperationCorrelation,
   snapshotOperationInvocationRef,
@@ -61,7 +61,7 @@ export interface CompositeOperationBinding<TRequest = unknown>
 export interface DescendantAgentOperationBinding<TRequest = unknown>
   extends ResolvedOperationBindingBase<TRequest> {
   readonly kind: "descendant_agent";
-  readonly agentRef: AgentRevisionRef;
+  readonly agentRef: AgentDefinitionRevisionRef;
 }
 
 export type ResolvedOperationBinding<TRequest = unknown> =
@@ -72,7 +72,7 @@ export type ResolvedOperationBinding<TRequest = unknown> =
   | DescendantAgentOperationBinding<TRequest>;
 
 export interface OperationBindingResolutionInput<TRequest, TBasis> {
-  readonly registration: RegisteredOperation;
+  readonly registration: RegisteredOperationDefinition;
   readonly context: OperationInvocationContext;
   readonly request: TRequest;
   readonly basis: TBasis;
@@ -200,9 +200,9 @@ export function snapshotResolvedOperationBinding<TRequest>(
 }
 
 function snapshotAgentRevisionRef(
-  input: AgentRevisionRef,
+  input: AgentDefinitionRevisionRef,
   path: string,
-): AgentRevisionRef {
+): AgentDefinitionRevisionRef {
   strictRecord(input, path, ["id", "revision"], "operation_binding_invalid");
   return Object.freeze({
     id: token(input.id, `${path}.id`),
@@ -249,8 +249,8 @@ function snapshotResolvedBindingBase<TRequest>(
     fail("operation_binding_invalid", "Compensation association must belong to this invocation and caller.", "ResolvedOperationBinding.compensation");
   }
   if (
-    operationRevisionKey(invocation.operation) !==
-    operationRevisionKey(binding.operation)
+    operationDefinitionRevisionKey(invocation.operation) !==
+    operationDefinitionRevisionKey(binding.operation)
   ) {
     fail(
       "operation_binding_invalid",

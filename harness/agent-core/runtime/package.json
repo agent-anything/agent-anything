@@ -1,13 +1,12 @@
 {
   "name": "@agent-anything/agent-runtime",
   "version": "0.0.0",
-  "description": "Authoritative Run lifecycle, Agent Loop, Controller, planning, cancellation, retry, and settlement for Agent Harness.",
+  "description": "Run execution coordination, task decision activities, context representation preparation, and execution support.",
   "type": "module",
   "exports": {
-    "./controller": {
-      "types": "./src/controller/index.ts",
-      "import": "./dist/controller/index.js"
-    },
+    "./activity": {"types": "./src/activity/index.ts", "import": "./dist/activity/index.js"},
+    "./model-access": {"types": "./src/model-access/index.ts", "import": "./dist/model-access/index.js"},
+    "./context-representation": {"types": "./src/context-representation/index.ts", "import": "./dist/context-representation/index.js"},
     "./delegation": {
       "types": "./src/delegation/index.ts",
       "import": "./dist/delegation/index.js"
@@ -32,9 +31,13 @@
       "types": "./src/run/index.ts",
       "import": "./dist/run/index.js"
     },
-    "./runner": {
-      "types": "./src/runner/index.ts",
-      "import": "./dist/runner/index.js"
+    "./decision": {
+      "types": "./src/decision/index.ts",
+      "import": "./dist/decision/index.js"
+    },
+    "./execution-coordinator": {
+      "types": "./src/execution-coordinator/index.ts",
+      "import": "./dist/execution-coordinator/index.js"
     }
   },
   "files": [

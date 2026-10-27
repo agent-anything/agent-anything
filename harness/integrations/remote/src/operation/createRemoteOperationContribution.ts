@@ -34,9 +34,9 @@ import {
 } from "@agent-anything/operation-catalog/binding";
 import type {
   OperationRequestOrigin,
-  RegisteredOperation,
+  RegisteredOperationDefinition,
 } from "@agent-anything/operation-catalog/catalog";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import type {
   CreateRemoteOperationContributionInput,
@@ -95,7 +95,7 @@ export function createRemoteOperationContribution<TOutput = unknown>(
 
 function operationRegistration(
   registration: TrustedRemoteOperationRegistration,
-): RegisteredOperation {
+): RegisteredOperationDefinition {
   return Object.freeze({
     admissionId: `${descriptorStem(registration)}.operation.admission`,
     operation: Object.freeze({
@@ -492,7 +492,7 @@ function settleRemoteOperation<TOutput>(
 function normalizeRegistration(
   input: TrustedRemoteOperationRegistration,
 ): TrustedRemoteOperationRegistration {
-  if (operationRevisionKey(input.operation) !== operationRevisionKey(input.binding.operation)) {
+  if (operationDefinitionRevisionKey(input.operation) !== operationDefinitionRevisionKey(input.binding.operation)) {
     throw new TypeError("Remote Operation binding must belong to its Operation revision.");
   }
   if (input.bindingKind === "hosted" && input.hostedEndpointRef === null) {

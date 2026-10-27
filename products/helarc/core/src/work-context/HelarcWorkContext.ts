@@ -1160,7 +1160,6 @@ function isProductRunProjection(value: unknown): value is HelarcProductRunProjec
     Number.isSafeInteger(projection.sequence) &&
     (projection.sequence ?? -1) >= 0 &&
     projection.result === null &&
-    isModelQualificationSafeProjection(projection.qualification) &&
     Array.isArray(projection.activity) &&
     Array.isArray(projection.commands) &&
     hasProductDisplayState(projection) &&
@@ -1216,7 +1215,6 @@ function isCompatibleProductTerminal(
   }
   const output = product.output;
   if (
-    !isModelQualificationSafeProjection(product.qualification) ||
     output === null || typeof output !== "object" || output.taskId !== run.taskId ||
     output.workspace === null || typeof output.workspace !== "object" ||
     !hasText(output.workspace.primaryId) || !Array.isArray(output.workspace.additionalIds) ||
@@ -1234,24 +1232,6 @@ function isCompatibleProductTerminal(
   if (output.runtimeStatus !== expectedRuntimeStatus) return false;
   if (host.status === "completed") return product.status !== "cancelled";
   return product.status === host.status;
-}
-
-function isModelQualificationSafeProjection(value: unknown): boolean {
-  if (value === null || typeof value !== "object") return false;
-  const projection = value as import("../model-qualification/index.js")
-    .HelarcModelQualificationSafeProjection;
-  return (
-    projection.status === "qualified" || projection.status === "experimental" ||
-    projection.status === "blocked"
-  ) && (
-    projection.policy === "require_qualified" ||
-    projection.policy === "allow_experimental"
-  ) && typeof projection.providerKind === "string" &&
-    typeof projection.modelId === "string" &&
-    typeof projection.experimentalUseSelected === "boolean" &&
-    Array.isArray(projection.scopes) && Array.isArray(projection.reasons) &&
-    projection.toolGuidance !== null &&
-    typeof projection.toolGuidance === "object";
 }
 
 function isHostTerminalProjection(value: HostTerminalRunProjection): boolean {

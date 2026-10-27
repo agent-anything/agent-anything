@@ -3,7 +3,7 @@ import {
   type ActionApprovalCoverage,
   type ControllerPermissionProfileProjection,
   type RunPermissionGrant,
-  type SessionAuthorityRecord,
+  type SessionAuthorizationBasis,
 } from "@agent-anything/permission";
 import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
@@ -11,14 +11,14 @@ import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 export interface RunPermissionState {
   readonly actionCoverage: readonly ActionApprovalCoverage[];
   readonly runPermissionGrants: readonly RunPermissionGrant[];
-  readonly sessionAuthorityRecords: readonly SessionAuthorityRecord[];
+  readonly sessionAuthorityRecords: readonly SessionAuthorizationBasis[];
   readonly appliedPolicyAmendments: readonly AppliedPolicyAmendmentRecord[];
 }
 
-export interface EffectivePermissionContext {
+export interface RunAuthorizationBasis {
   readonly profile: ResolvedRunPermissionConfig["permissionProfile"];
   readonly runPermissionGrants: readonly RunPermissionGrant[];
-  readonly sessionAuthorityRecords: readonly SessionAuthorityRecord[];
+  readonly sessionAuthorityRecords: readonly SessionAuthorizationBasis[];
   readonly appliedPolicyAmendments: readonly AppliedPolicyAmendmentRecord[];
 }
 
@@ -49,10 +49,10 @@ export function createInitialRunPermissionState(config: ResolvedRunPermissionCon
   });
 }
 
-export function deriveEffectivePermissionContext(
+export function collectRunAuthorizationBasis(
   config: ResolvedRunPermissionConfig,
   state: RunPermissionState,
-): EffectivePermissionContext {
+): RunAuthorizationBasis {
   return Object.freeze({
     profile: config.permissionProfile,
     runPermissionGrants: state.runPermissionGrants,

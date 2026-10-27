@@ -4,7 +4,8 @@ import { validateInspectionRef } from "./InspectionValidation.js";
 
 export function inspectionFlowReference(reference: ExecutionFlowSubjectRef, scope: Pick<InspectionSubjectRef, "sourceId" | "datasetId" | "runId">): InspectionSubjectRef {
   const kind = reference.owner === "runtime" && reference.kind === "descendant_relation" ? "contribution"
-    : reference.owner === "context" && reference.kind === "preparation" ? "context" : reference.kind;
+    : reference.owner === "context" && reference.kind === "preparation" ? "context"
+    : reference.owner === "agent-runtime" && reference.kind === "model_activity" ? "contribution" : reference.kind;
   const subject = {...scope, owner: reference.owner, kind: kind as InspectionSubjectRef["kind"], id: reference.id,
     revision: reference.revision, runId: reference.runId === undefined ? scope.runId : reference.runId};
   validateInspectionRef(subject);

@@ -49,17 +49,12 @@ export type HelarcProviderKind =
   | "openai-compatible"
   | "ollama";
 
-export type HelarcModelUsePolicy =
-  | "require_qualified"
-  | "allow_experimental";
-
 export const HELARC_DEFAULT_PROVIDER_SETTINGS = Object.freeze({
   providerKind: "ollama" as const satisfies HelarcProviderKind,
   displayName: "Ollama Provider",
   baseUrl: "http://localhost:11435",
   model: "gemma4:e4b",
   timeoutMs: 300_000_000,
-  qualificationPolicy: "allow_experimental" as const satisfies HelarcModelUsePolicy,
 });
 
 export interface HelarcOllamaRuntimeProfileSnapshot {
@@ -85,7 +80,6 @@ export interface HelarcProviderProfileSnapshot {
   timeoutMs: number;
   ollamaRuntime: HelarcOllamaRuntimeProfileSnapshot | null;
   credentialStatus: HelarcProviderCredentialStatus;
-  qualificationPolicy: HelarcModelUsePolicy;
   isActive: boolean;
 }
 
@@ -394,34 +388,6 @@ export interface HelarcModelContinuationSnapshot {
   readonly occurredAt: string;
 }
 
-export interface HelarcModelUseSnapshot {
-  readonly providerKind: string;
-  readonly modelId: string;
-  readonly modelIdentityStrength: "immutable" | "mutable_alias" | "unknown";
-  readonly status: "qualified" | "experimental" | "blocked";
-  readonly policy: HelarcModelUsePolicy;
-  readonly experimentalUseSelected: boolean;
-  readonly scopes: readonly {
-    readonly scope:
-      | "agent_loop"
-      | "workspace_observation"
-      | "workspace_mutation"
-      | "process_execution"
-      | "user_interaction"
-      | "delegation";
-    readonly applicability: "current" | "stale" | "absent";
-    readonly outcome: "qualified" | "not_qualified" | "inconclusive" | null;
-    readonly decidedAt: string | null;
-    readonly limitations: readonly string[];
-  }[];
-  readonly reasons: readonly string[];
-  readonly toolGuidance: {
-    readonly releaseId: string;
-    readonly releaseRevision: string;
-    readonly profileRevision: string;
-  };
-}
-
 export interface HelarcInstructionBindingSnapshot {
   readonly ref: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly agent: Readonly<{ readonly id: string; readonly revision: string }>;
@@ -437,7 +403,6 @@ export interface HelarcInstructionBindingSnapshot {
 
 export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "cancelled";
-  readonly qualification: HelarcModelUseSnapshot;
   readonly output: {
     readonly source: import("./HelarcWorkbench.js").HelarcOutputSource;
     readonly taskId: string;
@@ -494,7 +459,6 @@ export interface HelarcRunSnapshot {
   readonly product: {
     readonly presentationRevision: number;
     readonly phase: HelarcProductPhaseSnapshot;
-    readonly qualification: HelarcModelUseSnapshot;
     readonly continuation: HelarcModelContinuationSnapshot | null;
     readonly result: HelarcRunProductResultSnapshot | null;
   };
@@ -671,7 +635,6 @@ export interface HelarcSaveProviderConfigInput {
   model: string;
   timeoutMs: number;
   ollamaRuntime: HelarcOllamaRuntimeProfileSnapshot | null;
-  qualificationPolicy: HelarcModelUsePolicy;
   apiKeyUpdate: "keep" | "set" | "clear" | "reference";
   credential?: import("./HelarcProviderCredentials.js").HelarcCredentialSelection;
   apiKey: string;
@@ -684,9 +647,6 @@ export interface HelarcChooseWorkspaceInput {
 export interface HelarcProductCommandResultMap {
   readonly "provider.select": HelarcMainSnapshot;
   readonly "provider.delete": HelarcMainSnapshot;
-  readonly "qualification.start": import("./HelarcQualification.js").HelarcQualificationCommandResult;
-  readonly "qualification.cancel": import("./HelarcQualification.js").HelarcQualificationCommandResult;
-  readonly "qualification.publish": import("./HelarcQualification.js").HelarcQualificationCommandResult;
   readonly "project.select": HelarcMainSnapshot;
   readonly "project.save": { readonly ok: boolean; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
   readonly "project.chooseFolder": { readonly profile: HelarcWorkspaceProfileSnapshot | null; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
@@ -961,11 +921,6 @@ export interface HelarcDesktopApi {
   readCommandOutput(input: import("./HelarcWorkbench.js").CommandOutputQuery): Promise<import("./HelarcWorkbench.js").CommandOutputPage>;
   openExternalLink(input: { url: string }): Promise<{ ok: boolean }>;
   getInstructionSettings(): Promise<import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot>;
-  getQualification(): Promise<import("./HelarcQualification.js").HelarcQualificationSnapshot>;
-  readQualificationEvidence(input: { campaignId: string; trialId: string | null }): Promise<import("./HelarcQualification.js").HelarcQualificationEvidence>;
-  startQualification(input: { commandId: string; targetId: string }): Promise<HelarcProductCommandReceipt<"qualification.start">>;
-  cancelQualification(input: { commandId: string; campaignId: string }): Promise<HelarcProductCommandReceipt<"qualification.cancel">>;
-  publishQualification(input: { commandId: string; campaignId: string; targetId: string; reviewed: boolean }): Promise<HelarcProductCommandReceipt<"qualification.publish">>;
   getInspectionSettings(): Promise<import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot>;
   getStorage(): Promise<import("./HelarcStorage.js").HelarcStorageSnapshot>;
   cleanupStorage(input: { readonly commandId: string; readonly recordingIds: readonly string[] }): Promise<HelarcProductCommandReceipt<"storage.cleanup">>;

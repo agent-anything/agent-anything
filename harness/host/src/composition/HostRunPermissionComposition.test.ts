@@ -1,9 +1,9 @@
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type {
   ApprovalReviewerPort,
-  SessionAuthorityContext,
-  SessionAuthorityPort,
-  SessionAuthorityRecord,
+  SessionAuthorizationScope,
+  SessionAuthorizationStore,
+  SessionAuthorizationBasis,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { describe, expect, it } from "vitest";
@@ -13,7 +13,7 @@ describe("resolveHostRunPermissionConfig", () => {
   it("resolves an explicit composition and loads the exact Session context", async () => {
     const record = sessionRecord();
     const queries: unknown[] = [];
-    const port: SessionAuthorityPort = {
+    const port: SessionAuthorizationStore = {
       async listApplicable(query) {
         queries.push(query);
         return [record];
@@ -127,7 +127,7 @@ function managedConstraints(): ManagedPermissionConstraints {
   };
 }
 
-function sessionContext(): SessionAuthorityContext {
+function sessionContext(): SessionAuthorizationScope {
   return {
     hostSessionId: "session.1",
     authorityContextKey: "context.1",
@@ -137,7 +137,7 @@ function sessionContext(): SessionAuthorityContext {
   };
 }
 
-function sessionRecord(): SessionAuthorityRecord {
+function sessionRecord(): SessionAuthorizationBasis {
   return {
     id: "authority.1",
     ...sessionContext(),

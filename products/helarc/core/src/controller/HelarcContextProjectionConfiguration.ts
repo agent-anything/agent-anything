@@ -1,5 +1,5 @@
-import type { RunnerContextProjection } from "@agent-anything/agent-runtime/runner";
-import { selectConversationPresentations } from "@agent-anything/agent-runtime/controller";
+import type { DecisionSourceProjection } from "@agent-anything/agent-runtime/execution-coordinator";
+import { selectConversationPresentations } from "@agent-anything/agent-runtime/decision";
 import type {
   ContextProjectionEstimationInput,
   ContextProjectionEstimator,
@@ -12,7 +12,7 @@ import {
 
 const HELARC_MAXIMUM_CONTEXT_INPUT_BYTES = 256 * 1_024;
 
-export function createHelarcContextProjectionConfiguration(): RunnerContextProjection {
+export function createHelarcContextProjectionConfiguration(): DecisionSourceProjection {
   const estimator: ContextProjectionEstimator = Object.freeze({
     ref: Object.freeze({
       id: `helarc.context-projection.utf8.${HELARC_CONTEXT_PROJECTION_FORMAT_VERSION}`,
@@ -40,7 +40,7 @@ export function createHelarcContextProjectionConfiguration(): RunnerContextProje
     policy,
     audiences: Object.freeze(["model"]),
     maxContributionPayloadBytes: 128 * 1_024,
-    allocate(input: Parameters<RunnerContextProjection["allocate"]>[0]) {
+    allocate(input: Parameters<DecisionSourceProjection["allocate"]>[0]) {
       return Object.freeze({
         budget: Object.freeze({
           unit: "bytes" as const,

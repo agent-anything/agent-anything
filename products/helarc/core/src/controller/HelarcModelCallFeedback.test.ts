@@ -1,12 +1,12 @@
 import {
   createModelCallRef,
   snapshotModelCallableDefinitions,
-  type ModelToolCall,
+  type ModelCallableRequest,
 } from "@agent-anything/model-interaction";
 import { describe, expect, it } from "vitest";
 import { createHelarcUnknownCallableRejection } from "./HelarcModelCallFeedback.js";
 
-function call(name: string): ModelToolCall {
+function call(name: string): ModelCallableRequest {
   return {
     name,
     modelCallRef: createModelCallRef({

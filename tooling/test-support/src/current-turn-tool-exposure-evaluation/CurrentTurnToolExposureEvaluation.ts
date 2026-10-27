@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
-import { createOperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
+import type { OperationDefinitionRevisionRef } from "@agent-anything/operation-catalog/identity";
+import { createOperationDefinitionCatalog } from "@agent-anything/operation-catalog/catalog";
 import {
   createToolRegistrationSnapshot,
   type ToolRegistrationInput,
@@ -64,19 +64,19 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
   const selection = createEvaluationSelection();
   const full = resolve(selection, "full", {
     Read: available("read-path", "1"),
-    TaskStop: available("task-registry", "1"),
+    CommandStop: available("task-registry", "1"),
   });
   const partial = resolve(selection, "controlled-resource-absent", {
     Read: available("read-path", "1"),
-    TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
+    CommandStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
   const zero = resolve(selection, "all-paths-unavailable", {
     Read: unavailable("read-path", "2", "execution_path_unavailable"),
-    TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
+    CommandStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
   const recovered = resolve(selection, "controlled-resource-recovered", {
     Read: available("read-path", "1"),
-    TaskStop: available("task-registry", "2"),
+    CommandStop: available("task-registry", "2"),
   });
 
   let incompleteAssessmentFailureCode: "tool_exposure_assessment_missing" | null = null;
@@ -103,15 +103,15 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
 
   const permissionAsk = resolve(selection, "permission-ask", {
     Read: available("read-path", "1"),
-    TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
+    CommandStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
   const permissionDeny = resolve(selection, "permission-deny", {
     Read: available("read-path", "1"),
-    TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
+    CommandStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
   const repeatedAgentHook = resolve(selection, "agent-hook-repeated", {
     Read: available("read-path", "1"),
-    TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
+    CommandStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
   const proofA = createToolExposureProof(partial, "evaluation-controller-request-a");
   const proofB = createToolExposureProof(partial, "evaluation-controller-request-b");
@@ -193,11 +193,11 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
 function resolve(
   selection: ToolSelectionRevision,
   _caseId: string,
-  states: Readonly<Record<"Read" | "TaskStop", AvailabilityState>>,
+  states: Readonly<Record<"Read" | "CommandStop", AvailabilityState>>,
 ): CurrentTurnToolExposure {
   const assessments = [
     assessment(selection, "Read", states.Read),
-    assessment(selection, "TaskStop", states.TaskStop),
+    assessment(selection, "CommandStop", states.CommandStop),
   ];
   return resolveCurrentTurnToolExposure(selection, {
     basisRefs: Object.freeze(assessments.flatMap((item) => item.basisRefs)),
@@ -207,7 +207,7 @@ function resolve(
 
 function assessment(
   selection: ToolSelectionRevision,
-  name: "Read" | "TaskStop",
+  name: "Read" | "CommandStop",
   state: AvailabilityState,
 ): ToolBindingAvailabilityAssessment {
   const selected = selection.tools.find(({ registration }) => registration.descriptor.name === name);
@@ -265,7 +265,7 @@ function createEvaluationSelection(): ToolSelectionRevision {
   const read = operationRef("read");
   const stop = operationRef("task-stop");
   const workflow = operationRef("workflow-only");
-  const operationCatalog = createOperationCatalogSnapshot({
+  const operationCatalog = createOperationDefinitionCatalog({
     id: "current-turn-exposure-evaluation-operations",
     revision: "1",
     entries: [read, stop, workflow].map((ref) => ({
@@ -298,7 +298,7 @@ function createEvaluationSelection(): ToolSelectionRevision {
   });
   const registrations = createToolRegistrationSnapshot(operationCatalog, [
     registration("Read", read, "Read files."),
-    registration("TaskStop", stop, OMITTED_DESCRIPTOR_SECRET),
+    registration("CommandStop", stop, OMITTED_DESCRIPTOR_SECRET),
     registration("WorkflowOnly", workflow, "Trusted workflow only."),
   ]);
   return createFixedLocalToolSelection(registrations, operationCatalog, [
@@ -310,7 +310,7 @@ function createEvaluationSelection(): ToolSelectionRevision {
 
 function registration(
   name: string,
-  operation: OperationRevisionRef,
+  operation: OperationDefinitionRevisionRef,
   description: string,
 ): ToolRegistrationInput {
   return {
@@ -339,7 +339,7 @@ function registration(
   };
 }
 
-function operationRef(name: string): OperationRevisionRef {
+function operationRef(name: string): OperationDefinitionRevisionRef {
   return { operation: { namespace: "evaluation", name }, revision: "1" };
 }
 

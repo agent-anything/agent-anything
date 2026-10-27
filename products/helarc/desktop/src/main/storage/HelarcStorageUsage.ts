@@ -6,7 +6,6 @@ const groups = [
   ["conversations", "Conversations and transcripts"],
   ["command-output", "Command output"],
   ["execution", "Execution recovery records"],
-  ["qualification", "Model qualification"],
   ["cache", "Application cache"],
   ["configuration", "Configuration and other app data"],
 ] as const;
@@ -56,7 +55,6 @@ function category(name: string): string {
   if (["threads.json", "run-transcripts", "context-manifests.json", "model-continuations.json"].includes(name)) return "conversations";
   if (name === "command-output") return "command-output";
   if (name === "execution") return "execution";
-  if (name === "model-qualification.json") return "qualification";
   if (["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "ShaderCache", "GrShaderCache"].includes(name)) return "cache";
   return "configuration";
 }

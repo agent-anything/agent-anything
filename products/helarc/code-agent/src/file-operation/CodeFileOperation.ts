@@ -3,15 +3,16 @@ import type {
   OperationBindingResolverRegistration,
 } from "@agent-anything/operation-catalog/binding";
 import { snapshotResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
-import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
+import type { RegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
 import type {
   OperationBindingRevisionRef,
-  OperationRevisionRef,
+  OperationDefinitionRevisionRef,
 } from "@agent-anything/operation-catalog/identity";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import type { ToolJsonObject } from "@agent-anything/tools/catalog";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import { codeFileResultContract } from "./CodeFileResultContract.js";
+import type { CodeAgentFileLimits } from "../source/CodeSource.js";
 
 export const CODE_AGENT_READ_TOOL = "Read";
 export const CODE_AGENT_GLOB_TOOL = "Glob";
@@ -67,7 +68,7 @@ export type CodeFileOperationRequest =
     };
 
 export interface CodeFileOperationContribution {
-  readonly operations: readonly RegisteredOperation[];
+  readonly operations: readonly RegisteredOperationDefinition[];
   readonly resultContracts: readonly import("@agent-anything/operation-catalog/result").OperationResultContract[];
   readonly bindings: readonly OperationBindingResolverRegistration[];
   readonly tools: readonly ToolRegistrationInput[];
@@ -75,7 +76,7 @@ export interface CodeFileOperationContribution {
 
 export type CodeFileActionAdapterIds = Readonly<Record<CodeFileOperationKind, string>>;
 
-const REVISION = "2";
+const REVISION = "3";
 const BINDING_REVISION = "2";
 const RESOLVER_ID = "helarc.code-agent.file.direct";
 
@@ -90,6 +91,7 @@ const SPECS = Object.freeze([
 export function createCodeFileOperationContribution(input: {
   readonly actionAdapterIds: CodeFileActionAdapterIds;
   readonly admittedAt: string;
+  readonly limits?: CodeAgentFileLimits;
 }): CodeFileOperationContribution {
   const bindings: readonly OperationBindingResolverRegistration[] = Object.freeze([{
     resolver: Object.freeze({
@@ -120,11 +122,11 @@ export function createCodeFileOperationContribution(input: {
     operations,
     resultContracts: Object.freeze(operations.map((entry, index) => codeFileResultContract(entry, SPECS[index]!.requestOperation))),
     bindings,
-    tools: Object.freeze(SPECS.map((item) => toolRegistration(item, input.admittedAt))),
+    tools: Object.freeze(SPECS.map((item) => toolRegistration(item, input.admittedAt, input.limits))),
   });
 }
 
-export function operationRefForCodeFileTool(name: CodeFileToolName): OperationRevisionRef {
+export function operationRefForCodeFileTool(name: CodeFileToolName): OperationDefinitionRevisionRef {
   const item = SPECS.find((candidate) => candidate.toolName === name);
   if (item === undefined) throw new TypeError(`Unknown Code Agent file Tool: ${name}.`);
   return item.operation;
@@ -138,12 +140,12 @@ export function bindingRefForCodeFileTool(
   return item.binding;
 }
 
-export function codeFileOperationForRef(ref: OperationRevisionRef): CodeFileOperationKind {
+export function codeFileOperationForRef(ref: OperationDefinitionRevisionRef): CodeFileOperationKind {
   return specForOperation(ref).requestOperation;
 }
 
 interface CodeFileSpec {
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
   readonly binding: OperationBindingRevisionRef;
   readonly toolName: CodeFileToolName;
   readonly requestOperation: CodeFileOperationKind;
@@ -166,7 +168,7 @@ function spec(
   });
 }
 
-function operationRegistration(item: CodeFileSpec, admittedAt: string): RegisteredOperation {
+function operationRegistration(item: CodeFileSpec, admittedAt: string): RegisteredOperationDefinition {
   return {
     admissionId: `helarc.code-agent.file.${item.requestOperation}.admission.v2`,
     operation: {
@@ -196,10 +198,11 @@ function operationRegistration(item: CodeFileSpec, admittedAt: string): Register
   };
 }
 
-function toolRegistration(item: CodeFileSpec, admittedAt: string): ToolRegistrationInput {
+function toolRegistration(item: CodeFileSpec, admittedAt: string, limits?: CodeAgentFileLimits): ToolRegistrationInput {
   const mutation = item.requestOperation === "edit" || item.requestOperation === "write";
+  const effectiveLimits = limits ? fileToolLimits(item.requestOperation, limits) : null;
   return {
-    admissionId: `helarc.tool.file.${item.requestOperation}.admission.v2`,
+    admissionId: `helarc.tool.file.${item.requestOperation}.admission.v3`,
     descriptor: {
       ref: {
         tool: { namespace: "helarc.code-agent", name: item.requestOperation },
@@ -207,11 +210,13 @@ function toolRegistration(item: CodeFileSpec, admittedAt: string): ToolRegistrat
       },
       name: item.toolName,
       description: description(item.requestOperation),
-      inputSchema: schema(item.requestOperation),
+      inputSchema: {...schema(item.requestOperation), ...(effectiveLimits ? {
+        description: `Effective execution limits: ${JSON.stringify(effectiveLimits)}. Byte limits count UTF-8 bytes.`,
+      } : {})},
       schemaRevisions: {
         dialect: "json-schema-2020-12",
         input: "2",
-        output: "2",
+        output: "3",
         translation: "native-2",
       },
       annotations: {
@@ -224,7 +229,7 @@ function toolRegistration(item: CodeFileSpec, admittedAt: string): ToolRegistrat
       source: {
         kind: "product",
         sourceId: "helarc.code-agent",
-        sourceRevision: "2",
+        sourceRevision: "3",
         activationEpoch: null,
       },
       binding: { kind: "operation", operation: item.operation, revision: BINDING_REVISION },
@@ -232,11 +237,25 @@ function toolRegistration(item: CodeFileSpec, admittedAt: string): ToolRegistrat
       metadata: {
         profile: mutation ? "workspace-write" : "workspace-read",
         requestOperation: item.requestOperation,
+        ...(effectiveLimits ? {executionLimits: effectiveLimits} : {}),
       },
     },
     allowedOrigins: ["model"],
     admittedAt,
   };
+}
+
+function fileToolLimits(operation: CodeFileOperationKind, limits: CodeAgentFileLimits): ToolJsonObject {
+  if (operation === "read") return {maxReturnedBytes: limits.maxReadBytes, maxReturnedLines: limits.maxReadLines, maxFileInspectionBytes: limits.maxReadInspectionBytes};
+  if (operation === "edit" || operation === "write") return {maxResultingFileBytes: limits.maxWriteBytes,
+    maxBaselineInspectionBytes: operation === "edit" ? Math.min(limits.maxWriteBytes, limits.maxReadInspectionBytes) : limits.maxReadInspectionBytes};
+  return {maxVisitedEntries: limits.maxSearchEntries, maxDirectoryDepth: limits.maxSearchDepth,
+    maxDurationMs: limits.maxSearchDurationMs, maxReturnedBytes: limits.maxSearchOutputBytes,
+    ...(operation === "glob" ? {maxReturnedEntries: limits.maxGlobEntries} : {
+      maxReturnedEntries: limits.maxGrepMatches, maxContextLines: limits.maxGrepContextLines,
+      maxPerFileBytes: limits.maxSearchFileBytes, maxTotalReadBytes: limits.maxSearchBytes,
+      maxMatchCount: limits.maxSearchMatches, maxPerFileRegexMs: limits.maxSearchRegexMs,
+    })};
 }
 
 function schema(operation: CodeFileOperationKind): ToolJsonObject {
@@ -318,9 +337,9 @@ function nonNegativeInteger(): ToolJsonObject {
   return { type: "integer", minimum: 0 };
 }
 
-function specForOperation(ref: OperationRevisionRef): CodeFileSpec {
-  const key = operationRevisionKey(ref);
-  const item = SPECS.find((candidate) => operationRevisionKey(candidate.operation) === key);
+function specForOperation(ref: OperationDefinitionRevisionRef): CodeFileSpec {
+  const key = operationDefinitionRevisionKey(ref);
+  const item = SPECS.find((candidate) => operationDefinitionRevisionKey(candidate.operation) === key);
   if (item === undefined) throw new TypeError(`Unknown Code Agent file Operation: ${key}.`);
   return item;
 }

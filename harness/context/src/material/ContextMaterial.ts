@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-export const CONTEXT_MATERIAL_LIMITS = Object.freeze({revision: "context-material-access.v1",
-  pageBytes: 16_384, scanBytes: 262_144, matches: 16, queryBytes: 1_024, descriptions: 64, references: 16});
+export const CONTEXT_MATERIAL_LIMITS = Object.freeze({revision: "context-material-access.v2",
+  pageBytes: 16_384, scanBytes: 262_144, searchBytes: 8_388_608, searchMs: 1_000, matches: 16, queryBytes: 1_024, descriptions: 64, references: 16});
 export interface ContextMaterialRef { readonly id: string; readonly revision: string; }
 export interface ContextMaterialDescription {
   readonly reference: ContextMaterialRef;
@@ -22,6 +22,7 @@ export interface ContextMaterialRead {
 export interface ContextMaterialSearch {
   readonly query?: string; readonly in?: "content" | "description";
   readonly limit?: number; readonly cursor?: string;
+  readonly references?: readonly ContextMaterialRef[];
 }
 export interface ContextMaterialPage {
   readonly description: ContextMaterialDescription; readonly text: string;
@@ -34,10 +35,11 @@ export interface ContextMaterialSearchPage {
   readonly nextCursor: string | null; readonly exhausted: boolean;
   readonly scannedBytes: number; readonly scannedDescriptions: number;
   readonly frontier: number; readonly limitations: readonly string[];
+  readonly stopReason?: "scope_exhausted" | "result_limit" | "execution_budget";
 }
 export interface ContextMaterialAccessPort {
   read(runId: string, input: ContextMaterialRead, signal: AbortSignal, invocationId: string): Promise<ContextMaterialPage>;
-  search(runId: string, input: ContextMaterialSearch, signal: AbortSignal, invocationId: string): Promise<ContextMaterialSearchPage>;
+  search(runId: string, input: ContextMaterialSearch, signal: AbortSignal, invocationId: string, deadlineAt?: string): Promise<ContextMaterialSearchPage>;
   validate(runId: string, references: readonly ContextMaterialRef[]): Promise<void>;
 }
 export class ContextMaterialError extends Error {
@@ -45,7 +47,7 @@ export class ContextMaterialError extends Error {
 }
 export function snapshotContextMaterialRef(input: unknown): ContextMaterialRef {
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "id" && key !== "revision")) {
-    throw new ContextMaterialError("context_reference_invalid", "Copy an exact material reference returned by ContextSearch or a material handoff.");
+    throw new ContextMaterialError("context_reference_invalid", "Copy an exact material reference returned by ContextMaterialSearch or a material handoff.");
   }
   const value = input as Record<string, unknown>;
   if (typeof value.id !== "string" || !value.id.length || value.id.length > 1024 ||

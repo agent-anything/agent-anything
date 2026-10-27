@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createOperationCatalogSnapshot } from "./catalog/index.js";
+import { createOperationDefinitionCatalog } from "./catalog/index.js";
 import {
   snapshotResolvedOperationBinding,
   unavailableOperationBindingResolver,
@@ -43,15 +43,15 @@ function entry() {
 
 describe("Operation Catalog contracts", () => {
   it("creates canonical immutable snapshots", () => {
-    const snapshot = createOperationCatalogSnapshot({ id: "catalog-1", revision: "v1", entries: [entry()] });
+    const snapshot = createOperationDefinitionCatalog({ id: "catalog-1", revision: "v1", entries: [entry()] });
     expect(Object.isFrozen(snapshot.entries)).toBe(true);
     expect(Object.isFrozen(snapshot.entries[0]?.operation.roles.requestOrigins)).toBe(true);
   });
 
   it("rejects duplicate revisions and unsupported fields", () => {
-    expect(() => createOperationCatalogSnapshot({ id: "catalog-1", revision: "v1", entries: [entry(), entry()] }))
+    expect(() => createOperationDefinitionCatalog({ id: "catalog-1", revision: "v1", entries: [entry(), entry()] }))
       .toThrow(/Duplicate identity/);
-    expect(() => createOperationCatalogSnapshot({ id: "catalog-1", revision: "v1", entries: [], extra: true } as never))
+    expect(() => createOperationDefinitionCatalog({ id: "catalog-1", revision: "v1", entries: [], extra: true } as never))
       .toThrow(/Unsupported field/);
   });
 

@@ -15,7 +15,7 @@ import type {
 import {
   createModelCallRef,
   createModelTurnId,
-  snapshotModelToolCall,
+  snapshotModelCallableRequest,
   snapshotProviderResponse,
   type ModelJsonValue,
 } from "@agent-anything/model-interaction";
@@ -141,7 +141,6 @@ function createTestProviderProfile(
     model: provider.modelContext.target.model,
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
-    qualificationPolicy: "allow_experimental",
     isActive: true,
   });
   if (!result.ok) throw new TypeError("Test Provider profile is invalid.");
@@ -1085,13 +1084,18 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.effects.every((effect) => effect.status === "succeeded")).toBe(true);
     expect(result.activity.filter((item) => item.kind === "operation.finished")).toHaveLength(3);
     expect(provider.lastControllerResultCounts).toEqual([0, 1, 2, 3]);
+    const modelCatalog = JSON.stringify(provider.requests[0]!.interaction);
+    expect(modelCatalog).toContain("maxFileInspectionBytes");
+    expect(modelCatalog).toContain("maxPerFileRegexMs");
+    expect(modelCatalog).toContain("scan.complete");
     expect(operationOutputs(result)).toMatchObject([
-      { matches: ["src", "src/index.ts"], truncated: false, omitted_count: 0 },
+      { matches: ["src", "src/index.ts"], truncated: false, omitted_count: 0, scan: {complete: true, skipped_count: 0} },
       { file_path: "src/index.ts", content: "export const value = 42;\n", truncated: false },
       {
         output_mode: "content",
         entries: [{ file_path: "src/index.ts", line: 1, text: "export const value = 42;" }],
         truncated: false,
+        scan: {complete: true, files_searched: 1, skipped_count: 0},
       },
     ]);
   }));
@@ -1281,7 +1285,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.lastControllerResultCounts).toEqual([0, 1]);
   }));
 
-  it("starts and stops one background shell task through its exact TaskStop identity", withExecutionScope(async () => {
+  it("starts and stops one background shell task through its exact CommandStop identity", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-background-shell-"));
     const provider = new ScriptedProvider([
       {
@@ -1300,7 +1304,7 @@ describe("Helarc Host Run composition", () => {
       (request: ProviderRequest) => ({
         kind: "tool_call",
         reason: "Stop the exact background task.",
-        toolName: "TaskStop",
+        toolName: "CommandStop",
         input: { task_id: readBackgroundTaskId(request) },
       }),
       { kind: "completion", summary: "Background task was stopped." },
@@ -1342,7 +1346,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
   }));
 
-  it("delivers asynchronous timeout facts without TaskOutput or discarding a concurrent model response", withExecutionScope(async () => {
+  it("delivers asynchronous timeout facts without CommandObserve or discarding a concurrent model response", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-late-command-state-"));
     let active: HelarcHostActiveRun;
     const provider = new ScriptedProvider([
@@ -1373,29 +1377,42 @@ describe("Helarc Host Run composition", () => {
     const oldResults = provider.requests[1]!.messages.filter(message => message.role === "tool");
     expect(JSON.stringify(oldResults)).toContain('"phase":"running"');
     expect(provider.requests[2]!.messages.filter(message => message.role === "tool").slice(0, oldResults.length)).toEqual(oldResults);
-    expect(operationResults(result).some(operation => operation.binding.operation.operation.name === "task-output")).toBe(false);
+    expect(operationResults(result).some(operation => operation.binding.operation.operation.name === "command-observe")).toBe(false);
     expect(provider.requests.every(request => request.instructions.content.length === 0)).toBe(true);
   }));
 
-  it("retrieves a retained command through TaskOutput without launching it again", withExecutionScope(async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-command-observation-"));
-    const provider = new ScriptedProvider([
+  it("observes a retained command and reads its immutable output through generic access without relaunch", withExecutionScope(async () => {
+    const workspaceRoot=await mkdtemp(join(tmpdir(),"helarc-command-observation-"));
+    const worker=pathToFileURL(join(process.cwd(),"dist/main/execution-storage/ExecutionStoreWorker.js"));
+    const store=await openExecutionStoreFixture(join(workspaceRoot,"execution"),worker);
+    const provider=new ScriptedProvider([
       {kind:"tool_call",toolName:nativeShellTool(),input:{
-        command:process.platform === "win32" ? "Start-Sleep -Milliseconds 100; Write-Output 'retained-output'" : "sleep 0.1; printf retained-output",
-        run_in_background:true,timeout_ms:10000,
-      }},
-      (request:ProviderRequest)=>({kind:"tool_call",toolName:"TaskOutput",input:{task_id:readBackgroundTaskId(request),wait_ms:3000}}),
-      (request:ProviderRequest)=>({kind:"tool_call",toolName:"TaskOutput",input:{task_id:readBackgroundTaskId(request),wait_ms:0}}),
-      {kind:"completion",summary:"Observed retained output."},
+        command:process.platform==="win32" ? "Start-Sleep -Milliseconds 100; Write-Output 'retained-output'" : "sleep 0.1; printf retained-output",
+        run_in_background:true,timeout_ms:10000}},
+      (request:ProviderRequest)=>({kind:"tool_call",toolName:"CommandObserve",input:{task_id:readBackgroundTaskId(request),until:"settled",wait_ms:3000}}),
+      (request:ProviderRequest)=>{
+        const latest=request.messages.flatMap(message=>message.role==="tool" ? message.content.map(block=>block.result) : []).at(-1)!;
+        const output=(latest.content as {output:{output_materials:{reference:{id:string;revision:string};stream:string}[]}}).output;
+        expect(output).not.toHaveProperty("stdout");
+        return {kind:"tool_call",toolName:"ContextMaterialRead",input:{reference:output.output_materials.find(value=>value.stream==="stdout")!.reference}};
+      },
+      (request:ProviderRequest)=>{
+        const latest=request.messages.flatMap(message=>message.role==="tool" ? message.content.map(block=>block.result) : []).at(-1)!;
+        expect(latest.settlement,JSON.stringify(latest)).toBe("succeeded");
+        expect(JSON.stringify(latest.content)).toContain("retained-output");
+        return {kind:"completion",summary:"Observed retained output."};
+      },
     ]);
-    const result=await executeTestHostRun({...createTask(workspaceRoot),provider,permissionPreset:"full_access"});
-    expect(result.product.status,JSON.stringify(result.product.output.safeErrors)).toBe("completed");
-    const results=operationResults(result);
-    expect(results.filter(result=>result.binding.operation.operation.name === "process-start")).toHaveLength(1);
-    const observations=results.filter(result=>result.binding.operation.operation.name === "task-output");
-    expect(observations).toHaveLength(2);
-    expect(observations.at(-1)).toMatchObject({status:"succeeded",output:{stdout:{text:expect.stringContaining("retained-output")}}});
-    expect(observations[0]?.lowerRefs[0]?.id).not.toBe(observations[1]?.lowerRefs[0]?.id);
+    try {
+      const result=await executeTestHostRun({...createTask(workspaceRoot),provider,executionStore:store,permissionPreset:"full_access",
+        instructionSettings:createDefaultHelarcInstructionSettings()});
+      expect(result.product.status,JSON.stringify(result.product.output.safeErrors)).toBe("completed");
+      const results=operationResults(result);
+      expect(results.filter(value=>value.binding.operation.operation.name==="process-start")).toHaveLength(1);
+      expect(results.find(value=>value.binding.operation.operation.name==="command-observe")).toMatchObject({status:"succeeded",output:{until:"settled",snapshot:{phase:"settled"}}});
+      expect(results.find(value=>value.binding.operation.operation.name==="context-read")).toMatchObject({status:"succeeded",output:{text:expect.stringContaining("retained-output")}});
+      expect(provider.requests.every(request=>request.instructions.content.length===0)).toBe(true);
+    } finally {await store.close();}
   }), 20_000);
 
   it("submits the final Plan and reply together without another model request or enabled instructions", withExecutionScope(async () => {
@@ -1787,6 +1804,31 @@ describe("Helarc Host Run composition", () => {
     }));
     await expect(readFile(targetPath, "utf8")).resolves.toBe("same same\n");
   }));
+
+  it("round trips exact Read text through literal Edit including CRLF, BOM and dollar sequences", withExecutionScope(async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-literal-edit-"));
+    const targetPath = join(workspaceRoot, "target.txt");
+    const original = "\uFEFFbefore\r\nsecond\n";
+    const replacement = "\uFEFF$& $$ $` $' $1\r\nsecond\n";
+    await writeFile(targetPath, original);
+    const provider = new ScriptedProvider([
+      {kind: "tool_call", toolName: "Read", input: {file_path: "target.txt"}},
+      (request: ProviderRequest) => {
+        const results = request.messages.flatMap(message => message.role === "tool"
+          ? message.content.map(block => block.result.content) : []);
+        expect(results).toMatchObject([{output: {content: original, next_offset: null}}]);
+        return {kind: "tool_call", toolName: "Edit", input: {
+          file_path: "target.txt", old_string: original, new_string: replacement,
+        }};
+      },
+      {kind: "completion", summary: "Literal edit applied."},
+    ]);
+    try {
+      const result = await executeTestHostRun({...createTask(workspaceRoot), provider, permissionPreset: "full_access"});
+      expect(operationResults(result).map(operation => operation.status)).toEqual(["succeeded", "succeeded"]);
+      expect(await readFile(targetPath, "utf8")).toBe(replacement);
+    } finally { await rm(workspaceRoot, {recursive: true, force: true}); }
+  }), 20_000);
 
   it("returns the unchanged-file failure facts before accepting a corrected Edit", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-feedback-"));
@@ -2181,7 +2223,7 @@ function scriptedNativeProviderResult(
     : [scripted];
   const content = [...assistantText, ...calls.map((call, index) => Object.freeze({
         kind: "model_tool_call" as const,
-        call: snapshotModelToolCall({
+        call: snapshotModelCallableRequest({
           modelCallRef: createModelCallRef({
             providerRequestId: request.requestId,
             controllerRequestId: request.correlation.controllerRequestId,

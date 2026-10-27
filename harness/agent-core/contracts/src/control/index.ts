@@ -1,5 +1,5 @@
 export type {
-  ControllerTurnRef,
+  TaskDecisionActivityRef,
   InvocationCancellationRef,
   InvocationInterruptionContext,
   InvocationInterruptionRef,

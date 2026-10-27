@@ -8,6 +8,8 @@ import {CONTEXT_ASSESSMENT_CRITERIA, createContextTransformationBasis, createCon
   parseContextGeneratedAccount, parseContextAccountAssessment, contextAssessmentAllowsAccount, renderContextAccount,
   contextTransformationPrefixLimit} from "./ModelContextTransformation.js";
 import {planContextTransformationStages, contextTransformationNodeBasis} from "./ContextTransformationStages.js";
+import {createModelCallRef} from "../ModelCall.js";
+import {projectContextTransformationEvidence} from "./ContextTransformationProjection.js";
 
 const ref = {owner: "fixture", kind: "source", id: "binding", revision: "1"};
 function source(id: string, text: string, role: "user" | "assistant" = "user"): ModelInputSection {
@@ -39,6 +41,41 @@ const accountOutput = {entries: [{text: "The assistant proposed exact edges (1),
   sources: ["options", "choice"]}], limitations: [], omittedDetails: []};
 
 describe("Source-grounded context transformations", () => {
+  it("resolves delayed background citations using the frozen mapping, not later numbering", () => {
+    const original = request(), basis = createContextTransformationBasis(original, ["options", "choice"], "root");
+    const generation = createContextTransformationRequest(original, basis, "generation");
+    const sections = [source("earlier", "Additional earlier background"), ...original.composition.sections];
+    const next = {...original, composition: {...original.composition, sections}};
+    const current = createContextTransformationBasis(next, ["options", "choice"], "root");
+    const generated = response({...accountOutput, entries: [{...accountOutput.entries[0], sources: ["s1", "s2"]}]});
+    expect(parseContextGeneratedAccount(generated, current, generation).entries[0]!.sources).toEqual(["options", "choice"]);
+    expect(() => parseContextGeneratedAccount(generated, current)).toThrow("unavailable");
+    expect(() => parseContextGeneratedAccount(generated, current, {...generation, metadata: {}})).toThrow("mapping");
+  });
+  it("projects exact Call content and correlations without internal storage wrappers", () => {
+    const original = request();
+    const call = createModelCallRef({providerRequestId: "private-request", controllerRequestId: "private-controller",
+      turnId: "turn", contentBlockOrdinal: 0, branchId: "root"});
+    const input = {command: "printf 'Do not normalize this text'", reference: "material:exact-id"};
+    const content = {text: "DENIED: no command executed", partialEffects: "unknown"};
+    const requestSection: ModelInputSection = {...source("call", "", "assistant"), content: {kind: "model_message", message: {
+      role: "assistant", content: [{kind: "model_tool_call", call: {modelCallRef: call, providerCallRef: null, name: "Shell_x", input, ordinal: 0}}]}}};
+    const resultSection: ModelInputSection = {...source("result", ""), role: "tool", content: {kind: "model_message", message: {
+      role: "tool", content: [{kind: "model_tool_result", result: {modelCallRef: call, providerCallRef: null, name: "Shell_x",
+        settlement: "denied", content, sourceRefs: [ref], presentation: {presenter: {id: "shell", revision: "1"}, disposition: "bounded", failureCode: null}}}]}}};
+    const sections = [requestSection, resultSection, original.composition.sections[2]!, source("ack", "I understand the denial.", "assistant")];
+    const updated = {...original, composition: {...original.composition, sections}};
+    const basis = createContextTransformationBasis(updated, ["call", "result"], "root");
+    const projection = projectContextTransformationEvidence(basis, undefined, false);
+    const payload = JSON.parse(JSON.stringify(projection.payload));
+    expect(payload.replacementSources[0].content.message.content[0].call).toEqual({id: "c1", name: "Shell_x", input});
+    expect(payload.replacementSources[1].content.message.content[0].result).toEqual({callId: "c1", name: "Shell_x", settlement: "denied",
+      presentation: {disposition: "bounded", failureCode: null}, content});
+    expect(projection.callMapping).toHaveLength(1);
+    expect(JSON.stringify(projection.payload)).not.toContain("private-controller");
+    expect(basis.evidence[0]).toEqual(requestSection);
+    expect(payload.readOnlyBackground[0].content.text).toBe("Actually use option 1 for the remaining images.");
+  });
   it("preserves an eligible text prefix exactly and refuses inherited instructions", () => {
     const original = request(), basis = createContextTransformationBasis(original, ["options", "choice"], "root");
     const prefix = createContextTransformationRequest(original, basis, "generation", undefined, undefined, "prefix");
@@ -74,6 +111,11 @@ describe("Source-grounded context transformations", () => {
     expect(merge.inheritedLimitations).toEqual(expect.arrayContaining(["Original wording not retained", "omitted_detail:Formatting",
       "assessment_uses_derived_accounts_not_original_reread"]));
     const wire = createContextTransformationRequest(original, merge, "generation");
+    const projected = JSON.parse((wire.messages[0]!.content[0] as {text: string}).text);
+    expect(projected.unsuppliedSourcePositions).toEqual(["s1", "s2"]);
+    expect(projected.replacementSources.map((section: {id: string}) => section.id)).toEqual(["s4", "s5"]);
+    expect(wire.interaction).toMatchObject({outputFormat: {schemaRevision: "2", schema: {
+      properties: {entries: {items: {properties: {sources: {items: {enum: ["s4", "s5"]}}}}}}}}});
     expect(JSON.stringify(wire.messages)).not.toContain("Option 2 blurs them");
     expect(JSON.stringify(wire.messages)).toContain("Actually use option 1");
     expect(() => contextTransformationNodeBasis(basis, plan.nodes.at(-1)!, [...leaves].reverse())).toThrow("coverage");
@@ -97,8 +139,8 @@ describe("Source-grounded context transformations", () => {
     expect(createOwnerModelWorkingView({sections: replayed, recipientRunId: "root", boundary: "request", forms: [], accounts: [first, second]}).accounts).toHaveLength(2);
     const assessment = createContextTransformationRequest(next, nextBasis, "assessment", accountOutput, replayed);
     const packed = JSON.parse((assessment.messages[0]!.content[0] as {text: string}).text);
-    expect(packed.proposedCompleteInput.sectionOrder).toEqual([second.id, "amendment"]);
-    expect(packed.proposedCompleteInput.additionalSections.map((section: ModelInputSection) => section.id)).toEqual([second.id]);
+    expect(packed.proposedCompleteInput.sectionOrder).toEqual(["s3", "s2"]);
+    expect(packed.proposedCompleteInput.additionalSections.map((section: ModelInputSection) => section.id)).toEqual(["s3"]);
   });
   it("quotes background separately, preserves chronology and does not bind a fabricated Agent", () => {
     const original = request(), basis = createContextTransformationBasis(original, ["options", "choice"], "root");
@@ -109,15 +151,19 @@ describe("Source-grounded context transformations", () => {
     expect(generation.continuation).toBeNull();
     expect(original.instructions.content).toEqual([]);
     const data = JSON.parse((generation.messages[0]!.content[0] as {text: string}).text);
-    expect(data.replacementSources.map((value: ModelInputSection) => value.id)).toEqual(["options", "choice"]);
-    expect(data.readOnlyBackground.map((value: ModelInputSection) => value.id)).toEqual(["amendment"]);
-    expect(data.sourceOrder).toEqual(["options", "choice", "amendment"]);
+    expect(data.replacementSources.map((value: ModelInputSection) => value.id)).toEqual(["s1", "s2"]);
+    expect(data.readOnlyBackground.map((value: ModelInputSection) => value.id)).toEqual(["s3"]);
+    expect(data.sourceOrder).toEqual(["s1", "s2", "s3"]);
+    expect(data.unsuppliedSourcePositions).toEqual([]);
+    expect(generation.metadata.evidenceProjection).toMatchObject({mapping: [
+      {label: "s1", sectionId: "options"}, {label: "s2", sectionId: "choice"}, {label: "s3", sectionId: "amendment"}]});
     expect(() => snapshotProviderRequest({...generation, composition: {...generation.composition,
       lineage: {...generation.composition.lineage, agent: ref}}})).toThrow("impersonate");
   });
   it("replaces only the eligible interval, retaining later amendments and source-bound obligations", () => {
     const original = request(), basis = createContextTransformationBasis(original, ["options", "choice"], "root");
-    const generated = parseContextGeneratedAccount(response(accountOutput), basis);
+    const generated = parseContextGeneratedAccount(response({...accountOutput, entries: [{...accountOutput.entries[0], sources: ["s1", "s2"]}]}), basis);
+    expect(generated.entries[0]!.sources).toEqual(["options", "choice"]);
     const account = renderContextAccount(basis, generated, {...ref, kind: "assessment"}, "assessed-proposal");
     const sections = applyModelInputAccounts(original.composition.sections, [account], "root");
     expect(sections).toHaveLength(2);
@@ -135,7 +181,7 @@ describe("Source-grounded context transformations", () => {
   });
   it("does not treat valid source selectors as adequate semantics", () => {
     const original = request(), basis = createContextTransformationBasis(original, ["options", "choice"], "root");
-    const findings = CONTEXT_ASSESSMENT_CRITERIA.map(criterion => ({criterion, verdict: "adequate", reason: "Comparison with supplied sources.", sources: ["options"]}));
+    const findings = CONTEXT_ASSESSMENT_CRITERIA.map(criterion => ({criterion, verdict: "adequate", reason: "Comparison with supplied sources.", sources: ["s1"]}));
     const assessment = parseContextAccountAssessment(response({findings, inheritedDefects: [], introducedLoss: [], limitations: []}), basis);
     expect(contextAssessmentAllowsAccount(assessment)).toBe(true);
     expect(contextAssessmentAllowsAccount({...assessment, introducedLoss: ["Lost the meaning of option 1"]})).toBe(false);
@@ -151,7 +197,7 @@ describe("Source-grounded context transformations", () => {
     expect(() => validateModelAccountScope(sections.map(section => ({...section, preservation: {obligations: [{id: "exact", requirement: "exact", basis: "Required bytes"}], relationships: []}})), ["options"], "root")).toThrow("protected");
     const basis = createContextTransformationBasis(original, ["options"], "root");
     expect(() => createContextTransformationRequest({...original, requestId: "changed"}, basis, "generation")).toThrow("basis");
-    const generated = parseContextGeneratedAccount(response({entries: [{text: "Three distinct options.", sources: ["options"]}], limitations: [], omittedDetails: []}), basis);
+    const generated = parseContextGeneratedAccount(response({entries: [{text: "Three distinct options.", sources: ["s1"]}], limitations: [], omittedDetails: []}), basis);
     const account = renderContextAccount(basis, generated, ref, "assessment");
     const proposed = applyModelInputAccounts(sections, [account], "root");
     const assessmentRequest = createContextTransformationRequest(original, basis, "assessment", generated, proposed);

@@ -221,7 +221,7 @@ test("actual commands and nested delegation retain their response owners", async
     });
     await expect(command.locator(".wb-output")).toContainText("end");
     reply(held!.response, "I will read the retained command result.", [
-      call(held!.body, "TaskOutput", { task_id: taskId, wait_ms: 15000 }),
+      call(held!.body, "CommandObserve", { task_id: taskId, wait_ms: 15000 }),
     ]);
     await expect
       .poll(

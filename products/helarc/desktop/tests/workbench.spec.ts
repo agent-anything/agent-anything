@@ -114,7 +114,6 @@ async function setup(
             model: "gemma4:e4b",
             timeoutMs: 300000000,
             credentialStatus: "empty_allowed",
-            qualificationPolicy: "allow_experimental",
             ollamaRuntime: {
               contextWindowTokens: 163840,
             },

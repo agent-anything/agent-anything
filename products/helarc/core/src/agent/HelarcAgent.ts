@@ -1,6 +1,6 @@
 import {
-  snapshotAgent,
-  type Agent,
+  snapshotAgentDefinition,
+  type AgentDefinition,
   type AgentInstructions,
 } from "@agent-anything/agent-core/agent";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
@@ -30,7 +30,7 @@ export interface CreateHelarcDelegatedWorkerAgentInput {
 
 export function createHelarcAgent(
   input: CreateHelarcAgentInput,
-): Agent<HelarcAgentOutput> {
+): AgentDefinition<HelarcAgentOutput> {
   return createAgent(
     "helarc-code-agent",
     "Helarc",
@@ -53,7 +53,7 @@ export function createHelarcAgent(
 
 export function createHelarcDelegatedWorkerAgent(
   input: CreateHelarcDelegatedWorkerAgentInput,
-): Agent<HelarcAgentOutput> {
+): AgentDefinition<HelarcAgentOutput> {
   return createAgent(
     "helarc-delegated-worker",
     "Helarc Delegated Worker",
@@ -79,8 +79,8 @@ function createAgent(
   name: string,
   instructionTarget: string,
   instructions: AgentInstructions,
-): Agent<HelarcAgentOutput> {
-  return snapshotAgent({
+): AgentDefinition<HelarcAgentOutput> {
+  return snapshotAgentDefinition({
     id,
     revision: `instructions-v1:${instructions.contentDigest.value}:output-v3`,
     name,

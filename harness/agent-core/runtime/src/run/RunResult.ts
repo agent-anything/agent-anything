@@ -1,4 +1,4 @@
-import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ArtifactRef, RunRef } from "@agent-anything/agent-core/run";
 import type { EvidenceRef } from "@agent-anything/context/evidence";
 import type { RunItem } from "./RunItem.js";
@@ -17,8 +17,8 @@ interface RunResultBase<TOutput> {
   readonly run: RunRef;
   readonly runId: string;
   readonly taskId: string;
-  readonly startingAgent: AgentRevisionRef;
-  readonly finalActiveAgent: AgentRevisionRef;
+  readonly startingAgent: AgentDefinitionRevisionRef;
+  readonly finalActiveAgent: AgentDefinitionRevisionRef;
   readonly startingInstructionBinding: AgentInstructionBindingRef;
   readonly finalInstructionBinding: AgentInstructionBindingRef;
   readonly startedAt: string;
@@ -59,8 +59,8 @@ export type RunResult<TOutput = unknown> =
 export interface CreateRunResultInput<TOutput = unknown> {
   readonly runId: string;
   readonly taskId: string;
-  readonly startingAgent: AgentRevisionRef;
-  readonly finalActiveAgent: AgentRevisionRef;
+  readonly startingAgent: AgentDefinitionRevisionRef;
+  readonly finalActiveAgent: AgentDefinitionRevisionRef;
   readonly startingInstructionBinding: AgentInstructionBindingRef;
   readonly finalInstructionBinding: AgentInstructionBindingRef;
   readonly startedAt: string;
@@ -138,7 +138,7 @@ function snapshotCauseRecords(values: readonly RunSettlementCauseRecord[], runId
   return Object.freeze(records);
 }
 
-function snapshotAgentRef(value: AgentRevisionRef, field: string): AgentRevisionRef {
+function snapshotAgentRef(value: AgentDefinitionRevisionRef, field: string): AgentDefinitionRevisionRef {
   if (!isRecord(value)) throw new TypeError(`${field} must be an Agent revision.`);
   token(value.id, `${field}.id`);
   token(value.revision, `${field}.revision`);

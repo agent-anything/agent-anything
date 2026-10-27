@@ -24,16 +24,9 @@ describe("Helarc Desktop IPC projection", () => {
       "continuation",
       "phase",
       "presentationRevision",
-      "qualification",
       "result",
     ]);
-    expect(projected.run?.product.qualification).toMatchObject({
-      providerKind: "openai-compatible",
-      modelId: "model-1",
-      status: "experimental",
-      policy: "allow_experimental",
-      experimentalUseSelected: true,
-    });
+    expect(projected.run?.product).not.toHaveProperty("qualification");
     expect(projected.run?.product.continuation).toEqual({
       branchId: "product-run-1:main",
       requestId: "request-1",
@@ -173,7 +166,6 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
     timeoutMs: 30_000,
     ollamaRuntime: null,
     credentialStatus: "present" as const,
-    qualificationPolicy: "allow_experimental" as const,
     isActive: true,
     storedCredential: SECRET,
   };
@@ -229,27 +221,6 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       runId: "product-run-1",
       sequence: 1,
       phase: { kind: "none" },
-      qualification: {
-        providerKind: "openai-compatible",
-        modelId: "model-1",
-        modelIdentityStrength: "unknown",
-        status: "experimental",
-        policy: "allow_experimental",
-        experimentalUseSelected: true,
-        scopes: [{
-          scope: "agent_loop",
-          applicability: "absent",
-          outcome: null,
-          decidedAt: null,
-          limitations: [],
-        }],
-        reasons: ["No current qualification decision covers the required scope."],
-        toolGuidance: {
-          releaseId: "helarc.tool-guidance",
-          releaseRevision: "helarc.tool-guidance.v1",
-          profileRevision: "helarc.tool-profile.v1",
-        },
-      },
       activity: [{
         id: "activity-1",
         sequence: 1,
@@ -270,10 +241,6 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
           status: "running",
           controllerAction: "tool_call",
           exposedToolNames: ["Read", "Glob", "Grep", "Edit", "Write"],
-          modelUseDispositionStatus: "experimental",
-          modelQualificationPolicy: "allow_experimental",
-          modelQualificationScopes: ["agent_loop", "workspace_observation"],
-          modelQualificationReasons: ["qualification_evidence_absent"],
           privateTraceState: SECRET,
         },
       }],

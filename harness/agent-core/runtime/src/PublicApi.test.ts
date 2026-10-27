@@ -1,19 +1,22 @@
-import type { ProviderRequestBuildContext } from "./controller/index.js";
+import type { ProviderRequestBuildContext } from "./decision/index.js";
 import type {
   RootRunConfig,
   RunConfig,
-  RunnerDependencies,
+  RunExecutionCoordinatorDependencies,
   RunTreeLimits,
-} from "./runner/index.js";
+} from "./execution-coordinator/index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import * as controllerApi from "./controller/index.js";
+import * as controllerApi from "./decision/index.js";
 import * as delegationApi from "./delegation/index.js";
 import * as instructionsApi from "./instructions/index.js";
 import * as planApi from "./plan/index.js";
 import * as retryApi from "./retry/index.js";
 import * as runApi from "./run/index.js";
-import * as runnerApi from "./runner/index.js";
+import * as runnerApi from "./execution-coordinator/index.js";
 import * as transcriptApi from "./transcript/index.js";
+import * as contextApi from "./context-representation/index.js";
+import * as accessApi from "./model-access/index.js";
+import * as activityApi from "./activity/index.js";
 
 describe("Agent Core Runtime public API", () => {
   it("keeps every public value on its focused subpath", () => {
@@ -21,12 +24,11 @@ describe("Agent Core Runtime public API", () => {
     expectTypeOf<RunConfig>().toBeObject();
     expectTypeOf<RootRunConfig>().toBeObject();
     expectTypeOf<RunTreeLimits>().toBeObject();
-    expectTypeOf<RunnerDependencies>().toBeObject();
+    expectTypeOf<RunExecutionCoordinatorDependencies>().toBeObject();
     expect(Object.keys(controllerApi).sort()).toEqual([
-      "ControllerCheckpointError",
-      "ControllerError",
+      "TaskDecisionActivityError",
       "ModelInteractionProjectionError",
-      "ProviderBackedController",
+      "ModelResponseTaskDecisionMaker",
       "StructuredOutputError",
       "canonicalConversationPresentations",
       "createControllerInputDeliveryReceipt",
@@ -40,13 +42,15 @@ describe("Agent Core Runtime public API", () => {
       "projectModelInteraction",
       "retainInputPresentation",
       "selectConversationPresentations",
-      "snapshotControllerFeedback",
+      "snapshotTaskDecisionFeedback",
       "snapshotConversationOpeningReceipt",
       "snapshotInputPresentation",
       "snapshotModelConversationSeed",
-      "unsupportedModelInputRecovery",
-      "validateControllerDecision",
-    ]);
+      "validateTaskDecisionProposal",
+    ].sort());
+    expect(Object.keys(contextApi).sort()).toEqual(["ContextRepresentationManager", "unsupportedModelInputRecovery"]);
+    expect(Object.keys(accessApi).sort()).toEqual(["ModelRequestAccess", "assertModelActivityRequest", "createModelActivityBinding"]);
+    expect(Object.keys(activityApi)).toEqual(["ActivityCheckpointError"]);
     expect(Object.keys(delegationApi).sort()).toEqual([
       "DelegationRequestValidationError",
       "DelegationResultValidationError",
@@ -58,11 +62,11 @@ describe("Agent Core Runtime public API", () => {
       "createDelegationResultExpectation",
       "createDescendantContinuationTargetProjection",
       "createDescendantProgress",
-      "deriveDelegationAuthority",
+      "deriveDelegationExecutionConstraints",
       "deriveDelegationLimits",
       "materializeDelegationRequest",
-      "snapshotDelegationAuthorityDerivation",
-      "snapshotDelegationAuthorityDimensions",
+      "snapshotDelegationExecutionConstraints",
+      "snapshotDelegationExecutionConstraintDimensions",
       "snapshotDelegationContextMaterial",
       "snapshotDelegationContextPlan",
       "snapshotDelegationLimitDerivation",
@@ -74,7 +78,7 @@ describe("Agent Core Runtime public API", () => {
       "snapshotDelegationResumeRoute",
       "snapshotDelegationSteeringRoute",
       "snapshotDescendantMessageRequest",
-    ]);
+    ].sort());
     expect(Object.keys(instructionsApi).sort()).toEqual([
       "assertAgentInstructionBindingMatches",
       "createAgentInstructionBinding",
@@ -113,7 +117,7 @@ describe("Agent Core Runtime public API", () => {
       "deriveActiveRunStatus",
       "deriveApprovalReviewDeadline",
       "deriveAuthorityCommitDeadline",
-      "deriveEffectivePermissionContext",
+      "collectRunAuthorizationBasis",
       "deriveRunDeadline",
       "isReviewCapablePolicy",
       "projectPendingRunSubject",
@@ -132,11 +136,11 @@ describe("Agent Core Runtime public API", () => {
       "snapshotRunSteeringInput",
       "snapshotRunSuspendRequestInput",
       "toRunCancellationSummary",
-    ]);
-    expect(Object.keys(runnerApi)).toEqual(["Runner", "RunRecoveryError", "retainedRunResult", "RunCommitError", "validateRunTreeCommit", "RunTreeCommitWriter", "RUN_LIFECYCLE_DESCRIPTION", "retainRunConfiguration", "restoreRunConfiguration"]);
+    ].sort());
+    expect(Object.keys(runnerApi).sort()).toEqual(["RunExecutionCoordinator", "ModelTaskDecisionCoordinator", "DirectTaskDecisionCoordinator", "RunRecoveryError", "retainedRunResult", "RunCommitError", "validateRunTreeCommit", "RunTreeCommitWriter", "RUN_LIFECYCLE_DESCRIPTION", "retainRunConfiguration", "restoreRunConfiguration"].sort());
     expect(runnerApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runnerApi).not.toHaveProperty("RunState");
     expect(runnerApi).not.toHaveProperty("RuntimeEventEmitter");
-    expect(transcriptApi).not.toHaveProperty("Runner");
+    expect(transcriptApi).not.toHaveProperty("RunExecutionCoordinator");
   });
 });

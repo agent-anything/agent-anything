@@ -8,19 +8,19 @@ export interface OperationKey {
   readonly name: string;
 }
 
-export interface OperationRevisionRef {
+export interface OperationDefinitionRevisionRef {
   readonly operation: OperationKey;
   readonly revision: string;
 }
 
 export interface OperationBindingRevisionRef {
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
   readonly revision: string;
 }
 
 export interface OperationInvocationRef {
   readonly id: string;
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
 }
 
 export interface RunActionOperationCorrelation {
@@ -75,11 +75,11 @@ export function snapshotOperationKey(input: OperationKey): OperationKey {
   });
 }
 
-export function snapshotOperationRevisionRef(input: OperationRevisionRef): OperationRevisionRef {
-  strictRecord(input, "OperationRevisionRef", ["operation", "revision"]);
+export function snapshotOperationDefinitionRevisionRef(input: OperationDefinitionRevisionRef): OperationDefinitionRevisionRef {
+  strictRecord(input, "OperationDefinitionRevisionRef", ["operation", "revision"]);
   return Object.freeze({
     operation: snapshotOperationKey(input.operation),
-    revision: token(input.revision, "OperationRevisionRef.revision"),
+    revision: token(input.revision, "OperationDefinitionRevisionRef.revision"),
   });
 }
 
@@ -88,7 +88,7 @@ export function snapshotOperationBindingRevisionRef(
 ): OperationBindingRevisionRef {
   strictRecord(input, "OperationBindingRevisionRef", ["operation", "revision"]);
   return Object.freeze({
-    operation: snapshotOperationRevisionRef(input.operation),
+    operation: snapshotOperationDefinitionRevisionRef(input.operation),
     revision: token(input.revision, "OperationBindingRevisionRef.revision"),
   });
 }
@@ -99,7 +99,7 @@ export function snapshotOperationInvocationRef(
   strictRecord(input, "OperationInvocationRef", ["id", "operation"]);
   return Object.freeze({
     id: token(input.id, "OperationInvocationRef.id"),
-    operation: snapshotOperationRevisionRef(input.operation),
+    operation: snapshotOperationDefinitionRevisionRef(input.operation),
   });
 }
 
@@ -222,7 +222,7 @@ export function snapshotOperationCorrelation(
   }
 }
 
-export function operationRevisionKey(ref: OperationRevisionRef): string {
+export function operationDefinitionRevisionKey(ref: OperationDefinitionRevisionRef): string {
   return `${ref.operation.namespace}/${ref.operation.name}@${ref.revision}`;
 }
 

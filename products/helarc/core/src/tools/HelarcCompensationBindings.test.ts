@@ -11,7 +11,8 @@ const now = "2026-10-16T00:00:00.000Z";
 function fixture() {
   const file = createCodeFileOperationContribution({admittedAt: now,
     actionAdapterIds: {read: "read", glob: "glob", grep: "grep", edit: "edit", write: "write"}});
-  const tool = withHelarcCompensationInput(file.tools.find(tool => tool.descriptor.name === "Write")!);
+  const originalTool = file.tools.find(tool => tool.descriptor.name === "Write")!;
+  const tool = withHelarcCompensationInput(originalTool);
   const operation = file.operations.find(operation => operation.operation.ref.operation.name === "write")!;
   const action = (sequence: number) => ({run: {id: "run"}, id: `action-${sequence}`, sequence});
   const correlation = (sequence: number): RunActionOperationCorrelation => ({kind: "run_action", run: {id: "run"},
@@ -37,7 +38,7 @@ function fixture() {
   const request = {operation, context: {invocation: {id: "invocation-2", operation: operation.operation.ref},
     correlation: correlation(2), parentInvocation: null,
     interruption: {signal: new AbortController().signal, getCancellation: () => null}}, request: input, basis: call};
-  return {record, records, base, domainResolve, tool, input, call, request, bindings};
+  return {record, records, base, domainResolve, originalTool, tool, input, call, request, bindings};
 }
 
 describe("Helarc compensation binding", () => {
@@ -98,7 +99,11 @@ describe("Helarc compensation binding", () => {
 
   it("versions only the exposed input and rejects schema collisions", () => {
     const f = fixture();
-    expect(f.tool.descriptor.schemaRevisions).toMatchObject({input: "2.compensation-v1", output: "2"});
+    expect(f.tool.descriptor.schemaRevisions).toMatchObject({
+      input: `${f.originalTool.descriptor.schemaRevisions.input}.compensation-v1`,
+      output: f.originalTool.descriptor.schemaRevisions.output,
+    });
+    expect(f.tool.descriptor.outputSchema).toEqual(f.originalTool.descriptor.outputSchema);
     expect(f.tool.descriptor.inputSchema).toMatchObject({additionalProperties: false,
       properties: {compensation_of: {required: ["targets"], properties: {targets: {minItems: 1, maxItems: 64}}}}});
     expect(() => withHelarcCompensationInput(f.tool)).toThrow("compensation_of");

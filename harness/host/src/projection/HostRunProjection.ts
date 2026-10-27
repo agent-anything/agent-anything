@@ -16,7 +16,7 @@ import type {
   RunRetryProjection,
   RunTreeExecutionSnapshot,
   RunTreeResourceDimension,
-} from "@agent-anything/agent-runtime/runner";
+} from "@agent-anything/agent-runtime/execution-coordinator";
 import type { DescendantContinuationTargetProjection } from "@agent-anything/agent-runtime/delegation";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";

@@ -19,7 +19,7 @@ import type {
   ActionRecordPort,
   ActionRetryDecisionPort,
 } from "@agent-anything/action-execution/enforcement";
-import { Runner, type RunTreeLimits } from "@agent-anything/agent-runtime/runner";
+import { RunExecutionCoordinator, type RunTreeLimits } from "@agent-anything/agent-runtime/execution-coordinator";
 import {
   createRunFailureCause,
   runSettlementCauseCode,
@@ -51,7 +51,7 @@ import type {
   EvaluationTrial,
 } from "@agent-anything/evaluation/trial";
 import { createEvaluationTargetObservation } from "@agent-anything/evaluation/trial";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance";
 import type {
   ManagedPermissionConstraints,
@@ -92,7 +92,7 @@ import {
   HELARC_PROCESS_START_OPERATION,
   HELARC_PROCESS_START_BINDING,
   HELARC_INITIAL_OBSERVATION_HANDLER,
-  HELARC_TASK_OUTPUT_HANDLER,
+  HELARC_COMMAND_OBSERVE_HANDLER,
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
@@ -115,7 +115,7 @@ import { providerResponseUsage } from "@agent-anything/model-interaction";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
 import type { RunTrace } from "@agent-anything/observability/tracing";
 import type { ToolSelectionRevision } from "@agent-anything/tools/selection";
-import type { SessionAuthorityPort } from "@agent-anything/permission";
+import type { SessionAuthorizationStore } from "@agent-anything/permission";
 import type {
   ApprovalReviewInput,
   ApprovalReviewOutcome,
@@ -571,7 +571,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     shellOperation: HELARC_PROCESS_START_OPERATION,
     shellBinding: HELARC_PROCESS_START_BINDING,
     initialObservationHandlerId: HELARC_INITIAL_OBSERVATION_HANDLER,
-    taskOutputHandlerId: HELARC_TASK_OUTPUT_HANDLER,
+    commandObserveHandlerId: HELARC_COMMAND_OBSERVE_HANDLER,
     taskStopOperation: HELARC_TASK_STOP_OPERATION,
     taskStopBinding: HELARC_TASK_STOP_BINDING,
     now: clock.now,
@@ -586,7 +586,6 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     model: provider.modelContext.target.model,
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
-    qualificationPolicy: "allow_experimental",
     isActive: true,
   });
   if (!providerProfile.ok) {
@@ -617,8 +616,10 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     },
   });
   let allocatedRunCount = 0;
-  const runner = new Runner({
-    controller: product.controller,
+  const runner = new RunExecutionCoordinator({
+    taskDecisions: product.taskDecisions,
+    extensions: product.extensions,
+    preparations: product.preparations,
     contextProjection: createHelarcContextProjectionConfiguration(),
     operations: {
       catalog: product.actions.operationCatalog,
@@ -983,7 +984,7 @@ function collectObservedToolNames(
   const namesByOperation = new Map(selection.tools.flatMap((selected) =>
     selected.registration.binding.kind === "operation"
       ? [[
-          operationRevisionKey(selected.registration.binding.operation.operation.ref),
+          operationDefinitionRevisionKey(selected.registration.binding.operation.operation.ref),
           selected.registration.descriptor.name,
         ] as const]
       : []
@@ -994,7 +995,7 @@ function collectObservedToolNames(
     if (item.payload.kind !== "observation") continue;
     const payload = item.payload.observation.payload;
     if (payload.kind === "operation") {
-      const name = namesByOperation.get(operationRevisionKey(payload.result.binding.operation));
+      const name = namesByOperation.get(operationDefinitionRevisionKey(payload.result.binding.operation));
       if (name !== undefined) observedNames.add(name);
     }
     const toolResult = payload.kind === "operation" ||
@@ -1322,7 +1323,7 @@ interface EvaluationPermissionInput {
 
 async function createEvaluationPermissionConfig(input: EvaluationPermissionInput) {
   const preset = resolveHelarcPermissionPreset(input.preset);
-  const sessionAuthority: SessionAuthorityPort = createInMemoryHostSessionAuthorityStore({ maxRecords: 64 });
+  const sessionAuthority: SessionAuthorizationStore = createInMemoryHostSessionAuthorityStore({ maxRecords: 64 });
   const policyAmendments: PersistentPolicyAmendmentPort = createInMemoryHostPolicyAmendmentStore({ maxRecords: 64 });
   const managedConstraints: ManagedPermissionConstraints = Object.freeze({
     constraintSetId: `helarc-evaluation-${input.preset}`,

@@ -1,4 +1,4 @@
-import type { AgentRevisionRef } from "../agent/index.js";
+import type { AgentDefinitionRevisionRef } from "../agent/index.js";
 import type { RunRef } from "../run/index.js";
 import type { RunActionRef } from "../run-action/index.js";
 import type {
@@ -30,7 +30,7 @@ export interface DescendantContinuationCorrelation {
   readonly root: RunRef;
   readonly parent: RunRef;
   readonly sourceChild: RunRef;
-  readonly agent: AgentRevisionRef;
+  readonly agent: AgentDefinitionRevisionRef;
 }
 
 export interface DelegationOriginCorrelation {
@@ -53,7 +53,7 @@ export interface DelegationRunCorrelation {
   readonly child: {
     readonly run: RunRef;
     readonly task: TaskRef;
-    readonly agent: AgentRevisionRef;
+    readonly agent: AgentDefinitionRevisionRef;
   };
 }
 
@@ -303,9 +303,9 @@ function snapshotRelationRef(
 }
 
 function snapshotAgentRef(
-  input: AgentRevisionRef,
+  input: AgentDefinitionRevisionRef,
   field: string,
-): AgentRevisionRef {
+): AgentDefinitionRevisionRef {
   strictRecord(input, field, ["id", "revision"]);
   return Object.freeze({
     id: token(input.id, `${field}.id`),

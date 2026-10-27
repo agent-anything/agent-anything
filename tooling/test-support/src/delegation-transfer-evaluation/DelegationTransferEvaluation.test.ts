@@ -17,14 +17,14 @@ describe("Delegation Transfer deterministic Evaluation", () => {
       completionRate: 1,
       toolCallCount: 5,
       modelTurnCount: 5,
-      // Logical clock includes one frozen-opening checkpoint per Run (three here).
-      latencyMs: 376,
+      // Logical ticks include five durable model-activity bindings, not elapsed milliseconds.
+      latencyMs: 381,
       humanInteractionEvents: 0,
       terminalOutcome: "completed",
     });
     expect(Object.values(report.invariants).every(Boolean)).toBe(true);
     expect(report).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v10",
+      revision: "delegation-transfer-deterministic-evaluation-v11",
       descendantRunCount: 2,
       settledResultCount: 2,
       prohibitedDisclosureCount: 0,

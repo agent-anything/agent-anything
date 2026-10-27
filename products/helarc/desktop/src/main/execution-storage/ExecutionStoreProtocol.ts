@@ -2,7 +2,7 @@ import type {
   ActionPreparationRecord, PreparedActionRecord, ActionDispatchIntent, ActionAttemptResultRecord,
   ActionSettlementRecord, ActionRetryRecord, ActionRecoveryRecords,
 } from "@agent-anything/action-execution/enforcement";
-import type { RunCommit, RunCommitReceipt, RunTreeCommit, RunTreeCommitReceipt, RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/runner";
+import type { RunCommit, RunCommitReceipt, RunTreeCommit, RunTreeCommitReceipt, RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { CompositeCommit } from "@agent-anything/operation-composition/execution";
 import type { AgentHookInvocationCheckpoint } from "@agent-anything/agent-hooks/execution";
 import type { ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";

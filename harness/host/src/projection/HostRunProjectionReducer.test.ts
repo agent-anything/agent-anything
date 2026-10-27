@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RunOperationSnapshot } from "@agent-anything/agent-runtime/runner";
+import type { RunOperationSnapshot } from "@agent-anything/agent-runtime/execution-coordinator";
 import {
   createRunResult,
   type RunSettlementCauseRecord,

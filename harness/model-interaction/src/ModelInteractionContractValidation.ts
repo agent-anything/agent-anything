@@ -76,11 +76,11 @@ export function snapshotJsonValue(
     }
     const output: Record<string, ModelJsonValue> = {};
     for (const key of Object.keys(value).sort()) {
-      output[key] = snapshotJsonValue(
+      Object.defineProperty(output, key, {enumerable: true, value: snapshotJsonValue(
         (value as Record<string, unknown>)[key],
         `${path}.${key}`,
         ancestors,
-      );
+      )});
     }
     return Object.freeze(output);
   } finally {

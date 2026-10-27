@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, stat } from "node:fs/promises";
-import { isAbsolute, join, matchesGlob, relative, sep } from "node:path";
+import { stat } from "node:fs/promises";
+import { isAbsolute, matchesGlob } from "node:path";
 import type {
   ActionAdapterImplementation,
   ActionAdapterPreparedData,
@@ -47,14 +46,11 @@ import type {
   CodeFileBaselineOutput,
   CodeFileEditOutput,
   CodeFileGlobOutput,
-  CodeFileGrepContentEntry,
-  CodeFileGrepEntry,
   CodeFileGrepOutput,
   CodeFileReadOutput,
   CodeFileWriteOutput,
 } from "@agent-anything/helarc-code-agent/source";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
-import { workspaceRelativePath } from "./FileSystemBoundary.js";
 import { FileSystemError } from "./FileSystemError.js";
 import { resolveFileSystemLimits } from "./FileSystemLimits.js";
 import {
@@ -64,7 +60,8 @@ import {
   sameFileBaseline,
   type PreparedFileSystemTarget,
 } from "./FileSystemTarget.js";
-import { decodeUtf8 } from "./Utf8.js";
+import { readFileTextPage } from "./FileTextRead.js";
+import { searchWorkspaceFiles, type FileSearchRequest } from "./FileSearch.js";
 import { hostFileMutationClaims } from "./FileMutationClaims.js";
 import { writeBoundFileContent } from "./FileContentMutation.js";
 import { fileAncestryIdentity, retainFileSupport, retainedFileFailureSupport, snapshotFileSupportOrigin, type FileSupportOrigin, type FileSupportServices } from "./FileSupportCapture.js";
@@ -76,7 +73,7 @@ import { createLocalFileRestorationCapability } from "./LocalFileRestorationCapa
 
 const EXECUTOR_DESCRIPTOR = Object.freeze({
   id: "helarc.local.filesystem.executor",
-  version: "2",
+  version: "3",
   invocationContractVersion: "2",
   physicalPayloadSchemaRevision: "2",
 });
@@ -104,6 +101,7 @@ export interface CreateHelarcLocalFileActionCapabilityInput {
 }
 
 export interface HelarcLocalFileActionCapability {
+  readonly limits: CodeAgentFileLimits;
   readonly actionAdapterIds: CodeFileActionAdapterIds;
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
@@ -117,6 +115,7 @@ export function createHelarcLocalFileActionCapability(
   const restoration = createLocalFileRestorationCapability({workspace: input.workspace, support: input.fileSupport,
     evidence: input.executionEvidence, access: input.executionAccess, now: input.now ?? (() => new Date().toISOString())});
   return Object.freeze({
+    limits: Object.freeze(limits),
     actionAdapterIds: HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS,
     registrations: createActionRegistrationSnapshot([...SPECS.map(registrationInput), ...restoration.registrations.registrations.map(({registrationFingerprint: _fingerprint, ...entry}) => entry)]),
     adapters: Object.freeze([...SPECS.map((spec) => Object.freeze({
@@ -191,13 +190,14 @@ function createFileAdapter(
         }
         const requestedPath = fileTargetPath(request);
         const target = await prepareFileSystemTarget({
+          inspection: {maxBytes: limits.maxReadInspectionBytes, signal: context.interruption.signal},
           workspace,
           workspaceRoots: context.workspace.roots,
           platform: context.environment.platform,
           path: requestedPath,
           operation: request.operation,
         });
-        const preparedInput = await prepareOperationInput(request, target, limits);
+        const preparedInput = await prepareOperationInput(request, target, limits, context.interruption.signal);
         const preparedData = await createFilePreparedData(
           request,
           preparedInput,
@@ -239,6 +239,7 @@ function createFileAdapter(
           return invalidated("file_assertion_missing");
         }
         const actual = await inspectPreparedFileSystemTarget({
+          inspection: {maxBytes: limits.maxReadInspectionBytes, signal: context.interruption.signal},
           platform: context.environment.platform,
           operation: payload.operation,
           expectedBaseline: payload.expectedBaseline,
@@ -310,9 +311,12 @@ async function prepareOperationInput(
   request: CodeFileOperationRequest,
   target: PreparedFileSystemTarget,
   limits: CodeAgentFileLimits,
+  signal: AbortSignal,
 ): Promise<PreparedOperationInput> {
   if (request.operation === "edit") {
-    const current = await readBoundedUtf8(target.canonicalTarget, limits.maxWriteBytes);
+    const current = await readFileTextPage({path: target.canonicalTarget, offset: 1, limit: Number.MAX_SAFE_INTEGER,
+      maxBytes: limits.maxWriteBytes, maxInspectionBytes: limits.maxWriteBytes, signal,
+      expectedDigest: target.baseline.kind === "present" ? target.baseline.contentDigest ?? undefined : undefined});
     const replacementCount = countOccurrences(current.content, request.old_string);
     if (replacementCount === 0) {
       throw new FileSystemError(
@@ -328,12 +332,12 @@ async function prepareOperationInput(
     }
     const content = request.replace_all === true
       ? current.content.split(request.old_string).join(request.new_string)
-      : current.content.replace(request.old_string, request.new_string);
+      : current.content.replace(request.old_string, () => request.new_string);
     assertWriteLimit(content, limits.maxWriteBytes);
     return Object.freeze({
       content,
       replacementCount: request.replace_all === true ? replacementCount : 1,
-      previousByteLength: current.byteLength,
+      previousByteLength: current.byte_length,
     });
   }
   if (request.operation === "write") {
@@ -542,7 +546,7 @@ async function executeFile(
     case "read":
       return readTextFile(payload, limits, context);
     case "glob":
-      return globFiles(payload, limits.maxGlobEntries, context);
+      return globFiles(payload, limits, context);
     case "grep":
       return grepFiles(payload, limits, context);
     case "edit":
@@ -563,46 +567,25 @@ async function readTextFile(
   limits: CodeAgentFileLimits,
   context: ActionExecutorContext,
 ): Promise<CodeFileReadOutput> {
-  const current = await readBoundedUtf8(payload.canonicalTarget, limits.maxReadBytes);
-  throwIfInterrupted(context);
-  const lines = current.content.length === 0 ? [] : current.content.split(/\r?\n/u);
-  const requestedLimit = payload.limit ?? limits.maxReadLines;
-  const limit = Math.min(requestedLimit, limits.maxReadLines);
-  const startIndex = Math.min(payload.offset - 1, lines.length);
-  const selected = lines.slice(startIndex, startIndex + limit);
-  const startLine = lines.length === 0 ? 1 : startIndex + 1;
-  const endLine = selected.length === 0 ? 0 : startIndex + selected.length;
+  const current = await readFileTextPage({path: payload.canonicalTarget, offset: payload.offset,
+    limit: Math.min(payload.limit ?? limits.maxReadLines, limits.maxReadLines),
+    maxBytes: limits.maxReadBytes, maxInspectionBytes: limits.maxReadInspectionBytes,
+    signal: context.interruption.signal,
+    expectedDigest: payload.expectedBaseline.kind === "present" ? payload.expectedBaseline.contentDigest ?? undefined : undefined});
   return Object.freeze({
-    ...baselineOutput(payload, current.byteLength, digest(current.bytes)),
-    content: selected.join("\n"),
-    start_line: startLine,
-    end_line: endLine,
-    total_lines: lines.length,
-    truncated: startIndex > 0 || endLine < lines.length,
+    target_id: payload.targetId, file_path: payload.relativePath, ...current,
   });
 }
 
 async function globFiles(
   payload: PreparedFilePayload,
-  maximum: number,
+  limits: CodeAgentFileLimits,
   context: ActionExecutorContext,
 ): Promise<CodeFileGlobOutput> {
   if (payload.pattern === null) throw new TypeError("Glob pattern is missing.");
   validateGlobPattern(payload.pattern);
-  const candidates: string[] = [];
-  await visitFilesAndDirectories(payload.canonicalTarget, context, async (absolute, kind) => {
-    const relativeToTarget = normalizedRelative(payload.canonicalTarget, absolute);
-    if (relativeToTarget !== "." && matchesGlob(relativeToTarget, payload.pattern!)) {
-      candidates.push(workspaceRelativePath(payload.canonicalRoot, absolute));
-    }
-    return kind === "directory";
-  });
-  candidates.sort((left, right) => left.localeCompare(right));
-  return Object.freeze({
-    matches: Object.freeze(candidates.slice(0, maximum)),
-    truncated: candidates.length > maximum,
-    omitted_count: Math.max(0, candidates.length - maximum),
-  });
+  const result = await searchWorkspaceFiles(searchRequest(payload, limits), limits, context.interruption.signal);
+  return {matches: result.matches, truncated: result.truncated, omitted_count: result.omitted_count, scan: result.scan};
 }
 
 async function grepFiles(
@@ -611,93 +594,19 @@ async function grepFiles(
   context: ActionExecutorContext,
 ): Promise<CodeFileGrepOutput> {
   if (payload.pattern === null) throw new TypeError("Grep pattern is missing.");
-  const expression = compileExpression(payload.pattern, payload.caseSensitive, payload.multiline);
+  compileExpression(payload.pattern, payload.caseSensitive, payload.multiline);
   if (payload.glob !== null) validateGlobPattern(payload.glob);
-  const candidates: CodeFileGrepEntry[] = [];
-  await visitFilesAndDirectories(payload.canonicalTarget, context, async (absolute, kind) => {
-    if (kind !== "file") return kind === "directory";
-    const relativeToTarget = normalizedRelative(payload.canonicalTarget, absolute);
-    if (payload.glob !== null && !matchesGlob(relativeToTarget, payload.glob)) return false;
-    const stats = await stat(absolute);
-    if (stats.size > limits.maxSearchFileBytes) return false;
-    const bytes = await readFile(absolute);
-    if (bytes.byteLength > limits.maxSearchFileBytes) return false;
-    const content = decodeUtf8(bytes);
-    if (content === null) return false;
-    const path = workspaceRelativePath(payload.canonicalRoot, absolute);
-    const fileEntries = grepContent(path, content, expression, payload, limits);
-    candidates.push(...fileEntries);
-    return false;
-  });
-  const offset = payload.offset - 1;
-  const requestedLimit = payload.limit ?? limits.maxGrepMatches;
-  const limit = Math.min(requestedLimit, limits.maxGrepMatches);
-  const entries = candidates.slice(offset, offset + limit);
-  const omitted = candidates.length - entries.length;
-  return Object.freeze({
-    output_mode: payload.outputMode,
-    entries: Object.freeze(entries),
-    truncated: omitted > 0,
-    omitted_count: omitted,
-  });
+  const result = await searchWorkspaceFiles(searchRequest(payload, limits), limits, context.interruption.signal);
+  return {output_mode: result.output_mode, entries: result.entries,
+    truncated: result.truncated, omitted_count: result.omitted_count, scan: result.scan};
 }
 
-function grepContent(
-  filePath: string,
-  content: string,
-  expression: RegExp,
-  payload: PreparedFilePayload,
-  limits: CodeAgentFileLimits,
-): readonly CodeFileGrepEntry[] {
-  const lines = content.split(/\r?\n/u);
-  const matches: CodeFileGrepContentEntry[] = [];
-  if (payload.multiline) {
-    for (const match of content.matchAll(expression)) {
-      const beforeText = content.slice(0, match.index);
-      const line = beforeText.split(/\r?\n/u).length;
-      const lastBreak = Math.max(beforeText.lastIndexOf("\n"), beforeText.lastIndexOf("\r"));
-      const column = match.index - lastBreak;
-      matches.push(contentEntry(filePath, lines, line, column, limits, payload));
-    }
-  } else {
-    lines.forEach((lineText, index) => {
-      expression.lastIndex = 0;
-      for (const match of lineText.matchAll(expression)) {
-        matches.push(contentEntry(
-          filePath,
-          lines,
-          index + 1,
-          match.index + 1,
-          limits,
-          payload,
-        ));
-      }
-    });
-  }
-  if (payload.outputMode === "content") return matches;
-  if (matches.length === 0) return [];
-  if (payload.outputMode === "files_with_matches") return [{ file_path: filePath }];
-  return [{ file_path: filePath, count: matches.length }];
-}
-
-function contentEntry(
-  filePath: string,
-  lines: readonly string[],
-  line: number,
-  column: number,
-  limits: CodeAgentFileLimits,
-  payload: PreparedFilePayload,
-): CodeFileGrepContentEntry {
-  const beforeCount = Math.min(payload.beforeContext, limits.maxGrepContextLines);
-  const afterCount = Math.min(payload.afterContext, limits.maxGrepContextLines);
-  return Object.freeze({
-    file_path: filePath,
-    line,
-    column,
-    text: lines[line - 1] ?? "",
-    before: Object.freeze(lines.slice(Math.max(0, line - 1 - beforeCount), line - 1)),
-    after: Object.freeze(lines.slice(line, line + afterCount)),
-  });
+function searchRequest(payload: PreparedFilePayload, limits: CodeAgentFileLimits): FileSearchRequest {
+  return {operation: payload.operation === "glob" ? "glob" : "grep",
+    root: payload.canonicalRoot, target: payload.canonicalTarget, pattern: payload.pattern!,
+    glob: payload.glob, mode: payload.outputMode, offset: payload.offset,
+    limit: payload.limit ?? limits.maxGrepMatches, caseSensitive: payload.caseSensitive,
+    multiline: payload.multiline, before: payload.beforeContext, after: payload.afterContext};
 }
 
 async function executeEdit(
@@ -766,29 +675,6 @@ async function executeMutationWithSupport<T extends CodeFileWriteOutput | CodeFi
   return {...value, file_support: {material, after}};
 }
 
-async function visitFilesAndDirectories(
-  target: string,
-  context: ActionExecutorContext,
-  visit: (absolute: string, kind: "file" | "directory") => Promise<boolean>,
-): Promise<void> {
-  throwIfInterrupted(context);
-  const stats = await lstat(target);
-  if (stats.isSymbolicLink()) return;
-  if (stats.isFile()) {
-    await visit(target, "file");
-    return;
-  }
-  if (!stats.isDirectory()) return;
-  const descend = await visit(target, "directory");
-  if (!descend) return;
-  const entries = (await readdir(target, { withFileTypes: true }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    throwIfInterrupted(context);
-    if (entry.isSymbolicLink()) continue;
-    await visitFilesAndDirectories(join(target, entry.name), context, visit);
-  }
-}
 
 function settleFileOperation(
   prepared: import("@agent-anything/action-execution/registration").PreparedAction<PreparedFileBasis>,
@@ -988,24 +874,6 @@ function assertWriteLimit(content: string, maximum: number): void {
   }
 }
 
-async function readBoundedUtf8(
-  path: string,
-  maximum: number,
-): Promise<{ readonly bytes: Uint8Array; readonly content: string; readonly byteLength: number }> {
-  if ((await stat(path)).size > maximum) {
-    throw new FileSystemError("file_read_limit_exceeded", "File exceeds the configured read limit.");
-  }
-  const bytes = await readFile(path);
-  if (bytes.byteLength > maximum) {
-    throw new FileSystemError("file_read_limit_exceeded", "File exceeds the configured read limit.");
-  }
-  const content = decodeUtf8(bytes);
-  if (content === null || bytes.includes(0)) {
-    throw new FileSystemError("file_content_unsupported", "File is not supported UTF-8 text.");
-  }
-  return Object.freeze({ bytes, content, byteLength: bytes.byteLength });
-}
-
 function presentBaselineOutput(
   payload: PreparedFilePayload,
   byteLength: number | null,
@@ -1056,11 +924,6 @@ function validateGlobPattern(pattern: string): void {
   } catch {
     throw new FileSystemError("file_glob_pattern_invalid", "Glob pattern is invalid.");
   }
-}
-
-function normalizedRelative(from: string, to: string): string {
-  const value = relative(from, to);
-  return value.length === 0 ? "." : value.split(sep).join("/");
 }
 
 function globPattern(value: unknown, name: string): string {
@@ -1155,8 +1018,4 @@ function errorCode(error: unknown): string {
 
 function safeMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
-}
-
-function digest(value: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }

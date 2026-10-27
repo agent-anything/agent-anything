@@ -1,5 +1,5 @@
 import {expect, it, vi} from "vitest";
-import type {RunExecutionObservation} from "@agent-anything/agent-runtime/runner";
+import type {RunExecutionObservation} from "@agent-anything/agent-runtime/execution-coordinator";
 import type {InspectionRecorder} from "../recording/index.js";
 import {RunExecutionInspectionAdapter} from "./RunExecutionInspectionAdapter.js";
 

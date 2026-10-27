@@ -1,6 +1,6 @@
 import type {
   OperationBindingRevisionRef,
-  OperationRevisionRef,
+  OperationDefinitionRevisionRef,
 } from "@agent-anything/operation-catalog/identity";
 import type { PreparedAction } from "@agent-anything/action-execution/registration";
 import type { CanonicalActionSettlement } from "@agent-anything/canonical-action/settlement";
@@ -17,7 +17,7 @@ afterAll(() => rm(commandOutputDirectory, { recursive: true, force: true }));
 
 describe("createHelarcLocalCommandActionCapability", () => {
   it("binds the physical adapter to the Operation identity supplied by trusted composition", async () => {
-    const shellOperation: OperationRevisionRef = {
+    const shellOperation: OperationDefinitionRevisionRef = {
       operation: { namespace: "test-product", name: "shell" },
       revision: "7",
     };
@@ -25,7 +25,7 @@ describe("createHelarcLocalCommandActionCapability", () => {
       operation: shellOperation,
       revision: "3",
     };
-    const taskStopOperation: OperationRevisionRef = {
+    const taskStopOperation: OperationDefinitionRevisionRef = {
       operation: { namespace: "test-product", name: "task-stop" },
       revision: "2",
     };
@@ -49,7 +49,7 @@ describe("createHelarcLocalCommandActionCapability", () => {
         additional: [],
       },
       platform: process.platform === "win32" ? "win32":"posix",
-      initialObservationHandlerId:"test.initial",taskOutputHandlerId:"test.output",
+      initialObservationHandlerId:"test.initial",commandObserveHandlerId:"test.output",
       shellOperation,
       shellBinding,
       taskStopOperation,
@@ -107,11 +107,11 @@ describe("createHelarcLocalCommandActionCapability", () => {
 });
 
 async function createCapability() {
-  const shellOperation: OperationRevisionRef = {
+  const shellOperation: OperationDefinitionRevisionRef = {
     operation: { namespace: "test-product", name: "shell" },
     revision: "7",
   };
-  const taskStopOperation: OperationRevisionRef = {
+  const taskStopOperation: OperationDefinitionRevisionRef = {
     operation: { namespace: "test-product", name: "task-stop" },
     revision: "2",
   };
@@ -130,7 +130,7 @@ async function createCapability() {
       additional: [],
     },
     platform: process.platform === "win32" ? "win32":"posix",
-    initialObservationHandlerId:"test.initial",taskOutputHandlerId:"test.output",
+    initialObservationHandlerId:"test.initial",commandObserveHandlerId:"test.output",
     shellOperation,
     shellBinding: { operation: shellOperation, revision: "3" },
     taskStopOperation,

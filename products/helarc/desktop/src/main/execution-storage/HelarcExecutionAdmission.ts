@@ -1,9 +1,8 @@
 import type { RunInputItem } from "@agent-anything/agent-core/input";
 import type { IdentityRef } from "@agent-anything/agent-core/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
-import type { RunLimits, RunTreeLimits } from "@agent-anything/agent-runtime/runner";
+import type { RunLimits, RunTreeLimits } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { HelarcInstructionSettings, HelarcProviderProfile, HelarcPermissionPreset } from "@agent-anything/helarc/configuration";
-import type { HelarcModelQualificationCatalog, HelarcModelQualificationSafeProjection } from "@agent-anything/helarc/model-qualification";
 import type { HelarcTaskInput } from "@agent-anything/helarc/task";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-local-environment/command";
 import type { Provider } from "@agent-anything/model-interaction";
@@ -25,8 +24,6 @@ export interface HelarcExecutionAdmission {
   readonly providerProfile: HelarcProviderProfile;
   readonly providerBinding: HelarcProviderRecoveryBinding;
   readonly instructionSettings: HelarcInstructionSettings;
-  readonly qualificationCatalog: HelarcModelQualificationCatalog | null;
-  readonly qualification: HelarcModelQualificationSafeProjection;
   readonly permissionPreset: HelarcPermissionPreset;
   readonly enforcement: SandboxEnforcement;
   readonly commandLimits: Partial<CodeAgentCommandLimits> | null;

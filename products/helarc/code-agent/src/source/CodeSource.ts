@@ -77,11 +77,19 @@ export interface CodeSourcePort {
 export interface CodeAgentFileLimits {
   readonly maxGlobEntries: number;
   readonly maxReadBytes: number;
+  readonly maxReadInspectionBytes: number;
   readonly maxReadLines: number;
   readonly maxSearchFileBytes: number;
   readonly maxGrepMatches: number;
   readonly maxGrepContextLines: number;
   readonly maxWriteBytes: number;
+  readonly maxSearchEntries: number;
+  readonly maxSearchDepth: number;
+  readonly maxSearchBytes: number;
+  readonly maxSearchMatches: number;
+  readonly maxSearchOutputBytes: number;
+  readonly maxSearchDurationMs: number;
+  readonly maxSearchRegexMs: number;
 }
 
 export interface CodeFileBaselineOutput {
@@ -97,12 +105,25 @@ export interface CodeFileReadOutput extends CodeFileBaselineOutput {
   readonly end_line: number;
   readonly total_lines: number;
   readonly truncated: boolean;
+  readonly next_offset: number | null;
 }
 
 export interface CodeFileGlobOutput {
   readonly matches: readonly string[];
   readonly truncated: boolean;
-  readonly omitted_count: number;
+  readonly omitted_count: number | null;
+  readonly scan: CodeFileSearchCoverage;
+}
+
+export interface CodeFileSearchCoverage {
+  complete: boolean;
+  entries_visited: number;
+  files_searched: number;
+  bytes_read: number;
+  skipped_count: number;
+  skipped: {file_path: string; reason: string}[];
+  skipped_details_truncated: boolean;
+  stop_reason: string | null;
 }
 
 export interface CodeFileGrepContentEntry {
@@ -123,7 +144,8 @@ export interface CodeFileGrepOutput {
   readonly output_mode: "content" | "files_with_matches" | "count";
   readonly entries: readonly CodeFileGrepEntry[];
   readonly truncated: boolean;
-  readonly omitted_count: number;
+  readonly omitted_count: number | null;
+  readonly scan: CodeFileSearchCoverage;
 }
 
 export interface CodeFileEditOutput {

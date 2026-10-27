@@ -1,8 +1,8 @@
 import type {
-  ControllerInput,
-  ControllerPreProjectionInput,
-} from "@agent-anything/agent-runtime/controller";
-import { createInputDeliverySections, canonicalConversationPresentations } from "@agent-anything/agent-runtime/controller";
+  TaskDecisionInputSources,
+  TaskDecisionSourceBasis,
+} from "@agent-anything/agent-runtime/decision";
+import { createInputDeliverySections, canonicalConversationPresentations } from "@agent-anything/agent-runtime/decision";
 import type {
   ContextProjectionEstimationInput,
 } from "@agent-anything/context/projection";
@@ -40,7 +40,7 @@ export interface HelarcPromptAssemblyResult {
 }
 
 export function buildHelarcPromptAssembly(input: {
-  readonly controllerInput: ControllerInput;
+  readonly controllerInput: TaskDecisionInputSources;
   readonly protocolInstructions?: readonly HelarcInstructionSectionSetting[];
   readonly executionBackground?: HelarcExecutionBackground;
 }): HelarcPromptAssemblyResult {
@@ -58,7 +58,7 @@ export function renderHelarcContextProjectionFragment(
 }
 
 function assemble(
-  input: ControllerPreProjectionInput | ControllerInput,
+  input: TaskDecisionSourceBasis | TaskDecisionInputSources,
   protocolInstructions: readonly HelarcInstructionSectionSetting[],
   executionBackground?: HelarcExecutionBackground,
 ): HelarcPromptAssemblyResult {
@@ -104,7 +104,7 @@ function buildSystemPromptSections(
 }
 
 function interactionHistorySections(
-  input: ControllerPreProjectionInput | ControllerInput,
+  input: TaskDecisionSourceBasis | TaskDecisionInputSources,
 ): readonly ModelInputSectionCandidate[] {
   if (!("interaction" in input)) return Object.freeze([]);
   const openingIds = new Set(input.interaction.opening?.presentations.map(value => value.section.id) ?? []);
@@ -123,7 +123,7 @@ function interactionHistorySections(
 }
 
 function buildAgentInstructionSections(
-  input: ControllerPreProjectionInput | ControllerInput,
+  input: TaskDecisionSourceBasis | TaskDecisionInputSources,
 ): readonly HelarcPromptSection[] {
   return Object.freeze(input.agent.instructions.blocks.map((block) => Object.freeze({
     id: `agent-instructions:${block.id}`,

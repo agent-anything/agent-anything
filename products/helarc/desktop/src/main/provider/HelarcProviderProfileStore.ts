@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   createHelarcProviderProfile, type HelarcProviderKind, type HelarcOllamaRuntimeProfile,
   type HelarcProviderProfile, type HelarcProviderProfileError, type HelarcProviderModelSettings,
-  type HelarcModelUsePolicy,
 } from "@agent-anything/helarc/configuration";
 import { HELARC_DEFAULT_PROVIDER_SETTINGS } from "../../shared/HelarcDesktopApi.js";
 import { SerializedAtomicFile, type AtomicFileTransaction, type SerializedAtomicFileOptions } from "../persistence/SerializedAtomicFile.js";
@@ -21,7 +20,6 @@ export interface SaveHelarcProviderProfileInput {
   timeoutMs: number;
   ollamaRuntime: HelarcOllamaRuntimeProfile | null;
   modelSettings?: HelarcProviderModelSettings;
-  qualificationPolicy?: HelarcModelUsePolicy;
   apiKeyUpdate: "keep" | "set" | "clear" | "reference";
   credential?: HelarcCredentialSelection;
   apiKey: string;
@@ -36,12 +34,11 @@ export interface PersistedHelarcProviderProfile {
   readonly timeoutMs: number;
   readonly ollamaRuntime: Readonly<HelarcOllamaRuntimeProfile> | null;
   readonly modelSettings: HelarcProviderModelSettings;
-  readonly qualificationPolicy: HelarcModelUsePolicy;
   readonly credentialRef: ProviderCredentialRef | null;
   readonly updatedAt: string;
 }
 interface StoreDocument {
-  readonly formatVersion: 6;
+  readonly formatVersion: 7;
   readonly activeProfileId: string | null;
   readonly profiles: readonly PersistedHelarcProviderProfile[];
 }
@@ -128,8 +125,7 @@ export class FileHelarcProviderProfileStore {
       if (!previous && doc.profiles.length >= 64) return conflict("At most 64 Provider profiles can be saved.");
       const id = previous?.id ?? `provider-${randomUUID()}`;
       const revision = randomUUID();
-      const validated = createHelarcProviderProfile({ ...input, id, revision, credentialStatus: "missing",
-        qualificationPolicy: input.qualificationPolicy ?? HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy, isActive: true });
+      const validated = createHelarcProviderProfile({ ...input, id, revision, credentialStatus: "missing", isActive: true });
       if (!validated.ok) return validated;
       let choice: HelarcCredentialSelection;
       try { choice = snapshotCredentialSelection(input.credential ?? selectionFor(previous?.credentialRef ?? null)); }
@@ -174,9 +170,9 @@ export class FileHelarcProviderProfileStore {
       const p = { ...validated.profile, credentialStatus: apiKey ? "present" as const : "empty_allowed" as const };
       const stored: PersistedHelarcProviderProfile = { id, revision, providerKind: p.providerKind, displayName: p.displayName,
         baseUrl: p.baseUrl, model: p.model, timeoutMs: p.timeoutMs, ollamaRuntime: p.ollamaRuntime,
-        modelSettings: p.modelSettings!, qualificationPolicy: p.qualificationPolicy, credentialRef, updatedAt: new Date().toISOString() };
+        modelSettings: p.modelSettings!, credentialRef, updatedAt: new Date().toISOString() };
       try {
-        await write(file, { formatVersion: 6, activeProfileId: id,
+        await write(file, { formatVersion: 7, activeProfileId: id,
           profiles: previous ? doc.profiles.map(p => p.id === id ? stored : p) : [...doc.profiles, stored] });
       } catch {
         if (stagedRef) {
@@ -194,21 +190,35 @@ export class FileHelarcProviderProfileStore {
   }
   private async readDocument(file: AtomicFileTransaction): Promise<StoreDocument> {
     const text = await file.readText();
-    if (text === null) return { formatVersion: 6, activeProfileId: null, profiles: [] };
+    if (text === null) return { formatVersion: 7, activeProfileId: null, profiles: [] };
     try {
-      const doc = JSON.parse(text) as StoreDocument;
-      if (!doc || doc.formatVersion !== 6 || Object.keys(doc).sort().join() !== "activeProfileId,formatVersion,profiles" ||
+      const parsed = JSON.parse(text);
+      const retiringPolicy = parsed?.formatVersion === 6;
+      // A one-time retirement of the old policy, not an alternate runtime schema.
+      // Validate every legacy field before publishing the policy-free document.
+      if (retiringPolicy) {
+        if (!Array.isArray(parsed.profiles)) throw new Error("profiles");
+        for (const profile of parsed.profiles) {
+          if (!profile || Object.keys(profile).sort().join() !== "baseUrl,credentialRef,displayName,id,model,modelSettings,ollamaRuntime,providerKind,qualificationPolicy,revision,timeoutMs,updatedAt" ||
+              !["require_qualified", "allow_experimental"].includes(profile.qualificationPolicy)) throw new Error("legacy profile");
+          delete profile.qualificationPolicy;
+        }
+        parsed.formatVersion = 7;
+      }
+      const doc = parsed as StoreDocument;
+      if (!doc || doc.formatVersion !== 7 || Object.keys(doc).sort().join() !== "activeProfileId,formatVersion,profiles" ||
           !Array.isArray(doc.profiles) || doc.profiles.length > 64 ||
           new Set(doc.profiles.map(p => p.id)).size !== doc.profiles.length ||
           (doc.activeProfileId !== null && !doc.profiles.some(p => p.id === doc.activeProfileId)) ||
           (doc.activeProfileId === null && doc.profiles.length !== 0)) throw new Error("shape");
       for (const p of doc.profiles) {
-        if (Object.keys(p).sort().join() !== "baseUrl,credentialRef,displayName,id,model,modelSettings,ollamaRuntime,providerKind,qualificationPolicy,revision,timeoutMs,updatedAt" ||
+        if (Object.keys(p).sort().join() !== "baseUrl,credentialRef,displayName,id,model,modelSettings,ollamaRuntime,providerKind,revision,timeoutMs,updatedAt" ||
             !/^provider-[a-f0-9-]{36}$/.test(p.id) || typeof p.revision !== "string" || !/^[a-f0-9-]{36}$/.test(p.revision) ||
             (p.credentialRef !== null && !validCredentialRef(p.credentialRef, p.id)) ||
             !Number.isFinite(Date.parse(p.updatedAt)) || p.modelSettings === undefined ||
             !createHelarcProviderProfile({ ...p, credentialStatus: "missing" }).ok) throw new Error("profile");
       }
+      if (retiringPolicy) await write(file, doc);
       return doc;
     } catch (cause) {
       throw new HelarcProviderProfileStoreCorruptionError("Provider Profile Store document version or shape is invalid.", { cause });

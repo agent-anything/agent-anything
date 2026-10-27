@@ -1,6 +1,6 @@
 import type { RunRef } from "../run/index.js";
 
-export interface ControllerTurnRef {
+export interface TaskDecisionActivityRef {
   readonly run: RunRef;
   readonly id: string;
   readonly sequence: number;

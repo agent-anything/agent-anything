@@ -1,4 +1,4 @@
-import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ArtifactRef, IdentityRef, RunRef } from "@agent-anything/agent-core/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { EvidenceRef } from "@agent-anything/context/evidence";
@@ -23,8 +23,8 @@ interface RunStateBase<TOutput> {
   readonly run: RunRef;
   readonly revision: number;
   readonly taskId: string;
-  readonly startingAgent: AgentRevisionRef;
-  readonly activeAgent: AgentRevisionRef;
+  readonly startingAgent: AgentDefinitionRevisionRef;
+  readonly activeAgent: AgentDefinitionRevisionRef;
   readonly startingInstructionBinding: AgentInstructionBindingRef;
   readonly activeInstructionBinding: AgentInstructionBindingRef;
   readonly workspace: WorkspaceSelection | null;

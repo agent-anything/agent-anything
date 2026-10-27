@@ -56,7 +56,7 @@ export type {
   ModelCallRef,
   ModelCallSettlementKind,
   ModelCallSettlementSourceRef,
-  ModelToolCall,
+  ModelCallableRequest,
   ModelToolResult,
   ModelResultPresentation,
   ProviderCallRef,
@@ -65,7 +65,7 @@ export {
   createModelCallRef,
   modelCallRefKey,
   snapshotModelCallRef,
-  snapshotModelToolCall,
+  snapshotModelCallableRequest,
   snapshotModelToolResult,
   snapshotModelToolResultContent,
   snapshotModelResultPresentation,
@@ -142,6 +142,7 @@ export {
   providerGeneratedOutput,
   providerResponseUsage,
   snapshotProviderResponse,
+  snapshotProviderFailure,
 } from "./ProviderResponse.js";
 export type { ModelJsonValue } from "./ModelInteractionContractValidation.js";
 export { snapshotJsonValue as snapshotModelJsonValue } from "./ModelInteractionContractValidation.js";

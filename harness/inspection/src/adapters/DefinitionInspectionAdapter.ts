@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentDefinition } from "@agent-anything/agent-core/agent";
 import type { ToolSelectionRevision } from "@agent-anything/tools/selection";
 import type { ProviderDescriptor } from "@agent-anything/model-interaction";
 import type { AgentHookRegistration } from "@agent-anything/agent-hooks/composition";
@@ -10,7 +10,7 @@ import { inspectionLink } from "./ProviderInspectionAdapter.js";
 
 export class DefinitionInspectionAdapter {
   constructor(private readonly recorder: InspectionRecorder) {}
-  agent(agent: Agent): void {
+  agent(agent: AgentDefinition): void {
     const subject = this.recorder.ref("agent-core", "definition", agent.id, null, agent.revision);
     this.recorder.offer({ id: `agent:${agent.id}:${agent.revision}:${this.recorder.capturePolicyRevision}`, subject, occurredAt: null, payload: { kind: "definition", definitionKind: "agent", name: agent.name, revision: agent.revision, enabled: true }, contents: [{ name: "Agent definition", stage: "bound", class: "agent", mediaType: "application/json", value: { id: agent.id, name: agent.name, revision: agent.revision, instructions: agent.instructions, metadata: agent.metadata } as unknown as InspectionJson }] });
     const instructions = agent.instructions;

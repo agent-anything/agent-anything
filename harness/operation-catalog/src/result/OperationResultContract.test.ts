@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { createOperationCatalogSnapshot } from "../catalog/index.js";
+import { createOperationDefinitionCatalog } from "../catalog/index.js";
 import { createOperationResult, createOperationResultContracts, rejectOperationResultOutput, type OperationResult } from "./index.js";
 
 const operation = {operation: {namespace: "test", name: "inspect"}, revision: "1"};
 const binding = {operation, revision: "1"};
 const invocation = {id: "invocation-1", operation};
 const time = "2026-10-13T00:00:00.000Z";
-const catalog = createOperationCatalogSnapshot({id: "catalog", revision: "1", entries: [{
+const catalog = createOperationDefinitionCatalog({id: "catalog", revision: "1", entries: [{
   admissionId: "admission", operation: {ref: operation, semanticOwner: "test", requestSchemaRevision: "1", resultSchemaRevision: "2",
     roles: {requestOrigins: ["tool_request"], exposure: "eager_tool", runControl: "internal", trust: "effect_free", participation: "semantic_owner", domainPurpose: "test"}},
   binding: {ref: binding, kind: "internal", resolverId: "test", resolverRevision: "1"}, sourceRevision: "1",

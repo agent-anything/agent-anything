@@ -9,10 +9,6 @@ export type HelarcProviderKind =
   | "openai-compatible"
   | "ollama";
 
-export type HelarcModelUsePolicy =
-  | "require_qualified"
-  | "allow_experimental";
-
 export interface HelarcOllamaRuntimeProfile {
   contextWindowTokens: number;
 }
@@ -28,7 +24,6 @@ export interface CreateHelarcProviderProfileInput {
   timeoutMs: number;
   ollamaRuntime?: HelarcOllamaRuntimeProfile | null;
   credentialStatus: HelarcProviderCredentialStatus;
-  qualificationPolicy?: HelarcModelUsePolicy;
   isActive?: boolean;
 }
 
@@ -45,7 +40,6 @@ export interface HelarcProviderProfile {
   timeoutMs: number;
   ollamaRuntime: Readonly<HelarcOllamaRuntimeProfile> | null;
   credentialStatus: HelarcProviderCredentialStatus;
-  qualificationPolicy: HelarcModelUsePolicy;
   isActive: boolean;
 }
 
@@ -58,7 +52,6 @@ export type HelarcProviderProfileErrorCode =
   | "provider_profile_timeout_invalid"
   | "provider_profile_ollama_runtime_invalid"
   | "provider_profile_credential_status_invalid"
-  | "provider_profile_qualification_policy_invalid"
   | "provider_profile_kind_invalid"
   | "provider_profile_not_found";
 
@@ -128,14 +121,6 @@ export function createHelarcProviderProfile(
     );
   }
 
-  const qualificationPolicy = input.qualificationPolicy ?? "require_qualified";
-  if (!isQualificationPolicy(qualificationPolicy)) {
-    return reject(
-      "provider_profile_qualification_policy_invalid",
-      "Provider profile model qualification policy is invalid.",
-    );
-  }
-
   let modelSettings: HelarcProviderModelSettings;
   try { modelSettings = snapshotHelarcProviderModelSettings(input.modelSettings, providerKind); }
   catch { return reject("provider_profile_kind_invalid", "Provider model settings are invalid."); }
@@ -158,7 +143,6 @@ export function createHelarcProviderProfile(
       timeoutMs: input.timeoutMs,
       ollamaRuntime: ollamaRuntimeResult.runtime,
       credentialStatus: input.credentialStatus,
-      qualificationPolicy,
       isActive: input.isActive ?? false,
     },
   };
@@ -196,12 +180,6 @@ function normalizeOllamaRuntime(
       contextWindowTokens: value.contextWindowTokens,
     }),
   };
-}
-
-function isQualificationPolicy(
-  value: unknown,
-): value is HelarcModelUsePolicy {
-  return value === "require_qualified" || value === "allow_experimental";
 }
 
 export function selectHelarcProviderProfile(

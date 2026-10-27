@@ -46,8 +46,8 @@ describe("Permission public API", () => {
       "createActionApprovalCoverage",
       "createActionPermissionAssessmentPort",
       "isActionApprovalCoverageApplicable",
-      "isSessionAuthorityApplicable",
-      "validateSessionAuthorityRecord",
+      "isSessionAuthorizationApplicable",
+      "validateSessionAuthorizationBasis",
     ]);
     expect(Object.keys(api).sort()).toEqual([
       ...new Set([

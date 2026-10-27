@@ -3,7 +3,7 @@ import {
   createModelCallRef,
   createModelTurnId,
   snapshotModelJsonValue,
-  snapshotModelToolCall,
+  snapshotModelCallableRequest,
   snapshotProviderResponse,
   type ModelJsonValue,
   type Provider,
@@ -177,7 +177,7 @@ function createNativeResult(
       })]
     : [Object.freeze({
         kind: "model_tool_call" as const,
-        call: snapshotModelToolCall({
+        call: snapshotModelCallableRequest({
           modelCallRef: createModelCallRef({
             providerRequestId: request.requestId,
             controllerRequestId: request.correlation.controllerRequestId,

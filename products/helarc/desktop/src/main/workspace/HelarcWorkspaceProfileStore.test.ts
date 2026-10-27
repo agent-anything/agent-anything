@@ -139,7 +139,7 @@ describe("FileHelarcWorkspaceProfileStore", () => {
     });
 
     await expect(failingStore.rememberWorkspacePath(secondWorkspacePath)).rejects
-      .toThrow("injected replacement failure");
+      .toMatchObject({stage: "replace", cause: {message: "injected replacement failure"}});
 
     expect(await readFile(filePath, "utf8")).toBe(before);
     expect(await readdir(dirname(filePath))).toEqual(["workspaces.json"]);

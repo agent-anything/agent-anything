@@ -85,7 +85,6 @@ void app
               timeoutMs,
               ollamaRuntime,
               credentialStatus: "empty_allowed",
-              qualificationPolicy: "allow_experimental",
               isActive: true,
             },
             threadStore: new FileHelarcThreadStore(

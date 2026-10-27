@@ -1,4 +1,4 @@
-import type { ToolResultPresenter } from "@agent-anything/agent-runtime/runner";
+import type { ToolResultPresenter } from "@agent-anything/agent-runtime/execution-coordinator";
 import { snapshotExecutionEvidence, snapshotExecutionEvidenceRef, validateExecutionEffectSchemas, type ExecutionEvidenceRecord, type ExecutionEvidenceRecordPort } from "@agent-anything/operation-catalog/evidence";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import { CODE_FILE_CONTENT_CHANGE_SCHEMA, codeFileExecutionEffects, codeFileCompensationSupport } from "@agent-anything/helarc-code-agent/file-operation";

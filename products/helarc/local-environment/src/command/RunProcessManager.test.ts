@@ -46,6 +46,112 @@ async function setup(options: { records?: ProcessRecordPort; instant?: boolean; 
 }
 
 describe("RunProcessManager", () => {
+  it("does not turn unread pages of a completed capture into later notifications, including after recovery", async () => {
+    let latest: ProcessCheckpoint | null = null;
+    const records: ProcessRecordPort = {async commitProcess(value) {validateProcessCheckpoint(value, latest); latest = structuredClone(value);},
+      async readProcesses() {return latest ? [structuredClone(latest)] : [];}};
+    const t = await setup({records});
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("historical-".repeat(8000))});
+      t.finish();
+      await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+      const initial = await t.observe({initial: true});
+      expect(initial.hasMore).toBe(true);
+      expect(initial.availableOutputCursor).not.toBe(initial.nextCursor);
+      await t.commit(initial);
+      await t.commit(initial);
+      expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([]);
+      const restored = new RunProcessManager({backend: t.backend, records, maximumActive: 2, maximumSettled: 2});
+      await restored.restoreRun(t.input.runId);
+      await t.commit(initial, restored);
+      expect(restored.readInputNotifications(t.input.runId, 0)).toEqual([]);
+      expect(restored.readOutput(t.input.runId, t.input.executionId, initial.nextCursor).stdout.text.length).toBeGreaterThan(0);
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    } finally {await t.cleanup();}
+  });
+
+  it("announces only newly available output, not historical page tails, across later lifecycle facts", async () => {
+    const t = await setup();
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("historical-".repeat(6000))});
+      const initial = await t.observe({initial: true});
+      await t.commit(initial);
+      expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual([]);
+      // New data arrives after the immutable observation but before any later result.
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("new-range-".repeat(3000))});
+      t.finish();
+      await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+      const notifications = t.manager.readInputNotifications(t.input.runId, 0);
+      const captured = notifications.filter(item => item.data.capture !== undefined);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({data: {capture: {previousCursor: initial.availableOutputCursor,
+        stdout: {byteStart: initial.stdout.receivedBytes, text: expect.stringContaining("new-range-")}, hasMore: true}}});
+      expect(JSON.stringify(captured)).not.toContain("historical-");
+      expect(notifications.some(item => item.data.phase === "settled")).toBe(true);
+      expect(notifications.some(item => (item.data.output as {persistence: string}).persistence === "complete")).toBe(true);
+      expect(t.manager.readOutput(t.input.runId, t.input.executionId, initial.nextCursor).stdout.text).toContain("historical-");
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    } finally {await t.cleanup();}
+  });
+
+  it("commits pending later facts atomically with the initial receipt and restores them exactly once", async () => {
+    let latest: ProcessCheckpoint | null = null, receiptBoundary: ProcessCheckpoint | null = null;
+    const records: ProcessRecordPort = {async commitProcess(value) {
+      validateProcessCheckpoint(value, latest); latest = structuredClone(value);
+      if (value.initialDelivery !== null && receiptBoundary === null) receiptBoundary = structuredClone(value);
+    }, async readProcesses() {return latest ? [structuredClone(latest)] : [];}};
+    const t = await setup({records});
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("historical-".repeat(6000))});
+      const initial = await t.observe({initial: true});
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("later")});
+      t.finish();
+      await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+      await t.commit(initial);
+      expect(receiptBoundary).not.toBeNull();
+      expect((receiptBoundary! as ProcessCheckpoint).notifications).toHaveLength(1);
+      let recoveredCheckpoint = structuredClone(receiptBoundary);
+      const recoveredRecords: ProcessRecordPort = {async commitProcess(value) {
+        validateProcessCheckpoint(value, recoveredCheckpoint); recoveredCheckpoint = structuredClone(value);
+      }, async readProcesses() {return recoveredCheckpoint ? [structuredClone(recoveredCheckpoint)] : [];}};
+      const restored = new RunProcessManager({backend: t.backend, records: recoveredRecords, maximumActive: 2, maximumSettled: 2});
+      await restored.restoreRun(t.input.runId);
+      await t.commit(initial, restored);
+      const notifications = restored.readInputNotifications(t.input.runId, 0);
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]).toMatchObject({data: {phase: "settled", outcome: "succeeded",
+        capture: {previousCursor: initial.availableOutputCursor, stdout: {text: "later"}}}});
+      const reopened = new RunProcessManager({backend: t.backend, records: recoveredRecords, maximumActive: 2, maximumSettled: 2});
+      await reopened.restoreRun(t.input.runId);
+      expect(reopened.readInputNotifications(t.input.runId, 0)).toEqual(notifications);
+      expect(t.backend.launch).toHaveBeenCalledTimes(1);
+    } finally {await t.cleanup();}
+  });
+
+  it("rejects foreign, out-of-range and regressing announced frontiers without weakening checkpoint checks", async () => {
+    let latest: ProcessCheckpoint | null = null;
+    const records: ProcessRecordPort = {async commitProcess(value) {validateProcessCheckpoint(value, latest); latest = structuredClone(value);},
+      async readProcesses() {return latest ? [structuredClone(latest)] : [];}};
+    const t = await setup({records});
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("historical-".repeat(6000))});
+      const initial = await t.observe({initial: true});
+      await t.commit(initial);
+      const saved = latest! as ProcessCheckpoint;
+      const position = JSON.parse(Buffer.from(saved.announcedOutputCursor!, "base64url").toString("utf8"));
+      for (const invalid of [{...position, executionId: "foreign"}, {...position, stdout: 999999}, {...position, stdout: 0}]) {
+        expect(() => validateProcessCheckpoint({...saved, revision: saved.revision + 1,
+          announcedOutputCursor: Buffer.from(JSON.stringify(invalid)).toString("base64url")}, saved)).toThrow();
+      }
+      expect(() => validateProcessCheckpoint({...saved, revision: saved.revision + 1,
+        initialSnapshot: {...initial, availableOutputCursor: initial.nextCursor}}, saved)).toThrow();
+    } finally {await t.cleanup();}
+  });
+
   it("binds a composite Tool receipt to its exact process without equating outer and internal Actions", async () => {
     const t = await setup();
     try {
@@ -94,27 +200,55 @@ describe("RunProcessManager", () => {
     } finally { await t.cleanup(); }
   });
 
-  it("restores exact bounded search receipts without advancing the source frontier or launching again", async () => {
+  it("restores exact command observations and immutable material views without launching again", async () => {
     let latest: ProcessCheckpoint | null = null;
-    const records: ProcessRecordPort = {async commitProcess(value) {validateProcessCheckpoint(value, latest); latest = structuredClone(value);},
+    const records: ProcessRecordPort = {async commitProcess(value) {validateProcessCheckpoint(value, latest); latest=structuredClone(value);},
       async readProcesses() {return latest ? [structuredClone(latest)] : [];}};
-    const t = await setup({records});
-    let originalClosed = false;
+    const t=await setup({records});
+    let closed=false;
     try {
       await t.manager.start(t.input);
-      t.emit({kind:"output", stream:"stdout", bytes:Buffer.from("first MATCH")});
-      const request = {runId:t.input.runId,executionId:t.input.executionId,invocationId:"search-1",search:{query:"MATCH"},signal:new AbortController().signal};
-      const page = await t.manager.searchOutput(request);
-      t.emit({kind:"output", stream:"stdout", bytes:Buffer.from(" second MATCH")});
-      t.finish(); await t.cleanup(); originalClosed = true;
-      const restored = new RunProcessManager({backend:t.backend,maximumActive:2,maximumSettled:2,records});
+      t.emit({kind:"output",stream:"stdout",bytes:Buffer.from("first MATCH")});
+      const request={runId:t.input.runId,executionId:t.input.executionId,invocationId:"observe-1",request:{until:"snapshot" as const,waitMs:0},
+        signal:new AbortController().signal,deadlineAt:new Date(Date.now()+60_000).toISOString()};
+      const first=await t.manager.observeCommand(request);
+      expect(first.materials[0]?.bytes).toBe(11);
+      t.emit({kind:"output",stream:"stdout",bytes:Buffer.from(" second MATCH")});
+      t.finish(); await t.cleanup(); closed=true;
+      const restored=new RunProcessManager({backend:t.backend,maximumActive:2,maximumSettled:2,records});
       await restored.restoreRun(t.input.runId);
-      expect(await restored.searchOutput(request)).toEqual(page);
-      expect((await restored.searchOutput({...request,invocationId:"search-2"})).matches).toHaveLength(2);
-      await expect(restored.searchOutput({...request,search:{query:"other"}})).rejects.toMatchObject({code:"process_search_invocation_conflict"});
-      await expect(restored.searchOutput({...request,runId:"sibling"})).rejects.toThrow();
+      expect(await restored.observeCommand(request)).toEqual(first);
+      const second=await restored.observeCommand({...request,invocationId:"observe-2"});
+      expect(second.materials[0]?.bytes).toBe(24);
+      expect(second.materials[0]?.reference).not.toEqual(first.materials[0]?.reference);
+      await expect(restored.observeCommand({...request,request:{until:"outcome",waitMs:0}})).rejects.toMatchObject({code:"process_observation_invocation_conflict"});
+      await expect(restored.observeCommand({...request,runId:"sibling"})).rejects.toThrow();
       expect(t.backend.launch).toHaveBeenCalledTimes(1);
-    } finally {if (!originalClosed) await t.cleanup();}
+    } finally {if (!closed) await t.cleanup();}
+  });
+
+  it("waits for the declared condition and cancellation never terminates the command", async () => {
+    const t=await setup();
+    try {
+      await t.manager.start(t.input);
+      const request={runId:t.input.runId,executionId:t.input.executionId,invocationId:"snapshot",request:{until:"snapshot" as const,waitMs:0},
+        signal:new AbortController().signal,deadlineAt:new Date(Date.now()+60_000).toISOString()};
+      const first=await t.manager.observeCommand(request);
+      const changed=t.manager.observeCommand({...request,invocationId:"change",request:{until:"change",after:first.id,waitMs:1000}});
+      t.emit({kind:"output",stream:"stdout",bytes:Buffer.from("new output")});
+      expect((await changed).returnReason).toBe("condition_satisfied");
+      const abort=new AbortController();
+      const waiting=t.manager.observeCommand({...request,invocationId:"outcome",request:{until:"outcome",waitMs:1000},signal:abort.signal});
+      abort.abort(new Error("observation cancelled"));
+      await expect(waiting).rejects.toThrow();
+      expect(t.manager.get(t.input.runId,t.input.executionId).phase).toBe("running");
+      const outcome=t.manager.observeCommand({...request,invocationId:"outcome-2",request:{until:"outcome",waitMs:1000}});
+      t.emit({kind:"root_exit",code:0,signal:null});
+      expect((await outcome).snapshot.outcome).toBe("succeeded");
+      expect((await t.manager.observeCommand({...request,invocationId:"not-settled",request:{until:"settled",waitMs:0}})).returnReason).toBe("observation_wait_limit");
+      t.finish();
+      expect((await t.manager.observeCommand({...request,invocationId:"settled",request:{until:"settled",waitMs:1000}})).snapshot.phase).toBe("settled");
+    } finally {await t.cleanup();}
   });
 
   it("keeps interrupted process effects and containment unknown without controlling a retained PID", async () => {
@@ -184,6 +318,25 @@ describe("RunProcessManager", () => {
       await expect(t.manager.commitInitialDelivery({runId: t.input.runId, executionId: t.input.executionId, runActionId: t.input.origin!.runActionId,
         settlementId: "different", observationId: null, cursor: null})).rejects.toThrow("process_initial_delivery_conflict");
     } finally { await t.cleanup(); }
+  });
+
+  it("keeps a missing large initial presentation distinct from unread historical pages", async () => {
+    const t = await setup();
+    try {
+      await t.manager.start(t.input);
+      t.emit({kind: "output", stream: "stdout", bytes: Buffer.from("retained-".repeat(9000))});
+      t.finish();
+      await expect.poll(() => t.manager.get(t.input.runId, t.input.executionId).phase).toBe("settled");
+      await t.observe({initial: true});
+      await t.commit(null);
+      const facts = t.manager.readInputNotifications(t.input.runId, 0);
+      expect(facts).toHaveLength(1);
+      expect(facts[0]).toMatchObject({data: {phase: "settled", capture: {previousCursor: null, hasMore: true}}});
+      await t.commit(null);
+      expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual(facts);
+      expect(t.manager.readOutput(t.input.runId, t.input.executionId,
+        (facts[0]!.data.capture as {nextCursor: string}).nextCursor).stdout.text.length).toBeGreaterThan(0);
+    } finally {await t.cleanup();}
   });
 
   it("keeps automatically selected output bounded after JSON escaping and query reads non-destructive", async () => {
@@ -399,7 +552,8 @@ describe("RunProcessManager", () => {
     await t.observe();
     expect(t.manager.readInputNotifications(t.input.runId, 0)).toEqual(facts);
     expect(t.manager.readInputNotifications(t.input.runId, facts.at(-1)!.sequence)).toEqual([]);
-    expect(facts.slice(1).map(fact => (fact.data.capture as {stdout: {text: string}}).stdout.text)).toEqual(["", ""]);
+    expect(facts.slice(1).every(fact => fact.data.capture === undefined ||
+      (fact.data.capture as {stdout: {text: string}}).stdout.text === "")).toBe(true);
     expect(t.manager.readInputNotifications("other-run", 0)).toEqual([]);
     await t.cleanup();
   });

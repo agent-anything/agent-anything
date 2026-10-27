@@ -1,5 +1,5 @@
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import {
   type EvidenceData,
   type ExecutionEffectEvidence,
@@ -88,8 +88,8 @@ export function codeFileCompensationSupport(result: OperationResult): readonly E
 function fileTool(result: OperationResult) {
   return (["Edit", "Write", "RestoreFile"] as const).find(name => {
     const binding = name === "RestoreFile" ? CODE_FILE_RESTORE_BINDING : bindingRefForCodeFileTool(name);
-    return operationRevisionKey(binding.operation) === operationRevisionKey(result.ref.invocation.operation) &&
-      operationRevisionKey(binding.operation) === operationRevisionKey(result.binding.operation) && binding.revision === result.binding.revision;
+    return operationDefinitionRevisionKey(binding.operation) === operationDefinitionRevisionKey(result.ref.invocation.operation) &&
+      operationDefinitionRevisionKey(binding.operation) === operationDefinitionRevisionKey(result.binding.operation) && binding.revision === result.binding.revision;
   });
 }
 

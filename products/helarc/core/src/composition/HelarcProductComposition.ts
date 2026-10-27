@@ -1,28 +1,28 @@
-import { ProviderBackedController } from "@agent-anything/agent-runtime/controller";
+import { ModelTaskDecisionCoordinator } from "@agent-anything/agent-runtime/execution-coordinator";
 import { HelarcProtocolRecoveryController } from "../controller/HelarcProtocolRecoveryController.js";
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
-import type { Controller } from "@agent-anything/agent-runtime/controller";
+import type { TaskDecisionActivity } from "@agent-anything/agent-runtime/decision";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import { appendHelarcRunPresentation, associateHelarcOperationPresentation, labelHelarcRunPresentation, receiveHelarcRunInputPresentation } from "../run/presentation/HelarcRunPresentation.js";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import { HelarcResponsePreviewStore, type HelarcResponsePreview, type HelarcResponsePreviews } from "../run/presentation/HelarcResponsePreviews.js";
-import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
+import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/execution-coordinator";
 import {
   createDefaultHelarcInstructionSettings,
   snapshotHelarcInstructionSettings,
   type HelarcInstructionSettings,
 } from "../instructions/index.js";
 import {
-  AgentHookController,
+  AgentHookExtensions,
   type AgentHookExecutionStore,
   type AgentHookRecordPort,
 } from "@agent-anything/agent-hooks/execution";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { HELARC_RESULT_EXECUTION_FLOW } from "./HelarcResultExecutionFlow.js";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentDefinition } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { CodeSourcePort } from "@agent-anything/helarc-code-agent/source";
@@ -53,14 +53,7 @@ import {
 } from "../observability/index.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import type { HelarcProviderProfile } from "../configuration/index.js";
-import {
-  type HelarcModelQualificationCatalog,
-  type HelarcModelQualificationResolution,
-} from "../model-qualification/index.js";
-import {
-  admitHelarcModelUse,
-  resolveHelarcModelQualification,
-} from "./HelarcModelUseAdmission.js";
+import { assertHelarcProviderCompatibility } from "./HelarcProviderCompatibility.js";
 import type { Provider } from "@agent-anything/model-interaction";
 import {
   ModelContinuationLifecycle,
@@ -104,7 +97,7 @@ type HelarcProductProjectionUpdatePayload =
 
 export interface CreateHelarcProductCompositionInput {
   readonly contextMaterials?: import("@agent-anything/context/material").ContextMaterialAccessPort;
-  readonly contextPreparation?: import("@agent-anything/agent-runtime/controller").ControllerContextPreparation;
+  readonly contextPreparation?: import("@agent-anything/agent-runtime/context-representation").ContextRepresentationPreparationSupport;
   readonly materialHandoff?: HelarcMaterialHandoff;
   readonly executionEvidenceAccess?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort;
   readonly executionHandoff?: import("../tools/HelarcExecutionHandoff.js").HelarcExecutionHandoff;
@@ -119,7 +112,6 @@ export interface CreateHelarcProductCompositionInput {
   readonly workspace: WorkspaceSelection;
   readonly provider: Provider;
   readonly providerProfile: HelarcProviderProfile;
-  readonly qualificationCatalog?: HelarcModelQualificationCatalog;
   readonly instructionTarget: HelarcMainInstructionTarget;
   readonly instructionSettings?: HelarcInstructionSettings;
   readonly codeSource: CodeSourcePort;
@@ -130,11 +122,12 @@ export interface CreateHelarcProductCompositionInput {
 }
 
 export interface HelarcProductComposition {
-  readonly agent: Agent<HelarcAgentOutput>;
-  readonly delegatedAgent: Agent<HelarcAgentOutput>;
-  readonly controller: Controller<HelarcAgentOutput>;
+  readonly agent: AgentDefinition<HelarcAgentOutput>;
+  readonly delegatedAgent: AgentDefinition<HelarcAgentOutput>;
+  readonly taskDecisions: TaskDecisionActivity<HelarcAgentOutput>;
+  readonly extensions: import("@agent-anything/agent-runtime/execution-coordinator").AgentExecutionExtensions<HelarcAgentOutput>;
+  readonly preparations: import("@agent-anything/agent-runtime/context-representation").ContextPreparationLifecycle;
   readonly controllerProtocol: HelarcControllerProtocolComposition;
-  readonly qualification: HelarcModelQualificationResolution;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
@@ -214,14 +207,7 @@ export async function createHelarcProductComposition(
     shellRuntime: input.commandActions.shellRuntime,
   });
   const rootToolGuidanceBinding = controllerProtocol.bindRun(input.runId);
-  const qualification = resolveHelarcModelQualification({
-    provider: input.provider,
-    providerProfile: input.providerProfile,
-    agent,
-    controllerProtocol,
-    catalog: input.qualificationCatalog,
-  });
-  admitHelarcModelUse(qualification);
+  assertHelarcProviderCompatibility(input.provider, input.providerProfile);
   const interactions = createInteractionProtocolRegistrySnapshot(
     "helarc.interactions.v3",
     [clarification.protocol],
@@ -233,7 +219,6 @@ export async function createHelarcProductComposition(
   >();
   let productProjection = createHelarcProductRunProjection(
     input.runId,
-    qualification.safeProjection,
   );
   let productSequence = 0;
   let activitySequence = 0;
@@ -275,8 +260,7 @@ export async function createHelarcProductComposition(
       },
     }),
   });
-  const tracedController = new HelarcTracingController(
-    new HelarcProtocolRecoveryController(new ProviderBackedController<HelarcAgentOutput>({
+  const modelCoordinator = new ModelTaskDecisionCoordinator<HelarcAgentOutput>({
       provider: input.provider,
       contextPreparation: input.contextPreparation,
       delivery: {mode:input.responseDelivery ?? "buffered", observer:{observe:event => previews.observe(event)}},
@@ -287,7 +271,6 @@ export async function createHelarcProductComposition(
           controllerInput,
           context,
           controllerProtocol,
-          qualification,
           {shell: input.commandActions.shellRuntime, cwd: input.commandActions.shellSession?.(controllerInput.runId).canonicalPath ?? null},
         );
         previews.bindRequest(controllerInput.runId, request.requestId,
@@ -299,7 +282,6 @@ export async function createHelarcProductComposition(
           response,
           controllerInput,
           controllerProtocol,
-          qualification,
           executionFlow,
           await validateHelarcFinalMaterials(response, controllerInput.runId, input.contextMaterials),
         ),
@@ -307,12 +289,13 @@ export async function createHelarcProductComposition(
       retryExecutor: createSystemRetryExecutor(retryClock),
       retryClock,
       continuation,
-    })),
+    });
+  const tracedController = new HelarcTracingController(
+    new HelarcProtocolRecoveryController(modelCoordinator),
     controllerTraceByOperationId,
   );
-  const providerController = new AgentHookController<HelarcAgentOutput>({
+  const providerController = new AgentHookExtensions<HelarcAgentOutput>({
     invocationRecords: input.hookInvocationRecords,
-    controller: tracedController,
     composition: taskFulfillment.composition,
     rootRunId: input.runId,
     maxConsecutiveContinuations: 2,
@@ -328,20 +311,15 @@ export async function createHelarcProductComposition(
     toolGuidanceProfileRevision: rootToolGuidanceBinding.guidanceProfileRevision,
     toolGuidanceContentDigest: rootToolGuidanceBinding.contentDigest,
     controllerControlGuidanceRevision: controllerProtocol.controlGuidance.revision,
-    modelQualificationTargetId: qualification.target.id,
-    modelUseDispositionId: qualification.disposition.id,
-    modelUseDispositionStatus: qualification.disposition.status,
-    modelQualificationPolicy: qualification.disposition.policy,
-    modelQualificationScopes: qualification.requiredScopes,
-    modelQualificationReasons: qualification.disposition.reasons,
   });
 
   return Object.freeze({
     agent,
     delegatedAgent,
-    controller: providerController,
+    taskDecisions: tracedController,
+    extensions: providerController,
+    preparations: modelCoordinator.preparations,
     controllerProtocol,
-    qualification,
     actions,
     interactions,
     delegation: descendant.delegation,
@@ -425,7 +403,6 @@ export async function createHelarcProductComposition(
         input.workspace,
         runResult,
         selectedEnforcement,
-        qualification.safeProjection,
       );
       const resultRef = flow.material("Helarc Product result", "projected", result);
       projectionStep.output(resultRef);

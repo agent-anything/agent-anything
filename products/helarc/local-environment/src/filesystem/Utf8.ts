@@ -2,6 +2,7 @@ import { TextDecoder } from "node:util";
 
 const utf8Decoder = new TextDecoder("utf-8", {
   fatal: true,
+  ignoreBOM: true,
 });
 
 export function decodeUtf8(bytes: Uint8Array): string | null {

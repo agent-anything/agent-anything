@@ -52,14 +52,14 @@ export {
   snapshotResolvedRunPermissionConfig,
 } from "./RunPermissionConfig.js";
 export type {
-  EffectivePermissionContext,
+  RunAuthorizationBasis,
   PermissionContextProjection,
   RunPermissionState,
 } from "./RunPermissionState.js";
 export {
   assertRunPermissionStateInvariant,
   createInitialRunPermissionState,
-  deriveEffectivePermissionContext,
+  collectRunAuthorizationBasis,
   projectPermissionContext,
 } from "./RunPermissionState.js";
 export type { CancelledRunResult, CreateRunResultInput, FailedRunResult, RunResult, CompletedRunResult } from "./RunResult.js";

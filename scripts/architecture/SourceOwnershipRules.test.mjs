@@ -5,7 +5,7 @@ import { evaluateSourceOwnershipRules } from "./SourceOwnershipRules.mjs";
 test("accepts current owner-directed source forms", () => {
   const fixtures = [
     {
-      sourcePath: "harness/agent-core/runtime/src/runner/RunConfig.ts",
+      sourcePath: "harness/agent-core/runtime/src/execution-coordinator/RunConfig.ts",
       text: 'import type { WorkspaceSelection } from "@agent-anything/workspace/selection";',
     },
     {
@@ -32,7 +32,7 @@ test("accepts current owner-directed source forms", () => {
       ].join("\n"),
     },
     {
-      sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
+      sourcePath: "harness/agent-core/runtime/src/execution-coordinator/RunExecution.ts",
       text: [
         'if (decision.decision.kind === "continue_with_feedback") { return; }',
         "managed.markInitialDelivered();",
@@ -189,50 +189,13 @@ test("protects the Helarc Tool Contract authority boundary", () => {
   );
 });
 
-test("protects Product Tool Guidance and model qualification semantic owners", () => {
-  const guidanceDependency = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/core/src/tools/guidance/InvalidGuidance.ts",
-    text: 'import type { Runner } from "@agent-anything/agent-runtime/runner";',
-  });
-  const guidanceAllowedDependency = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/core/src/tools/guidance/ValidGuidance.ts",
-    text: 'import type { ToolRevisionRef } from "@agent-anything/tools/identity";',
-  });
-  const guidanceOwner = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/core/src/controller/InvalidGuidance.ts",
-    text: "export interface HelarcToolGuidanceRelease {}",
-  });
-  const qualificationDependency = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/core/src/model-qualification/InvalidQualification.ts",
-    text: 'import type { ModelInputComposition } from "@agent-anything/model-interaction";',
-  });
-  const qualificationOwner = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/core/src/configuration/InvalidQualification.ts",
-    text: "export interface HelarcModelQualificationDecision {}",
-  });
-
-  assert.deepEqual(guidanceDependency.map(({ rule }) => rule), [
-    "helarc_tool_guidance_dependency_direction",
-  ]);
-  assert.deepEqual(guidanceAllowedDependency, []);
-  assert.deepEqual(guidanceOwner.map(({ rule }) => rule), [
-    "helarc_tool_guidance_owner",
-  ]);
-  assert.deepEqual(qualificationDependency.map(({ rule }) => rule), [
-    "helarc_model_qualification_dependency_direction",
-  ]);
-  assert.deepEqual(qualificationOwner.map(({ rule }) => rule), [
-    "helarc_model_qualification_owner",
-  ]);
-});
-
-test("requires complete Provider composition and Controller verification", () => {
+test("requires complete Provider composition and representation-owner verification", () => {
   const request = evaluateSourceOwnershipRules({
     sourcePath: "harness/model-interaction/src/ProviderRequest.ts",
     text: "export interface ProviderRequest { readonly messages: readonly unknown[]; }",
   });
   const controller = evaluateSourceOwnershipRules({
-    sourcePath: "harness/agent-core/runtime/src/controller/ProviderBackedController.ts",
+    sourcePath: "harness/agent-core/runtime/src/context-representation/ContextRepresentationManager.ts",
     text: "return provider.send(request);",
   });
 
@@ -244,6 +207,22 @@ test("requires complete Provider composition and Controller verification", () =>
     controller.map(({ rule }) => rule),
     ["model_input_composition_verification"],
   );
+});
+
+test("protects Product Tool Guidance ownership", () => {
+  const violations = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/configuration/IncorrectGuidance.ts",
+    text: "export interface HelarcToolGuidanceSource {}",
+  });
+  assert.deepEqual(violations.map(({ rule }) => rule), ["helarc_tool_guidance_owner"]);
+});
+
+test("keeps task response interpretation separate from execution and preparation", () => {
+  for (const text of ["new ModelRequestAccess()", "new ContextRepresentationManager()", "new RunStateWriter()", "provider.send(request)"]) {
+    assert.deepEqual(evaluateSourceOwnershipRules({
+      sourcePath: "harness/agent-core/runtime/src/decision/ModelResponseTaskDecisionMaker.ts", text,
+    }).map(value => value.rule), ["task_decision_responsibility"]);
+  }
 });
 
 test("rejects opaque Provider continuation in canonical Context, Run, and Product state", () => {
@@ -265,7 +244,7 @@ test("rejects opaque Provider continuation in canonical Context, Run, and Produc
 
 test("requires current Runner continuation and descendant progression semantics", () => {
   const violations = evaluateSourceOwnershipRules({
-    sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
+    sourcePath: "harness/agent-core/runtime/src/execution-coordinator/RunExecution.ts",
     text: 'return this.settle({ status: "succeeded" });',
   });
 
@@ -277,7 +256,7 @@ test("requires current Runner continuation and descendant progression semantics"
 
 test("rejects optional Agent Hook ownership in Agent Core Runtime", () => {
   const violations = evaluateSourceOwnershipRules({
-    sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
+    sourcePath: "harness/agent-core/runtime/src/execution-coordinator/RunExecution.ts",
     text: [
       'import type { AgentHookExecution } from "@agent-anything/agent-hooks/execution";',
       'if (decision.decision.kind === "continue_with_feedback") { return; }',

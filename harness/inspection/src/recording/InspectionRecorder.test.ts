@@ -11,7 +11,7 @@ import { retireInspectionDatasets } from "../../dist/storage/index.js";
 import { datasetDirectory } from "../sources/index.js";
 import { acquireInspectionReadLease } from "../storage/InspectionDatasetAccess.js";
 import { RunExecutionInspectionAdapter, RunTranscriptInspectionAdapter, ProviderInspectionAdapter } from "../../dist/adapters/index.js";
-import { retainInputPresentation, createModelConversationSeed, importModelConversationSeed } from "@agent-anything/agent-runtime/controller";
+import { retainInputPresentation, createModelConversationSeed, importModelConversationSeed } from "@agent-anything/agent-runtime/decision";
 import { modelInputFromSections, createExactModelWorkingView, createOwnerModelWorkingView, applyModelInputOwnerForms,
   modelInputOccurrenceDigest, type ModelInputOwnerForm, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
 import { createModelNativeInputFootprint, planModelInput, observeModelInputUsage } from "@agent-anything/model-interaction/context";

@@ -1,9 +1,9 @@
-import { RUN_LIFECYCLE_DESCRIPTION, type RunObserver, type RunSnapshotObservation, type RunTransitionObservation } from "@agent-anything/agent-runtime/runner";
+import { RUN_LIFECYCLE_DESCRIPTION, type RunObserver, type RunSnapshotObservation, type RunTransitionObservation } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { RunTranscriptObserver, RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { InspectionJson } from "../records/index.js";
 import type { InspectionRecorder } from "../recording/index.js";
 import { inspectionLink, inspectionModelSource } from "./ProviderInspectionAdapter.js";
-import type { RetainedInputPresentation } from "@agent-anything/agent-runtime/controller";
+import type { RetainedInputPresentation } from "@agent-anything/agent-runtime/decision";
 
 /** Reads published owner snapshots; never derives a replacement Run state. */
 export class RunInspectionAdapter implements RunObserver {
@@ -50,7 +50,9 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
       const action = ref("runtime", "action", payload.action.ref.id);
       const provenance = payload.action.provenance;
       r.offer({ subject: action, occurredAt: item.createdAt, payload: { kind: "event", name: "run_action.materialized", sequence: payload.action.ref.sequence, code: null },
-        links: [inspectionLink("trigger", subject, action), ...(provenance.kind === "controller" ? [inspectionLink("materializes", ref("runtime", "call", provenance.modelCallRef.id), action)] : [])],
+        links: [inspectionLink("trigger", subject, action), ...(provenance.kind === "controller" ? [inspectionLink("materializes",
+          provenance.modelCallRef === null ? ref("runtime", "contribution", `${provenance.turn.id}:candidate:${provenance.candidateIndex}`)
+            : ref("runtime", "call", provenance.modelCallRef.id), action)] : [])],
         contents: [{ name: "Run Action", class: "agent", stage: "materialized", mediaType: "application/json", value: payload.action as unknown as InspectionJson }],
       });
     } else if (payload.kind === "controller_feedback") {

@@ -12,7 +12,6 @@ test("Storage shows usage, protects open recordings and confirms selective clean
       categories: [
         { id: "conversations", name: "Conversations and transcripts", bytes: 27 * 1024 * 1024, files: 20 },
         { id: "command-output", name: "Command output", bytes: 410000, files: 40 },
-        { id: "qualification", name: "Model qualification", bytes: 140000, files: 1 },
         { id: "cache", name: "Application cache", bytes: 4200000, files: 8 },
         { id: "configuration", name: "Configuration and other app data", bytes: 24000, files: 10 },
       ],
@@ -29,7 +28,6 @@ test("Storage shows usage, protects open recordings and confirms selective clean
     (window as any).cleanupCalls = calls;
     (window as any).helarc = {
       getSnapshot: async () => structuredClone(application), subscribeSnapshot: () => () => {},
-      getQualification: async () => ({ available: false, error: null, campaigns: [], scopes: [] }),
       getStorage: async () => structuredClone(storage),
       cleanupStorage: async ({ recordingIds }: { recordingIds: string[] }) => {
         calls.push(recordingIds);

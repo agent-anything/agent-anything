@@ -1,4 +1,4 @@
-import type { Controller } from "@agent-anything/agent-runtime/controller";
+import type { TaskDecisionActivity } from "@agent-anything/agent-runtime/decision";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   snapshotRuntimeEventPayload,
@@ -7,7 +7,7 @@ import {
   type RuntimeEventPayloadMap,
 } from "@agent-anything/observability/events";
 import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
-import type { ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
+import type { AgentActivityExecutionContext, TaskDecisionProposal, TaskDecisionInputSources } from "@agent-anything/agent-runtime/decision";
 import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
 import { createAgentInstructions } from "@agent-anything/agent-core/agent";
 import { describe, expect, it } from "vitest";
@@ -41,10 +41,6 @@ describe("Helarc controller trace projection", () => {
           toolGuidanceId: "guidance-1",
           toolGuidanceContentDigest: "guidance-content-1",
           controllerControlGuidanceRevision: "control-guidance-1",
-          modelUseDispositionStatus: "experimental",
-          modelQualificationPolicy: "allow_experimental",
-          modelQualificationScopes: ["agent_loop", "workspace_observation"],
-          modelQualificationReasons: ["qualification_evidence_absent"],
           modelTurnId: "model-turn-1",
           modelFinishKind: "normal",
           modelResponseId: "model-response-1",
@@ -92,10 +88,6 @@ describe("Helarc controller trace projection", () => {
       toolGuidanceId: "guidance-1",
       toolGuidanceContentDigest: "guidance-content-1",
       controllerControlGuidanceRevision: "control-guidance-1",
-      modelUseDispositionStatus: "experimental",
-      modelQualificationPolicy: "allow_experimental",
-      modelQualificationScopes: ["agent_loop", "workspace_observation"],
-      modelQualificationReasons: ["qualification_evidence_absent"],
       modelTurnId: "model-turn-1",
       modelFinishKind: "normal",
       modelResponseId: "model-response-1",
@@ -139,10 +131,6 @@ describe("Helarc controller trace projection", () => {
       toolGuidanceId: null,
       toolGuidanceContentDigest: null,
       controllerControlGuidanceRevision: null,
-      modelUseDispositionStatus: null,
-      modelQualificationPolicy: null,
-      modelQualificationScopes: Object.freeze([]),
-      modelQualificationReasons: Object.freeze([]),
       modelTurnId: null,
       modelFinishKind: null,
       modelResponseId: null,
@@ -218,15 +206,15 @@ describe("Helarc controller trace projection", () => {
   });
 });
 
-class FakeController implements Controller {
-  constructor(private readonly decision: ControllerDecision) {}
+class FakeController implements TaskDecisionActivity {
+  constructor(private readonly decision: TaskDecisionProposal) {}
 
-  async next(): Promise<ControllerDecision> {
+  async next(): Promise<TaskDecisionProposal> {
     return this.decision;
   }
 }
 
-function controllerCallContext(): ControllerCallContext {
+function controllerCallContext(): AgentActivityExecutionContext {
   const policy = disabledRetryPolicy();
   return {
     cancellation: createRunCancellationController({ runId: "run-1" }).context,
@@ -254,7 +242,7 @@ function disabledRetryPolicy() {
   };
 }
 
-function createControllerInput(): ControllerInput {
+function createControllerInput(): TaskDecisionInputSources {
   return {
     runId: "run-1",
     iteration: 1,

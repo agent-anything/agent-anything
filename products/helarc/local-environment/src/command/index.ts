@@ -8,6 +8,9 @@ export type {
   HelarcLocalCommandActionCapability,
 } from "./LocalCommandActionCapability.js";
 export { RunProcessManager, ProcessManagerError } from "./RunProcessManager.js";
+export {processOutputViewSegments, describeProcessOutput} from "./ProcessOutputMaterials.js";
+export type {ProcessOutputMaterialView} from "./ProcessOutputMaterials.js";
+export type {CommandObservation, CommandObservationRequest, CommandObservationCondition} from "./CommandObservation.js";
 export type {
   ProcessSnapshot, ProcessObservation, ProcessExecutionFact, ProcessExecutionObserver,
   ProcessCleanupSummary,

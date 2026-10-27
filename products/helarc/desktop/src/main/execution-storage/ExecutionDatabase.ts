@@ -6,6 +6,7 @@ import {unpackExecutionContent, ExecutionContentCache, ExecutionContentEncoder, 
 import { FileMaterialDatabase, FILE_MATERIAL_SCHEMA } from "./FileMaterialDatabase.js";
 import {ContextMaterialDatabase, CONTEXT_MATERIAL_SCHEMA, type ContextMaterialCommand, type ContextMaterialValue} from "./ContextMaterialDatabase.js";
 import {projectContextMaterials} from "./ContextMaterialProjection.js";
+import {projectProcessOutputMaterial} from "./ProcessOutputMaterialProjection.js";
 import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 import {snapshotExecutionReferenceTransfer, type ExecutionReferenceTransfer, type ExecutionReferencePage} from "@agent-anything/operation-catalog/evidence";
 import type { HelarcExecutionAdmission, HelarcExecutionDiscovery } from "./HelarcExecutionAdmission.js";
@@ -21,7 +22,7 @@ import { validateAgentHookCheckpoint, type AgentHookInvocationCheckpoint } from 
 import { validateProcessCheckpoint, validateShellSessionCommit, type ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
 import {validateProtectedEnvironment, type StoredProcessCheckpoint as ProcessCheckpoint} from "./ExecutionEnvironmentProtection.js";
 import { CanonicalActionLedger } from "@agent-anything/action-execution/coordination";
-import { validateRunTreeCommit, type RunTreeCommit, type RunTreeCommitReceipt, type RunTreeRecoveryRecords, type RetainedRunTreeMember } from "@agent-anything/agent-runtime/runner";
+import { validateRunTreeCommit, type RunTreeCommit, type RunTreeCommitReceipt, type RunTreeRecoveryRecords, type RetainedRunTreeMember } from "@agent-anything/agent-runtime/execution-coordinator";
 import {
   EXECUTION_STORE_LIMITS, ExecutionStoreError,
   type ActionOwnerRecord, type ExecutionRecordReceipt,
@@ -29,7 +30,7 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 20;
+const FORMAT = 21;
 const SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -518,6 +519,10 @@ export class ExecutionDatabase {
         return;
       }
       validateProcessCheckpoint(checkpoint, previous);
+      for (const view of checkpoint.materialViews.slice(previous?.materialViews.length ?? 0)) {
+        const material=projectProcessOutputMaterial(checkpoint,view);
+        this.contextMaterials.publishChunks(material.description,material.texts,checkpoint.input.runId);
+      }
       this.data.prepare("INSERT INTO process_records VALUES (?,?,?,?,?,?)").run(checkpoint.input.executionId,
         checkpoint.input.runId, checkpoint.revision, generation, encoded.digest, encoded.text);
     })();
@@ -1105,7 +1110,7 @@ export class ExecutionDatabase {
 
   private validateSchema(): void {
     const objects = this.data.prepare("SELECT name,type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all() as { name: string; type: string }[];
-    if (objects.length !== 30 || !["execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
+    if (objects.length !== 31 || !["execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
         !objects.some(row => row.name === "execution_content" && row.type === "table") ||
         !objects.some(row => row.name === "run_tree_commits" && row.type === "table") ||
         !objects.some(row => row.name === "file_materials" && row.type === "table") ||

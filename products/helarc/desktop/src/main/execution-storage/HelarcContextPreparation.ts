@@ -1,15 +1,15 @@
-import type {ControllerContextPreparation} from "@agent-anything/agent-runtime/controller";
+import type { ContextRepresentationPreparationSupport } from "@agent-anything/agent-runtime/context-representation";
 import type {ModelInputSourceRef} from "@agent-anything/model-interaction/input";
 import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 import type {HelarcExecutionStore} from "./HelarcExecutionStore.js";
 
-export const HELARC_CONTEXT_PREPARATION_BINDING = Object.freeze({revision: "source-grounded-preparation.v2",
-  semantic: {revision: "source-grounded-account.v1", work: {maximumSourceBytes: 64 * 1024, maximumNodes: 9},
+export const HELARC_CONTEXT_PREPARATION_BINDING = Object.freeze({revision: "source-grounded-preparation.v3",
+  semantic: {revision: "source-grounded-account.v2", work: {maximumSourceBytes: 64 * 1024, maximumNodes: 9},
     prefix: {enabled: true as const, revision: "compatible-prefix.v1"},
     background: {enabled: true as const, revision: "run-owned-generation.v1"}}});
 
 /** Context preparation cannot manufacture access to undisclosed source material. */
-export function createHelarcContextPreparation(store: HelarcExecutionStore): ControllerContextPreparation {
+export function createHelarcContextPreparation(store: HelarcExecutionStore): ContextRepresentationPreparationSupport {
   const references = (values: readonly ModelInputSourceRef[]) => {
     if (values.some(value => value.owner !== "context" || value.kind !== "material" || !value.revision)) {
       throw new TypeError("Context preparation material owner is unsupported.");

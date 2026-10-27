@@ -14,6 +14,7 @@ import {
 import {
   SerializedAtomicFile,
   type AtomicFileTransaction,
+  type AtomicFileWriteReport,
   type SerializedAtomicFileOptions,
 } from "../persistence/SerializedAtomicFile.js";
 import {
@@ -31,9 +32,14 @@ export interface FileHelarcThreadStoreOptions extends SerializedAtomicFileOption
 }
 
 export interface HelarcThreadStore extends HelarcWorkContextCommitStore {
+  commitRunStart(input: HelarcRunStartCommit): Promise<HelarcThreadCommitResult>;
+  commitRunProjection(input: HelarcRunProjectionCommit): Promise<HelarcThreadCommitResult>;
+  commitRunTerminal(input: HelarcRunTerminalCommit): Promise<HelarcThreadCommitResult>;
   listThreadSummaries(): Promise<HelarcThreadSummary[]>;
   loadThread(threadId: string): Promise<HelarcThreadRecord | null>;
 }
+
+export type HelarcThreadCommitResult = HelarcCommitResult & { readonly persistence?: AtomicFileWriteReport };
 
 export class HelarcThreadStoreCorruptionError extends Error {
   readonly code = "thread_store_corrupt";
@@ -80,19 +86,19 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
     });
   }
 
-  commitRunStart(input: HelarcRunStartCommit): Promise<HelarcCommitResult> {
+  commitRunStart(input: HelarcRunStartCommit): Promise<HelarcThreadCommitResult> {
     return this.commit(input.threadId, (aggregate) =>
       applyHelarcRunStartCommit(aggregate, input)
     );
   }
 
-  commitRunProjection(input: HelarcRunProjectionCommit): Promise<HelarcCommitResult> {
+  commitRunProjection(input: HelarcRunProjectionCommit): Promise<HelarcThreadCommitResult> {
     return this.commit(input.threadId, (aggregate) =>
       applyHelarcRunProjectionCommit(aggregate, input)
     );
   }
 
-  commitRunTerminal(input: HelarcRunTerminalCommit): Promise<HelarcCommitResult> {
+  commitRunTerminal(input: HelarcRunTerminalCommit): Promise<HelarcThreadCommitResult> {
     return this.commit(input.threadId, (aggregate) =>
       applyHelarcRunTerminalCommit(aggregate, input)
     );
@@ -103,7 +109,8 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
     transition: (
       aggregate: HelarcThreadAggregate | null,
     ) => Promise<HelarcCommitResult>,
-  ): Promise<HelarcCommitResult> {
+  ): Promise<HelarcThreadCommitResult> {
+    let persistence: AtomicFileWriteReport | undefined;
     return this.atomicFile.transact(async (file) => {
       const document = await this.readDocument(file);
       const aggregate = document.aggregates.find(
@@ -124,8 +131,8 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
         this.maxThreads,
       );
       await this.writeDocument(file, { formatVersion: 5, aggregates: retained });
-      return result;
-    });
+      return { ...result, persistence };
+    }, report => { persistence = report; });
   }
 
   private async readDocument(

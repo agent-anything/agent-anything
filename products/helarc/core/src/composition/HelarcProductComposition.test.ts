@@ -52,11 +52,6 @@ import {
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "../tools/HelarcCommandOperation.js";
-import { createHelarcQualificationProfile } from "../qualification-execution/HelarcQualificationProfile.js";
-import {
-  createHelarcModelQualificationCatalog,
-  createHelarcModelQualificationDecision,
-} from "../model-qualification/index.js";
 import type { HelarcAgentOutput } from "../controller/index.js";
 
 async function createHelarcProductComposition(
@@ -70,7 +65,6 @@ async function createHelarcProductComposition(
 
 function createTestProviderProfile(
   provider: Provider,
-  qualificationPolicy: "require_qualified" | "allow_experimental" = "allow_experimental",
 ): CreateHelarcProductCompositionInput["providerProfile"] {
   const result = createHelarcProviderProfile({
     id: "test-provider",
@@ -79,7 +73,6 @@ function createTestProviderProfile(
     model: provider.modelContext.target.model,
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
-    qualificationPolicy,
     isActive: true,
   });
   if (!result.ok) throw new TypeError("Test Provider profile is invalid.");
@@ -87,35 +80,11 @@ function createTestProviderProfile(
 }
 
 describe("HelarcProductComposition", () => {
-  it("resolves the same qualification target from a definition-only Settings profile and a real Run", async () => {
-    const provider = new UnusedProvider();
-    const contributions = createLocalContributions();
-    const providerProfile = createTestProviderProfile(provider);
-    const { createDefaultHelarcInstructionSettings } = await import("../instructions/index.js");
-    const instructionSettings = createDefaultHelarcInstructionSettings();
-    const profile = createHelarcQualificationProfile({ provider, providerProfile, instructionSettings,
-      fileActionAdapterIds: contributions.fileActions.actionAdapterIds,
-      shellRuntime: contributions.commandActions.shellRuntime,
-      inputContract: contributions.commandActions.inputContract,
-      shellActionAdapterId: contributions.commandActions.shellActionAdapterId,
-      taskStopActionAdapterId: contributions.commandActions.taskStopActionAdapterId,
-      planLimits: { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2000 },
-    });
-    const composition = await createHelarcProductComposition({
-      runId: "qualification-profile-parity", ...createTask("D:/workspace"), provider, providerProfile,
-      instructionSettings, ...contributions, now: fixedNow,
-    });
-    expect(profile.qualification.target).toEqual(composition.qualification.target);
-    expect(profile.protocol.toolGuidance.id).not.toBe(composition.controllerProtocol.toolGuidance.id);
-    expect(profile.protocol.protocolInstructions).toEqual(composition.controllerProtocol.protocolInstructions);
-    const changed = createHelarcQualificationProfile({ provider, providerProfile,
-      instructionSettings: { ...instructionSettings, protocol: instructionSettings.protocol.map((s, i) => i === 0 ? { ...s, enabled: true, content: "Changed protocol." } : s) },
-      fileActionAdapterIds: contributions.fileActions.actionAdapterIds, shellRuntime: contributions.commandActions.shellRuntime,
-      inputContract: contributions.commandActions.inputContract,
-      shellActionAdapterId: contributions.commandActions.shellActionAdapterId, taskStopActionAdapterId: contributions.commandActions.taskStopActionAdapterId,
-      planLimits: { maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2000 },
-    });
-    expect(changed.qualification.target.id).not.toBe(profile.qualification.target.id);
+  it("uses compatible models without evaluation results or a qualification policy", async () => {
+    const composition = await createHelarcProductComposition({ runId: "unassessed-model", ...createTask("D:/workspace"),
+      provider: new UnusedProvider(), ...createLocalContributions(), now: fixedNow });
+    expect(composition).not.toHaveProperty("qualification");
+    expect(JSON.stringify(composition.runMetadata)).not.toMatch(/qualification|experimental/i);
   });
   it("registers only the instruction-driven Stop handler for root and descendant Runs", async () => {
     const composition = await createHelarcProductComposition({
@@ -134,108 +103,18 @@ describe("HelarcProductComposition", () => {
     });
   });
 
-  it("fails closed before Run composition when exact qualification is absent", async () => {
-    const provider = new UnusedProvider();
-
-    await expect(createProductComposition({
-      runId: "strict-run",
-      ...createTask("D:/workspace"),
-      provider,
-      providerProfile: createTestProviderProfile(provider, "require_qualified"),
-      ...createLocalContributions(),
-      now: fixedNow,
-    })).rejects.toMatchObject({
-      code: "model_qualification_required",
-      qualification: {
-        status: "blocked",
-        policy: "require_qualified",
-      },
-    });
-  });
-
-  it("admits explicit experimental use without granting execution authority", async () => {
-    const composition = await createHelarcProductComposition({
-      runId: "experimental-run",
-      ...createTask("D:/workspace"),
-      provider: new UnusedProvider(),
-      ...createLocalContributions(),
-      now: fixedNow,
-    });
-
-    expect(composition.qualification.safeProjection).toMatchObject({
-      status: "experimental",
-      policy: "allow_experimental",
-      experimentalUseSelected: true,
-    });
-    expect(composition.qualification.requiredScopes).toEqual([
-      "agent_loop",
-      "workspace_observation",
-      "workspace_mutation",
-      "process_execution",
-      "user_interaction",
-      "delegation",
-    ]);
-    expect(composition.qualification.disposition).not.toHaveProperty("permission");
-    expect(composition.qualification.disposition).not.toHaveProperty("execute");
-    expect(composition.actions.toolSelection).toBeDefined();
-  });
-
-  it("blocks a Provider without native Tool interaction before policy admission", async () => {
+  it("blocks a Provider without native Tool interaction before execution", async () => {
     const provider = new UnusedProvider(false);
 
     await expect(createProductComposition({
       runId: "unsupported-run",
       ...createTask("D:/workspace"),
       provider,
-      providerProfile: createTestProviderProfile(provider, "allow_experimental"),
+      providerProfile: createTestProviderProfile(provider),
       ...createLocalContributions(),
       now: fixedNow,
     })).rejects.toMatchObject({
       code: "model_native_tool_interaction_unsupported",
-      qualification: {
-        status: "blocked",
-        policy: "allow_experimental",
-      },
-    });
-  });
-
-  it("admits exact qualified evidence and blocks a current not-qualified scope", async () => {
-    const provider = new UnusedProvider();
-    const seed = await createHelarcProductComposition({
-      runId: "qualification-seed",
-      ...createTask("D:/workspace"),
-      provider,
-      ...createLocalContributions(),
-      now: fixedNow,
-    });
-    const qualifiedCatalog = qualificationCatalog(seed, () => "qualified");
-    const qualified = await createProductComposition({
-      runId: "qualified-run",
-      ...createTask("D:/workspace"),
-      provider,
-      providerProfile: createTestProviderProfile(provider, "require_qualified"),
-      qualificationCatalog: qualifiedCatalog,
-      ...createLocalContributions(),
-      now: fixedNow,
-    });
-
-    expect(qualified.qualification.target.id).toBe(seed.qualification.target.id);
-    expect(qualified.qualification.safeProjection.status).toBe("qualified");
-
-    const notQualifiedCatalog = qualificationCatalog(seed, (scope) =>
-      scope === "workspace_mutation" ? "not_qualified" : "qualified"
-    );
-    await expect(createProductComposition({
-      runId: "not-qualified-run",
-      ...createTask("D:/workspace"),
-      provider,
-      providerProfile: createTestProviderProfile(provider, "allow_experimental"),
-      qualificationCatalog: notQualifiedCatalog,
-      ...createLocalContributions(),
-      now: fixedNow,
-    })).rejects.toMatchObject({
-      code: "model_qualification_not_qualified",
-      qualification: { status: "blocked" },
     });
   });
 
@@ -286,7 +165,7 @@ describe("HelarcProductComposition", () => {
       },
     ), "controller-request-1");
     expect(exposure.catalog.tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
-      "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
+      "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "CommandStop",
       "AskUserQuestion", "Agent", "SendMessage",
     ]));
     expect(exposure.catalog.tools.find(({ name }) => name === "AskUserQuestion")?.binding.kind)
@@ -318,8 +197,8 @@ describe("HelarcProductComposition", () => {
     expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(15);
     expect(composition.controllerProtocol.toolGuidance.entries.map(({ name }) => name))
       .toEqual(expect.arrayContaining([
-        "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
-        "AskUserQuestion", "Agent", "SendMessage", "ContextRead", "ContextSearch",
+        "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "CommandStop",
+        "AskUserQuestion", "Agent", "SendMessage", "ContextMaterialRead", "ContextMaterialSearch",
       ]));
     const powerShellGuidance = composition.controllerProtocol.toolGuidance.entries.find(
       ({ name }) => name === "PowerShell",
@@ -786,31 +665,4 @@ function failedRunResult(
 
 function fixedNow(): string {
   return "2026-08-28T00:00:00.000Z";
-}
-
-function qualificationCatalog(
-  composition: Awaited<ReturnType<typeof createHelarcProductComposition>>,
-  outcomeFor: (
-    scope: typeof composition.qualification.requiredScopes[number],
-  ) => "qualified" | "not_qualified" | "inconclusive",
-) {
-  return createHelarcModelQualificationCatalog({
-    decisions: composition.qualification.requiredScopes.map((scope) =>
-      createHelarcModelQualificationDecision({
-        id: `decision-${scope}`,
-        target: composition.qualification.target,
-        scope,
-        outcome: outcomeFor(scope),
-        evidenceRefs: [{
-          owner: "helarc.manual-qualification",
-          kind: "bounded-exercise",
-          id: `evidence-${scope}`,
-          revision: "1",
-        }],
-        limitations: ["Exact target and scope only."],
-        decidedAt: fixedNow(),
-        decidedBy: "helarc-reviewer",
-      })
-    ),
-  });
 }

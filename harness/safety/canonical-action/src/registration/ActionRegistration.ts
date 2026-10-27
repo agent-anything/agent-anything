@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   OperationBindingRevisionRef,
-  OperationRevisionRef,
+  OperationDefinitionRevisionRef,
 } from "@agent-anything/operation-catalog/identity";
 
 export interface ActionAdapterDescriptor {
@@ -27,7 +27,7 @@ export type CanonicalEffectFamily =
 export interface ActionRegistration {
   readonly registrationId: string;
   readonly revision: string;
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
   readonly binding: OperationBindingRevisionRef;
   readonly adapter: ActionAdapterDescriptor;
   readonly executor: ActionExecutorDescriptor;
@@ -218,9 +218,9 @@ function executionLifetime(value: unknown, path: string): "invocation" | "run" {
 }
 
 function snapshotOperation(
-  input: OperationRevisionRef,
+  input: OperationDefinitionRevisionRef,
   path: string,
-): OperationRevisionRef {
+): OperationDefinitionRevisionRef {
   assertPlainRecord(input, path, ["operation", "revision"]);
   assertPlainRecord(input.operation, `${path}.operation`, ["namespace", "name"]);
   return Object.freeze({
@@ -437,7 +437,7 @@ function positiveInteger(input: unknown, path: string): number {
   return input as number;
 }
 
-function operationKey(input: OperationRevisionRef): string {
+function operationKey(input: OperationDefinitionRevisionRef): string {
   return `${input.operation.namespace}/${input.operation.name}@${input.revision}`;
 }
 

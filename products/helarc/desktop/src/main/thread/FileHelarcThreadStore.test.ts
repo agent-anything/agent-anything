@@ -178,7 +178,7 @@ describe("FileHelarcThreadStore", () => {
 
     await expect(failingStore.commitRunProjection(
       projectionCommit(1, "commit-projection-failed"),
-    )).rejects.toThrow("injected rename failure");
+    )).rejects.toMatchObject({stage: "replace", cause: {message: "injected rename failure"}});
 
     expect(await readFile(filePath, "utf8")).toBe(before);
     expect(await readdir(dirname(filePath))).toEqual(["threads.json"]);
@@ -368,7 +368,6 @@ function projectionCommit(
         responses: { revision: 0, omittedAttempts: 0, retainedBytes: 0, attempts: [] },
         sequence,
         phase: { kind: "none" },
-        qualification: qualificationProjection(),
         activity: [],
         commands:[],
         continuation: null,
@@ -414,7 +413,6 @@ function terminalCommit(): HelarcRunTerminalCommit {
       },
       product: {
         status: "completed",
-        qualification: qualificationProjection(),
         runResult: {
           runId: "run-1",
           status: "completed",
@@ -486,30 +484,6 @@ function terminalCommit(): HelarcRunTerminalCommit {
       limitations: [],
       createdAt: COMPLETED_AT,
     }],
-  };
-}
-
-function qualificationProjection() {
-  return {
-    providerKind: "openai-compatible",
-    modelId: "test-model",
-    modelIdentityStrength: "unknown" as const,
-    status: "experimental" as const,
-    policy: "allow_experimental" as const,
-    experimentalUseSelected: true,
-    scopes: [{
-      scope: "agent_loop" as const,
-      applicability: "absent" as const,
-      outcome: null,
-      decidedAt: null,
-      limitations: [],
-    }],
-    reasons: ["scope_absent:agent_loop"],
-    toolGuidance: {
-      releaseId: "test-guidance",
-      releaseRevision: `sha256:${"0".repeat(64)}`,
-      profileRevision: "test-profile.v1",
-    },
   };
 }
 

@@ -1,5 +1,5 @@
 import type { CompositeResult } from "./CompositeResult.js";
-import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import type { OperationDefinitionRevisionRef } from "@agent-anything/operation-catalog/identity";
 import { readOperationLimitFailureDetail, type OperationLimitFailureDetail } from "@agent-anything/operation-catalog/result";
 
 const MAX_CHILDREN = 32;
@@ -15,7 +15,7 @@ export interface CompositeResultSummary {
     nodeId: string;
     instance: number;
     status: string;
-    operation: OperationRevisionRef | null;
+    operation: OperationDefinitionRevisionRef | null;
     resultId: string | null;
     failure: Readonly<{owner: string; code: string; message: string; messageTruncated: boolean; detail?: OperationLimitFailureDetail}> | null;
     effectCertainty: string | null;

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import {describeProcessOutput, type ProcessOutputMaterialView} from "./ProcessOutputMaterials.js";
+import {commandObservationBasis, type CommandObservation, type CommandObservationRequest} from "./CommandObservation.js";
 import { publishCommandConstraint, type CommandConstraintObserver, type CommandConstraintFact } from "./CommandConstraintObservation.js";
 import type { CommandInputContract } from "./CommandInputContract.js";
 import { ProcessRecordError, type ProcessCheckpoint, type ProcessRecordPort } from "./ProcessCheckpoint.js";
-import {searchProcessOutput, type ProcessOutputSearchInput} from "./ProcessOutputSearch.js";
-import type {ProcessOutputSearchReceipt} from "./ProcessCheckpoint.js";
 import { performance } from "node:perf_hooks";
 import type { CanonicalProcessIdentity } from "@agent-anything/canonical-action/subject";
 import { ProcessLaunchFailure, type ProcessBackend, type ProcessBackendEvent, type ProcessBackendHandle } from "./ProcessBackend.js";
@@ -38,7 +38,8 @@ interface Execution {
   persistence: Promise<void>;
   persistenceFailure: ProcessRecordError | null;
   observations: ProcessObservation[];
-  searches: ProcessOutputSearchReceipt[];
+  commandObservations: CommandObservation[];
+  materialViews: ProcessOutputMaterialView[];
   readonly input: ManagedProcessStart;
   snapshot: ProcessSnapshot;
   output: ProcessOutputStore | null;
@@ -61,6 +62,7 @@ interface Execution {
   initialDelivery: string | null;
   initialSnapshot: ProcessObservation | null;
   deliveryCursor: string | undefined;
+  announcedOutputCursor: string | undefined;
   deliveryState: string | null;
   lastOutputNotification: number;
 }
@@ -82,6 +84,7 @@ export interface RunProcessManagerOptions {
 export class RunProcessManager {
   readonly scopeId: string;
   private readonly executions = new Map<string, Execution>();
+  private readonly observationWork = new Map<string, {request: string; work: Promise<CommandObservation>}>();
   private readonly expired = new Map<string, string>();
   private readonly closedRuns = new Set<string>();
   private sequence = 0;
@@ -110,11 +113,11 @@ export class RunProcessManager {
     const settled = new Promise<void>((done) => { resolve = done; });
     const launchAbort = new AbortController();
     const entry: Execution = {
-      checkpointRevision: -1, launchIntent: false, recovered: false, persistence: Promise.resolve(), persistenceFailure: null, observations: [], searches: [],
+      checkpointRevision: -1, launchIntent: false, recovered: false, persistence: Promise.resolve(), persistenceFailure: null, observations: [], commandObservations: [], materialViews: [],
       input, output: null, handle: null, launchFinished: false, timer: null, runDeadlineTimer: null, terminationTimer: null, listeners: new Set(), launchAbort,
       abort: () => { void this.requestTermination(entry, "run_cancelled"); }, settled, resolve,
       closePromise: null, outputClosePromise: null, cwdPromise: null, stopPromise: null, observationSequence: 0, initialObservation: false,
-      initialDelivery: null, initialSnapshot: null, deliveryCursor: undefined, deliveryState: null, lastOutputNotification: 0,
+      initialDelivery: null, initialSnapshot: null, deliveryCursor: undefined, announcedOutputCursor: undefined, deliveryState: null, lastOutputNotification: 0,
       snapshot: immutable({ ref: { runId: input.runId, executionId: input.executionId }, revision: 0, phase: "starting",
         backend: this.options.backend.descriptor, process: null, helperProcessId: null, actionId: input.actionId, origin: input.origin ?? null,
         startedAt: null, finishedAt: null, deadlineAt: null, initialCwd: input.cwd, finalCwd: null, sessionCwd: null,
@@ -229,10 +232,14 @@ export class RunProcessManager {
       }
       entry.initialDelivery = key;
       entry.deliveryCursor = input.cursor ?? undefined;
+      entry.announcedOutputCursor = baseline?.availableOutputCursor;
       entry.deliveryState = baseline === null ? null : deliveryState(baseline.snapshot);
-      this.publish(entry, "initial_delivery_committed", {delivery: input});
-      // Reconcile after commitment: callbacks before this point were intentionally held.
-      this.notifyInput(entry, "process_state_changed");
+      const outputDelivery = {availableCursor: entry.announcedOutputCursor ?? null, presentedCursor: entry.deliveryCursor ?? null};
+      // The receipt and facts accumulated since its observation share one durable checkpoint.
+      const notification = this.notifyInput(entry, "process_state_changed", false);
+      this.publish(entry, "initial_delivery_committed", {delivery: input, outputDelivery});
+      if (notification) this.publish(entry, "input_notified", {notification,
+        outputDelivery: {availableCursor: entry.announcedOutputCursor ?? null, presentedCursor: entry.deliveryCursor ?? null}});
       await this.flush(entry);
     }
   }
@@ -259,26 +266,6 @@ export class RunProcessManager {
     return entry !== undefined && !entry.recovered && entry.input.runId === identity.runId &&
       entry.snapshot.process?.startFingerprint === identity.startFingerprint && entry.snapshot.process.processId === identity.processId &&
       entry.snapshot.containment.disposition !== "empty";
-  }
-
-  async searchOutput(input: {runId: string; executionId: string; invocationId: string; search: ProcessOutputSearchInput; signal: AbortSignal}) {
-    const entry = this.find(input.runId, input.executionId);
-    const retained = entry.searches.find(item => item.invocationId === input.invocationId);
-    if (retained) {
-      if (JSON.stringify(retained.input) !== JSON.stringify(input.search)) throw new ProcessManagerError("process_search_invocation_conflict");
-      await this.flush(entry);
-      this.publish(entry, "output_searched", {invocationId: input.invocationId, search: retained.output, searchReused: true});
-      return retained.output;
-    }
-    input.signal.throwIfAborted();
-    if (!entry.output) throw new ProcessManagerError("process_output_unavailable");
-    const output = searchProcessOutput(entry.output.checkpoint(), input.search);
-    entry.searches.push(immutable({invocationId: input.invocationId, input: input.search, output}));
-    // Freeze both captured source and exact result before returning a page or cursor.
-    this.retain(entry);
-    await this.flush(entry);
-    this.publish(entry, "output_searched", {invocationId: input.invocationId, search: output, searchReused: false});
-    return output;
   }
 
   async observe(input: { runId: string; executionId: string; invocationId: string; cursor?: string; waitMs: number; requestedWaitMs?:number; signal: AbortSignal; initial?: boolean }): Promise<ProcessObservation> {
@@ -318,17 +305,75 @@ export class RunProcessManager {
     this.refreshOutput(entry);
     const observation: ProcessObservation = immutable({
       id: observationId, invocationId: input.invocationId,
-      execution: entry.snapshot.ref, snapshot: entry.snapshot, requestedWaitMs: input.requestedWaitMs ?? input.waitMs, effectiveWaitMs: input.waitMs,
+      execution: entry.snapshot.ref, snapshot: entry.snapshot, materials: this.outputMaterials(entry), requestedWaitMs: input.requestedWaitMs ?? input.waitMs, effectiveWaitMs: input.waitMs,
       elapsedWaitMs: Math.max(0, performance.now() - started),
       returnReason: entry.snapshot.phase === "settled" ? "process_settled" : input.initial && entry.snapshot.rootExit !== null ? "command_completed" : input.waitMs === 0 ? "immediate_snapshot" :
         input.initial ? "initial_wait_limit" : output.stdout.text.length + output.stderr.text.length > 0 ? "output_available" :
-        changed ? "lifecycle_changed" : "observation_wait_limit", ...output,
+        changed ? "lifecycle_changed" : "observation_wait_limit", ...output, availableOutputCursor: entry.output.captureCursor(),
     });
     if (input.initial) entry.initialSnapshot = observation;
     entry.observations.push(observation);
     this.publish(entry, "observation_returned", { ...details, observation });
     await this.flush(entry);
     return observation;
+  }
+
+  async observeCommand(input: {runId: string; executionId: string; invocationId: string; request: CommandObservationRequest;
+    signal: AbortSignal; deadlineAt: string}): Promise<CommandObservation> {
+    const entry = this.find(input.runId, input.executionId), request = JSON.stringify(input.request);
+    const saved = entry.commandObservations.find(value=>value.invocationId === input.invocationId);
+    if (saved) {
+      if (JSON.stringify(saved.request) !== request) throw new ProcessManagerError("process_observation_invocation_conflict");
+      await this.flush(entry); return saved;
+    }
+    const key = JSON.stringify([input.runId,input.executionId,input.invocationId]);
+    const active = this.observationWork.get(key);
+    if (active) {
+      if (active.request !== request) throw new ProcessManagerError("process_observation_invocation_conflict");
+      return active.work;
+    }
+    const work = this.executeCommandObservation(entry,input);
+    this.observationWork.set(key,{request,work});
+    try {return await work;} finally {this.observationWork.delete(key);}
+  }
+
+  private outputMaterials(entry: Execution): readonly ProcessOutputMaterialView[] {
+    if (!entry.output) return [];
+    const views = describeProcessOutput(entry.output.checkpoint(),entry.snapshot);
+    return views.map(view=> {
+      const retained = entry.materialViews.find(value=>value.reference.id === view.reference.id);
+      if (retained) return retained;
+      const saved = immutable(view); entry.materialViews.push(saved); return saved;
+    });
+  }
+
+  private async executeCommandObservation(entry: Execution, input: Parameters<RunProcessManager["observeCommand"]>[0]): Promise<CommandObservation> {
+    const {request} = input;
+    if (!["snapshot","change","outcome","settled"].includes(request.until) || !Number.isSafeInteger(request.waitMs) || request.waitMs < 0 || request.waitMs > 30_000 ||
+        !Number.isFinite(Date.parse(input.deadlineAt)) || (request.until !== "change" && request.after !== undefined)) throw new ProcessManagerError("process_observation_input_invalid");
+    const before = request.until === "change" ? entry.commandObservations.find(value=>value.id === request.after) : undefined;
+    if (request.until === "change" && !before) throw new ProcessManagerError("process_observation_basis_invalid");
+    const basis = before ? commandObservationBasis(before.snapshot,before.materials) : null;
+    const ready = () => request.until === "snapshot" || request.until === "outcome" && entry.snapshot.outcome !== null ||
+      request.until === "settled" && entry.snapshot.phase === "settled" || request.until === "change" &&
+      commandObservationBasis(entry.snapshot,entry.output ? describeProcessOutput(entry.output.checkpoint(),entry.snapshot) : []) !== basis;
+    const terminal = () => entry.snapshot.phase === "unresolved" || entry.snapshot.phase === "settled";
+    const effectiveWaitMs = request.until === "snapshot" ? 0 : Math.min(request.waitMs,Math.max(0,Date.parse(input.deadlineAt)-Date.parse(this.now())));
+    const observationId = `${input.executionId}:observation:${++entry.observationSequence}`;
+    const details = {observationId,invocationId:input.invocationId,waitMs:effectiveWaitMs,requestedWaitMs:request.waitMs,commandCondition:request};
+    this.publish(entry,"observation_started",details);
+    const start = performance.now();
+    try {await this.wait(entry,input.signal,effectiveWaitMs,()=>ready() || terminal());}
+    catch (error) {this.publish(entry,"observation_cancelled",details);throw error;}
+    input.signal.throwIfAborted();
+    const result: CommandObservation = immutable({id:observationId,invocationId:input.invocationId,request:structuredClone(request),
+      snapshot:entry.snapshot,materials:this.outputMaterials(entry),effectiveWaitMs,elapsedWaitMs:Math.max(0,performance.now()-start),
+      returnReason:request.until === "snapshot" ? "immediate_snapshot" : entry.snapshot.phase === "unresolved" ? "process_unresolved" :
+        ready() ? "condition_satisfied" : terminal() ? "process_settled" : "observation_wait_limit"});
+    entry.commandObservations.push(result);
+    this.publish(entry,"observation_returned",{...details,commandObservation:result});
+    await this.flush(entry);
+    return result;
   }
 
   async stop(identity: CanonicalProcessIdentity, requestId?: string): Promise<ProcessSnapshot> {
@@ -378,13 +423,14 @@ export class RunProcessManager {
         ...(saved.input.origin ? {origin: saved.input.origin} : {origin: undefined}),
         displayCommand: saved.input.displayCommand ?? undefined};
       const entry: Execution = {input, snapshot, checkpointRevision: saved.revision, launchIntent: saved.launchIntent,
-        recovered: true, persistence: Promise.resolve(), persistenceFailure: null, observations: [...saved.observations], searches: [...saved.searches],
+        recovered: true, persistence: Promise.resolve(), persistenceFailure: null, observations: [...saved.observations], commandObservations: [...saved.commandObservations], materialViews: [...saved.materialViews],
         output: saved.output ? ProcessOutputStore.restore(saved.output, saved.input.paths) : null,
         handle: null, launchFinished: true, timer: null, runDeadlineTimer: null, terminationTimer: null,
         listeners: new Set(), launchAbort: new AbortController(), abort: () => {}, settled: Promise.resolve(), resolve: () => {},
         closePromise: null, outputClosePromise: Promise.resolve(), cwdPromise: Promise.resolve(), stopPromise: null,
         observationSequence: saved.observationSequence, initialObservation: saved.initialSnapshot !== null,
         initialSnapshot: saved.initialSnapshot, initialDelivery: saved.initialDelivery, deliveryCursor: saved.deliveryCursor ?? undefined,
+        announcedOutputCursor: saved.announcedOutputCursor ?? undefined,
         deliveryState: saved.deliveryState, lastOutputNotification: 0};
       this.executions.set(input.executionId, entry);
       this.revision++;
@@ -414,14 +460,16 @@ export class RunProcessManager {
     const records = this.options.records;
     if (!records || entry.persistenceFailure) return;
     const source = entry.input;
-    const checkpoint: ProcessCheckpoint = structuredClone({version: 1, revision: ++entry.checkpointRevision,
+    const checkpoint: ProcessCheckpoint = structuredClone({version: 4, revision: ++entry.checkpointRevision,
       input: {runId: source.runId, executionId: source.executionId, actionId: source.actionId, origin: source.origin ?? null,
         environmentId: source.environmentId, executable: source.executable, args: source.args, cwd: source.cwd,
         environment: source.environment, timeoutMs: source.timeoutMs, deadlineAt: source.deadlineAt, paths: source.paths,
         maximumOutputBytes: source.maximumOutputBytes, background: source.background, displayCommand: source.displayCommand ?? null},
       launchIntent: entry.launchIntent, snapshot: entry.snapshot, output: entry.output?.checkpoint() ?? null,
-      observationSequence: entry.observationSequence, initialSnapshot: entry.initialSnapshot, observations: entry.observations, searches: entry.searches,
+      observationSequence: entry.observationSequence, initialSnapshot: entry.initialSnapshot, observations: entry.observations,
+      commandObservations: entry.commandObservations, materialViews: entry.materialViews,
       initialDelivery: entry.initialDelivery, deliveryCursor: entry.deliveryCursor ?? null, deliveryState: entry.deliveryState,
+      announcedOutputCursor: entry.announcedOutputCursor ?? null,
       notifications: (this.notifications.get(source.runId) ?? []).filter(fact => fact.source.id === source.executionId)});
     entry.persistence = entry.persistence.then(async () => {
       if (entry.persistenceFailure) return;
@@ -547,13 +595,17 @@ export class RunProcessManager {
     })();
   }
 
-  private notifyInput(entry: Execution, kind: string): void {
+  private notifyInput(entry: Execution, kind: string, publish = true): ProcessInputNotification | undefined {
     if (entry.initialDelivery === null || this.closedRuns.has(entry.input.runId)) return;
     const snapshot = entry.snapshot;
     const state = deliveryState(snapshot);
-    if (entry.deliveryState === state && !entry.output?.hasUnread(entry.deliveryCursor)) return;
-    const previousCursor = entry.deliveryCursor ?? null;
-    const capture = entry.output?.readModelOutput(entry.deliveryCursor);
+    const newOutput = entry.output?.hasUnread(entry.announcedOutputCursor) ?? false;
+    if (entry.deliveryState === state && !newOutput) return;
+    // Availability is not read coverage: old unshown pages remain explicitly retrievable.
+    const previousCursor = entry.announcedOutputCursor ?? null;
+    const selected = newOutput ? entry.output?.readModelOutput(entry.announcedOutputCursor) : undefined;
+    const capture = selected && [selected.stdout, selected.stderr].some(stream =>
+      stream.text.length > 0 || stream.byteEnd > stream.byteStart) ? selected : undefined;
     // Segment text is diagnostic detail; duplicating it would double the model payload.
     const stream = (value: NonNullable<typeof capture>["stdout"]) => {
       const {segments: _segments, ...projection} = value;
@@ -566,7 +618,7 @@ export class RunProcessManager {
         initial_cwd: snapshot.initialCwd, final_cwd: snapshot.finalCwd, session_cwd: snapshot.sessionCwd, cwd_disposition: snapshot.cwdDisposition,
         command: entry.input.displayCommand?.command.slice(0, 4096) ?? null,
         command_truncated: (entry.input.displayCommand?.command.length ?? 0) > 4096,
-        snapshot_revision: snapshot.revision, phase: snapshot.phase,
+        snapshot_revision: snapshot.revision, phase: snapshot.phase, output_materials: this.outputMaterials(entry),
         outcome: snapshot.outcome, rootExit: snapshot.rootExit, termination: snapshot.termination,
         containment: snapshot.containment, output: snapshot.output, limitations: snapshot.limitations.slice(0, 16).map(value => value.slice(0, 256)),
         limitations_truncated: snapshot.limitations.length > 16 || snapshot.limitations.some(value => value.length > 256),
@@ -578,7 +630,10 @@ export class RunProcessManager {
     // This reserves an immutable payload; Runtime's receipt, not this cursor, records acceptance.
     entry.deliveryState = state;
     entry.deliveryCursor = capture?.nextCursor ?? entry.deliveryCursor;
-    this.publish(entry, "input_notified", {notification: fact});
+    entry.announcedOutputCursor = entry.output?.captureCursor() ?? entry.announcedOutputCursor;
+    if (publish) this.publish(entry, "input_notified", {notification: fact,
+      outputDelivery: {availableCursor: entry.announcedOutputCursor ?? null, presentedCursor: entry.deliveryCursor ?? null}});
+    return fact;
   }
 
   private requestTermination(entry: Execution, reason: ProcessTerminationReason, requestId?: string): Promise<void> {
@@ -643,7 +698,7 @@ export class RunProcessManager {
     for (const listener of entry.listeners) listener();
   }
   private publish(entry: Execution, kind: ProcessExecutionFact["kind"], extra: Partial<ProcessExecutionFact> = {}): void {
-    if (kind !== "output" && kind !== "scope_members" && kind !== "output_searched") this.retain(entry);
+    if (!["output", "scope_members"].includes(kind)) this.retain(entry);
     const fact: ProcessExecutionFact = immutable({ ...extra, kind, sequence: ++this.sequence, activationId: this.scopeId,
       occurredAt: this.now(), snapshot: entry.snapshot, ...(entry.output ? {outputPositions:entry.output.positions} : {}) });
     const emit = () => { try { void Promise.resolve(this.options.observer?.(fact)).catch(() => {}); } catch {} };
@@ -655,7 +710,8 @@ export class RunProcessManager {
 
 function deliveryState(snapshot: ProcessSnapshot): string {
   return JSON.stringify({phase: snapshot.phase, outcome: snapshot.outcome, rootExit: snapshot.rootExit,
-    termination: snapshot.termination, containment: snapshot.containment, output: snapshot.output, limitations: snapshot.limitations});
+    termination: snapshot.termination, containment: snapshot.containment, output: snapshot.output, limitations: snapshot.limitations,
+    finalCwd: snapshot.finalCwd, sessionCwd: snapshot.sessionCwd, cwdDisposition: snapshot.cwdDisposition});
 }
 
 export class ProcessManagerError extends Error {

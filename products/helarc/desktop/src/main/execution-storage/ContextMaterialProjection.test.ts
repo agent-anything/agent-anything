@@ -1,5 +1,5 @@
 import {expect,it} from "vitest";
-import type {RunCommit} from "@agent-anything/agent-runtime/runner";
+import type {RunCommit} from "@agent-anything/agent-runtime/execution-coordinator";
 import {projectContextMaterials} from "./ContextMaterialProjection.js";
 
 it("indexes accepted public views, not private instructions, reasoning or recursive access results",()=>{

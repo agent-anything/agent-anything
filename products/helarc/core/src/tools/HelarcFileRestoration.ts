@@ -1,6 +1,6 @@
 import { CODE_FILE_RESTORE_OPERATION, CODE_FILE_RESTORE_BINDING, isFileFailureSupport } from "@agent-anything/helarc-code-agent/file-operation";
 import { snapshotResolvedOperationBinding, type OperationBindingResolverRegistration } from "@agent-anything/operation-catalog/binding";
-import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
+import type { RegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
 import type { OperationResultContract } from "@agent-anything/operation-catalog/result";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import type { ToolJsonObject } from "@agent-anything/tools/catalog";
@@ -15,7 +15,7 @@ export const FILE_RESTORE_SCHEMA: ToolJsonObject = {type: "object", additionalPr
 
 export function createHelarcFileRestorationContribution(admittedAt: string) {
   const resolverId = "helarc.file-restoration";
-  const operation: RegisteredOperation = {admissionId: `${resolverId}.admission`, admittedAt, retirement: null, sourceRevision: "1",
+  const operation: RegisteredOperationDefinition = {admissionId: `${resolverId}.admission`, admittedAt, retirement: null, sourceRevision: "1",
     allowedRequestOrigins: ["tool_request"], operation: {ref: CODE_FILE_RESTORE_OPERATION, semanticOwner: "helarc.code-agent",
       requestSchemaRevision: "1", resultSchemaRevision: "1", roles: {requestOrigins: ["tool_request"], exposure: "eager_tool", runControl: "direct",
         trust: "canonical_external_effect", participation: "semantic_owner", domainPurpose: "file.restore"}},

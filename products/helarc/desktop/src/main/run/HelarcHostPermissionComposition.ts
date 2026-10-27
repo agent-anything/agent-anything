@@ -11,7 +11,7 @@ import {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
 } from "@agent-anything/helarc/configuration";
-import type { SessionAuthorityPort } from "@agent-anything/permission";
+import type { SessionAuthorizationStore } from "@agent-anything/permission";
 import type {
   PermissionEnforcement,
   PermissionProfileDefinition,
@@ -29,7 +29,7 @@ export interface CreateHelarcHostPermissionCompositionInput {
   readonly automaticReviewer: (ApprovalReviewerBinding & {
     readonly kind: "auto_review";
   }) | null;
-  readonly sessionAuthorityPort: SessionAuthorityPort;
+  readonly sessionAuthorityPort: SessionAuthorizationStore;
   readonly persistentPolicyAmendments: PersistentPolicyAmendmentPort;
 }
 

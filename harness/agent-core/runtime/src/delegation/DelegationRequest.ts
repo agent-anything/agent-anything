@@ -1,4 +1,4 @@
-import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
 import {
   snapshotDelegationOriginCorrelation,
   snapshotDescendantContinuationCorrelation,
@@ -11,12 +11,12 @@ import type { ContextJsonObject, ContextJsonValue } from "@agent-anything/contex
 import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolCall } from "@agent-anything/tools/invocation";
 import {
-  snapshotDelegationAuthorityDimensions,
-  snapshotDelegationAuthorityDerivation,
-  type DelegationAuthorityDerivation,
-  type DelegationAuthorityDerivationRef,
-  type DelegationAuthorityDimensionInput,
-} from "./DelegationAuthority.js";
+  snapshotDelegationExecutionConstraintDimensions,
+  snapshotDelegationExecutionConstraints,
+  type DelegationExecutionConstraints,
+  type DelegationExecutionConstraintsRef,
+  type DelegationExecutionConstraintInput,
+} from "./DelegationExecutionConstraints.js";
 import {
   boundedText,
   createDelegationContractIdentity,
@@ -106,12 +106,12 @@ export interface DelegationLimits {
 
 export interface DelegationPreparation {
   readonly schemaVersion: 1;
-  readonly childAgent: AgentRevisionRef;
+  readonly childAgent: AgentDefinitionRevisionRef;
   readonly task: DelegationTaskPreparation;
   readonly objective: DelegatedObjective;
   readonly expectedResult: DelegationResultExpectation;
   readonly contextPlan: DelegationContextPlan;
-  readonly authorityRestriction: readonly DelegationAuthorityDimensionInput[] | null;
+  readonly authorityRestriction: readonly DelegationExecutionConstraintInput[] | null;
   readonly allocationRequest: DelegationLimits;
 }
 
@@ -129,12 +129,12 @@ export interface DelegationRequest {
   readonly ref: DelegationRequestRef;
   readonly origin: DelegationOriginCorrelation;
   readonly toolCall: DelegationToolCallCorrelation;
-  readonly childAgent: AgentRevisionRef;
+  readonly childAgent: AgentDefinitionRevisionRef;
   readonly task: DelegationTaskPreparation;
   readonly objective: DelegatedObjective;
   readonly expectedResult: DelegationResultExpectation;
   readonly contextPlan: DelegationContextPlan;
-  readonly authorityDerivation: DelegationAuthorityDerivationRef;
+  readonly authorityDerivation: DelegationExecutionConstraintsRef;
   readonly limitDerivation: DelegationLimitDerivationRef;
   readonly limits: DelegationLimits;
   readonly continuation: DescendantContinuationCorrelation | null;
@@ -153,7 +153,7 @@ export function materializeDelegationRequest(input: {
   readonly origin: DelegationOriginCorrelation;
   readonly toolCall: ToolCall;
   readonly preparation: DelegationPreparation;
-  readonly authorityDerivation: DelegationAuthorityDerivation;
+  readonly authorityDerivation: DelegationExecutionConstraints;
   readonly limitDerivation: DelegationLimitDerivation;
   readonly continuation: DescendantContinuationCorrelation | null;
   readonly createdAt: string;
@@ -172,7 +172,7 @@ export function materializeDelegationRequest(input: {
     const requestId = token(input.requestId, "requestId");
     const origin = snapshotDelegationOriginCorrelation(input.origin);
     const preparation = snapshotDelegationPreparation(input.preparation);
-    const authority = snapshotDelegationAuthorityDerivation(input.authorityDerivation);
+    const authority = snapshotDelegationExecutionConstraints(input.authorityDerivation);
     const limitDerivation = snapshotDelegationLimitDerivation(input.limitDerivation);
     const createdAt = isoDateTime(input.createdAt, "createdAt");
     const toolCall = snapshotToolCallCorrelation(input.toolCall, origin, preparation.childAgent);
@@ -203,7 +203,7 @@ export function materializeDelegationRequest(input: {
       );
     }
     if (preparation.authorityRestriction !== null) {
-      const restriction = snapshotDelegationAuthorityDimensions(
+      const restriction = snapshotDelegationExecutionConstraintDimensions(
         preparation.authorityRestriction,
       );
       if (restrictionSource!.dimensions.some(
@@ -287,7 +287,7 @@ export function snapshotDelegationPreparation(
   const contextPlan = snapshotContextPlan(input.contextPlan);
   const authorityRestriction = input.authorityRestriction === null
     ? null
-    : snapshotDelegationAuthorityDimensions(input.authorityRestriction);
+    : snapshotDelegationExecutionConstraintDimensions(input.authorityRestriction);
   const allocationRequest = snapshotDelegationLimits(input.allocationRequest);
   if (contextPlan.maxContextBytes > allocationRequest.maxContextBytes) {
     throw new TypeError("Delegation Context plan exceeds the request Context limit.");
@@ -705,7 +705,7 @@ function snapshotObjective(input: DelegatedObjective): DelegatedObjective {
 function snapshotToolCallCorrelation(
   call: ToolCall,
   origin: DelegationOriginCorrelation,
-  childAgent: AgentRevisionRef,
+  childAgent: AgentDefinitionRevisionRef,
 ): DelegationToolCallCorrelation {
   if (
     call.parentRunAction.run.id !== origin.parent.run.id ||
@@ -788,8 +788,8 @@ function snapshotMaterialRef(
   });
 }
 
-function snapshotAgentRef(input: AgentRevisionRef): AgentRevisionRef {
-  strictRecord(input, "AgentRevisionRef", ["id", "revision"]);
+function snapshotAgentRef(input: AgentDefinitionRevisionRef): AgentDefinitionRevisionRef {
+  strictRecord(input, "AgentDefinitionRevisionRef", ["id", "revision"]);
   return Object.freeze({
     id: token(input.id, "childAgent.id"),
     revision: token(input.revision, "childAgent.revision"),
@@ -797,9 +797,9 @@ function snapshotAgentRef(input: AgentRevisionRef): AgentRevisionRef {
 }
 
 function snapshotAuthorityRef(
-  input: DelegationAuthorityDerivationRef,
-): DelegationAuthorityDerivationRef {
-  strictRecord(input, "DelegationAuthorityDerivationRef", ["id", "revision"]);
+  input: DelegationExecutionConstraintsRef,
+): DelegationExecutionConstraintsRef {
+  strictRecord(input, "DelegationExecutionConstraintsRef", ["id", "revision"]);
   return Object.freeze({
     id: token(input.id, "authorityDerivation.id"),
     revision: token(input.revision, "authorityDerivation.revision"),

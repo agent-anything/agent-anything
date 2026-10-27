@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import {ContextMaterialError, type ContextMaterialAccessPort, type ContextMaterialPage, type ContextMaterialSearchPage} from "@agent-anything/context/material";
+import {CONTEXT_MATERIAL_LIMITS, ContextMaterialError, type ContextMaterialAccessPort, type ContextMaterialPage, type ContextMaterialSearchPage} from "@agent-anything/context/material";
 import { restoreExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
 import { reportExecutionFailure, type ExecutionDiagnosticSink, type ExecutionDiagnosticContext } from "../diagnostics/HelarcExecutionDiagnostics.js";
 import {beginExecutionTiming, measureExecutionSync, type ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
@@ -14,7 +14,7 @@ import type {CommandEnvironmentRecoverySnapshot} from "@agent-anything/helarc-lo
 import type { ProcessCheckpoint, ProcessRecordPort, ShellSessionRecordPort, ShellSessionCommit } from "@agent-anything/helarc-local-environment/command";
 import {unpackExecutionContent, executionContentReferences, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentStatistics, EXECUTION_CONTENT_LIMITS,
   type ExecutionContentBlock, type ExecutionContentRoot} from "./ExecutionContent.js";
-import type { RunCommit, RunCommitPort, RunCommitReceipt, RunTreeCommit, RunTreeCommitPort, RunTreeCommitReceipt, RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/runner";
+import type { RunCommit, RunCommitPort, RunCommitReceipt, RunTreeCommit, RunTreeCommitPort, RunTreeCommitReceipt, RunTreeRecoveryRecords } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { CompositeCommit, CompositeCommitPort } from "@agent-anything/operation-composition/execution";
 import type { AgentHookRecordPort, AgentHookInvocationCheckpoint } from "@agent-anything/agent-hooks/execution";
 import type {
@@ -214,11 +214,17 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       signal.throwIfAborted();
       return value as ContextMaterialPage;
     },
-    search: async (runId, input, signal, invocationId) => {
-      signal.throwIfAborted();
-      const value = await this.contextMaterialRequest({kind: "search", runId, input, invocationId});
-      signal.throwIfAborted();
-      return value as ContextMaterialSearchPage;
+    search: async (runId, input, signal, invocationId, deadlineAt) => {
+      const deadline=Math.min(Date.now()+CONTEXT_MATERIAL_LIMITS.searchMs,deadlineAt===undefined ? Infinity : Date.parse(deadlineAt));
+      if (!Number.isFinite(deadline)) throw new ContextMaterialError("context_deadline_invalid","Search requires a valid execution deadline.");
+      for (;;) {
+        signal.throwIfAborted();
+        const value=await this.contextMaterialRequest({kind:"search",runId,input,invocationId,finish:Date.now()>=deadline});
+        signal.throwIfAborted();
+        if (!value || !("kind" in value)) return value as ContextMaterialSearchPage;
+        // Each scan is a separate durable Worker transaction; cancellation never kills the shared Worker.
+        await new Promise<void>(resolve=>setImmediate(resolve));
+      }
     },
     validate: async (runId, references) => {await this.contextMaterialRequest({kind: "validate", runId, references});},
   };

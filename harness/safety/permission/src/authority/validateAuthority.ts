@@ -8,38 +8,38 @@ import {
 import type {
   ActionApprovalCoverage,
   ApprovalApplicabilityKey,
-  SessionAuthorityContext,
-  SessionAuthorityLookup,
-  SessionAuthorityRecord,
-  SessionAuthorityRecordInput,
+  SessionAuthorizationScope,
+  SessionAuthorizationLookup,
+  SessionAuthorizationBasis,
+  SessionAuthorizationBasisInput,
 } from "./AuthorityContracts.js";
 
-export type SessionAuthorityValidationCode =
+export type SessionAuthorizationValidationCode =
   | "session_authority_invalid_identity"
   | "session_authority_context_mismatch"
   | "session_authority_category_mismatch"
   | "session_authority_applicability_invalid"
   | "session_authority_permissions_invalid";
 
-export type ValidateSessionAuthorityRecordResult =
-  | { readonly status: "valid"; readonly record: SessionAuthorityRecord }
+export type ValidateSessionAuthorizationResult =
+  | { readonly status: "valid"; readonly record: SessionAuthorizationBasis }
   | {
       readonly status: "invalid";
-      readonly code: SessionAuthorityValidationCode;
+      readonly code: SessionAuthorizationValidationCode;
       readonly message: string;
     };
 
-export interface ValidateSessionAuthorityRecordInput {
-  readonly record: SessionAuthorityRecordInput;
-  readonly expectedContext: SessionAuthorityContext;
+export interface ValidateSessionAuthorizationInput {
+  readonly record: SessionAuthorizationBasisInput;
+  readonly expectedContext: SessionAuthorizationScope;
   readonly cwd: string;
   readonly environment: PermissionResolutionEnvironmentInput;
   readonly managedConstraints: ManagedPermissionConstraints;
 }
 
-export function validateSessionAuthorityRecord(
-  input: ValidateSessionAuthorityRecordInput,
-): ValidateSessionAuthorityRecordResult {
+export function validateSessionAuthorizationBasis(
+  input: ValidateSessionAuthorizationInput,
+): ValidateSessionAuthorizationResult {
   const record = input.record;
   if (
     !nonEmpty(record.id) ||
@@ -150,9 +150,9 @@ function sameStrings(
     leftValues.every((value, index) => value === rightValues[index]);
 }
 
-export function isSessionAuthorityApplicable(
-  record: SessionAuthorityRecord,
-  lookup: SessionAuthorityLookup,
+export function isSessionAuthorizationApplicable(
+  record: SessionAuthorizationBasis,
+  lookup: SessionAuthorizationLookup,
 ): boolean {
   if (!sameContext(record, lookup.context)) return false;
   if (lookup.category === null) return true;
@@ -182,8 +182,8 @@ export function isActionApprovalCoverageApplicable(
 }
 
 function sameContext(
-  left: SessionAuthorityContext,
-  right: SessionAuthorityContext,
+  left: SessionAuthorizationScope,
+  right: SessionAuthorizationScope,
 ): boolean {
   return (
     left.hostSessionId === right.hostSessionId &&
@@ -195,9 +195,9 @@ function sameContext(
 }
 
 function invalid(
-  code: SessionAuthorityValidationCode,
+  code: SessionAuthorizationValidationCode,
   message: string,
-): Extract<ValidateSessionAuthorityRecordResult, { status: "invalid" }> {
+): Extract<ValidateSessionAuthorizationResult, { status: "invalid" }> {
   return Object.freeze({ status: "invalid", code, message });
 }
 

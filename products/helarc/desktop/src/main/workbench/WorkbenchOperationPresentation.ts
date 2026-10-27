@@ -8,7 +8,8 @@ const labels: Readonly<Record<string, string>> = {
   Agent: "Delegated task", SendMessage: "Message to delegated task",
   Read: "Read file", Glob: "Find files", Grep: "Search contents",
   Write: "Write file", Edit: "Edit file", Bash: "Bash command", PowerShell: "PowerShell command",
-  AskUserQuestion: "Question", TaskOutput: "Read command output", TaskStop: "Stop command",
+  AskUserQuestion: "Question", CommandObserve: "Check command", CommandStop: "Stop command",
+  ContextMaterialRead:"Read retained content",ContextMaterialSearch:"Search retained content",
 };
 
 export function isWorkbenchOperation(record: HelarcRunPresentationRecord): record is HelarcRunPresentationRecord & { content: Call } {

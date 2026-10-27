@@ -31,7 +31,7 @@ export function evaluateSourceOwnershipRules({
     if (
       /\bapplyContextTransition\s*\(/.test(text) &&
       path !== "harness/context/src/active-context/ContextTransitionApplication.ts" &&
-      path !== "harness/agent-core/runtime/src/runner/RunExecution.ts"
+      path !== "harness/agent-core/runtime/src/execution-coordinator/RunExecution.ts"
     ) {
       reject(
         "active_context_writer",
@@ -125,27 +125,6 @@ export function evaluateSourceOwnershipRules({
       );
     }
 
-    const isHelarcModelQualificationOwner =
-      path.startsWith("products/helarc/core/src/model-qualification/");
-    if (
-      isHelarcModelQualificationOwner &&
-      /@agent-anything\//.test(text)
-    ) {
-      reject(
-        "helarc_model_qualification_dependency_direction",
-        "Helarc model qualification owns Product behavior claims and cannot depend on Harness packages.",
-      );
-    }
-    if (
-      !isHelarcModelQualificationOwner &&
-      /export\s+(?:interface|class|type)\s+(?:HelarcModelQualification|HelarcModelUseDisposition)\w*\b/.test(text)
-    ) {
-      reject(
-        "helarc_model_qualification_owner",
-        "Helarc model qualification Contracts belong to products/helarc/core/src/model-qualification.",
-      );
-    }
-
     if (
       path === "harness/model-interaction/src/ProviderRequest.ts" &&
       !/readonly\s+composition\s*:\s*ModelInputComposition\s*;/.test(text)
@@ -156,7 +135,7 @@ export function evaluateSourceOwnershipRules({
       );
     }
     if (
-      path === "harness/agent-core/runtime/src/controller/ProviderBackedController.ts" &&
+      path === "harness/agent-core/runtime/src/context-representation/ContextRepresentationManager.ts" &&
       (
         !/snapshotProviderRequest\s*\(/.test(text) ||
         !/request\.composition\.providerId\b/.test(text) ||
@@ -166,8 +145,13 @@ export function evaluateSourceOwnershipRules({
     ) {
       reject(
         "model_input_composition_verification",
-        "The Provider-backed Controller must snapshot and bind the complete composition before Provider-native context assessment.",
+        "Context Representation Manager must snapshot and bind the complete composition before Provider-native context assessment.",
       );
+    }
+
+    if (path === "harness/agent-core/runtime/src/decision/ModelResponseTaskDecisionMaker.ts" &&
+        /\b(?:ModelRequestAccess|ContextRepresentationManager|RunStateWriter)\b|\bprovider\.send\s*\(/.test(text)) {
+      reject("task_decision_responsibility", "Task response interpretation cannot own transport, input preparation or Run state mutation.");
     }
 
     const isCanonicalContextOrRunState =
@@ -195,7 +179,7 @@ export function evaluateSourceOwnershipRules({
     }
 
     if (
-      path === "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
+      path === "harness/agent-core/runtime/src/execution-coordinator/RunExecution.ts" &&
       (
         !/decision\.decision\.kind\s*===\s*["']continue_with_feedback["']/.test(text) ||
         !/markInitialDelivered\s*\(\)/.test(text) ||

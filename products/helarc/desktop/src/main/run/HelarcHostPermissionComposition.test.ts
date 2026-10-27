@@ -2,7 +2,7 @@ import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
 } from "@agent-anything/host/authority";
-import type { ApprovalReviewerPort, SessionAuthorityPort } from "@agent-anything/permission";
+import type { ApprovalReviewerPort, SessionAuthorizationStore } from "@agent-anything/permission";
 import { describe, expect, it } from "vitest";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
@@ -76,7 +76,7 @@ describe("Helarc Host permission composition", () => {
   });
 
   it("propagates initial authority-store failure before returning a composition", async () => {
-    const unavailable: SessionAuthorityPort = {
+    const unavailable: SessionAuthorizationStore = {
       async listApplicable() {
         throw new Error("authority store unavailable");
       },

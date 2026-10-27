@@ -1,12 +1,12 @@
 export type {
   OperationBindingRevision,
-  OperationCatalogSnapshot,
+  OperationDefinitionCatalog,
   OperationRequestOrigin,
-  OperationRetirement,
-  OperationRevision,
-  OperationRoles,
-  RegisteredOperation,
+  OperationDefinitionRetirement,
+  OperationDefinitionRevision,
+  OperationDefinitionRoles,
+  RegisteredOperationDefinition,
 } from "./OperationCatalog.js";
-export { createOperationCatalogSnapshot, findRegisteredOperation } from "./OperationCatalog.js";
+export { createOperationDefinitionCatalog, findRegisteredOperationDefinition } from "./OperationCatalog.js";
 export { OperationContractValidationError } from "../contract/OperationContractValidation.js";
 export type { OperationContractValidationCode } from "../contract/OperationContractValidation.js";

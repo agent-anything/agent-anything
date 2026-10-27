@@ -1,10 +1,10 @@
 export type {
-  Agent,
+  AgentDefinition,
   AgentOutputContract,
   AgentOutputValidation,
-  AgentRevisionRef,
-} from "./Agent.js";
-export { snapshotAgent, toAgentRevisionRef } from "./Agent.js";
+  AgentDefinitionRevisionRef,
+} from "./AgentDefinition.js";
+export { snapshotAgentDefinition, toAgentDefinitionRevisionRef } from "./AgentDefinition.js";
 export type {
   AgentInstructionBlock,
   AgentInstructionContentDigest,

@@ -1,10 +1,10 @@
-import type { ControllerModelItem, ModelInteractionProjection } from "@agent-anything/agent-runtime/controller";
-import { snapshotModelCallRef, type ModelToolCall } from "@agent-anything/model-interaction";
+import type { TaskDecisionModelItem, ModelInteractionProjection } from "@agent-anything/agent-runtime/decision";
+import { snapshotModelCallRef, type ModelCallableRequest } from "@agent-anything/model-interaction";
 import type { HelarcOutputSource } from "../run/presentation/HelarcRunPresentation.js";
 
 export const HELARC_FINAL_REPLY_REVISION = "helarc.final-reply.v1";
 export const HELARC_FINAL_REPLY_CONTENT_GUIDANCE = [
-  "Optional response is the complete final reply: supplying it replaces, not appends to, earlier assistant text.",
+  "Optional response is the complete final reply delivered to the caller, not an ending reason or an acknowledgement that a reply was written. Supplying it replaces, not appends to, earlier assistant text.",
   "To return an already-written report, omit response to adopt ordinary assistant text from this turn or, if absent, the immediately preceding Model Turn of this Run; no confirmation sentence or repeated report is needed.",
   "If neither turn has text, no final reply is supplied. Adoption does not redisplay existing text.",
   "Supply an empty string to explicitly provide no reply and prevent adoption.",
@@ -13,19 +13,25 @@ export const HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE = [
   "The final reply is delivered to the caller: the user for root work, or the Parent Agent for delegated work.",
   "The Parent receives the resolved final reply, not the Child's conversation history. Do not assume the Parent has read earlier Child messages.",
 ].join(" ");
-export const HELARC_ENDING_SIGNAL_FEEDBACK = [
-  "To end this Run, call final_result.",
-  HELARC_FINAL_REPLY_CONTENT_GUIDANCE,
-  HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE,
-  "Include the complete final Plan snapshot when a Plan exists.",
-  "To continue work, use the functions supplied in the request. Ordinary text alone does not end the Run.",
-].join(" ");
+export function createHelarcEndingSignalFeedback(input: {readonly hasText: boolean; readonly hasPlan: boolean}): string {
+  return [
+    "No callable request or ending signal was received. Ordinary text alone does not end this Run.",
+    input.hasText
+      ? "Your ordinary text from this turn is retained. If you want to end with that reply, make the next response a native final_result call without response and without another ordinary-text acknowledgement."
+      : "If you want to end, make a native final_result call. Supply response for a new final reply; omit it to adopt eligible existing text, if any.",
+    input.hasPlan
+      ? "A Plan exists: include its complete final snapshot in plan, with actual step statuses. Do not use empty arguments or mark unfinished steps completed just to end."
+      : 'No Plan exists. To end without replacing existing text, call final_result with arguments {}. To supply a new reply, use {"response":"<complete reply>"}.',
+    "A supplied response replaces the reply delivered to the caller; it is not a completion confirmation. A Parent receives that selected reply, not your private conversation history.",
+    "If further work is needed, request the appropriate available function instead.",
+  ].join(" ");
+}
 
 export interface HelarcFinalReplyResolution {
   readonly protocolRevision: typeof HELARC_FINAL_REPLY_REVISION;
   readonly runId: string;
   readonly interactionRevision: string;
-  readonly ending: { readonly modelItemId: string; readonly call: ModelToolCall["modelCallRef"] };
+  readonly ending: { readonly modelItemId: string; readonly call: ModelCallableRequest["modelCallRef"] };
   readonly disposition: "supplied" | "explicit_empty" | "adopted_current" | "adopted_previous" | "no_text";
   readonly textJoin: "none" | "double_newline";
 }
@@ -50,8 +56,8 @@ export function selectHelarcFinalReplyText(args: {
 export function resolveHelarcFinalReply(input: {
   readonly runId: string;
   readonly interactionRevision: string;
-  readonly call: ModelToolCall;
-  readonly modelItems: readonly ControllerModelItem[];
+  readonly call: ModelCallableRequest;
+  readonly modelItems: readonly TaskDecisionModelItem[];
   readonly previous: ModelInteractionProjection["latestTurn"];
 }): { readonly summary: string; readonly source: HelarcOutputSource; readonly finalReply: HelarcFinalReplyResolution } {
   const item = input.modelItems.find(item => item.kind === "model_tool_call" && item.call.modelCallRef.id === input.call.modelCallRef.id);

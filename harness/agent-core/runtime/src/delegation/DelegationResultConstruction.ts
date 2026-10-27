@@ -4,7 +4,7 @@ import { runSettlementCauseCode, type RunItem, type RunResult } from "../run/ind
 import type {
   RunTreeResourceMeasurement,
   RunTreeResourceSettlement,
-} from "../runner/RunTreeResourceAccount.js";
+} from "../execution-coordinator/RunTreeResourceAccount.js";
 import { createDelegationResult, type DelegationEffectSummary, type DelegationLimitDisposition, type DelegationResult, type DelegationUsageSummary } from "./DelegationResult.js";
 import type { DelegationRequest } from "./DelegationRequest.js";
 

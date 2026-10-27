@@ -49,7 +49,7 @@ export class HelarcProviderSelection {
     if (selection && stored.profile.revision !== selection.profileRevision) throw new Error("Provider profile changed; select the current configuration.");
     const settings = snapshotHelarcProviderModelSettings(stored.config.modelSettings, stored.config.providerKind);
     const model = (selection?.model ?? stored.config.model).trim();
-    if (!model) throw new Error("Select a model before starting work or verification.");
+    if (!model) throw new Error("Select a model before starting work.");
     const requested = selection?.thinking ?? settings.thinking;
     let catalog: ModelDiscovery | null = null;
     try { catalog = await this.query(stored.config, model, true); }

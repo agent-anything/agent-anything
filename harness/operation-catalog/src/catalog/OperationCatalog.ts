@@ -1,10 +1,10 @@
 import type { OperationBindingKind } from "../binding/OperationBinding.js";
 import {
-  operationRevisionKey,
+  operationDefinitionRevisionKey,
   snapshotOperationBindingRevisionRef,
-  snapshotOperationRevisionRef,
+  snapshotOperationDefinitionRevisionRef,
   type OperationBindingRevisionRef,
-  type OperationRevisionRef,
+  type OperationDefinitionRevisionRef,
 } from "../identity/index.js";
 import { dateTime, denseArray, fail, strictRecord, token, uniqueSorted } from "../contract/OperationContractValidation.js";
 
@@ -16,7 +16,7 @@ export type OperationRequestOrigin =
   | "product_request"
   | "host_request";
 
-export interface OperationRoles {
+export interface OperationDefinitionRoles {
   readonly requestOrigins: readonly OperationRequestOrigin[];
   readonly exposure: "eager_tool" | "deferred_tool" | "workflow_only" | "non_tool";
   readonly runControl: OperationBindingKind;
@@ -30,12 +30,12 @@ export interface OperationRoles {
   readonly domainPurpose: string;
 }
 
-export interface OperationRevision {
-  readonly ref: OperationRevisionRef;
+export interface OperationDefinitionRevision {
+  readonly ref: OperationDefinitionRevisionRef;
   readonly semanticOwner: string;
   readonly requestSchemaRevision: string;
   readonly resultSchemaRevision: string;
-  readonly roles: OperationRoles;
+  readonly roles: OperationDefinitionRoles;
 }
 
 export interface OperationBindingRevision {
@@ -45,33 +45,33 @@ export interface OperationBindingRevision {
   readonly resolverRevision: string;
 }
 
-export interface OperationRetirement {
+export interface OperationDefinitionRetirement {
   readonly retiredAt: string;
   readonly reasonCode: string;
 }
 
-export interface RegisteredOperation {
+export interface RegisteredOperationDefinition {
   readonly admissionId: string;
-  readonly operation: OperationRevision;
+  readonly operation: OperationDefinitionRevision;
   readonly binding: OperationBindingRevision;
   readonly sourceRevision: string;
   readonly allowedRequestOrigins: readonly OperationRequestOrigin[];
   readonly admittedAt: string;
-  readonly retirement: OperationRetirement | null;
+  readonly retirement: OperationDefinitionRetirement | null;
 }
 
-export interface OperationCatalogSnapshot {
+export interface OperationDefinitionCatalog {
   readonly id: string;
   readonly revision: string;
-  readonly entries: readonly RegisteredOperation[];
+  readonly entries: readonly RegisteredOperationDefinition[];
 }
 
-export function createOperationCatalogSnapshot(input: OperationCatalogSnapshot): OperationCatalogSnapshot {
-  strictRecord(input, "OperationCatalogSnapshot", ["id", "revision", "entries"], "operation_catalog_invalid");
+export function createOperationDefinitionCatalog(input: OperationDefinitionCatalog): OperationDefinitionCatalog {
+  strictRecord(input, "OperationDefinitionCatalog", ["id", "revision", "entries"], "operation_catalog_invalid");
   denseArray(input.entries, "OperationCatalogSnapshot.entries");
   const entries = uniqueSorted(
     input.entries.map((entry, index) => snapshotRegistration(entry, index)),
-    (entry) => operationRevisionKey(entry.operation.ref),
+    (entry) => operationDefinitionRevisionKey(entry.operation.ref),
     "OperationCatalogSnapshot.entries",
   );
   return Object.freeze({
@@ -81,20 +81,20 @@ export function createOperationCatalogSnapshot(input: OperationCatalogSnapshot):
   });
 }
 
-export function findRegisteredOperation(
-  snapshot: OperationCatalogSnapshot,
-  ref: OperationRevisionRef,
-): RegisteredOperation | undefined {
-  const key = operationRevisionKey(ref);
-  return snapshot.entries.find((entry) => operationRevisionKey(entry.operation.ref) === key);
+export function findRegisteredOperationDefinition(
+  snapshot: OperationDefinitionCatalog,
+  ref: OperationDefinitionRevisionRef,
+): RegisteredOperationDefinition | undefined {
+  const key = operationDefinitionRevisionKey(ref);
+  return snapshot.entries.find((entry) => operationDefinitionRevisionKey(entry.operation.ref) === key);
 }
 
-function snapshotRegistration(input: RegisteredOperation, index: number): RegisteredOperation {
+function snapshotRegistration(input: RegisteredOperationDefinition, index: number): RegisteredOperationDefinition {
   const path = `OperationCatalogSnapshot.entries[${index}]`;
   strictRecord(input, path, ["admissionId", "operation", "binding", "sourceRevision", "allowedRequestOrigins", "admittedAt", "retirement"]);
   const operation = snapshotRevision(input.operation, `${path}.operation`);
   const binding = snapshotBinding(input.binding, `${path}.binding`);
-  if (operationRevisionKey(operation.ref) !== operationRevisionKey(binding.ref.operation)) {
+  if (operationDefinitionRevisionKey(operation.ref) !== operationDefinitionRevisionKey(binding.ref.operation)) {
     fail("operation_binding_invalid", "Binding Operation revision does not match registration.", `${path}.binding.ref.operation`);
   }
   denseArray(input.allowedRequestOrigins, `${path}.allowedRequestOrigins`);
@@ -115,10 +115,10 @@ function snapshotRegistration(input: RegisteredOperation, index: number): Regist
   });
 }
 
-function snapshotRevision(input: OperationRevision, path: string): OperationRevision {
+function snapshotRevision(input: OperationDefinitionRevision, path: string): OperationDefinitionRevision {
   strictRecord(input, path, ["ref", "semanticOwner", "requestSchemaRevision", "resultSchemaRevision", "roles"]);
   return Object.freeze({
-    ref: snapshotOperationRevisionRef(input.ref),
+    ref: snapshotOperationDefinitionRevisionRef(input.ref),
     semanticOwner: token(input.semanticOwner, `${path}.semanticOwner`),
     requestSchemaRevision: token(input.requestSchemaRevision, `${path}.requestSchemaRevision`),
     resultSchemaRevision: token(input.resultSchemaRevision, `${path}.resultSchemaRevision`),
@@ -136,7 +136,7 @@ function snapshotBinding(input: OperationBindingRevision, path: string): Operati
   });
 }
 
-function snapshotRoles(input: OperationRoles, path: string): OperationRoles {
+function snapshotRoles(input: OperationDefinitionRoles, path: string): OperationDefinitionRoles {
   strictRecord(input, path, ["requestOrigins", "exposure", "runControl", "trust", "participation", "domainPurpose"]);
   denseArray(input.requestOrigins, `${path}.requestOrigins`);
   const requestOrigins = uniqueSorted(
@@ -157,7 +157,7 @@ function snapshotRoles(input: OperationRoles, path: string): OperationRoles {
   });
 }
 
-function snapshotRetirement(input: OperationRetirement, path: string): OperationRetirement {
+function snapshotRetirement(input: OperationDefinitionRetirement, path: string): OperationDefinitionRetirement {
   strictRecord(input, path, ["retiredAt", "reasonCode"]);
   return Object.freeze({ retiredAt: dateTime(input.retiredAt, `${path}.retiredAt`), reasonCode: token(input.reasonCode, `${path}.reasonCode`) });
 }

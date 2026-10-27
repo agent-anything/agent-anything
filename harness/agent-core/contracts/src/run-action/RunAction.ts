@@ -1,4 +1,4 @@
-import type { ControllerTurnRef } from "../control/index.js";
+import type { TaskDecisionActivityRef } from "../control/index.js";
 import type { RunRef } from "../run/index.js";
 
 export interface RunActionRef {
@@ -20,7 +20,7 @@ export interface OwnerOperationRef {
 export type RunActionProvenance =
   | {
       readonly kind: "controller";
-      readonly turn: ControllerTurnRef;
+      readonly turn: TaskDecisionActivityRef;
       readonly candidateIndex: number;
     }
   | {

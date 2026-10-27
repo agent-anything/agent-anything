@@ -1,6 +1,6 @@
 import type { AgentHookRegistration } from "../composition/index.js";
 import type { AgentStopEvent, AgentStopFailureEvent } from "../events/index.js";
-import { ControllerCheckpointError } from "@agent-anything/agent-runtime/controller";
+import { ActivityCheckpointError } from "@agent-anything/agent-runtime/activity";
 
 export type AgentHookInvocationOutcome =
   | {readonly status: "completed"; readonly value: unknown; readonly startedAt: string; readonly completedAt: string}
@@ -25,17 +25,17 @@ export function validateAgentHookCheckpoint(next: AgentHookInvocationCheckpoint,
   if (next.version !== 1 || next.id !== hookInvocationId(next.event, next.registration) ||
       !Number.isFinite(Date.parse(next.startedAt)) ||
       next.event.point !== next.registration.point || !next.registration.runKinds.includes(next.event.runKind)) {
-    throw new ControllerCheckpointError("agent_hook_record_invalid");
+    throw new ActivityCheckpointError("agent_hook_record_invalid");
   }
   if (previous && (JSON.stringify({...next, outcome: null}) !== JSON.stringify({...previous, outcome: null}) ||
       previous.outcome !== null && JSON.stringify(previous.outcome) !== JSON.stringify(next.outcome))) {
-    throw new ControllerCheckpointError("agent_hook_record_conflict");
+    throw new ActivityCheckpointError("agent_hook_record_conflict");
   }
-  if (!previous && next.outcome !== null) throw new ControllerCheckpointError("agent_hook_intent_missing");
+  if (!previous && next.outcome !== null) throw new ActivityCheckpointError("agent_hook_intent_missing");
   const outcome = next.outcome;
   if (outcome && (outcome.startedAt !== next.startedAt || !Number.isFinite(Date.parse(outcome.completedAt)) ||
       !["completed", "failed", "timed_out", "cancelled", "output_invalid"].includes(outcome.status))) {
-    throw new ControllerCheckpointError("agent_hook_outcome_invalid");
+    throw new ActivityCheckpointError("agent_hook_outcome_invalid");
   }
 }
 

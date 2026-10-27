@@ -20,9 +20,9 @@ const processFlow = createExecutionFlowDefinition({owner:"helarc-command",id:"pr
   transitions:steps.flatMap(from=>steps.filter(to=>to!==from && to!=="reserved").map(to=>({id:`${from}:${to}`,from,to,label:to.replaceAll("_"," ")}))),
   entryStepIds:["reserved"],exitStepIds:["settled"],
 });
-const observationFlow = createExecutionFlowDefinition({owner:"helarc-command",id:"process-observation",revision:"1",label:"Bounded process observation",
-  description:"Read retained output or wait for a process fact; this invocation does not own the process.",
-  steps:[{id:"wait",label:"Observe owned process",kind:"entry",checks:["run_identity","cursor_valid","wait_bound"]},
+const observationFlow = createExecutionFlowDefinition({owner:"helarc-command",id:"process-observation",revision:"2",label:"Bounded process observation",
+  description:"Observe an owned command under an explicit wait condition; only initial Shell observation also selects a bounded output preview.",
+  steps:[{id:"wait",label:"Observe owned process",kind:"entry",checks:["run_identity","observation_basis","wait_bound"]},
     {id:"return",label:"Return immutable observation",kind:"exit",checks:[]}],
   transitions:[{id:"wait:return",from:"wait",to:"return",label:"Observation returned"}],entryStepIds:["wait"],exitStepIds:["return"],
 });
@@ -54,13 +54,15 @@ export class ProcessInspectionAdapter {
       const n=fact.notification;
       const notification=ref("contribution",n.source.id,n.source.revision,n.source.owner);
       offer(notification,{kind:"event",name:`process.notification.${n.source.kind}`,sequence:n.sequence,code:null},
-        [content("Run input notification",n,"published")],[link("produces",process,notification),link("trigger",event,notification)]);
+        [content("Run input notification",n,"published"),
+          ...(fact.outputDelivery ? [content("Output availability and preview coverage",fact.outputDelivery,"delivery_coverage")] : [])],
+        [link("produces",process,notification),link("trigger",event,notification)]);
     }
     if(fact.delivery) {
       const delivery=ref("contribution",`${s.ref.executionId}:initial-delivery`,"1");
       const accepted=ref("call",fact.delivery.settlementId,null,"runtime");
       offer(delivery,{kind:"event",name:"process.initial_delivery.committed",sequence:fact.sequence,code:null},
-        [content("Initial result delivery baseline",fact.delivery,"committed")],
+        [content("Initial result delivery baseline",{...fact.delivery,outputCoverage:fact.outputDelivery ?? null},"committed")],
         [link("trigger",accepted,delivery),link("binding",process,delivery),
           ...(fact.delivery.observationId === null ? [] : [link("includes",ref("process-observation",fact.delivery.observationId,"1"),delivery)])]);
     }
@@ -96,39 +98,37 @@ export class ProcessInspectionAdapter {
         code:fact.cleanupConfirmed ? null:"process_cleanup_unconfirmed"},[content("Cleanup outcome",{confirmed:fact.cleanupConfirmed,snapshot:s},"finalized")],
         [link("binding",process,run)]);
     }
-    if (fact.search && fact.invocationId) {
-      const search = ref("contribution", fact.invocationId, "1");
-      offer(search,{kind:"event",name:"process.output.searched",sequence:fact.sequence,code:null},
-        [content("Retained output search",{...fact.search,reused:fact.searchReused ?? false},"returned")],
-        [link("produces",process,search),link("produces",ref("operation",fact.invocationId,null,"operations"),search)]);
-    }
     if(!fact.observationId || !fact.invocationId)return;
     const observation=ref("process-observation",fact.observationId,"1");
     const invocation=ref("operation",fact.invocationId,null,"operations");
-    const value=fact.observation;
+    const value=fact.observation, command=fact.commandObservation;
     const disposition=fact.kind === "observation_started" ? "started":fact.kind === "observation_cancelled" ? "cancelled":"returned";
     const observationLinks=[link("produces",invocation,observation),link("contains",process,observation)];
-    if(value) {
+    if(value || command) {
       const exact=ref("process",s.ref.executionId,String(s.revision));
       offer(exact,processPayload(s),[content("Observed process snapshot",s,"observed")],[link("binding",process,exact)]);
       observationLinks.push(link("observes",observation,exact));
     }
+    for (const material of command?.materials ?? value?.materials ?? []) {
+      const target=r.ref("context","contribution",material.reference.id,null,material.reference.revision);
+      observationLinks.push(link("includes",target,observation),link("produces",process,target));
+    }
     const observationRecordId=`${recordId}:observation`;
     offer(observation,{kind:"process_observation",executionId:s.ref.executionId,invocationId:fact.invocationId,snapshotRevision:s.revision,disposition,
-      requestedWaitMs:value?.requestedWaitMs ?? fact.requestedWaitMs ?? fact.waitMs ?? 0,effectiveWaitMs:value?.effectiveWaitMs ?? fact.waitMs ?? 0,
-      elapsedWaitMs:value?.elapsedWaitMs ?? null,returnReason:value?.returnReason ?? null,
+      requestedWaitMs:command?.request.waitMs ?? value?.requestedWaitMs ?? fact.requestedWaitMs ?? fact.waitMs ?? 0,effectiveWaitMs:command?.effectiveWaitMs ?? value?.effectiveWaitMs ?? fact.waitMs ?? 0,
+      elapsedWaitMs:command?.elapsedWaitMs ?? value?.elapsedWaitMs ?? null,returnReason:command?.returnReason ?? value?.returnReason ?? null,
       ranges:value ? (["stdout","stderr"] as const).map(stream=>({stream,start:value[stream].byteStart,end:value[stream].byteEnd,omitted:value[stream].omittedBytes})):[],
-    },[content(value ? "Returned observation":"Observation request",value ?? {cursor:fact.cursor ?? null,waitMs:fact.waitMs ?? 0},value ? "returned":"received")],observationLinks,observationRecordId);
+    },[content((value || command) ? "Returned observation":"Observation request",command ?? value ?? {condition:fact.commandCondition ?? null,cursor:fact.cursor ?? null,waitMs:fact.waitMs ?? 0},(value || command) ? "returned":"received")],observationLinks,observationRecordId);
     if(disposition === "started") {
       interval(observation,"wait","started",null);
       const flow=new ExecutionFlowPath(observationFlow,this.flow,s.ref.runId,[flowRef(observation),flowRef(invocation)],()=>this.occurredAt);
-      const step=flow.advance("wait",{waitMs:fact.waitMs ?? 0},[flowRef(process)]);
-      step.check("run_identity","passed");step.check("cursor_valid","passed");step.check("wait_bound","passed",{waitMs:fact.waitMs ?? 0});
+      const step=flow.advance("wait",{waitMs:fact.waitMs ?? 0,condition:fact.commandCondition?.until ?? null,after:fact.commandCondition?.after ?? null},[flowRef(process)]);
+      step.check("run_identity","passed");step.check("observation_basis","passed");step.check("wait_bound","passed",{waitMs:fact.waitMs ?? 0});
       this.observationFlows.set(fact.observationId,flow);
     } else {
       interval(observation,"wait","settled",disposition);
       const flow=this.observationFlows.get(fact.observationId);
-      flow?.advance("return",{reason:value?.returnReason ?? disposition},[flowRef(observation)]);
+      flow?.advance("return",{reason:command?.returnReason ?? value?.returnReason ?? disposition},[flowRef(observation)]);
       flow?.close(disposition === "cancelled" ? "cancelled":"returned",undefined,[flowRef(observation)]);
       this.observationFlows.delete(fact.observationId);
       if(value) for(const stream of ["stdout","stderr"] as const) {

@@ -56,18 +56,21 @@ export interface ProcessObservation {
   readonly stdout: ProcessOutputSlice;
   readonly stderr: ProcessOutputSlice;
   readonly nextCursor: string;
+  /** Available decoded capture at observation time, not the displayed excerpt end. */
+  readonly availableOutputCursor: string;
   readonly hasMore: boolean;
+  readonly materials?: readonly import("./ProcessOutputMaterials.js").ProcessOutputMaterialView[];
 }
 
 export interface ProcessExecutionFact {
   readonly activationId?: string;
-  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "scope_members" | "input_notified" | "initial_delivery_committed" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired" | "reconciled" | "output_searched";
+  readonly kind: "reserved" | "launching" | "started" | "output" | "root_exit" | "scope_empty" | "scope_members" | "input_notified" | "initial_delivery_committed" | "output_settled" | "termination_requested" | "settled" | "unresolved" | "observation_started" | "observation_returned" | "observation_cancelled" | "cwd" | "finalized" | "retention_expired" | "reconciled";
   readonly sequence: number;
   readonly occurredAt: string;
   readonly snapshot: ProcessSnapshot;
   readonly observation?: ProcessObservation;
-  readonly search?: import("./ProcessOutputSearch.js").ProcessOutputSearchResult;
-  readonly searchReused?: boolean;
+  readonly commandObservation?: import("./CommandObservation.js").CommandObservation;
+  readonly commandCondition?: import("./CommandObservation.js").CommandObservationRequest;
   readonly invocationId?: string;
   readonly waitMs?: number;
   readonly requestedWaitMs?: number;
@@ -78,6 +81,7 @@ export interface ProcessExecutionFact {
   readonly scopeMembers?: ProcessScopeMembers;
   readonly notification?: ProcessInputNotification;
   readonly delivery?: ProcessInitialDelivery;
+  readonly outputDelivery?: {readonly availableCursor: string | null; readonly presentedCursor: string | null};
   readonly outputPositions?: Readonly<Record<ProcessStream, {readonly received: number; readonly retained: number; readonly projected: number; readonly omitted: number; readonly encoding: string | null; readonly integrity: string | null}>>;
 }
 export interface ProcessInitialDelivery {

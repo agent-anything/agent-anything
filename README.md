@@ -79,7 +79,7 @@ Current Helarc capabilities include:
 - Provider-backed Controller and unified Runner execution
 - Complete Read, Glob, Grep, Edit and Write Tools
 - Permission-gated Bash/PowerShell with Run-owned processes, bounded initial waits,
-  independent TaskOutput observations and exact TaskStop control
+  independent CommandObserve state/waits, generic ContextMaterialRead/ContextMaterialSearch output access and exact CommandStop control
 - Model-requested Agent delegation, concurrent descendants and explicit resume
 - Multiple pending user questions, approvals and Run cancellation
 - Patch proposal, review, and application flow
@@ -333,8 +333,8 @@ override the next task without rewriting saved defaults. Active work and its
 subtasks retain their captured configuration.
 
 Ollama and DeepSeek reasoning is displayed separately and preserved for required
-history replay. Qualification applies to the exact effective configuration,
-not just a model name. Changing thinking mode or effort requires its own evidence.
+history replay. Helarc validates actual configuration and native Tool protocol
+support; it does not run model evaluation or consume evaluation reports.
 
 HTTP provider URLs are accepted only for loopback addresses.
 Provider timeout values use positive whole-second increments expressed in milliseconds.

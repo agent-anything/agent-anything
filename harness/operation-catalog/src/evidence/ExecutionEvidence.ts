@@ -1,5 +1,5 @@
 import {
-  operationRevisionKey, snapshotOperationBindingRevisionRef, snapshotOperationCorrelation,
+  operationDefinitionRevisionKey, snapshotOperationBindingRevisionRef, snapshotOperationCorrelation,
   snapshotOperationInvocationRef, type OperationBindingRevisionRef, type OperationCorrelation,
 } from "../identity/index.js";
 import type { OperationLowerResultRef, OperationResultRef, OperationResult } from "../result/OperationResult.js";
@@ -102,7 +102,7 @@ export function snapshotExecutionEvidence(input: ExecutionEvidenceRecord): Execu
   strictRecord(input.source.result, "evidence.source.result", ["id", "invocation"]);
   const invocation = snapshotOperationInvocationRef(input.source.result.invocation);
   const binding = snapshotOperationBindingRevisionRef(input.source.binding);
-  if (operationRevisionKey(invocation.operation) !== operationRevisionKey(binding.operation)) invalid("source binding");
+  if (operationDefinitionRevisionKey(invocation.operation) !== operationDefinitionRevisionKey(binding.operation)) invalid("source binding");
   strictRecord(input.outcome, "evidence.outcome", ["status", "effectCertainty", "completionExtent"]);
   if (!["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"].includes(input.outcome.status) ||
       !["none", "confirmed", "partial", "unknown"].includes(input.outcome.effectCertainty) ||

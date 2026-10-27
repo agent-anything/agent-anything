@@ -409,7 +409,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.working-conversation-baseline-result`,
+      id: `${definition.ref.id}.responsibility-composition-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -420,7 +420,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.working-conversation.report.baseline",
+      id: "helarc.responsibility-composition.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -466,7 +466,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.final-plan-submission.report.baseline",
+      id: "helarc.working-conversation.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -482,13 +482,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.working-conversation.baseline-acceptance",
+      id: "helarc.responsibility-composition.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "working-conversation-v1",
+      revision: "responsibility-composition-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -497,14 +497,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Frozen openings, accepted exchange replay and scoped Child history replace the mutable state tail. Outcome and safety gates remain unchanged; the logical clock includes one opening checkpoint per model-backed Run. Actual cross-process recovery is verified separately.",
+      "Task judgment, representation preparation, model access and execution coordination have distinct owners. Outcome and safety gates remain unchanged; the logical clock also counts durable model-activity binding. Actual elapsed performance and cross-process recovery are verified separately.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.final-plan-submission.baseline-acceptance",
+      id: "helarc.working-conversation.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -529,10 +529,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v27-")) {
-    throw new TypeError(`Unknown working-conversation Target revision '${revision}'.`);
+  if (!revision.startsWith("v28-")) {
+    throw new TypeError(`Unknown responsibility-composition Target revision '${revision}'.`);
   }
-  return revision.replace(/^v27-/, "v26-");
+  return revision.replace(/^v28-/, "v27-");
 }
 
 function gradeExpectedOutcome(

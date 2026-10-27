@@ -9,7 +9,6 @@ describe("resolveHelarcProviderConfig", () => {
       HELARC_PROVIDER_API_KEY: " secret-key ",
       HELARC_PROVIDER_MODEL: " model-a ",
       HELARC_PROVIDER_TIMEOUT_MS: "1500",
-      HELARC_MODEL_QUALIFICATION_POLICY: "require_qualified",
     });
 
     expect(result).toEqual({
@@ -35,7 +34,6 @@ describe("resolveHelarcProviderConfig", () => {
         ollamaRuntime: null,
         credentialStatus: "present",
         modelSettings: { service: "generic", thinking: { mode: "default" } },
-        qualificationPolicy: "require_qualified",
         isActive: true,
       },
     });
@@ -100,7 +98,6 @@ describe("resolveHelarcProviderConfig", () => {
         baseUrl: "http://localhost:11435/",
         baseUrlOrigin: "http://localhost:11435",
         credentialStatus: "empty_allowed",
-        qualificationPolicy: "allow_experimental",
         timeoutMs: 300_000_000,
         ollamaRuntime: {
           contextWindowTokens: 163_840,
@@ -134,39 +131,6 @@ describe("resolveHelarcProviderConfig", () => {
       HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
       HELARC_PROVIDER_MODEL: "gemma4:e4b",
       HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS: "0",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: "provider_config_invalid",
-        message: "Provider configuration is invalid.",
-        missingKeys: [],
-      },
-    });
-  });
-
-  it("accepts explicit strict model qualification", () => {
-    const result = resolveHelarcProviderConfig({
-      HELARC_PROVIDER_KIND: "ollama",
-      HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
-      HELARC_PROVIDER_MODEL: "gemma4:e4b",
-      HELARC_MODEL_QUALIFICATION_POLICY: "require_qualified",
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      profile: {
-        qualificationPolicy: "require_qualified",
-      },
-    });
-  });
-
-  it("rejects an unknown model qualification policy instead of defaulting", () => {
-    const result = resolveHelarcProviderConfig({
-      HELARC_PROVIDER_BASE_URL: "https://provider.local/v1",
-      HELARC_PROVIDER_MODEL: "model-a",
-      HELARC_MODEL_QUALIFICATION_POLICY: "permissive",
     });
 
     expect(result).toEqual({

@@ -4,7 +4,7 @@ import {
   type ModelCallableDefinition,
   type ModelInstructions,
   type ModelMessage,
-  type ModelToolCall,
+  type ModelCallableRequest,
   type Provider,
   type ProviderRequest,
 } from "@agent-anything/model-interaction";
@@ -141,7 +141,7 @@ export function createNativeProviderRequest(
 }
 
 export function createSettledToolResultMessage(
-  call: ModelToolCall,
+  call: ModelCallableRequest,
 ): Extract<ModelMessage, { readonly role: "tool" }> {
   return {
     role: "tool",

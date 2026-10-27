@@ -8,7 +8,7 @@ describe("Current-turn Tool Exposure deterministic Evaluation", () => {
 
     expect(byId.get("full-model-origin-exposure")).toMatchObject({
       selectedModelToolCount: 2,
-      exposedToolNames: ["Read", "TaskStop"],
+      exposedToolNames: ["Read", "CommandStop"],
       omittedToolCount: 0,
     });
     expect(byId.get("controlled-resource-absence")).toMatchObject({
@@ -21,7 +21,7 @@ describe("Current-turn Tool Exposure deterministic Evaluation", () => {
       omittedToolCount: 2,
     });
     expect(byId.get("controlled-resource-reappearance")?.exposedToolNames)
-      .toEqual(["Read", "TaskStop"]);
+      .toEqual(["Read", "CommandStop"]);
     expect(report).toMatchObject({
       incompleteAssessmentFailureCode: "tool_exposure_assessment_missing",
       workflowOnlyToolExcluded: true,

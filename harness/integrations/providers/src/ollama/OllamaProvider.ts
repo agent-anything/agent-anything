@@ -15,16 +15,16 @@ import {
   providerResultFromInterruption,
   snapshotProviderRequest,
   snapshotProviderResponse,
+  snapshotProviderFailure,
   type ModelJsonValue,
   type ModelInstructions,
   type ModelMessage,
-  type ModelToolCall,
+  type ModelCallableRequest,
   type ModelToolResult,
   type ModelTurnFinish,
   type Provider,
   type ProviderCallResult,
   type ProviderDescriptor,
-  type ProviderFailure,
   type ProviderInteraction,
   type ProviderModelContext,
   type ProviderRequest,
@@ -58,6 +58,10 @@ const MAX_RESPONSE_TEXT_LENGTH = 64_000;
 interface OllamaHttpErrorDiagnostic {
   readonly message: string | null;
   readonly truncated: boolean;
+  readonly errorType: string | null;
+  readonly errorCode: string | null;
+  readonly reportedInputTokens: number | null;
+  readonly reportedContextTokens: number | null;
 }
 
 export interface OllamaProviderConfig {
@@ -295,7 +299,7 @@ export class OllamaProvider implements Provider {
         const interruptedAfterFailureBody = providerResultFromInterruption(attempt.cause);
         if (interruptedAfterFailureBody !== null) return interruptedAfterFailureBody;
         const contextWindowExceeded = response.status === 400 &&
-          isOllamaContextWindowExceeded(diagnostic.message);
+          isOllamaContextWindowExceeded(diagnostic);
         const classification = contextWindowExceeded
           ? Object.freeze({
               category: "invalid_request",
@@ -321,6 +325,10 @@ export class OllamaProvider implements Provider {
             metadata: {
               ollamaError: diagnostic.message,
               ollamaErrorTruncated: diagnostic.truncated,
+              ollamaErrorType: diagnostic.errorType,
+              ollamaErrorCode: diagnostic.errorCode,
+              providerCapacityDiagnostic: {source: "provider_reported", inputTokens: diagnostic.reportedInputTokens,
+                contextTokens: diagnostic.reportedContextTokens},
               ...(contextWindowExceeded
                 ? {
                     contextWindowTokens: this.config.runtime.contextWindowTokens,
@@ -633,7 +641,7 @@ function mapOllamaChatResponse(
     });
     const assistantContent: Array<
       | { readonly kind: "text"; readonly text: string }
-      | { readonly kind: "model_tool_call"; readonly call: ModelToolCall }
+      | { readonly kind: "model_tool_call"; readonly call: ModelCallableRequest }
     > = [];
     if (content.length > 0) assistantContent.push({ kind: "text", text: content });
     // An output-limit finish rejects the entire call set, including complete-looking calls.
@@ -686,7 +694,7 @@ function readOllamaToolCall(
   request: ProviderRequest,
   turnId: string,
   ordinal: number,
-): ModelToolCall {
+): ModelCallableRequest {
   if (!isRecord(value) || !isRecord(value.function)) {
     throw new TypeError("Ollama Tool call must contain a function.");
   }
@@ -864,18 +872,29 @@ async function readOllamaHttpErrorDiagnostic(
   try {
     body = await response.json();
   } catch {
-    return Object.freeze({ message: null, truncated: false });
+    body = null;
   }
-  if (!isRecord(body) || typeof body.error !== "string") {
-    return Object.freeze({ message: null, truncated: false });
+  let value = isRecord(body) ? body.error : null;
+  // Only unwrap known error envelopes; do not recursively parse arbitrary diagnostics.
+  for (let depth = 0; depth < 4; depth++) {
+    if (typeof value === "string" && value.length <= MAX_PROVIDER_HTTP_DIAGNOSTIC_MESSAGE_LENGTH) {
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (!isRecord(parsed)) break;
+        value = parsed;
+      } catch { break; }
+    } else if (isRecord(value) && "error" in value) value = value.error;
+    else break;
   }
-  const bounded = boundProviderHttpDiagnosticText(
-    body.error,
-    MAX_PROVIDER_HTTP_DIAGNOSTIC_MESSAGE_LENGTH,
-  );
+  const text = typeof value === "string" ? value : isRecord(value) && typeof value.message === "string" ? value.message : null;
+  const bounded = text === null ? null : boundProviderHttpDiagnosticText(text, MAX_PROVIDER_HTTP_DIAGNOSTIC_MESSAGE_LENGTH);
+  const identifier = (key: string) => isRecord(value) && typeof value[key] === "string" && value[key].length <= 128 ? value[key] : null;
   return Object.freeze({
-    message: bounded.value,
-    truncated: bounded.truncated,
+    message: bounded?.value ?? null,
+    truncated: bounded?.truncated ?? false,
+    errorType: identifier("type"), errorCode: identifier("code"),
+    reportedInputTokens: isRecord(value) ? readCount(value.n_prompt_tokens) : null,
+    reportedContextTokens: isRecord(value) ? readCount(value.n_ctx) : null,
   });
 }
 
@@ -891,9 +910,11 @@ function formatOllamaHttpFailureMessage(
     `${renderProviderHttpRequestDiagnostic(request)}.`;
 }
 
-function isOllamaContextWindowExceeded(message: string | null): boolean {
-  return message !== null &&
-    message.toLowerCase().includes("input length exceeds the context length");
+function isOllamaContextWindowExceeded(diagnostic: OllamaHttpErrorDiagnostic): boolean {
+  if ([diagnostic.errorType, diagnostic.errorCode].includes("exceed_context_size_error")) return true;
+  const message = diagnostic.message?.toLowerCase();
+  return message !== undefined && (message.includes("input length exceeds the context length") ||
+    /request \(\d+ tokens\) exceeds the available context size \(\d+ tokens\)/.test(message));
 }
 
 function readCount(value: unknown): number | null {
@@ -917,7 +938,7 @@ function failed(
     metadata?: Record<string, unknown>;
   } = {},
 ): ProviderCallResult {
-  const failure: ProviderFailure = {
+  const failure = snapshotProviderFailure({
     category,
     code,
     message,
@@ -925,7 +946,7 @@ function failed(
     retryAfterMs: input.retryAfterMs,
     requestId: input.requestId,
     metadata: input.metadata ?? {},
-  };
+  });
   return { kind: "failed", failure };
 }
 

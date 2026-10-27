@@ -47,7 +47,7 @@ describe("Action Execution public API", () => {
     for (const api of publicApis) {
       expect(api).not.toHaveProperty("ToolActionBindingValidationError");
       expect(api).not.toHaveProperty("createToolActionBindingSnapshot");
-      expect(api).not.toHaveProperty("Runner");
+      expect(api).not.toHaveProperty("RunExecutionCoordinator");
       expect(api).not.toHaveProperty("RunState");
       expect(api).not.toHaveProperty("createActionDispatchPlan");
       expect(api).not.toHaveProperty("prepareSandboxDispatch");

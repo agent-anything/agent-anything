@@ -1,4 +1,4 @@
-import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
 import type { DelegationOriginCorrelation } from "@agent-anything/agent-core/delegation";
 import type { ToolCall } from "@agent-anything/tools/invocation";
 import { describe, expect, it } from "vitest";
@@ -17,12 +17,12 @@ import {
   type DelegationPreparation,
 } from "./DelegationRequest.js";
 import {
-  deriveDelegationAuthority,
-  snapshotDelegationAuthorityDerivation,
-  type DelegationAuthorityDimensionInput,
-  type DelegationAuthoritySourceInput,
-  type DelegationAuthoritySourceRole,
-} from "./DelegationAuthority.js";
+  deriveDelegationExecutionConstraints,
+  snapshotDelegationExecutionConstraints,
+  type DelegationExecutionConstraintInput,
+  type DelegationExecutionConstraintSourceInput,
+  type DelegationExecutionConstraintSourceRole,
+} from "./DelegationExecutionConstraints.js";
 import {
   deriveDelegationLimits,
   snapshotDelegationLimitDerivation,
@@ -38,7 +38,7 @@ import {
   snapshotDelegationSteeringRoute,
 } from "./DelegationControl.js";
 
-const CHILD_AGENT: AgentRevisionRef = Object.freeze({
+const CHILD_AGENT: AgentDefinitionRevisionRef = Object.freeze({
   id: "agent-child",
   revision: "agent-child-v1",
 });
@@ -58,11 +58,11 @@ describe("delegation authority", () => {
     ]);
     expect(authority.deadlineAt).toBe("2026-08-25T00:06:00.000Z");
     expect(Object.isFrozen(authority.sources)).toBe(true);
-    expect(snapshotDelegationAuthorityDerivation(authority)).toEqual(authority);
+    expect(snapshotDelegationExecutionConstraints(authority)).toEqual(authority);
   });
 
   it("rejects incomplete authority-source coverage", () => {
-    expect(() => deriveDelegationAuthority({
+    expect(() => deriveDelegationExecutionConstraints({
       derivationId: "authority-1",
       sources: authoritySources().slice(0, 2),
     })).toThrow(/root, parent, and current-policy/);
@@ -79,7 +79,7 @@ describe("delegation authority", () => {
       ),
     };
 
-    expect(() => snapshotDelegationAuthorityDerivation(forged)).toThrow(
+    expect(() => snapshotDelegationExecutionConstraints(forged)).toThrow(
       /effective result is inconsistent/,
     );
   });
@@ -436,7 +436,7 @@ function request(overrides: {
 function preparation(overrides: {
   readonly contextEntries?: readonly ReturnType<typeof material>[];
   readonly allocationRequest?: ReturnType<typeof limits>;
-  readonly authorityRestriction?: readonly DelegationAuthorityDimensionInput[] | null;
+  readonly authorityRestriction?: readonly DelegationExecutionConstraintInput[] | null;
 } = {}): DelegationPreparation {
   return {
     schemaVersion: 1,
@@ -538,7 +538,7 @@ function toolCall(): ToolCall {
 }
 
 function authorityDerivation() {
-  return deriveDelegationAuthority({
+  return deriveDelegationExecutionConstraints({
     derivationId: "authority-1",
     sources: authoritySources(),
   });
@@ -580,8 +580,8 @@ function limitSources(): readonly DelegationLimitSourceInput[] {
   }));
 }
 
-function authoritySources(): readonly DelegationAuthoritySourceInput[] {
-  const roles: readonly DelegationAuthoritySourceRole[] = [
+function authoritySources(): readonly DelegationExecutionConstraintSourceInput[] {
+  const roles: readonly DelegationExecutionConstraintSourceRole[] = [
     "root",
     "parent",
     "current_policy",
@@ -600,8 +600,8 @@ function authoritySources(): readonly DelegationAuthoritySourceInput[] {
 }
 
 function authorityDimensions(
-  role: DelegationAuthoritySourceRole,
-): readonly DelegationAuthorityDimensionInput[] {
+  role: DelegationExecutionConstraintSourceRole,
+): readonly DelegationExecutionConstraintInput[] {
   const kinds = [
     "workspace",
     "tool",

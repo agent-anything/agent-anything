@@ -13,8 +13,8 @@ import {
   type ApprovalPolicy,
   type PermissionProfileDefinition,
   type PermissionResolutionEnvironmentInput,
-  type SessionAuthorityContext,
-  type SessionAuthorityPort,
+  type SessionAuthorizationScope,
+  type SessionAuthorizationStore,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { isReviewCapablePolicy, type ApprovalReviewerBinding, type AuthorityApplicationLimits, type ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
@@ -26,8 +26,8 @@ export interface HostPermissionProfileSelection {
 }
 
 export interface HostSessionAuthorityComposition {
-  readonly context: SessionAuthorityContext;
-  readonly port: SessionAuthorityPort;
+  readonly context: SessionAuthorizationScope;
+  readonly port: SessionAuthorizationStore;
   readonly maxInitialRecords: number;
 }
 

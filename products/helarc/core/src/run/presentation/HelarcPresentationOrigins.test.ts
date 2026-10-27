@@ -8,37 +8,11 @@ import {
 } from "./HelarcRunPresentation.js";
 import type { RuntimeEvent } from "@agent-anything/observability";
 import {
-  createHelarcProductRunProjection as createProjection,
+  createHelarcProductRunProjection,
   reduceHelarcProductRunProjection,
   type HelarcProductRunProjection,
   type HelarcProductRunProjectionUpdate,
 } from "../HelarcRunProjection.js";
-
-function createHelarcProductRunProjection(runId: string) {
-  return createProjection(runId, {
-    providerKind: "openai-compatible",
-    modelId: "test-model",
-    modelIdentityStrength: "unknown",
-    status: "experimental",
-    policy: "allow_experimental",
-    experimentalUseSelected: true,
-    scopes: [
-      {
-        scope: "agent_loop",
-        applicability: "absent",
-        outcome: null,
-        decidedAt: null,
-        limitations: [],
-      },
-    ],
-    reasons: ["scope_absent:agent_loop"],
-    toolGuidance: {
-      releaseId: "test-guidance",
-      releaseRevision: `sha256:${"0".repeat(64)}`,
-      profileRevision: "test-profile.v1",
-    },
-  });
-}
 
 function record(sequence: number, payload: unknown): RunTranscriptRecord {
   return {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createOperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
+import { createOperationDefinitionCatalog } from "@agent-anything/operation-catalog/catalog";
 import { createToolRegistrationSnapshot, type RegisteredTool } from "@agent-anything/tools/registration";
 import type { ToolDescriptorInput } from "@agent-anything/tools/catalog";
 import {
@@ -297,7 +297,7 @@ describe("Helarc Product Tool Guidance", () => {
 });
 
 function registeredTools(...names: string[]): readonly RegisteredTool[] {
-  const operationCatalog = createOperationCatalogSnapshot({
+  const operationCatalog = createOperationDefinitionCatalog({
     id: "empty-operation-catalog",
     revision: "1",
     entries: [],

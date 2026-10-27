@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ControllerResponseObservation } from "@agent-anything/agent-runtime/controller";
+import type { ModelResponseObservation } from "@agent-anything/agent-runtime/model-access";
 import type { ProviderDeliveryEvent } from "@agent-anything/model-interaction";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import { HelarcResponsePreviewStore } from "./HelarcResponsePreviews.js";
@@ -10,7 +10,7 @@ function delivery(
   event: ProviderDeliveryEvent,
   runId = "root",
   invocationId = "attempt-1",
-): ControllerResponseObservation {
+): ModelResponseObservation {
   return {
     kind: "delivery",
     runId,
@@ -25,7 +25,7 @@ function delivery(
 }
 function interpreted(
   disposition: "validated" | "rejected" = "validated",
-): ControllerResponseObservation {
+): ModelResponseObservation {
   return {
     kind: "interpretation",
     runId: "root",

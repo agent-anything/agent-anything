@@ -1,6 +1,6 @@
 import {contextMaterialDigest, type ContextMaterialDocument} from "@agent-anything/context/material";
-import type {RunCommit} from "@agent-anything/agent-runtime/runner";
-import type {RetainedInputPresentation} from "@agent-anything/agent-runtime/controller";
+import type {RunCommit} from "@agent-anything/agent-runtime/execution-coordinator";
+import type {RetainedInputPresentation} from "@agent-anything/agent-runtime/decision";
 
 /** Only newly accepted public presentations are indexed; neither checkpoints nor reasoning are material. */
 export function projectContextMaterials(commit: RunCommit, previousItemCount: number): readonly ContextMaterialDocument[] {

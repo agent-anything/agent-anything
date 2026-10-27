@@ -19,7 +19,7 @@ import {
   type ModelCallRef,
   type ModelCallableDefinition,
   type ModelMessage,
-  type ModelToolCall,
+  type ModelCallableRequest,
 } from "./index.js";
 import {
   composeModelInput,
@@ -449,7 +449,7 @@ function toolCallBlock(ordinal: number) {
   return { kind: "model_tool_call" as const, call: toolCall(ordinal) };
 }
 
-function toolCall(ordinal: number, id = `model-call-${ordinal}`): ModelToolCall {
+function toolCall(ordinal: number, id = `model-call-${ordinal}`): ModelCallableRequest {
   return {
     modelCallRef: callRef(ordinal, id),
     providerCallRef: { providerId: "provider-1", id: `provider-call-${ordinal}` },

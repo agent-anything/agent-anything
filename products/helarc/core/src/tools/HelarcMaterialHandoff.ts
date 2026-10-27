@@ -20,6 +20,6 @@ export async function validateHelarcFinalMaterials(response: ProviderResponse, r
     return null;
   } catch (error) {
     if (!(error instanceof ContextMaterialError)) throw error;
-    return `${error.code}: ${error.message} Copy accessible references from ContextSearch, or omit the attachment; successful work need not be repeated.`;
+    return `${error.code}: ${error.message} Copy accessible references from ContextMaterialSearch, or omit the attachment; successful work need not be repeated.`;
   }
 }

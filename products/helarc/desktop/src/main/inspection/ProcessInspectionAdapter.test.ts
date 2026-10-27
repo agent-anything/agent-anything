@@ -3,7 +3,7 @@ import {tmpdir} from "node:os";
 import {join,relative} from "node:path";
 import {expect,it} from "vitest";
 import {InspectionQueryService} from "@agent-anything/inspection/query";
-import {RunProcessManager} from "@agent-anything/helarc-local-environment/command";
+import {RunProcessManager, type ProcessExecutionFact} from "@agent-anything/helarc-local-environment/command";
 import {HelarcInspection} from "./HelarcInspection.js";
 
 it("records independent process lifetimes and immutable observations before Run finalization",async()=>{
@@ -19,7 +19,9 @@ it("records independent process lifetimes and immutable observations before Run 
     return {processId:100+publishers.size,helperProcessId:200+publishers.size,startIdentity:request.executionId,
       async terminate(){publish({kind:"root_exit",code:1,signal:null});publish({kind:"scope_empty"});publish({kind:"output_closed",incomplete:false});return "forced";},async close(){}};
   }};
-  const manager=new RunProcessManager({backend,maximumActive:4,maximumSettled:8,observer:inspection.processObserver});
+  const facts: ProcessExecutionFact[] = [];
+  const manager=new RunProcessManager({backend,maximumActive:4,maximumSettled:8,
+    observer:fact => {facts.push(fact); inspection.processObserver?.(fact);}});
   const controller=new AbortController();
   const start=(id:string)=>manager.start({runId:"run",executionId:id,actionId:`${id}-action`,origin:{invocationId:`${id}-start`,runActionId:`${id}-run-action`,attemptId:`${id}-attempt`},
     environmentId:"local",executable:"fixture",args:[],cwd:directory,environment:{},timeoutMs:10000,deadlineAt:new Date(Date.now()+20000).toISOString(),runSignal:controller.signal,
@@ -31,6 +33,8 @@ it("records independent process lifetimes and immutable observations before Run 
     expect(observed.snapshot.phase).toBe("running");
     manager.commitInitialDelivery({runId:"run",executionId:"a",runActionId:"a-run-action",settlementId:"initial-call",
       observationId:observed.id,cursor:observed.nextCursor});
+    expect(facts.find(fact => fact.kind === "initial_delivery_committed")?.outputDelivery).toEqual({
+      availableCursor: observed.availableOutputCursor, presentedCursor: observed.nextCursor});
     const r=inspection.recorder!;
     await r.flush();
     expect(r.health().available,JSON.stringify(r.health())).toBe(true);
@@ -51,17 +55,20 @@ it("records independent process lifetimes and immutable observations before Run 
     expect(commandTimeline.intervals.find(i=>i.activity === "process-output" && i.subject.id === "a")?.end).not.toBeNull();
     const notifications=manager.readInputNotifications("run",0);
     expect(notifications).toHaveLength(2);
+    expect(facts.filter(fact => fact.kind === "input_notified").every(fact =>
+      typeof fact.outputDelivery?.availableCursor === "string")).toBe(true);
     const notificationData=await queries.query({kind:"get_data_flow",...commandDone,subject:r.ref(notifications[0]!.source.owner,"contribution",notifications[0]!.source.id,"run",notifications[0]!.source.revision)});
     expect(notificationData.graph?.links).toContainEqual(expect.objectContaining({kind:"produces",from:expect.objectContaining({kind:"process",id:"a"})}));
     finish({kind:"scope_empty"});
     await expect.poll(()=>manager.get("run","a").phase).toBe("settled");
     const returned=await manager.observe({runId:"run",executionId:"a",invocationId:"later",waitMs:0,signal:controller.signal});
     expect(returned.stdout.text).toBe("captured-output");
-    await manager.searchOutput({runId:"run",executionId:"a",invocationId:"search",search:{query:"captured"},signal:controller.signal});
+    const command=await manager.observeCommand({runId:"run",executionId:"a",invocationId:"status",request:{until:"settled",waitMs:0},signal:controller.signal,deadlineAt:new Date(Date.now()+60_000).toISOString()});
     await r.flush();
     const current=(await queries.query({kind:"get_snapshot",...ids})).selection!;
-    const searched=await queries.query({kind:"get_data_flow",...current,subject:r.ref("helarc-command","contribution","search","run","1")});
-    expect(searched.graph?.links).toContainEqual(expect.objectContaining({kind:"produces",from:expect.objectContaining({kind:"process",id:"a"})}));
+    const observedFlow=await queries.query({kind:"get_data_flow",...current,subject:r.ref("helarc-command","process-observation",command.id,"run","1")});
+    expect(facts.find(fact=>fact.commandObservation)?.commandObservation).toMatchObject({request:{until:"settled"},materials:[{bytes:15},{bytes:0}]});
+    expect(observedFlow.graph?.links).toContainEqual(expect.objectContaining({kind:"includes",from:expect.objectContaining({owner:"context",id:command.materials[0]!.reference.id})}));
     expect((await queries.query({kind:"get_subject",...before,subject})).records[0]?.payload).toMatchObject({kind:"process",phase:"running"});
     expect((await queries.query({kind:"get_subject",...current,subject})).records[0]?.payload).toMatchObject({kind:"process",phase:"settled"});
     const lifetime=await queries.query({kind:"get_timeline",...current,runId:"run",limit:500});
@@ -71,13 +78,14 @@ it("records independent process lifetimes and immutable observations before Run 
       expect.objectContaining({label:"Root exit 0",occurredAt:returned.snapshot.rootExit!.observedAt}),
     ]);
     expect(lifetime.intervals.find(i=>i.activity === "process" && i.subject.id === "b")?.end).toBeNull();
-    expect(lifetime.intervals.filter(i=>i.activity === "wait")).toHaveLength(2);
+    expect(lifetime.intervals.filter(i=>i.activity === "wait")).toHaveLength(3);
     const observation=r.ref("helarc-command","process-observation",returned.id,"run","1");
     const data=await queries.query({kind:"get_data_flow",...current,subject:observation});
     expect(data.graph?.links).toContainEqual(expect.objectContaining({kind:"observes",to:expect.objectContaining({id:"a",revision:String(returned.snapshot.revision)})}));
     const included=data.graph?.links.filter(link=>link.kind === "includes" && link.to.id === returned.id);
-    expect(included).toHaveLength(2);
-    expect(included?.every(link=>link.sourceLocation?.contentId && link.targetLocation?.contentId)).toBe(true);
+    expect(included).toHaveLength(4);
+    expect(included?.filter(link=>link.from.owner==="helarc-command").every(link=>link.sourceLocation?.contentId && link.targetLocation?.contentId)).toBe(true);
+    expect(included?.filter(link=>link.from.owner==="context")).toHaveLength(2);
     const lifecycle=await queries.query({kind:"get_lifecycle",...current,subject});
     expect(lifecycle.records.filter(record=>record.payload.kind === "transition").map(record=>record.payload.kind === "transition" ? record.payload.to:null)).toEqual(["starting","running","draining","settled"]);
     expect(lifecycle.relatedRecords?.length).toBeGreaterThan(0);

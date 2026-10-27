@@ -8,7 +8,7 @@ import type { ToolFailure } from "@agent-anything/tools/result";
 import type { OperationFailure } from "@agent-anything/operation-catalog/result";
 import type { InteractionFailure } from "@agent-anything/interaction/protocol";
 import type { CompositeFailure } from "@agent-anything/operation-composition/result";
-import type { ModelFailure } from "../controller/ModelFailure.js";
+import type { ModelFailure } from "../decision/ModelFailure.js";
 
 export interface RuntimeFailure {
   readonly code: string;

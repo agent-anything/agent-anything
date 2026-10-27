@@ -1,12 +1,12 @@
 import {
-  ControllerError,
+  TaskDecisionActivityError,
   createControllerModelItems,
   createModelOutputRecoverySection,
-  type ControllerDecision,
-  type ControllerInput,
+  type TaskDecisionProposal,
+  type TaskDecisionInputSources,
   type ProgressionCandidate,
   type ProviderRequestBuildContext,
-} from "@agent-anything/agent-runtime/controller";
+} from "@agent-anything/agent-runtime/decision";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { HELARC_REQUEST_EXECUTION_FLOW, HELARC_RESPONSE_EXECUTION_FLOW } from "./HelarcControllerExecutionFlow.js";
 import {
@@ -15,7 +15,7 @@ import {
 } from "@agent-anything/model-interaction/input";
 import {
   createNativeToolTurnInteraction,
-  type ModelToolCall,
+  type ModelCallableRequest,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
@@ -33,11 +33,8 @@ import type { HelarcControllerProtocolComposition } from "./HelarcControllerProt
 import { helarcOpeningBackground, type HelarcExecutionBackground } from "../prompt/HelarcConversationOpening.js";
 import { createHelarcUnknownCallableRejection } from "./HelarcModelCallFeedback.js";
 import { finalResultInputError } from "./HelarcFinalResultInput.js";
-import type {
-  HelarcModelQualificationResolution,
-} from "../model-qualification/index.js";
 
-import { resolveHelarcFinalReply, HELARC_ENDING_SIGNAL_FEEDBACK, type HelarcFinalReplyResolution } from "./HelarcFinalReply.js";
+import { resolveHelarcFinalReply, createHelarcEndingSignalFeedback, type HelarcFinalReplyResolution } from "./HelarcFinalReply.js";
 import {snapshotContextMaterialRefs, type ContextMaterialRef} from "@agent-anything/context/material";
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
@@ -56,10 +53,9 @@ class HelarcInstructionModelMismatchError extends TypeError {
 }
 
 export function buildHelarcProviderRequest(
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
-  qualification: HelarcModelQualificationResolution,
   executionBackground?: HelarcExecutionBackground,
 ): ProviderRequest {
   const flow = new ExecutionFlowPath(HELARC_REQUEST_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId);
@@ -70,7 +66,7 @@ export function buildHelarcProviderRequest(
       const background = helarcOpeningBackground(input, executionBackground);
       flow.material("Bound execution background", "bound", background.value, "agent", background.source);
     }
-    const request = buildRequest(input, context, protocol, qualification, executionBackground);
+    const request = buildRequest(input, context, protocol, executionBackground);
     step.check("instruction_binding", "passed", {bindingId:input.instructionBinding.ref.id});
     step.check("settled_interaction", "passed");
     const compositionRef = flow.material("Model input composition", "composed", request.composition, "provider");
@@ -85,10 +81,9 @@ export function buildHelarcProviderRequest(
 }
 
 function buildRequest(
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
-  qualification: HelarcModelQualificationResolution,
   executionBackground?: HelarcExecutionBackground,
 ): ProviderRequest {
   assertInstructionModelIdentity(input, context);
@@ -141,12 +136,7 @@ function buildRequest(
       toolGuidance: source("helarc", "tool_guidance_binding", toolGuidanceBinding.id, toolGuidanceBinding.contentDigest),
       controllerControlGuidance: source("helarc", "controller_control_guidance", protocol.controlGuidance.id, protocol.controlGuidance.revision),
       callableDefinitions: source("helarc", "model_callable_definitions", callableCatalog.revision, callableCatalog.definitionsDigest),
-      modelQualification: source(
-        "helarc",
-        "model_qualification_disposition",
-        qualification.target.id,
-        qualification.disposition.id,
-      ),
+      modelQualification: null,
       interactionHistory: input.interaction.messages.length === 0
         ? null
         : source("agent-runtime", "model_interaction_projection", input.interaction.id, input.interaction.revision),
@@ -198,12 +188,6 @@ function buildRequest(
       toolGuidanceProfileRevision: toolGuidanceBinding.guidanceProfileRevision,
       toolGuidanceContentDigest: toolGuidanceBinding.contentDigest,
       controllerControlGuidanceRevision: callableCatalog.controlGuidanceRevision,
-      modelQualificationTargetId: qualification.target.id,
-      modelUseDispositionId: qualification.disposition.id,
-      modelUseDispositionStatus: qualification.disposition.status,
-      modelQualificationPolicy: qualification.disposition.policy,
-      modelQualificationScopes: qualification.requiredScopes,
-      modelQualificationReasons: qualification.disposition.reasons,
       interactionProjectionId: input.interaction.id,
       interactionProjectionRevision: input.interaction.revision,
       interactionMessageCount: input.interaction.messages.length,
@@ -228,17 +212,16 @@ function buildRequest(
 
 export function parseHelarcProviderResponse(
   response: ProviderResponse,
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   protocol: HelarcControllerProtocolComposition,
-  qualification: HelarcModelQualificationResolution,
   executionFlow?: ExecutionFlowContext,
   materialReferenceError: string | null = null,
-): ControllerDecision<HelarcAgentOutput> {
+): TaskDecisionProposal<HelarcAgentOutput> {
   const flow = new ExecutionFlowPath(HELARC_RESPONSE_EXECUTION_FLOW, executionFlow ?? {}, input.runId);
   const interpretation = flow.advance("interpret", {controllerRequestId:input.toolExposure.controllerRequestId, responseKind:response.kind},
     [flow.material("Response to interpret", "received", response, "provider")]);
   try {
-    const decision = interpretResponse(response, input, protocol, qualification, materialReferenceError);
+    const decision = interpretResponse(response, input, protocol, materialReferenceError);
     const decisionRef = flow.material("Interpreted Controller decision", "interpreted", decision);
     interpretation.output(decisionRef);
     if (decision.kind === "propose_completion" && decision.output.finalReply) {
@@ -257,11 +240,10 @@ export function parseHelarcProviderResponse(
 
 function interpretResponse(
   response: ProviderResponse,
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   protocol: HelarcControllerProtocolComposition,
-  qualification: HelarcModelQualificationResolution,
   materialReferenceError: string | null,
-): ControllerDecision<HelarcAgentOutput> {
+): TaskDecisionProposal<HelarcAgentOutput> {
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
   }
@@ -269,7 +251,7 @@ function interpretResponse(
   assertTurnCorrelation(response, input);
   const modelItems = createControllerModelItems(
     response.turn,
-    createControllerTraceMetadata(response, input, catalog, qualification),
+    createControllerTraceMetadata(response, input, catalog),
   ).map(item => item.kind === "model_tool_call" ? Object.freeze({
     ...item,
     metadata: Object.freeze({
@@ -305,7 +287,7 @@ function interpretResponse(
       kind: "continue_with_feedback",
       feedback: {source: {owner: "helarc", kind: "controller_protocol", id: HELARC_NATIVE_TOOL_PROTOCOL_REVISION, revision: "4"},
         code: "helarc_ending_signal_missing",
-        message: HELARC_ENDING_SIGNAL_FEEDBACK},
+        message: createHelarcEndingSignalFeedback({hasText: text.length > 0, hasPlan: input.plan !== null})},
       modelItems,
     });
   }
@@ -365,9 +347,9 @@ function interpretResponse(
 }
 
 function bindModelCall(
-  call: ModelToolCall,
+  call: ModelCallableRequest,
   catalog: HelarcModelCallableCatalog,
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
 ): ProgressionCandidate {
   const binding = findHelarcModelCallableBinding(catalog, call.name);
   if (binding === undefined) {
@@ -397,9 +379,9 @@ function bindModelCall(
 
 function assertTurnCorrelation(
   response: Extract<ProviderResponse, { readonly kind: "native_tool_turn" }>,
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
 ): void {
-  // ProviderBackedController checks the actual request ID, including recovery attempts.
+  // The model task coordinator checks the actual request ID, including recovery attempts.
   for (const block of response.turn.assistant.content) {
     if (
       block.kind === "model_tool_call" &&
@@ -412,7 +394,7 @@ function assertTurnCorrelation(
 }
 
 function assertInstructionModelIdentity(
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
 ): void {
   const model = input.agent.instructions.model;
@@ -426,9 +408,8 @@ function assertInstructionModelIdentity(
 
 function createControllerTraceMetadata(
   response: Extract<ProviderResponse, { readonly kind: "native_tool_turn" }>,
-  input: ControllerInput<HelarcAgentOutput>,
+  input: TaskDecisionInputSources<HelarcAgentOutput>,
   callableCatalog: HelarcModelCallableCatalog,
-  qualification: HelarcModelQualificationResolution,
 ): Readonly<Record<string, unknown>> {
   return Object.freeze({
     source: "helarc-controller",
@@ -444,10 +425,6 @@ function createControllerTraceMetadata(
     toolGuidanceId: callableCatalog.toolGuidanceId,
     toolGuidanceContentDigest: callableCatalog.toolGuidanceContentDigest,
     controllerControlGuidanceRevision: callableCatalog.controlGuidanceRevision,
-    modelUseDispositionStatus: qualification.disposition.status,
-    modelQualificationPolicy: qualification.disposition.policy,
-    modelQualificationScopes: qualification.requiredScopes,
-    modelQualificationReasons: qualification.disposition.reasons,
     modelTurnId: response.turn.turnId,
     modelFinishKind: response.turn.finish.kind,
     modelResponseId: response.turn.responseRef.responseId,
@@ -466,7 +443,7 @@ function source(owner: string, kind: string, id: string, revision: string) {
 }
 
 function nativeTurnFailure(code: string): never {
-  throw new ControllerError(Object.freeze({
+  throw new TaskDecisionActivityError(Object.freeze({
     kind: "model",
     failure: Object.freeze({
       code: "model_output_invalid",

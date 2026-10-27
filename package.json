@@ -3,6 +3,8 @@
   "version": "0.0.0",
   "description": "A TypeScript Agent Harness for building tool-using AI agent products with structured tasks, permissions, evidence, and runtime output.",
   "scripts": {
+    "model:evaluate": "node scripts/check-runtime.mjs && node tooling/model-evaluator/server.mjs",
+    "model:evaluate:test": "node --test tooling/model-evaluator/*.test.mjs",
     "runtime:check": "node scripts/check-runtime.mjs",
     "helarc:build": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/helarc-desktop... build",
     "helarc:start": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/helarc-desktop start",

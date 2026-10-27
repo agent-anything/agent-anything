@@ -6,9 +6,6 @@ import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
 import type { ModelContinuationSafeEvent } from "@agent-anything/model-interaction/continuation";
-import type {
-  HelarcModelQualificationSafeProjection,
-} from "../model-qualification/index.js";
 
 export type HelarcModelContinuationProjection = ModelContinuationSafeEvent;
 
@@ -47,7 +44,6 @@ export interface HelarcProductRunProjection {
   readonly runId: string;
   readonly sequence: number;
   readonly phase: HelarcProductPhase;
-  readonly qualification: HelarcModelQualificationSafeProjection;
   readonly activity: readonly HelarcActivityItem[];
   readonly commands:readonly HelarcCommandProgress[];
   readonly presentation: HelarcRunPresentation;
@@ -148,14 +144,12 @@ export type HelarcRunProjectionReduction =
 
 export function createHelarcProductRunProjection(
   runId: string,
-  qualification: HelarcModelQualificationSafeProjection,
 ): HelarcProductRunProjection {
   assertIdentity(runId, "runId");
   return Object.freeze({
     runId,
     sequence: 0,
     phase: Object.freeze({ kind: "none" as const }),
-    qualification: snapshotQualification(qualification),
     activity: Object.freeze([]),
     commands:Object.freeze([]),
     presentation: createHelarcRunPresentation(),
@@ -431,7 +425,6 @@ function snapshotProductResult(result: HelarcProductResult): HelarcProductResult
   }
   return Object.freeze({
     status: result.status,
-    qualification: snapshotQualification(result.qualification),
     runResult: Object.freeze({ ...result.runResult }),
     output: Object.freeze({
       ...result.output,
@@ -461,30 +454,6 @@ function snapshotProductResult(result: HelarcProductResult): HelarcProductResult
     incompleteWork: Object.freeze([...result.incompleteWork]),
     nextActions: Object.freeze([...result.nextActions]),
     artifactRefs: Object.freeze([...result.artifactRefs]),
-  });
-}
-
-function snapshotQualification(
-  qualification: HelarcModelQualificationSafeProjection,
-): HelarcModelQualificationSafeProjection {
-  if (
-    qualification === null || typeof qualification !== "object" ||
-    (qualification.status !== "qualified" &&
-      qualification.status !== "experimental" && qualification.status !== "blocked") ||
-    (qualification.policy !== "require_qualified" &&
-      qualification.policy !== "allow_experimental") ||
-    !Array.isArray(qualification.scopes) || !Array.isArray(qualification.reasons)
-  ) {
-    throw new TypeError("Model qualification projection is invalid.");
-  }
-  return Object.freeze({
-    ...qualification,
-    scopes: Object.freeze(qualification.scopes.map((scope) => Object.freeze({
-      ...scope,
-      limitations: Object.freeze([...scope.limitations]),
-    }))),
-    reasons: Object.freeze([...qualification.reasons]),
-    toolGuidance: Object.freeze({ ...qualification.toolGuidance }),
   });
 }
 

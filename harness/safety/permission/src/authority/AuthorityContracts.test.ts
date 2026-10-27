@@ -6,18 +6,18 @@ import { resolvePermissionProfile } from "../profile/resolvePermissionProfile.js
 import { allowsRetainedFileRead } from "./ActionPermissionAssessment.js";
 import {
   createActionApprovalCoverage,
-  type SessionAuthorityCommit,
-  type SessionAuthorityCommitResult,
-  type SessionAuthorityLookup,
-  type SessionAuthorityPort,
-  type SessionAuthorityRecord,
-  type SessionAuthorityRecordInput,
-  type ValidatedActionAuthority,
+  type SessionAuthorizationCommit,
+  type SessionAuthorizationCommitResult,
+  type SessionAuthorizationLookup,
+  type SessionAuthorizationStore,
+  type SessionAuthorizationBasis,
+  type SessionAuthorizationBasisInput,
+  type ValidatedActionAuthorizationBasis,
 } from "./AuthorityContracts.js";
 import {
   isActionApprovalCoverageApplicable,
-  isSessionAuthorityApplicable,
-  validateSessionAuthorityRecord,
+  isSessionAuthorizationApplicable,
+  validateSessionAuthorizationBasis,
 } from "./validateAuthority.js";
 
 describe("authority contracts", () => {
@@ -38,14 +38,14 @@ describe("authority contracts", () => {
   });
   it("loads all records for an exact Session context when category is null", () => {
     const record = validatedRecord();
-    expect(isSessionAuthorityApplicable(record, {
+    expect(isSessionAuthorizationApplicable(record, {
       context: sessionContext(),
       category: null,
       applicabilityKeys: [],
     })).toBe(true);
   });
   it("creates exact consumable Action coverage", () => {
-    const authority: ValidatedActionAuthority = {
+    const authority: ValidatedActionAuthorizationBasis = {
       id: "coverage_1",
       runId: "run_1",
       actionId: "action_1",
@@ -74,7 +74,7 @@ describe("authority contracts", () => {
   });
 
   it("validates Session context, applicability, and current managed constraints", () => {
-    const result = validateSessionAuthorityRecord({
+    const result = validateSessionAuthorizationBasis({
       record: sessionRecordInput(),
       expectedContext: sessionContext(),
       cwd: "/work/repo",
@@ -85,7 +85,7 @@ describe("authority contracts", () => {
     expect(result).toMatchObject({ status: "valid" });
     if (result.status === "valid") {
       expect(
-        isSessionAuthorityApplicable(result.record, {
+        isSessionAuthorizationApplicable(result.record, {
           context: sessionContext(),
           category: "commandExecution",
           applicabilityKeys: [
@@ -94,7 +94,7 @@ describe("authority contracts", () => {
         }),
       ).toBe(true);
       expect(
-        isSessionAuthorityApplicable(result.record, {
+        isSessionAuthorizationApplicable(result.record, {
           context: sessionContext(),
           category: "commandExecution",
           applicabilityKeys: [
@@ -107,7 +107,7 @@ describe("authority contracts", () => {
 
   it("rejects context mismatch and managed authority denial", () => {
     expect(
-      validateSessionAuthorityRecord({
+      validateSessionAuthorizationBasis({
         record: sessionRecordInput(),
         expectedContext: { ...sessionContext(), workspaceId: "workspace_2" },
         cwd: "/work/repo",
@@ -120,7 +120,7 @@ describe("authority contracts", () => {
     });
 
     expect(
-      validateSessionAuthorityRecord({
+      validateSessionAuthorizationBasis({
         record: sessionRecordInput(),
         expectedContext: sessionContext(),
         cwd: "/work/repo",
@@ -146,7 +146,7 @@ describe("authority contracts", () => {
   });
 
   it("rejects stored Session permissions that are not already canonical", () => {
-    const result = validateSessionAuthorityRecord({
+    const result = validateSessionAuthorizationBasis({
       record: {
         ...sessionRecordInput(),
         grantedPermissions: {
@@ -181,28 +181,28 @@ describe("authority contracts", () => {
   });
 });
 
-class FakeSessionAuthorityPort implements SessionAuthorityPort {
-  readonly commits: SessionAuthorityCommit[] = [];
+class FakeSessionAuthorityPort implements SessionAuthorizationStore {
+  readonly commits: SessionAuthorizationCommit[] = [];
 
-  constructor(private readonly result: SessionAuthorityCommitResult) {}
+  constructor(private readonly result: SessionAuthorizationCommitResult) {}
 
   async listApplicable(
-    _input: SessionAuthorityLookup,
+    _input: SessionAuthorizationLookup,
     _context: InvocationInterruptionContext,
-  ): Promise<readonly SessionAuthorityRecord[]> {
+  ): Promise<readonly SessionAuthorizationBasis[]> {
     return [];
   }
 
   async commit(
-    input: SessionAuthorityCommit,
+    input: SessionAuthorizationCommit,
     _context: InvocationInterruptionContext,
-  ): Promise<SessionAuthorityCommitResult> {
+  ): Promise<SessionAuthorizationCommitResult> {
     this.commits.push(input);
     return this.result;
   }
 }
 
-function sessionRecordInput(): SessionAuthorityRecordInput {
+function sessionRecordInput(): SessionAuthorizationBasisInput {
   const permissions = canonicalizeAdditionalPermissions({
     permissions: { fileSystem: { read: ["src"] } },
     cwd: "/work/repo",
@@ -223,8 +223,8 @@ function sessionRecordInput(): SessionAuthorityRecordInput {
   };
 }
 
-function validatedRecord(): SessionAuthorityRecord {
-  const result = validateSessionAuthorityRecord({
+function validatedRecord(): SessionAuthorizationBasis {
+  const result = validateSessionAuthorizationBasis({
     record: sessionRecordInput(),
     expectedContext: sessionContext(),
     cwd: "/work/repo",

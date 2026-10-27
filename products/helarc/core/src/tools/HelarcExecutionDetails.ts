@@ -1,6 +1,6 @@
-import type { InternalOperationHandler } from "@agent-anything/agent-runtime/runner";
+import type { InternalOperationHandler } from "@agent-anything/agent-runtime/execution-coordinator";
 import { snapshotResolvedOperationBinding, type OperationBindingResolverRegistration } from "@agent-anything/operation-catalog/binding";
-import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
+import type { RegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
 import { executionEvidenceKey, resolveExecutionEvidence, snapshotExecutionEvidenceRef, ExecutionEvidenceUnavailableError,
   type ExecutionEvidenceAccessPort, type ExecutionEvidenceRecordPort, type ExecutionEvidenceRef } from "@agent-anything/operation-catalog/evidence";
 import { createOperationResult, OperationCommitError, type OperationResultContract } from "@agent-anything/operation-catalog/result";
@@ -39,7 +39,7 @@ export interface HelarcExecutionCollectionReader {
 }
 
 export function createHelarcExecutionDetailsContribution(admittedAt: string) {
-  const operation: RegisteredOperation = {admissionId: `${OWNER}.admission`, admittedAt, retirement: null, sourceRevision: "1",
+  const operation: RegisteredOperationDefinition = {admissionId: `${OWNER}.admission`, admittedAt, retirement: null, sourceRevision: "1",
     allowedRequestOrigins: ["tool_request"], operation: {ref: HELARC_EXECUTION_DETAILS_OPERATION, semanticOwner: OWNER,
       requestSchemaRevision: "1", resultSchemaRevision: "1", roles: {requestOrigins: ["tool_request"], exposure: "eager_tool",
         runControl: "internal", trust: "effect_free", participation: "semantic_owner", domainPurpose: "execution.inspect"}},

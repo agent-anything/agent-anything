@@ -2,6 +2,18 @@
 
 ## Highest-Priority Engineering Method
 
+For every design change, including one discovered during implementation,
+verify affected concept names against their confirmed responsibilities. Prefer
+the smallest semantic scope that fully covers the responsibility, without
+implying additional duties or omitting necessary ones. This is not a shortest-
+name rule; precise longer names are welcome. Check adjacent boundaries even
+when no rename was requested, and never change a responsibility silently to fit
+a name. Record a brief verification outcome before accepting the design change.
+The full naming standard is
+`../agent-anything-design/standards/architecture-documentation.md`, under
+"Minimum Sufficient Responsibility Naming", when the design repository is
+available. The rule above applies independently of that file's availability.
+
 For model requests and context, also apply
 `../agent-anything-design/standards/model-request-correctness.md` when available.
 Every request must faithfully represent the objective, applicable constraints

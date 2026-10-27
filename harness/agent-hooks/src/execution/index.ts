@@ -1,7 +1,7 @@
 export type {
-  AgentHookControllerInput,
-} from "./AgentHookController.js";
-export { AgentHookController } from "./AgentHookController.js";
+  AgentHookExtensionsOptions,
+} from "./AgentHookExtensions.js";
+export { AgentHookExtensions } from "./AgentHookExtensions.js";
 export type { AgentHookInvocationCheckpoint, AgentHookInvocationOutcome, AgentHookRecordPort } from "./AgentHookRecordPort.js";
 export { validateAgentHookCheckpoint, interruptedAgentHook } from "./AgentHookRecordPort.js";
 export type {

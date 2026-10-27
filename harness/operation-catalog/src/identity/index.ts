@@ -5,16 +5,16 @@ export type {
   OperationInvocationContext,
   OperationInvocationRef,
   OperationKey,
-  OperationRevisionRef,
+  OperationDefinitionRevisionRef,
   OwnerOperationCorrelation,
   RunActionOperationCorrelation,
   RunRequestOperationCorrelation,
 } from "./OperationIdentity.js";
 export {
-  operationRevisionKey,
+  operationDefinitionRevisionKey,
   snapshotOperationBindingRevisionRef,
   snapshotOperationCorrelation,
   snapshotOperationInvocationRef,
   snapshotOperationKey,
-  snapshotOperationRevisionRef,
+  snapshotOperationDefinitionRevisionRef,
 } from "./OperationIdentity.js";

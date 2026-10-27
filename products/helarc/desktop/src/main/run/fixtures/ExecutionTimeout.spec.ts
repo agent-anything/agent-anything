@@ -49,7 +49,7 @@ async function executeFixture(): Promise<void> {
   };
   const task = createHelarcTask({taskId: "timeout-task", prompt: "Wait for fixture cancellation.", createdAt: "2026-10-19T00:00:00.000Z"});
   const profile = createHelarcProviderProfile({id: "timeout-profile", providerKind: "openai-compatible", displayName: "Fixture", baseUrl: "https://fixture.invalid/v1",
-    model: "fixture-model", timeoutMs: 30000, credentialStatus: "empty_allowed", qualificationPolicy: "allow_experimental", isActive: true});
+    model: "fixture-model", timeoutMs: 30000, credentialStatus: "empty_allowed", isActive: true});
   if (!task.ok || !profile.ok) throw new Error("Invalid timeout fixture input");
   const prepared = await scope.prepare(() => prepareHelarcHostRun({
     provider, executionStore: store,

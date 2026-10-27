@@ -1,7 +1,8 @@
 
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
-import { ControllerCheckpointError, type Controller, type ControllerCallContext, type ControllerDecision, type ControllerInput } from "@agent-anything/agent-runtime/controller";
+import { ActivityCheckpointError } from "@agent-anything/agent-runtime/activity";
+import { type TaskDecisionActivity, type AgentActivityExecutionContext, type TaskDecisionProposal, type TaskDecisionInputSources } from "@agent-anything/agent-runtime/decision";
 
 export interface HelarcControllerTraceProjection {
   readonly runId: string;
@@ -20,10 +21,6 @@ export interface HelarcControllerTraceProjection {
   readonly toolGuidanceId: string | null;
   readonly toolGuidanceContentDigest: string | null;
   readonly controllerControlGuidanceRevision: string | null;
-  readonly modelUseDispositionStatus: string | null;
-  readonly modelQualificationPolicy: string | null;
-  readonly modelQualificationScopes: readonly string[];
-  readonly modelQualificationReasons: readonly string[];
   readonly modelTurnId: string | null;
   readonly modelFinishKind: string | null;
   readonly modelResponseId: string | null;
@@ -48,33 +45,33 @@ export interface HelarcControllerTraceProjection {
   readonly agentInstructionModelId: string | null;
 }
 
-export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {
+export class HelarcTracingController<TOutput = unknown> implements TaskDecisionActivity<TOutput> {
   constructor(
-    private readonly inner: Controller<TOutput>,
+    private readonly inner: TaskDecisionActivity<TOutput>,
     private readonly traceByOperationId: Map<
       string,
       HelarcControllerTraceProjection
     >,
   ) {}
 
-  get resourceMetering(): Controller<TOutput>["resourceMetering"] {
+  get resourceMetering(): TaskDecisionActivity<TOutput>["resourceMetering"] {
     return this.inner.resourceMetering;
   }
 
   async next(
-    input: ControllerInput<TOutput>,
-    context: ControllerCallContext,
-  ): Promise<ControllerDecision<TOutput>> {
+    input: TaskDecisionInputSources<TOutput>,
+    context: AgentActivityExecutionContext,
+  ): Promise<TaskDecisionProposal<TOutput>> {
     const decision = await this.inner.next(input, context);
     return this.record(input, decision);
   }
 
-  async recover(input: ControllerInput<TOutput>, context: ControllerCallContext): Promise<ControllerDecision<TOutput>> {
-    if (!this.inner.recover) throw new ControllerCheckpointError("controller_recovery_unavailable");
+  async recover(input: TaskDecisionInputSources<TOutput>, context: AgentActivityExecutionContext): Promise<TaskDecisionProposal<TOutput>> {
+    if (!this.inner.recover) throw new ActivityCheckpointError("controller_recovery_unavailable");
     return this.record(input, await this.inner.recover(input, context));
   }
 
-  private record(input: ControllerInput<TOutput>, decision: ControllerDecision<TOutput>): ControllerDecision<TOutput> {
+  private record(input: TaskDecisionInputSources<TOutput>, decision: TaskDecisionProposal<TOutput>): TaskDecisionProposal<TOutput> {
     const metadata = decision.modelItems[0]?.metadata ?? {};
     const operationId = createControllerTurnTraceOperationId(input.iteration);
     this.traceByOperationId.set(
@@ -130,14 +127,6 @@ function createHelarcControllerTraceProjection(
     toolGuidanceContentDigest: readTraceString(source.toolGuidanceContentDigest),
     controllerControlGuidanceRevision: readTraceString(
       source.controllerControlGuidanceRevision,
-    ),
-    modelUseDispositionStatus: readTraceString(source.modelUseDispositionStatus),
-    modelQualificationPolicy: readTraceString(source.modelQualificationPolicy),
-    modelQualificationScopes: Object.freeze(
-      readTraceStringArray(source.modelQualificationScopes),
-    ),
-    modelQualificationReasons: Object.freeze(
-      readTraceStringArray(source.modelQualificationReasons),
     ),
     modelTurnId: readTraceString(source.modelTurnId),
     modelFinishKind: readTraceString(source.modelFinishKind),

@@ -20,7 +20,8 @@ describe("Helarc Agent Instruction Evaluation", () => {
   it("proves deterministic Harness semantics under paired minimal and production instructions", async () => {
     const report = await runHelarcAgentInstructionConformance();
 
-    expect(report.disposition).toEqual({ status: "comparable" });
+    expect(report.disposition, JSON.stringify(report.pairs.filter(pair =>
+      pair.disposition.status !== "comparable"), null, 2)).toEqual({ status: "comparable" });
     expect(report.pairs).toHaveLength(13);
     expect(report.behaviorCoverage).toEqual([
       "clarification",

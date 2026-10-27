@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE, HELARC_DEFAULT_PROVIDER_SETTINGS,
   type HelarcMainSnapshot, type HelarcProviderProfileSnapshot, type HelarcSaveProviderConfigInput } from "../../shared/HelarcDesktopApi.js";
-import { QualificationSettingsPanel } from "../QualificationSettingsPanel.js";
 import { ModelThinkingFields } from "./ModelThinkingFields.js";
 import { useModelDiscovery } from "./useModelDiscovery.js";
 import type { HelarcCredentialSelection } from "../../shared/HelarcProviderCredentials.js";
@@ -88,8 +87,6 @@ export function ProviderSettingsPanel({ snapshot, onSaved }: { snapshot: HelarcM
           setSelection({ kind: "saved", id: saved.id }); setDirty(false); setError(receipt.result.error?.message ?? null);
         })} />}
     </section>
-    {provider && provider.id === snapshot.provider.activeProfile?.id && editorKey && <QualificationSettingsPanel key={editorKey}
-      api={typeof window === "undefined" ? null : window.helarc} dirty={dirty || busy}/>}
   </>;
 }
 
@@ -142,8 +139,6 @@ function ProviderConfigurationForm({ provider, service, busy, configurationError
         onChange={event => update({ timeoutMs: Number(event.target.value) })}/></label>
       {draft.ollamaRuntime && <label><span>Context window</span><input aria-label="Context window" type="number" min="1" required value={draft.ollamaRuntime.contextWindowTokens} disabled={locked}
         onChange={event => update({ ollamaRuntime: { ...draft.ollamaRuntime!, contextWindowTokens: Number(event.target.value) } })}/></label>}
-      <label><span>Model qualification</span><select aria-label="Model qualification" value={draft.qualificationPolicy} disabled={locked} onChange={event => update({ qualificationPolicy: event.target.value as Draft["qualificationPolicy"] })}>
-        <option value="require_qualified">Require qualified</option><option value="allow_experimental">Allow experimental</option></select></label>
       <label><span>Credential storage</span><select aria-label="Credential storage" disabled={busy || credentialLoading} value={credential.source}
         onChange={event => { const source = event.target.value as HelarcCredentialSelection["source"];
           update({ apiKey: "", credential: source === "windows-reference" ? { source, target: "", encoding: "utf16le" } : { source } }); }}>
@@ -177,7 +172,6 @@ function draftFor(profile: HelarcProviderProfileSnapshot | null, service: Servic
     baseUrl: profile?.baseUrl ?? (service === "ollama" ? HELARC_DEFAULT_PROVIDER_SETTINGS.baseUrl : service === "deepseek" ? "https://api.deepseek.com" : ""), model: profile?.model ?? "",
     timeoutMs: profile?.timeoutMs ?? HELARC_DEFAULT_PROVIDER_SETTINGS.timeoutMs, apiKey: "",
     ollamaRuntime: profile ? profile.ollamaRuntime : service === "ollama" ? { ...HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE } : null,
-    qualificationPolicy: profile?.qualificationPolicy ?? HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy,
     modelSettings: profile?.modelSettings ?? { service, thinking: { mode: "default" } } };
 }
 function sameUrl(a: string, b: string): boolean { try { return new URL(a).href.replace(/\/+$/, "") === new URL(b).href.replace(/\/+$/, ""); } catch { return false; } }

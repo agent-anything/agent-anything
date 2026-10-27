@@ -14,16 +14,16 @@ import {
   providerResultFromInterruption,
   snapshotProviderRequest,
   snapshotProviderResponse,
+  snapshotProviderFailure,
   type ModelJsonValue,
   type ModelInstructions,
   type ModelMessage,
-  type ModelToolCall,
+  type ModelCallableRequest,
   type ModelToolResult,
   type ModelTurnFinish,
   type Provider,
   type ProviderCallResult,
   type ProviderDescriptor,
-  type ProviderFailure,
   type ProviderInteraction,
   type ProviderModelContext,
   type ProviderRequest,
@@ -657,7 +657,7 @@ function mapNativeChatCompletionResponse(
     });
     const assistantContent: Array<
       | { readonly kind: "text"; readonly text: string }
-      | { readonly kind: "model_tool_call"; readonly call: ModelToolCall }
+      | { readonly kind: "model_tool_call"; readonly call: ModelCallableRequest }
     > = [];
     if (typeof content === "string" && content.length > 0) {
       assistantContent.push({ kind: "text", text: content });
@@ -716,7 +716,7 @@ function readOpenAIToolCall(
   request: ProviderRequest,
   turnId: string,
   ordinal: number,
-): ModelToolCall {
+): ModelCallableRequest {
   if (!isRecord(value) || value.type !== "function" || !isRecord(value.function)) {
     throw new TypeError("Chat Completion Tool call must contain a function.");
   }
@@ -1022,7 +1022,7 @@ function failed(
     metadata?: Record<string, unknown>;
   } = {},
 ): ProviderCallResult {
-  const failure: ProviderFailure = {
+  const failure = snapshotProviderFailure({
     category,
     code,
     message,
@@ -1030,7 +1030,7 @@ function failed(
     retryAfterMs: input.retryAfterMs,
     requestId: input.requestId,
     metadata: input.metadata ?? {},
-  };
+  });
   return { kind: "failed", failure };
 }
 

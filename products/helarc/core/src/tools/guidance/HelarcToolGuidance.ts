@@ -3,7 +3,7 @@ import type { ToolDescriptor, ToolJsonObject } from "@agent-anything/tools/catal
 import { createToolCatalogSnapshot } from "@agent-anything/tools/catalog";
 import type { ToolBindingRef, ToolRevisionRef } from "@agent-anything/tools/identity";
 import { createToolContractIdentity, toolRevisionKey } from "@agent-anything/tools/identity";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import { annotateHelarcToolInputSchema } from "./HelarcToolGuidanceSchema.js";
 import { toolGuidanceError } from "./HelarcToolGuidanceError.js";
 
@@ -598,8 +598,8 @@ function registrationBindingMatchesDescriptor(
   switch (registration.binding.kind) {
     case "operation":
       return descriptor.binding.kind === "operation" &&
-        operationRevisionKey(registration.binding.operation.operation.ref) ===
-          operationRevisionKey(descriptor.binding.operation) &&
+        operationDefinitionRevisionKey(registration.binding.operation.operation.ref) ===
+          operationDefinitionRevisionKey(descriptor.binding.operation) &&
         registration.binding.operation.binding.ref.revision === descriptor.binding.revision;
     case "interaction":
       return descriptor.binding.kind === "interaction" &&

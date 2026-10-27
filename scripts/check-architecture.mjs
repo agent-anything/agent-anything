@@ -208,8 +208,6 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/helarc/configuration",
       "@agent-anything/helarc/controller",
       "@agent-anything/helarc/interaction",
-      "@agent-anything/helarc/model-qualification",
-      "@agent-anything/helarc/qualification-execution",
       "@agent-anything/helarc/observability",
       "@agent-anything/helarc/prompt",
       "@agent-anything/helarc/result",
@@ -485,9 +483,9 @@ function checkArchitectureSource(file, text, isTestOnly) {
   }
   if (
     !isTestOnly &&
-    rel.startsWith("harness/agent-core/runtime/src/runner/") &&
-    rel !== "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
-    rel !== "harness/agent-core/runtime/src/runner/RunStateWriter.ts" &&
+    rel.startsWith("harness/agent-core/runtime/src/execution-coordinator/") &&
+    rel !== "harness/agent-core/runtime/src/execution-coordinator/RunExecution.ts" &&
+    rel !== "harness/agent-core/runtime/src/execution-coordinator/RunStateWriter.ts" &&
     (
       /\bthis\.state\s*=/.test(text) ||
       /\breplaceState\s*\(/.test(text)
@@ -639,7 +637,7 @@ function checkDesktopSafeSurface(rel, text) {
   }
 
   const trustedSymbols = [
-    "Runner",
+    "RunExecutionCoordinator",
     "RunResult",
     "RunState",
     "RunCancellationController",
@@ -647,7 +645,7 @@ function checkDesktopSafeSurface(rel, text) {
     "ActionEnforcementPipeline",
     "SandboxExecutionGateway",
     "ProviderCredentialStore",
-    "SessionAuthorityPort",
+    "SessionAuthorizationStore",
     "PolicyAmendmentStore",
   ];
   for (const symbol of trustedSymbols) {
@@ -1055,14 +1053,17 @@ function checkExecutionSourceTopology() {
       packagePath: "harness/agent-core/runtime",
       allowedSourceEntries: [
         "PublicApi.test.ts",
+        "activity",
         "context-contribution",
-        "controller",
+        "context-representation",
+        "decision",
         "delegation",
+        "execution-coordinator",
         "instructions",
+        "model-access",
         "plan",
         "retry",
         "run",
-        "runner",
         "transcript",
       ],
       forbiddenPaths: [
@@ -1095,8 +1096,6 @@ function checkExecutionSourceTopology() {
         "index.ts",
         "interaction",
         "instructions",
-        "model-qualification",
-        "qualification-execution",
         "observability",
         "prompt",
         "result",

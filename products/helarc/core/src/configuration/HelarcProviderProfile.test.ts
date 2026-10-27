@@ -39,7 +39,6 @@ describe("createHelarcProviderProfile", () => {
         ollamaRuntime: null,
         modelSettings: { service: "generic", thinking: { mode: "default" } },
         credentialStatus: "present",
-        qualificationPolicy: "require_qualified",
         isActive: true,
       },
     });
@@ -82,31 +81,6 @@ describe("createHelarcProviderProfile", () => {
         },
         credentialStatus: "empty_allowed",
         isActive: false,
-      },
-    });
-  });
-
-  it("rejects an unknown model qualification policy", () => {
-    const result = createHelarcProviderProfile({
-      id: "local",
-      providerKind: "ollama",
-      displayName: "Local Model",
-      baseUrl: "http://localhost:11434",
-      model: "gemma4:e4b",
-      timeoutMs: 30_000,
-      ollamaRuntime: {
-        contextWindowTokens: 16_384,
-      },
-      credentialStatus: "empty_allowed",
-      qualificationPolicy: "permissive" as never,
-      isActive: true,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: "provider_profile_qualification_policy_invalid",
-        message: "Provider profile model qualification policy is invalid.",
       },
     });
   });

@@ -7,8 +7,8 @@ import {
   type ApprovalReviewerPort,
   type ApprovalReviewOutcome,
   type ResolvedPermissionProfile,
-  type SessionAuthorityPort,
-  type SessionAuthorityRecord,
+  type SessionAuthorizationStore,
+  type SessionAuthorizationBasis,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -155,7 +155,7 @@ describe("Run permission configuration", () => {
       identityId: "identity.test",
       environmentId: "local",
     };
-    const record: SessionAuthorityRecord = {
+    const record: SessionAuthorizationBasis = {
       id: "session-authority.test",
       ...context,
       category: "permissions",
@@ -400,7 +400,7 @@ function automaticReviewerBinding(
   } as NonNullable<ResolvedRunPermissionConfig["reviewer"]>;
 }
 
-function sessionAuthorityPort(): SessionAuthorityPort {
+function sessionAuthorityPort(): SessionAuthorizationStore {
   return {
     async listApplicable() {
       return [];

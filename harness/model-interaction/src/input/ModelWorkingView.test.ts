@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {createModelCallRef, type ModelToolCall, type ModelToolResult} from "../ModelCall.js";
+import {createModelCallRef, type ModelCallableRequest, type ModelToolResult} from "../ModelCall.js";
 import {modelInputFromSections, type ModelInputSection} from "./ModelInput.js";
 import {createExactModelWorkingView, selectModelWorkingView} from "./ModelWorkingView.js";
 import {applyModelInputOwnerForms, modelInputOccurrenceDigest, type ModelInputOwnerForm} from "./ModelInputForms.js";
@@ -11,7 +11,7 @@ const section = (id: string, content: ModelInputSection["content"], role: ModelI
     presenter: {owner: "test", kind: "presenter", id: "exact", revision: "1"}, coverage: [`${id}@1`], limitations: []},
 });
 function exchange() {
-  const calls: ModelToolCall[] = [0, 1].map(ordinal => ({name: "Read", ordinal, input: {path: `${ordinal}.txt`},
+  const calls: ModelCallableRequest[] = [0, 1].map(ordinal => ({name: "Read", ordinal, input: {path: `${ordinal}.txt`},
     modelCallRef: createModelCallRef({providerRequestId: "request", controllerRequestId: "controller", turnId: "turn",
       contentBlockOrdinal: ordinal, branchId: "main"}), providerCallRef: {providerId: "provider", id: `call-${ordinal}`}}));
   const results: ModelToolResult[] = calls.map(call => ({name: call.name, modelCallRef: call.modelCallRef,

@@ -1,12 +1,42 @@
 import { createDelegationLimits, type DelegationResult } from "@agent-anything/agent-runtime/delegation";
-import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
-import { createModelCallRef, type ModelToolCall } from "@agent-anything/model-interaction";
-import { describe, expect, it } from "vitest";
+import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/execution-coordinator";
+import { createModelCallRef, type ModelCallableRequest } from "@agent-anything/model-interaction";
+import { describe, expect, it, vi } from "vitest";
 import { resolveHelarcFinalReply } from "../controller/HelarcFinalReply.js";
 import { createHelarcDelegatedWorkerAgent } from "./HelarcAgent.js";
 import { createHelarcDescendantAgentContribution } from "./HelarcDescendantAgent.js";
 
 describe("Helarc descendant Agent contribution", () => {
+  it("validates new continuation references and persists only the new assignment alongside inherited history", async () => {
+    const agent = createHelarcDelegatedWorkerAgent({providerId: "test", modelId: "test"});
+    const material = {id: "material-1", revision: `sha256:${"a".repeat(64)}`};
+    const execution = {owner: "test", kind: "execution", id: "execution-1", revision: "1"};
+    const validateMaterial = vi.fn().mockResolvedValue(undefined);
+    const validateExecution = vi.fn().mockResolvedValue(undefined);
+    const contribution = createHelarcDescendantAgentContribution(agent, "2026-09-01T00:00:00.000Z",
+      {validate: validateExecution} as unknown as NonNullable<Parameters<typeof createHelarcDescendantAgentContribution>[2]>,
+      {validate: validateMaterial} as unknown as NonNullable<Parameters<typeof createHelarcDescendantAgentContribution>[3]>);
+    const initial = await prepareDelegation({prompt: "Original assignment."});
+    const input = {
+      parentRunId: "parent", targetAgent: {id: agent.id, revision: agent.revision},
+      sourceRequest: {...initial.preparation, childAgent: {id: agent.id, revision: agent.revision},
+        ref: {id: "request-1", revision: "1"}, origin: {parent: {run: {id: "parent"}}}},
+      sourceResult: {request: {id: "request-1", revision: "1"}},
+      message: "Use the newly supplied evidence.", limitCeiling: initial.preparation.allocationRequest,
+      toolCall: {input: {agent_id: "continuation-1", prompt: "Use the newly supplied evidence.",
+        material_refs: [material], execution_refs: [execution]}},
+    } as unknown as Parameters<RunnerDelegationComposition["continuation"]["prepare"]>[0];
+    const result = await contribution.delegation.continuation.prepare(input);
+    expect(validateMaterial).toHaveBeenCalledWith("parent", [material]);
+    expect(validateExecution).toHaveBeenCalledWith("parent", [execution]);
+    expect(result.preparation.task.input).toEqual({prompt: input.message, material_refs: [material], execution_refs: [execution]});
+    expect(input.sourceRequest.task.input).toEqual({prompt: "Original assignment."});
+    validateMaterial.mockRejectedValueOnce(new Error("material_access_denied"));
+    await expect(contribution.delegation.continuation.prepare(input)).rejects.toThrow("material_access_denied");
+    validateExecution.mockRejectedValueOnce(new Error("execution_access_denied"));
+    await expect(contribution.delegation.continuation.prepare(input)).rejects.toThrow("execution_access_denied");
+  });
+
   it("preserves surrounding whitespace and embedded indentation in delegated text", async () => {
     const prompt = "\r\n\tInspect this example:\n    return 1;\n  ";
     const description = "\t Inspection \r\n";
@@ -156,7 +186,7 @@ describe("Helarc descendant Agent contribution", () => {
     { response: "The report was provided above.", expected: "The report was provided above.", disposition: "supplied" },
     { response: "", expected: "", disposition: "explicit_empty" },
   ])("delivers the selected Child reply, not its private conversation: $disposition / $response", async ({response, expected, disposition}) => {
-    const call: ModelToolCall = {
+    const call: ModelCallableRequest = {
       name: "final_result",
       modelCallRef: createModelCallRef({
         providerRequestId: "child-request-2", controllerRequestId: "child-controller-2",

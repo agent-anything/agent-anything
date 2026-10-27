@@ -50,7 +50,8 @@ describe("Instruction settings storage", () => {
     const defaults = createDefaultHelarcInstructionSettings();
     await store.save(defaults);
     const failing = new FileHelarcInstructionSettingsStore(path, { operations: { replace: async () => { throw new Error("disk failure"); } } });
-    await expect(failing.save({ ...defaults, protocol: defaults.protocol.map((entry) => ({ ...entry, enabled: true })) })).rejects.toThrow("disk failure");
+    await expect(failing.save({ ...defaults, protocol: defaults.protocol.map((entry) => ({ ...entry, enabled: true })) }))
+      .rejects.toMatchObject({stage: "replace", cause: {message: "disk failure"}});
     expect(await store.load()).toEqual(defaults);
   });
 });

@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 
 import {
-  snapshotAgent,
-  toAgentRevisionRef,
-  type Agent,
+  snapshotAgentDefinition,
+  toAgentDefinitionRevisionRef,
+  type AgentDefinition,
   type AgentInstructionModelRef,
   type AgentInstructionsRef,
-  type AgentRevisionRef,
+  type AgentDefinitionRevisionRef,
 } from "@agent-anything/agent-core/agent";
 import type { RunRef } from "@agent-anything/agent-core/run";
 
@@ -20,7 +20,7 @@ export interface AgentInstructionBindingRef {
 export interface AgentInstructionBinding {
   readonly ref: AgentInstructionBindingRef;
   readonly run: RunRef;
-  readonly agent: AgentRevisionRef;
+  readonly agent: AgentDefinitionRevisionRef;
   readonly instructions: AgentInstructionsRef;
   readonly model: AgentInstructionModelRef;
   readonly effectiveFromRunRevision: number;
@@ -29,7 +29,7 @@ export interface AgentInstructionBinding {
 
 export interface AgentInstructionBindingProjection {
   readonly ref: AgentInstructionBindingRef;
-  readonly agent: AgentRevisionRef;
+  readonly agent: AgentDefinitionRevisionRef;
   readonly instructions: AgentInstructionsRef;
   readonly release: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly model: AgentInstructionModelRef;
@@ -42,12 +42,12 @@ export interface AgentInstructionBindingProjection {
 
 export function createAgentInstructionBinding<TOutput>(input: {
   readonly run: RunRef;
-  readonly agent: Agent<TOutput>;
+  readonly agent: AgentDefinition<TOutput>;
   readonly effectiveFromRunRevision: number;
   readonly supersedes: AgentInstructionBindingRef | null;
 }): AgentInstructionBinding {
   const run = snapshotRunRef(input.run);
-  const agent = snapshotAgent(input.agent);
+  const agent = snapshotAgentDefinition(input.agent);
   const effectiveFromRunRevision = nonNegativeInteger(
     input.effectiveFromRunRevision,
     "AgentInstructionBinding.effectiveFromRunRevision",
@@ -57,7 +57,7 @@ export function createAgentInstructionBinding<TOutput>(input: {
     : snapshotAgentInstructionBindingRef(input.supersedes);
   const material = {
     run,
-    agent: toAgentRevisionRef(agent),
+    agent: toAgentDefinitionRevisionRef(agent),
     instructions: agent.instructions.ref,
     model: agent.instructions.model,
     effectiveFromRunRevision,
@@ -117,7 +117,7 @@ export function snapshotAgentInstructionBinding(
 
 function bindingRevision(material: {
   readonly run: RunRef;
-  readonly agent: AgentRevisionRef;
+  readonly agent: AgentDefinitionRevisionRef;
   readonly instructions: AgentInstructionsRef;
   readonly model: AgentInstructionModelRef;
   readonly effectiveFromRunRevision: number;
@@ -144,10 +144,10 @@ export function snapshotAgentInstructionBindingRef(
 export function assertAgentInstructionBindingMatches<TOutput>(input: {
   readonly binding: AgentInstructionBinding;
   readonly run: RunRef;
-  readonly agent: Agent<TOutput>;
+  readonly agent: AgentDefinition<TOutput>;
 }): void {
   const binding = snapshotAgentInstructionBinding(input.binding);
-  const agent = snapshotAgent(input.agent);
+  const agent = snapshotAgentDefinition(input.agent);
   if (
     binding.run.id !== input.run.id ||
     binding.agent.id !== agent.id ||
@@ -164,11 +164,11 @@ export function assertAgentInstructionBindingMatches<TOutput>(input: {
 export function projectAgentInstructionBinding<TOutput>(input: {
   readonly binding: AgentInstructionBinding;
   readonly run: RunRef;
-  readonly agent: Agent<TOutput>;
+  readonly agent: AgentDefinition<TOutput>;
 }): AgentInstructionBindingProjection {
   assertAgentInstructionBindingMatches(input);
   const binding = snapshotAgentInstructionBinding(input.binding);
-  const agent = snapshotAgent(input.agent);
+  const agent = snapshotAgentDefinition(input.agent);
   return deepFreeze({
     ref: binding.ref,
     agent: binding.agent,
@@ -188,7 +188,7 @@ function snapshotRunRef(input: RunRef): RunRef {
   return Object.freeze({ id: token(input.id, "AgentInstructionBinding.run.id") });
 }
 
-function snapshotAgentRef(input: AgentRevisionRef): AgentRevisionRef {
+function snapshotAgentRef(input: AgentDefinitionRevisionRef): AgentDefinitionRevisionRef {
   strictRecord(input, "AgentInstructionBinding.agent", ["id", "revision"]);
   return Object.freeze({
     id: token(input.id, "AgentInstructionBinding.agent.id"),

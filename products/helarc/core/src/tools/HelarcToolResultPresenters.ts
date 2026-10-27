@@ -1,10 +1,12 @@
-import type { ToolResultPresenter } from "@agent-anything/agent-runtime/runner";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import type { ToolResultPresenter } from "@agent-anything/agent-runtime/execution-coordinator";
+import {isDeepStrictEqual} from "node:util";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import type { ToolRegistrationSnapshot } from "@agent-anything/tools/registration";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
-import { HELARC_SHELL_OPERATION, HELARC_TASK_OUTPUT_OPERATION } from "./HelarcCommandIdentity.js";
+import { HELARC_SHELL_OPERATION, HELARC_COMMAND_OBSERVE_OPERATION, HELARC_TASK_STOP_OPERATION } from "./HelarcCommandIdentity.js";
 import type { ExecutionEvidenceRecordPort } from "@agent-anything/operation-catalog/evidence";
 import { commitHelarcExecutionEvidence, helarcExecutionReferences } from "./HelarcExecutionEvidence.js";
+import {presentHelarcCommandResult} from "./HelarcCommandResultPresentation.js";
 
 export interface HelarcCommandResultDelivery {
   commitInitialDelivery(input: {
@@ -19,25 +21,18 @@ export function createHelarcToolResultPresenters(
 ): readonly ToolResultPresenter[] {
   return Object.freeze(tools.flatMap(({descriptor}): ToolResultPresenter[] => {
     if (descriptor.binding.kind !== "operation") return [];
-    const operation = operationRevisionKey(descriptor.binding.operation);
-    const shell = operation === operationRevisionKey(HELARC_SHELL_OPERATION);
-    const outputQuery = operation === operationRevisionKey(HELARC_TASK_OUTPUT_OPERATION);
+    const operation = operationDefinitionRevisionKey(descriptor.binding.operation);
+    const shell = operation === operationDefinitionRevisionKey(HELARC_SHELL_OPERATION);
+    const commandObservation = operation === operationDefinitionRevisionKey(HELARC_COMMAND_OBSERVE_OPERATION);
+    const stop = operation === operationDefinitionRevisionKey(HELARC_TASK_STOP_OPERATION);
     const contextAccess = descriptor.binding.operation.operation.namespace === "helarc" &&
       ["context-read", "context-search"].includes(descriptor.binding.operation.operation.name);
     return [Object.freeze({tool: descriptor.ref,
-      ref: Object.freeze({id: contextAccess ? "helarc.context-access-result" : shell || outputQuery ? "helarc.command-result" : "helarc.public-operation-result", revision: evidence ? "5" : "1"}),
+      ref: Object.freeze({id: contextAccess ? "helarc.context-access-result" : shell || commandObservation || stop ? "helarc.command-result" : "helarc.public-operation-result", revision: evidence ? "7" : "3"}),
       ...(evidence ? {references(result: OperationResult) { return helarcExecutionReferences(result); }} : {}),
       present(result: OperationResult) {
-        if ((!shell && !outputQuery) || !record(result.output) || !record(result.output.stdout) || !record(result.output.stderr)) {
-          return {output: result.output, disposition: "complete" as const};
-        }
-        // Text is already range-bounded by the owner. Segment text is the same content again.
-        const stream = (value: Record<string, unknown>) => {
-          const {segments: _segments, ...summary} = value;
-          return summary;
-        };
-        return {output: {...result.output, stdout: stream(result.output.stdout), stderr: stream(result.output.stderr)},
-          disposition: result.output.has_more === true ? "bounded" as const : "complete" as const};
+        return shell || commandObservation || stop ? presentHelarcCommandResult(result, shell)
+          : {output: result.output, disposition: "complete" as const};
       },
       ...(shell || evidence ? {async committed(input: Parameters<NonNullable<ToolResultPresenter["committed"]>>[0]) {
         if (evidence) await commitHelarcExecutionEvidence(evidence, input);
@@ -45,11 +40,17 @@ export function createHelarcToolResultPresenters(
         const content = input.presentation.content;
         const output = input.presentation.presentation.disposition !== "unavailable" && record(content) && record(content.output)
           ? content.output : null;
+        const source = record(input.result.output) ? input.result.output : null;
+        const expected = presentHelarcCommandResult(input.result, true).output;
+        // The private cursor is usable only when the exact bounded preview was delivered.
+        const delivered = output !== null && record(expected) && typeof source?.observation_id === "string" &&
+          typeof source.next_cursor === "string" && output.observation_id === source.observation_id &&
+          isDeepStrictEqual(output.stdout, expected.stdout) && isDeepStrictEqual(output.stderr, expected.stderr);
         return delivery.commitInitialDelivery({runId: input.runId, runActionId: input.call.parentRunAction.id,
           executionId: record(input.result.output) && typeof input.result.output.task_id === "string" ? input.result.output.task_id : null,
           settlementId: input.presentation.modelCallRef.id,
-          observationId: typeof output?.observation_id === "string" ? output.observation_id : null,
-          cursor: typeof output?.observation_id === "string" && typeof output?.next_cursor === "string" ? output.next_cursor : null});
+          observationId: delivered ? source.observation_id as string : null,
+          cursor: delivered ? source.next_cursor as string : null});
       }} : {}),
     })];
   }));

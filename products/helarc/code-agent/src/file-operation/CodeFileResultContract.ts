@@ -1,9 +1,9 @@
 import type { OperationResult, OperationResultContract } from "@agent-anything/operation-catalog/result";
-import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
+import type { RegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
 import type { CodeFileOperationKind } from "./CodeFileOperation.js";
 import { snapshotExecutionEvidenceRef } from "@agent-anything/operation-catalog/evidence";
 
-export function codeFileResultContract(registration: RegisteredOperation, kind: CodeFileOperationKind): OperationResultContract {
+export function codeFileResultContract(registration: RegisteredOperationDefinition, kind: CodeFileOperationKind): OperationResultContract {
   return Object.freeze({operation: registration.operation.ref, revision: registration.operation.resultSchemaRevision,
     validateOutput(result: OperationResult) {
       if (result.status !== "succeeded" && result.status !== "partial") return result.output === null ||
@@ -13,7 +13,10 @@ export function codeFileResultContract(registration: RegisteredOperation, kind: 
       switch (kind) {
         case "read": return baseline(value) && typeof value.content === "string" && count(value.start_line, 1) &&
           count(value.end_line) && count(value.total_lines) && typeof value.truncated === "boolean" &&
-          value.end_line <= value.total_lines;
+          value.start_line <= value.total_lines + 1 && value.end_line <= value.total_lines &&
+          (value.end_line === 0 ? value.start_line === value.total_lines + 1 : value.end_line >= value.start_line) &&
+          (value.end_line > 0 && value.end_line < value.total_lines
+            ? value.next_offset === value.end_line + 1 && value.truncated === true : value.next_offset === null);
         case "glob": return strings(value.matches) && coverage(value);
         case "grep": return coverage(value) && Array.isArray(value.entries) &&
           ["content", "files_with_matches", "count"].includes(value.output_mode as string) && value.entries.every(entry =>
@@ -43,4 +46,14 @@ function count(value: unknown, minimum = 0): value is number { return Number.isS
 function strings(value: unknown): value is readonly string[] { return Array.isArray(value) && value.every(item => typeof item === "string"); }
 function target(value: Record<string, unknown>): boolean { return text(value.target_id) && text(value.file_path); }
 function baseline(value: unknown): boolean { return record(value) && target(value) && count(value.byte_length) && text(value.content_digest); }
-function coverage(value: Record<string, unknown>): boolean { return typeof value.truncated === "boolean" && count(value.omitted_count); }
+function coverage(value: Record<string, unknown>): boolean {
+  const scan = value.scan;
+  return typeof value.truncated === "boolean" && record(scan) && typeof scan.complete === "boolean" &&
+    count(scan.entries_visited) && count(scan.files_searched) && count(scan.bytes_read) && count(scan.skipped_count) &&
+    typeof scan.skipped_details_truncated === "boolean" && (scan.stop_reason === null || text(scan.stop_reason)) &&
+    Array.isArray(scan.skipped) && scan.skipped.length <= 32 && scan.skipped.length <= scan.skipped_count &&
+    scan.files_searched <= scan.entries_visited && scan.skipped_details_truncated === (scan.skipped.length < scan.skipped_count) &&
+    scan.skipped.every(item => record(item) && text(item.file_path) && text(item.reason)) &&
+    (scan.complete ? count(value.omitted_count) && value.truncated === (value.omitted_count > 0) && scan.skipped_count === 0 && scan.stop_reason === null :
+      value.omitted_count === null && value.truncated === true && (scan.skipped_count > 0 || scan.stop_reason !== null));
+}

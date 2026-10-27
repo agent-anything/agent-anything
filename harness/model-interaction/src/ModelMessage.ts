@@ -1,8 +1,8 @@
 import {
   modelCallRefKey,
-  snapshotModelToolCall,
+  snapshotModelCallableRequest,
   snapshotModelToolResult,
-  type ModelToolCall,
+  type ModelCallableRequest,
   type ModelToolResult,
 } from "./ModelCall.js";
 import { strictRecord } from "./ModelInteractionContractValidation.js";
@@ -17,7 +17,7 @@ export interface ModelTextContentBlock {
 
 export interface ModelToolCallContentBlock {
   readonly kind: "model_tool_call";
-  readonly call: ModelToolCall;
+  readonly call: ModelCallableRequest;
 }
 
 export interface ModelToolResultContentBlock {
@@ -75,7 +75,7 @@ export function snapshotModelMessage(input: ModelMessage): ModelMessage {
         throw new TypeError("Assistant Model Message content is unsupported.");
       }
       strictRecord(block as unknown, `ModelMessage.content[${index}]`, ["kind", "call"]);
-      const call = snapshotModelToolCall(block.call);
+      const call = snapshotModelCallableRequest(block.call);
       if (
         call.ordinal !== index ||
         call.modelCallRef.contentBlockOrdinal !== index

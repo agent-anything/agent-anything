@@ -1,4 +1,7 @@
-import { persistenceFailureCode, type HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
+import { persistenceFailureCode, type HelarcPersistenceDiagnostics, type HelarcPersistenceDiagnostic } from "./persistence/HelarcPersistenceDiagnostics.js";
+import { AtomicFileError, isTransientFileAccessFailure, type AtomicFileWriteReport } from "./persistence/SerializedAtomicFile.js";
+import { captureExecutionError } from "./diagnostics/ExecutionErrorDetails.js";
+import { setTimeout as persistenceDelay } from "node:timers/promises";
 import { reportExecutionFailure, type ExecutionDiagnosticSink } from "./diagnostics/HelarcExecutionDiagnostics.js";
 import {measureExecutionAsync} from "./diagnostics/ExecutionPerformance.js";
 import { restoreHelarcTerminalResult } from "./execution-storage/restoreHelarcTerminalResult.js";
@@ -62,14 +65,9 @@ import {
   type HelarcRunProviderRef,
 } from "@agent-anything/helarc/run";
 import {
-  HelarcModelUseAdmissionError,
-  type HelarcModelUseAdmissionErrorCode,
+  HelarcProviderCompatibilityError,
   type HelarcProductResult,
 } from "@agent-anything/helarc/composition";
-import {
-  createHelarcModelQualificationCatalog,
-  type HelarcModelQualificationCatalog,
-} from "@agent-anything/helarc/model-qualification";
 import {
   type HelarcTaskInputError,
 } from "@agent-anything/helarc/task";
@@ -240,10 +238,9 @@ export type HelarcMainErrorCode =
   | "provider_profile_timeout_invalid"
   | "provider_profile_ollama_runtime_invalid"
   | "provider_profile_credential_status_invalid"
-  | "provider_profile_qualification_policy_invalid"
   | "provider_profile_kind_invalid"
   | "provider_profile_not_found"
-  | HelarcModelUseAdmissionErrorCode
+  | "model_native_tool_interaction_unsupported"
   | HelarcTaskInputError["code"];
 
 export interface HelarcMainError {
@@ -319,7 +316,13 @@ export interface HelarcMainControllerInput {
   modelContinuationStore?: ModelContinuationStore;
   contextManifestPersistence?: ContextManifestPersistencePort;
   runTranscriptPort?: RunTranscriptPort;
-  qualificationCatalog?: HelarcModelQualificationCatalog;
+}
+
+interface PendingRunProjection {
+  readonly sequence: number;
+  readonly projection: HelarcRunProjection;
+  commit: HelarcRunProjectionCommit | null;
+  attempts: number;
 }
 
 type DesktopActiveRunSlot =
@@ -337,7 +340,9 @@ type DesktopActiveRunSlot =
       readonly productRunId: string;
       readonly handle: HelarcHostActiveRun;
       projectionSequence: number;
-      pendingProjection: { sequence: number; projection: HelarcRunProjection } | null;
+      pendingProjection: PendingRunProjection | null;
+      retryWait: AbortController | null;
+      firstFailedSequence: number | null;
       progressWriting: boolean;
       finishing: boolean;
       progressTail: Promise<void>;
@@ -369,7 +374,6 @@ export class HelarcMainController {
     | ContextManifestPersistencePort
     | undefined;
   private readonly runTranscriptPort: RunTranscriptPort | undefined;
-  private qualificationCatalog: HelarcModelQualificationCatalog | undefined;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private instructionSettings: HelarcInstructionSettings;
@@ -441,7 +445,6 @@ export class HelarcMainController {
     this.modelContinuationStore = input.modelContinuationStore;
     this.contextManifestPersistence = input.contextManifestPersistence;
     this.runTranscriptPort = input.runTranscriptPort;
-    this.qualificationCatalog = input.qualificationCatalog;
     this.provider = input.providerConfigError
       ? {
           configured: false,
@@ -503,14 +506,10 @@ export class HelarcMainController {
     return Object.freeze({ settings: this.instructionSettings, defaults: createDefaultHelarcInstructionSettings() });
   }
 
-  getQualificationConfiguration() {
+  getModelConfiguration() {
     if (!this.providerInstance || !this.provider.configured) return null;
     return { provider: this.providerInstance, providerProfile: this.provider.activeProfile,
       instructionSettings: this.instructionSettings };
-  }
-
-  configureQualificationCatalog(catalog: HelarcModelQualificationCatalog): void {
-    this.qualificationCatalog = createHelarcModelQualificationCatalog({ decisions: catalog.decisions });
   }
 
   configureInstructions(settings: HelarcInstructionSettings) {
@@ -730,7 +729,6 @@ export class HelarcMainController {
         sessionId: threadId,
         provider: providerInstance,
         providerProfile,
-        qualificationCatalog: this.qualificationCatalog,
         modelContinuationStore: this.modelContinuationStore,
         contextManifestPersistence: this.contextManifestPersistence,
         runTranscriptPort: this.runTranscriptPort,
@@ -769,6 +767,7 @@ export class HelarcMainController {
         throw new HelarcDesktopPersistenceError(committed.code, committed.message);
       }
       startCommitted = true;
+      this.recordReplacementRecovery(startCommitResult.commit, 0, committed.persistence);
       this.nextTaskNumber += 1;
       this.currentThreadRecord = committed.aggregate.record;
       this.threadSummaries = upsertThreadSummarySnapshot(
@@ -801,7 +800,7 @@ export class HelarcMainController {
       }
       this.releaseActiveRunSlot(token);
       const persistenceFailure = cause instanceof HelarcDesktopPersistenceError;
-      const admissionFailure = cause instanceof HelarcModelUseAdmissionError
+      const admissionFailure = cause instanceof HelarcProviderCompatibilityError
         ? cause
         : null;
       const error = this.setError(
@@ -848,6 +847,10 @@ export class HelarcMainController {
     if (!retainedRun) return {ok: false, message: "Original conversation work is unavailable."};
     if (entry.terminal && retainedRun.terminal) {
       await this.executionStore.commitProductDelivery(saved.rootRunId);
+      this.recordPersistenceDiagnostic({operation: "run_terminal", outcome: "recovered",
+        threadId: saved.sessionId, runId: saved.productRunId, commitId: `helarc-terminal-${saved.productRunId}`,
+        projectionSequence: retainedRun.projectionSequence, expectedRevision: record!.thread.revision,
+        occurredAt: new Date().toISOString(), code: "product_delivery_recovered"});
       return {ok: true};
     }
     const token = Symbol(saved.productRunId);
@@ -863,6 +866,10 @@ export class HelarcMainController {
           const restored = restoreHelarcTerminalResult(saved, records);
           await this.persistWorkContextTerminal(restored);
           await this.executionStore.commitProductDelivery(saved.rootRunId);
+          this.recordPersistenceDiagnostic({operation: "run_terminal", outcome: "recovered",
+            threadId: saved.sessionId, runId: saved.productRunId, commitId: `helarc-terminal-${saved.productRunId}`,
+            projectionSequence: retainedRun.projectionSequence, expectedRevision: record!.thread.revision,
+            occurredAt: new Date().toISOString(), code: "terminal_delivery_recovered"});
           this.inspection?.recordRecoveredDelivery({runId: saved.rootRunId, threadId: saved.sessionId,
             productRunId: saved.productRunId, checkpointId: records.commit.id,
             checkpointRevision: records.commit.revision, completedAt: restored.runResult.completedAt});
@@ -884,7 +891,7 @@ export class HelarcMainController {
         workspaceSelection: {kind: "references", primaryRef: saved.workspace.primary.id, additionalRefs: saved.workspace.additional.map(root => root.id)},
         identityResolver: {async resolve() {return saved.identity;}},
         identitySelection: saved.identity.kind === "anonymous" ? {kind: "anonymous"} : {kind: "reference", identityRef: saved.identity.id},
-        provider, providerProfile: saved.providerProfile, qualificationCatalog: saved.qualificationCatalog ?? undefined,
+        provider, providerProfile: saved.providerProfile,
         modelContinuationStore: this.modelContinuationStore, contextManifestPersistence: this.contextManifestPersistence,
         runTranscriptPort: this.runTranscriptPort, permissionPreset: saved.permissionPreset, enforcement: saved.enforcement,
         runLimits: saved.runLimits, runTreeLimits: saved.runTreeLimits, commandLimits: saved.commandLimits ?? undefined,
@@ -1127,6 +1134,7 @@ export class HelarcMainController {
       }, error);
       failedSlot.finishing = true;
       failedSlot.pendingProjection = null;
+      failedSlot.retryWait?.abort();
       await measureExecutionAsync(this.executionDiagnostics, "host.failed_projection_drain",
         {runId: failedSlot.handle.runId, threadId: failedSlot.threadId}, () => failedSlot.progressTail);
       this.lastError = {
@@ -1141,6 +1149,7 @@ export class HelarcMainController {
     if (slot.kind !== "active" || slot.token !== token) return;
     slot.finishing = true;
     slot.pendingProjection = null;
+    slot.retryWait?.abort();
     const terminalContext = {runId: slot.handle.runId, threadId: slot.threadId, productRunId: slot.productRunId};
     await measureExecutionAsync(this.executionDiagnostics, "host.final_projection_drain", terminalContext, () => slot.progressTail);
 
@@ -1158,7 +1167,7 @@ export class HelarcMainController {
       await measureExecutionAsync(this.executionDiagnostics, "host.terminal_persistence", terminalContext, () => this.persistWorkContextTerminal(outcome));
       await measureExecutionAsync(this.executionDiagnostics, "host.result_delivery", terminalContext,
         async () => {await this.executionStore?.commitProductDelivery(outcome.harnessRunId);});
-      if (slot.persistenceFailure !== null && this.lastError?.code === "run_persistence_failed") this.lastError = null;
+      this.markProjectionPersistenceRecovered(slot, "run_terminal", slot.projectionSequence);
     } catch (cause) {
       this.recordPersistenceFailure(slot, "run_terminal", cause);
       this.lastError = {
@@ -1195,6 +1204,8 @@ export class HelarcMainController {
       finishing: false,
       progressTail: Promise.resolve(),
       persistenceFailure: null,
+      retryWait: null,
+      firstFailedSequence: null,
     };
     this.runProjection = createHelarcRunProjection({
       host: activeRun.getProjection(),
@@ -1231,7 +1242,8 @@ export class HelarcMainController {
   ): void {
     if (slot.finishing) return;
     slot.projectionSequence += 1;
-    slot.pendingProjection = { sequence: slot.projectionSequence, projection };
+    slot.pendingProjection = { sequence: slot.projectionSequence, projection, commit: null, attempts: 0 };
+    slot.retryWait?.abort();
     if (slot.progressWriting) return;
     slot.progressWriting = true;
     slot.progressTail = Promise.resolve().then(async () => {
@@ -1239,15 +1251,27 @@ export class HelarcMainController {
         while (slot.pendingProjection !== null && !slot.finishing) {
           const pending = slot.pendingProjection;
           slot.pendingProjection = null;
+          pending.attempts += 1;
           try {
-            await this.persistRunProjection(slot, pending.sequence, pending.projection);
+            await this.persistRunProjection(slot, pending);
+            if (slot.pendingProjection === null) this.markProjectionPersistenceRecovered(slot, "run_projection", pending.sequence);
           } catch (cause) {
-            if (slot.persistenceFailure === null) {
-              slot.persistenceFailure = cause instanceof Error ? cause : new Error("Run projection persistence failed.");
-              this.recordPersistenceFailure(slot, "run_projection", cause, pending.sequence);
-              this.lastError = { code: "run_persistence_failed", message: "Helarc could not persist the Run projection." };
-              this.publishSnapshot();
-            }
+            slot.persistenceFailure = cause instanceof Error ? cause : new Error("Run projection persistence failed.");
+            slot.firstFailedSequence ??= pending.sequence;
+            this.recordPersistenceFailure(slot, "run_projection", cause, pending.sequence, pending.attempts, pending.commit ?? undefined);
+            this.lastError = { code: "run_persistence_failed", message: "Helarc could not persist the Run projection." };
+            this.publishSnapshot();
+            if (slot.finishing) break;
+            // A newer full snapshot supersedes this unsaved projection, never the reverse.
+            if (slot.pendingProjection !== null) continue;
+            slot.pendingProjection = pending;
+            const wait = [250, 1000][pending.attempts - 1];
+            if (!isTransientFileAccessFailure(cause) || wait === undefined) break;
+            const retryWait = new AbortController();
+            slot.retryWait = retryWait;
+            try { await persistenceDelay(wait, undefined, { signal: retryWait.signal }); }
+            catch (error) { if (!retryWait.signal.aborted) throw error; }
+            finally { slot.retryWait = null; }
           }
         }
       } finally { slot.progressWriting = false; }
@@ -1256,9 +1280,9 @@ export class HelarcMainController {
 
   private async persistRunProjection(
     slot: Extract<DesktopActiveRunSlot, { kind: "active" }>,
-    projectionSequence: number,
-    projection: HelarcRunProjection,
+    pending: PendingRunProjection,
   ): Promise<void> {
+    const { sequence: projectionSequence, projection } = pending;
     const expectedThreadRevision = this.currentThreadRecord?.thread.revision ?? 0;
     const currentRun = this.currentThreadRecord?.runs.find(
       (run) => run.id === slot.productRunId,
@@ -1267,7 +1291,7 @@ export class HelarcMainController {
       currentRun?.updatedAt ?? new Date().toISOString(),
       new Date().toISOString(),
     );
-    const commit: HelarcRunProjectionCommit = {
+    const commit: HelarcRunProjectionCommit = pending.commit ?? {
       kind: "run_projection",
       commitId: `helarc-projection-${slot.productRunId}-${projectionSequence}`,
       threadId: slot.threadId,
@@ -1281,9 +1305,11 @@ export class HelarcMainController {
         product: projection.product,
       },
     };
+    pending.commit = commit;
     const result = await this.threadStore.commitRunProjection(commit);
     if (result.status === "rejected") throw new HelarcDesktopPersistenceError(result.code, result.message);
     this.currentThreadRecord = result.aggregate.record;
+    this.recordReplacementRecovery(commit, projectionSequence, result.persistence);
   }
 
   private recordPersistenceFailure(
@@ -1291,18 +1317,57 @@ export class HelarcMainController {
     operation: "run_projection" | "run_terminal",
     cause: unknown,
     projectionSequence = slot.projectionSequence,
+    attempt = 1,
+    commit?: HelarcRunProjectionCommit,
   ): void {
     const diagnostic = {
       operation, threadId: slot.threadId, runId: slot.productRunId,
       projectionSequence,
-      expectedRevision: this.currentThreadRecord?.thread.revision ?? 0,
+      expectedRevision: commit?.expectedThreadRevision ?? this.currentThreadRecord?.thread.revision ?? 0,
       occurredAt: new Date().toISOString(),
       code: cause instanceof HelarcDesktopPersistenceError ? cause.persistenceCode : persistenceFailureCode(cause),
+      outcome: "failed" as const, attempt,
+      commitId: commit?.commitId ?? (operation === "run_terminal" ? `helarc-terminal-${slot.productRunId}` : undefined),
+      firstFailedSequence: slot.firstFailedSequence ?? projectionSequence,
+      error: captureExecutionError(cause),
+      writeReport: cause instanceof AtomicFileError ? cause.writeReport : undefined,
     };
-    console.error("Helarc persistence failed.", diagnostic);
-    void this.persistenceDiagnostics?.record(diagnostic).catch(() => {
-      console.error("Helarc persistence diagnostic could not be saved.");
-    });
+    console.error("Helarc persistence failed.", { operation, projectionSequence, code: diagnostic.code });
+    this.recordPersistenceDiagnostic(diagnostic);
+  }
+
+  private recordPersistenceDiagnostic(diagnostic: HelarcPersistenceDiagnostic): void {
+    try {
+      void this.persistenceDiagnostics?.record(diagnostic).catch(() => {});
+    } catch { /* Diagnostic sink failure cannot change a data commit's outcome. */ }
+  }
+
+  private recordReplacementRecovery(
+    commit: HelarcRunStartCommit | HelarcRunProjectionCommit | HelarcRunTerminalCommit,
+    projectionSequence: number,
+    writeReport?: AtomicFileWriteReport,
+  ): void {
+    if (!writeReport || writeReport.replacementAttempts < 2) return;
+    this.recordPersistenceDiagnostic({ operation: commit.kind, outcome: "replacement_recovered",
+      threadId: commit.threadId, runId: commit.runId, projectionSequence,
+      commitId: commit.commitId, expectedRevision: commit.expectedThreadRevision,
+      occurredAt: new Date().toISOString(), code: "persistence_recovered", writeReport });
+  }
+
+  private markProjectionPersistenceRecovered(
+    slot: Extract<DesktopActiveRunSlot, {kind: "active"}>,
+    operation: "run_projection" | "run_terminal",
+    projectionSequence: number,
+  ): void {
+    if (slot.persistenceFailure === null) return;
+    this.recordPersistenceDiagnostic({ operation, outcome: "recovered", threadId: slot.threadId,
+      runId: slot.productRunId, projectionSequence, firstFailedSequence: slot.firstFailedSequence ?? projectionSequence,
+      expectedRevision: this.currentThreadRecord?.thread.revision ?? 0,
+      occurredAt: new Date().toISOString(), code: "persistence_recovered" });
+    slot.persistenceFailure = null;
+    slot.firstFailedSequence = null;
+    if (this.lastError?.code === "run_persistence_failed") this.lastError = null;
+    this.publishSnapshot();
   }
 
   private releaseActiveRunSlot(token: symbol): void {
@@ -1487,6 +1552,7 @@ export class HelarcMainController {
       throw new HelarcDesktopPersistenceError(committed.code, committed.message);
     }
     this.currentThreadRecord = committed.aggregate.record;
+    this.recordReplacementRecovery(commit, this.activeRunSlot.kind === "active" ? this.activeRunSlot.projectionSequence : 0, committed.persistence);
     this.threadSummaries = upsertThreadSummarySnapshot(
       this.threadSummaries,
       createThreadSummarySnapshotFromRecord(committed.aggregate.record),
@@ -1875,7 +1941,6 @@ function createInjectedProviderProfile(provider: Provider | null): HelarcProvide
     model: provider?.modelContext.target.model ?? "injected-model",
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
-    qualificationPolicy: "allow_experimental",
     isActive: true,
   });
 

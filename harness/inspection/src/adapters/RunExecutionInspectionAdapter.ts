@@ -1,4 +1,4 @@
-import type { RunExecutionObserver, RunExecutionObservation } from "@agent-anything/agent-runtime/runner";
+import type { RunExecutionObserver, RunExecutionObservation } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { InspectionContentInput, InspectionJson, InspectionRecordInput } from "../records/index.js";
 import type { InspectionRecorder } from "../recording/index.js";
 import { inspectionContentId, inspectionLink } from "./ProviderInspectionAdapter.js";

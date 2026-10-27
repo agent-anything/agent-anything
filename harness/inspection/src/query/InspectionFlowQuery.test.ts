@@ -24,6 +24,48 @@ async function setup() {
 }
 
 describe("Recorded execution flow queries",()=>{
+  it("retains public allocation numbers without exposing authority grants", async () => {
+    const {adapter, recorder, query, snapshot} = await setup();
+    recorder.setPolicy({...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "allocation", provider: true});
+    const flow = new ExecutionFlowPath(definition, {observer: adapter}, "run");
+    const step = flow.advance("work");
+    step.output(flow.material("Model input allocation", "assessed", {unit: "tokens",
+      estimator: {id: "anchored", revision: "1", unit: "tokens", accuracy: "estimated"}, uncertainty: {kind: "unquantified"}, groups: [
+      {group: "working_conversation", baseline: 10, demand: 30, allocatedAmount: 20, used: 20, unmet: 10}],
+      authority: {grant: {secret: "private-authority"}}, apiKey: "private-key"}, "provider"));
+    flow.advance("finish"); flow.close("returned");
+    const scope = await snapshot();
+    const detail = await query.query({...scope, kind: "get_flow_occurrence", runId: "run",
+      invocationId: flow.ref.invocationId, occurrenceId: step.ref.stepExecutionId!});
+    const ref = detail.flow!.occurrence!.references.find(ref => ref.role === "output")!;
+    const records = await query.query({...scope, kind: "get_record", recordId: ref.recordId!});
+    const content = await query.query({...scope, kind: "get_content", contentId: records.records[0]!.contents[0]!.id});
+    expect(JSON.parse(content.content!.text)).toMatchObject({unit: "tokens", groups: [{allocatedAmount: 20}],
+      estimator: {accuracy: "estimated"}, uncertainty: {kind: "unquantified"},
+      authority: {grant: "[redacted]"}, apiKey: "[redacted]"});
+    expect(content.content!.text).not.toContain("private-");
+  });
+  it("resolves model activity and continuation identities across responsibility flows", async () => {
+    const {adapter, recorder, query, snapshot} = await setup();
+    recorder.setPolicy({...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "activity-evidence", execution: true});
+    const activity = {owner: "agent-runtime", kind: "model_activity", id: "decision-activity", revision: "1"};
+    const accepted = {owner: "agent-runtime", kind: "contribution", id: "accepted-continuation", revision: "1"};
+    const first = new ExecutionFlowPath(definition, {observer: adapter}, "child");
+    const activityRef = first.material("Model activity", "bound", {purpose: "task", inputOwner: "context_representation"}, "execution", activity);
+    first.advance("work", {}, [activityRef]).check("ready", "passed");
+    first.advance("finish").output(first.material("Accepted continuation", "accepted", {sourceRequestId: "original"}, "execution", accepted));
+    first.close("returned");
+    const next = new ExecutionFlowPath(definition, {observer: adapter}, "child", [accepted]);
+    const occurrence = next.advance("work", {}, [activity, accepted]);
+    occurrence.check("ready", "passed");
+    next.advance("finish"); next.close("returned");
+    const detail = await query.query({...await snapshot(), kind: "get_flow_occurrence", runId: "child", invocationId: next.ref.invocationId, occurrenceId: occurrence.ref.stepExecutionId!});
+    expect(detail.flow!.occurrence!.references.filter(ref => ref.role === "input")).toEqual(expect.arrayContaining([
+      expect.objectContaining({availability: "present", reference: expect.objectContaining({kind: "model_activity", id: activity.id})}),
+      expect.objectContaining({availability: "present", reference: expect.objectContaining({id: accepted.id})}),
+    ]));
+    expect(recorder.health().rejected).toBe(0);
+  });
   it("keeps per-invocation prepared inputs readable through the shared output/input reference", async () => {
     const {adapter, recorder, query, snapshot} = await setup();
     recorder.setPolicy({...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "capture-inputs", agent: true});

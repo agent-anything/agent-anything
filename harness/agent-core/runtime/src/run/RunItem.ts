@@ -1,5 +1,5 @@
-import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
-import type { ControllerTurnRef } from "@agent-anything/agent-core/control";
+import type { AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
+import type { TaskDecisionActivityRef } from "@agent-anything/agent-core/control";
 import type {
   RunActionEnvelope,
   RunActionProvenance,
@@ -7,7 +7,7 @@ import type {
 import type { RunItemEnvelope } from "@agent-anything/agent-core/run-item";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { PlanProjection } from "../plan/index.js";
-import type { ControllerModelItem } from "../controller/Controller.js";
+import type { TaskDecisionModelItem } from "../decision/TaskDecisionActivity.js";
 import type { PendingRunSubject } from "./PendingRunSubject.js";
 import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunSteeringApplication } from "./RunSteering.js";
@@ -24,7 +24,7 @@ import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolBindingUnavailableReason } from "@agent-anything/tools/selection";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 import type { ModelCallRef, ModelToolResult } from "@agent-anything/model-interaction";
-import type { ControllerFeedback } from "../controller/index.js";
+import type { TaskDecisionFeedback } from "../decision/index.js";
 
 export interface ControllerToolExposureRecord {
   readonly proofId: string;
@@ -49,7 +49,7 @@ export type RuntimeRunActionSubject =
 
 export type RuntimeRunActionProvenance =
   | (Extract<RunActionProvenance, { readonly kind: "controller" }> & {
-      readonly modelCallRef: ModelCallRef;
+      readonly modelCallRef: ModelCallRef | null;
     })
   | Exclude<RunActionProvenance, { readonly kind: "controller" }>;
 
@@ -61,13 +61,13 @@ export type RuntimeRunAction = Omit<
 export type RunItemPayload<TOutput = unknown> =
   | {
       readonly kind: "controller_turn";
-      readonly turn: ControllerTurnRef;
+      readonly turn: TaskDecisionActivityRef;
       readonly status: "decided" | "failed" | "interrupted";
       readonly decisionKind: "advance" | "continue_with_feedback" | "propose_completion" | null;
       readonly instructionBinding: AgentInstructionBindingRef;
       readonly toolExposure: ControllerToolExposureRecord;
-      readonly modelItems: readonly ControllerModelItem[];
-      readonly openingReceipt?: import("../controller/ControllerConversation.js").ConversationOpeningReceipt | null;
+      readonly modelItems: readonly TaskDecisionModelItem[];
+      readonly openingReceipt?: import("../decision/TaskConversation.js").ConversationOpeningReceipt | null;
       readonly failure: RunFailureCause | null;
     }
   | { readonly kind: "run_action"; readonly action: RuntimeRunAction }
@@ -82,8 +82,8 @@ export type RunItemPayload<TOutput = unknown> =
   | {
       readonly kind: "state_transition";
       readonly transition: "active_agent";
-      readonly previousAgent: AgentRevisionRef;
-      readonly activeAgent: AgentRevisionRef;
+      readonly previousAgent: AgentDefinitionRevisionRef;
+      readonly activeAgent: AgentDefinitionRevisionRef;
       readonly previousInstructionBinding: AgentInstructionBindingRef;
       readonly activeInstructionBinding: AgentInstructionBindingRef;
       readonly reason: string;
@@ -105,20 +105,20 @@ export type RunItemPayload<TOutput = unknown> =
       readonly pending: Extract<PendingRunSubject, { readonly kind: "retry_wait" }>;
     }
   | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
-  | { readonly kind: "controller_feedback"; readonly feedback: ControllerFeedback; readonly turn: ControllerTurnRef }
-  | { readonly kind: "input_notification"; readonly notification: import("../runner/RunInputNotifications.js").RunInputNotification }
+  | { readonly kind: "controller_feedback"; readonly feedback: TaskDecisionFeedback; readonly turn: TaskDecisionActivityRef }
+  | { readonly kind: "input_notification"; readonly notification: import("../execution-coordinator/RunInputNotifications.js").RunInputNotification }
   | { readonly kind: "input_delivery";
-      readonly batch: import("../controller/index.js").ControllerInputDeliveryBatch;
-      readonly receipt: import("../controller/index.js").ControllerInputDeliveryReceipt;
-      readonly turn: ControllerTurnRef }
+      readonly batch: import("../decision/index.js").ControllerInputDeliveryBatch;
+      readonly receipt: import("../decision/index.js").ControllerInputDeliveryReceipt;
+      readonly turn: TaskDecisionActivityRef }
   | { readonly kind: "input_delivery_closed"; readonly reason: RunResultStatus;
-      readonly entries: readonly import("../runner/RunInputNotifications.js").RunInputNotification[] }
+      readonly entries: readonly import("../execution-coordinator/RunInputNotifications.js").RunInputNotification[] }
   | {
       readonly kind: "completion_acceptance";
       readonly source: RunCauseSourceRef;
       readonly candidateId: string;
       readonly candidateRevision: string;
-      readonly completionSource: import("../controller/index.js").CompletionSource;
+      readonly completionSource: import("../decision/index.js").CompletionSource;
       readonly basisRevision: number;
       readonly acceptedAt: string;
     }

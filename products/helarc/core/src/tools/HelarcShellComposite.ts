@@ -1,4 +1,4 @@
-import type {CompositeOperationResolverPort} from "@agent-anything/agent-runtime/runner";
+import type {CompositeOperationResolverPort} from "@agent-anything/agent-runtime/execution-coordinator";
 import {snapshotCompositeDefinition} from "@agent-anything/operation-composition/definition";
 import {HELARC_SHELL_COMPOSITE,HELARC_PROCESS_START_OPERATION,HELARC_INITIAL_OBSERVATION_OPERATION} from "./HelarcCommandIdentity.js";
 

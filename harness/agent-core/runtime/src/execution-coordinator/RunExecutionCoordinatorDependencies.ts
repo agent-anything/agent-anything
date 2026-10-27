@@ -1,0 +1,322 @@
+import type { AgentDefinition, AgentDefinitionRevisionRef } from "@agent-anything/agent-core/agent";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import type { RunActionRef } from "@agent-anything/agent-core/run-action";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
+import type { AgentTask, TaskRef } from "@agent-anything/agent-core/task";
+import type {
+  ContextBudgetGrant,
+  ContextProjectionEstimator,
+  ContextProjectionPolicy,
+  ContextProjectionProfile,
+} from "@agent-anything/context/projection";
+import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
+import type { TaskDecisionSourceBasis } from "../decision/index.js";
+import type { AuditPort, RunTraceObserver, RuntimeEventPublisher, TelemetryPort } from "@agent-anything/observability";
+import type { ActionExecutionCoordinatorDependencies } from "@agent-anything/action-execution/enforcement";
+import type { ActionExecutionObserver } from "@agent-anything/action-execution/enforcement";
+import type { InteractionProtocolRegistrySnapshot } from "@agent-anything/interaction/coordination";
+import type {
+  OperationBindingResolverSnapshot,
+  ResolvedOperationBinding,
+} from "@agent-anything/operation-catalog/binding";
+import type {
+  OperationDefinitionCatalog,
+  OperationRequestOrigin,
+} from "@agent-anything/operation-catalog/catalog";
+import type {
+  OperationBindingRevisionRef,
+  OperationDefinitionRevisionRef,
+} from "@agent-anything/operation-catalog/identity";
+import type { OperationResult } from "@agent-anything/operation-catalog/result";
+import type { CompositeDefinitionRevision } from "@agent-anything/operation-composition/definition";
+import type { CompositeExecutionDependencies } from "@agent-anything/operation-composition/execution";
+import type { RetryExecutor } from "../retry/RetryExecutor.js";
+import type { RunResult } from "../run/RunResult.js";
+import type { RunRef } from "@agent-anything/agent-core/run";
+import type { RunFinalizationContext } from "../run/RunCancellation.js";
+import type { RunFailureCause } from "../run/RunFailure.js";
+import type {
+  ToolBindingUnavailableReason,
+  ToolExposureBasisRef,
+} from "@agent-anything/tools/selection";
+import type { ToolCall } from "@agent-anything/tools/invocation";
+import type { ToolInputSemanticValidator } from "@agent-anything/tools/validation";
+import type {
+  DelegationExecutionConstraintInput,
+  DelegationContextMaterial,
+  DelegationLimits,
+  DelegationPreparation,
+  DelegationRequest,
+  DelegationResult,
+} from "../delegation/index.js";
+import type { RunTranscriptPort, RunTranscriptObserver } from "../transcript/index.js";
+import type { RunObserver } from "./RunObserver.js";
+import type { RunExecutionObserver } from "./RunExecutionObserver.js";
+
+export type RunIdentityKind =
+  | "run_cancellation_request"
+  | "run_item"
+  | "run_action"
+  | "controller_turn"
+  | "operation_invocation"
+  | "operation_result"
+  | "tool_call"
+  | "observation"
+  | "plan"
+  | "interaction_request"
+  | "interaction_submission_receipt"
+  | "interaction_resolution"
+  | "interaction_application"
+  | "action"
+  | "descendant_relation"
+  | "delegation_request"
+  | "delegation_result"
+  | "descendant_continuation"
+  | "delegation_authority"
+  | "delegation_limits"
+  | "composite"
+  | "runtime_event"
+  | "run_trace"
+  | "trace_span"
+  | "approval_record"
+  | "authority_record"
+  | "active_context"
+  | "context_item"
+  | "context_transition"
+  | "context_contribution"
+  | "context_refresh"
+  | "run_suspension"
+  | "run_resume"
+  | "run_settlement_cause"
+  | "run_failure_fact"
+  | "run_completion_acceptance"
+  | "controller_feedback";
+
+export interface CreateRunIdentityInput {
+  readonly kind: RunIdentityKind;
+  readonly runId: string;
+  readonly sequence: number;
+}
+
+export type CreateExecutionIdentity = (input: CreateRunIdentityInput) => string;
+export type CreateRunIdentity = () => string;
+
+export interface DecisionSourceProjection {
+  readonly purpose: string;
+  readonly profile: ContextProjectionProfile;
+  readonly policy: ContextProjectionPolicy;
+  readonly audiences: readonly string[];
+  readonly maxContributionPayloadBytes: number;
+  readonly manifestPersistence?: ContextManifestPersistencePort;
+  allocate(input: TaskDecisionSourceBasis): {
+    readonly budget: ContextBudgetGrant;
+    readonly estimator: ContextProjectionEstimator;
+    readonly retainedCoverage?: import("@agent-anything/context/projection").ContextProjectionRequest["retainedCoverage"];
+  };
+}
+
+export interface InternalOperationExecutionContext {
+  readonly runId: string;
+  readonly parentRunAction: RunActionRef;
+  readonly binding: Extract<ResolvedOperationBinding, { readonly kind: "internal" }>;
+  readonly deadlineAt: string;
+  readonly interruption: InvocationInterruptionContext;
+}
+
+export interface InternalOperationHandler {
+  readonly id: string;
+  execute(context: InternalOperationExecutionContext): Promise<OperationResult>;
+  /** Observe/reconstruct prior work; never start a replacement operation. */
+  reconcile?(context: InternalOperationExecutionContext): Promise<OperationResult | null>;
+}
+
+export interface AgentResolution {
+  readonly status: "admitted" | "unavailable" | "denied";
+  readonly agent: AgentDefinition | null;
+  readonly admissionEvidenceRef: string | null;
+  readonly code: string | null;
+}
+
+export interface AgentResolverPort {
+  resolve(ref: AgentDefinitionRevisionRef): Promise<AgentResolution>;
+}
+
+export interface DelegationPreparationResult {
+  readonly agent: AgentDefinition;
+  readonly preparation: DelegationPreparation;
+  readonly contextMaterials: readonly DelegationContextMaterial[];
+}
+
+export type DescendantOperationOutcome =
+  | { readonly status: "succeeded"; readonly output: unknown; readonly failure: null }
+  | { readonly status: "partial"; readonly output: unknown; readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure }
+  // Failure can retain terminal facts and diagnostics without claiming useful partial work.
+  | { readonly status: "failed"; readonly output: unknown; readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure }
+  | {
+      readonly status: "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect";
+      readonly output: null;
+      readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure;
+    };
+
+export interface DelegationPreparationPort {
+  assessAvailability(input: {
+    readonly parentRunId: string;
+    readonly targetAgent: AgentDefinitionRevisionRef;
+  }): Promise<ToolPathAvailability> | ToolPathAvailability;
+  prepare(input: {
+    readonly root: {
+      readonly run: RunRef;
+      readonly task: AgentTask;
+    };
+    readonly parent: {
+      readonly run: RunRef;
+      readonly task: TaskRef;
+      readonly action: RunActionRef;
+      readonly lineage: RunLineage;
+    };
+    readonly targetAgent: AgentDefinitionRevisionRef;
+    readonly toolCall: ToolCall;
+    readonly authorityCeiling: readonly DelegationExecutionConstraintInput[];
+    readonly limitCeiling: DelegationLimits;
+  }): Promise<DelegationPreparationResult>;
+}
+
+export interface DelegationContinuationPreparationPort {
+  prepare(input: {
+    readonly toolCall: ToolCall;
+    readonly parentRunId: string;
+    readonly targetAgent: AgentDefinitionRevisionRef;
+    readonly sourceRequest: DelegationRequest;
+    readonly sourceResult: DelegationResult;
+    readonly message: string;
+    readonly authorityCeiling: readonly DelegationExecutionConstraintInput[];
+    readonly limitCeiling: DelegationLimits;
+  }): Promise<DelegationPreparationResult>;
+}
+
+export interface DelegationResultProjectionPort {
+  project(input: {
+    readonly result: DelegationResult;
+    readonly continuation: import("@agent-anything/agent-core/delegation").DescendantContinuationRef | null;
+  }): DescendantOperationOutcome | Promise<DescendantOperationOutcome>;
+}
+
+export interface DelegationProgressProjectionPort {
+  project(input: {
+    readonly progress: import("../delegation/index.js").DescendantProgress;
+  }): DescendantOperationOutcome;
+}
+
+export interface DelegationNarrativeProjectionPort {
+  project(input: {
+    readonly request: DelegationRequest;
+    readonly childResult: import("../run/index.js").RunResult;
+  }): string | null;
+}
+
+export interface RunnerDelegationComposition {
+  readonly preparation: DelegationPreparationPort;
+  readonly continuation: DelegationContinuationPreparationPort;
+  readonly narrativeProjection: DelegationNarrativeProjectionPort;
+  readonly progressProjection: DelegationProgressProjectionPort;
+  readonly resultProjection: DelegationResultProjectionPort;
+}
+
+export interface ToolPathAvailability {
+  readonly basisRefs: readonly ToolExposureBasisRef[];
+  readonly disposition: "available" | "unavailable";
+  readonly reason: ToolBindingUnavailableReason | null;
+}
+
+export interface OperationToolAvailabilityParticipant {
+  readonly binding: OperationBindingRevisionRef;
+  /** Trusted same-Run overlap permission; absence means exclusive execution. */
+  readonly scheduling?: {
+    readonly group: string;
+    readonly maxParallel: number;
+  };
+  assess(input: {
+    readonly run: RunRef;
+  }): Promise<ToolPathAvailability> | ToolPathAvailability;
+}
+
+export interface CompositeOperationResolution {
+  readonly definition: CompositeDefinitionRevision;
+  readonly execution: Omit<CompositeExecutionDependencies, "children">;
+}
+
+export interface CompositeOperationResolverPort {
+  resolve(definitionRef: string): CompositeOperationResolution | null;
+}
+
+export interface RunOperationComposition {
+  readonly catalog: OperationDefinitionCatalog;
+  readonly resultPresenters?: readonly import("./ToolResultPresenter.js").ToolResultPresenter[];
+  readonly resultContracts: import("@agent-anything/operation-catalog/result").OperationResultContracts;
+  readonly bindings: OperationBindingResolverSnapshot;
+  readonly toolInputSemanticValidators: readonly ToolInputSemanticValidator[];
+  readonly internalHandlers: readonly InternalOperationHandler[];
+  readonly availability: readonly OperationToolAvailabilityParticipant[];
+  readonly actionExecution?: Omit<
+    ActionExecutionCoordinatorDependencies,
+    "approval" | "permission"
+  >;
+  readonly composite?: CompositeOperationResolverPort;
+  readonly actionRecovery?: {
+    readonly records: import("@agent-anything/action-execution/enforcement").ActionRecoveryRecordPort;
+    readonly attempts: import("@agent-anything/action-execution/enforcement").ActionAttemptReconciliationPort | null;
+  };
+  readonly delegation?: RunnerDelegationComposition;
+}
+
+export interface RunResourceFinalizerPort {
+  readonly binding?: {readonly id: string; readonly revision: string};
+  finalize(context: RunFinalizationContext): Promise<RunFailureCause | null>;
+  /** Reconcile original cleanup; absence does not authorize replay. */
+  reconcile?(context: RunFinalizationContext): Promise<RunFailureCause | null>;
+}
+
+export interface RunExecutionCoordinatorDependencies {
+  readonly runCommits?: import("./RunCommitPort.js").RunCommitPort;
+  readonly runTreeCommits?: import("./RunTreeCommitPort.js").RunTreeCommitPort;
+  readonly compositeCommits?: import("@agent-anything/operation-composition/execution").CompositeCommitPort;
+  readonly compositeRecovery?: {
+    readLatestComposite(compositeId: string): Promise<import("@agent-anything/operation-composition/execution").CompositeCommit | null>;
+  };
+  readonly taskDecisions: import("../decision/index.js").TaskDecisionActivity<unknown>;
+  readonly preparations?: import("../context-representation/ContextPreparationLifecycle.js").ContextPreparationLifecycle;
+  readonly extensions?: import("../decision/AgentExecutionExtensions.js").AgentExecutionExtensions;
+  readonly contextProjection: DecisionSourceProjection;
+  readonly operations: RunOperationComposition;
+  readonly interactions: InteractionProtocolRegistrySnapshot;
+  readonly agents?: AgentResolverPort;
+  readonly runtimeEventPublisher?: RuntimeEventPublisher;
+  readonly auditPort?: AuditPort;
+  readonly telemetryPort?: TelemetryPort;
+  readonly runTraceObserver?: RunTraceObserver;
+  readonly runTranscriptPort?: RunTranscriptPort;
+  readonly runTranscriptObserver?: RunTranscriptObserver;
+  readonly runObserver?: RunObserver;
+  readonly executionObserver?: RunExecutionObserver;
+  readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
+  readonly resourceFinalizers?: readonly RunResourceFinalizerPort[];
+  readonly inputNotifications?: import("./RunInputNotifications.js").RunInputNotificationSource;
+  readonly retryExecutor?: RetryExecutor;
+  readonly now?: () => string;
+  readonly createRunId?: CreateRunIdentity;
+  readonly createId?: CreateExecutionIdentity;
+}
+
+export interface RunInvocationOptions {
+  /** Recovery-only control, accepted durably before any restored member activates. */
+  readonly recoveryCancellation?: import("../run/index.js").RunCancellationRequestInput;
+  readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;
+  readonly runtimeEventPublisher?: RuntimeEventPublisher;
+  readonly runTraceObserver?: RunTraceObserver;
+  readonly actionExecutionObserver?: ActionExecutionObserver;
+}
+
+export type ResolvedExecutionCoordinatorDependencies = Required<Pick<
+  RunExecutionCoordinatorDependencies,
+  "taskDecisions" | "contextProjection" | "operations" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"
+>> & Omit<RunExecutionCoordinatorDependencies, "taskDecisions" | "contextProjection" | "operations" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor">;

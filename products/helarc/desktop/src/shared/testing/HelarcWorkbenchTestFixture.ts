@@ -18,7 +18,6 @@ export function createWorkbenchTestRun(input: {
     : status === "cancelled"
       ? "runtime_cancelled" as const
       : "runtime_limit_exceeded" as const);
-  const qualification = modelQualificationSnapshot();
   return {
     productRunId: "product-run-1",
     harnessRunId: "harness-run-1",
@@ -43,12 +42,10 @@ export function createWorkbenchTestRun(input: {
     product: {
       presentationRevision: 0,
       phase: { kind: "none" },
-      qualification,
       continuation: null,
       result: terminal
         ? {
             status: status === "completed" ? "completed" : status,
-            qualification,
             output: {
               taskId: "task-1",
               workspace: {
@@ -69,32 +66,6 @@ export function createWorkbenchTestRun(input: {
             },
           }
         : null,
-    },
-  };
-}
-
-function modelQualificationSnapshot(): NonNullable<HelarcMainSnapshot["run"]>["product"]["qualification"] {
-  return {
-    providerKind: "ollama",
-    modelId: "gemma4:e4b",
-    modelIdentityStrength: "mutable_alias",
-    status: "experimental",
-    policy: "allow_experimental",
-    experimentalUseSelected: true,
-    scopes: [
-      {
-        scope: "agent_loop",
-        applicability: "absent",
-        outcome: null,
-        decidedAt: null,
-        limitations: [],
-      },
-    ],
-    reasons: ["No current qualification decision covers the required scope."],
-    toolGuidance: {
-      releaseId: "helarc.tool-guidance",
-      releaseRevision: "helarc.tool-guidance.v1",
-      profileRevision: "helarc.tool-profile.v1",
     },
   };
 }

@@ -13,6 +13,34 @@ function document(id: string, text: string): ContextMaterialDocument {return {te
   originRunId: "root", source: {owner:"test",kind:"public",id,revision:"1"}, label:`Report ${id}`, role:"tool",position:1,bytes:Buffer.byteLength(text),format:"text",relationships:[],limitations:[]}};}
 
 describe("retained context material", () => {
+  it("searches explicit chunk-backed views across internal scans and preserves a prepared scope across restart", () => {
+    const directory=mkdtempSync(join(tmpdir(),"helarc-material-test-")); directories.push(directory); const path=join(directory,"search.sqlite");
+    const first=open(path), text="x".repeat(600000)+"NEEDLE", doc=document("output-prefix",text);
+    first.material.publishChunks(doc.description,[text.slice(0,300000),text.slice(300000)],"root");
+    expect(first.material.search("root",{}).matches).toEqual([]);
+    const command={kind:"search" as const,runId:"root",invocationId:"scoped-search",input:{query:"NEEDLE",references:[doc.description.reference]}};
+    expect(first.material.command(command)).toEqual({kind:"search_progress"});
+    first.material.publishChunks(document("later","NEEDLE later").description,["NEEDLE later"],"root"); first.db.close();
+    const next=open(path,false);
+    let page=next.material.command(command);
+    while (page && "kind" in page) page=next.material.command(command);
+    expect(page).toMatchObject({exhausted:true,stopReason:"scope_exhausted",scannedBytes:600006,matches:[{byteStart:600000}]});
+    expect(next.material.command(command)).toEqual(page);
+    expect(()=>next.material.command({...command,input:{query:"x",references:[doc.description.reference]}})).toThrow("conflict");
+    expect(()=>next.material.command({...command,runId:"other",invocationId:"forbidden"})).toThrow("not disclosed");
+    const budget={...command,invocationId:"budget",input:{...command.input,query:"absent"}};
+    expect(next.material.command(budget)).toEqual({kind:"search_progress"});
+    expect(next.material.command({...budget,finish:true})).toMatchObject({exhausted:false,stopReason:"execution_budget",scannedBytes:262144});
+  });
+  it("reuses immutable output chunks and keeps old pages independent of newer views", () => {
+    const {db,material}=open(), old=document("old","prefix"), newer=document("new","prefix tail");
+    material.publishChunks(old.description,["prefix"],"root"); material.publishChunks(newer.description,["prefix"," tail"],"root");
+    expect(db.prepare("SELECT COUNT(*) AS n FROM context_material_chunks").get()).toEqual({n:2});
+    expect(material.read("root",{reference:old.description.reference}).text).toBe("prefix");
+    expect(material.read("root",{reference:newer.description.reference}).text).toBe("prefix tail");
+    const page=material.search("root",{references:[newer.description.reference],query:"i",limit:1});
+    expect(()=>material.search("root",{references:[old.description.reference],query:"i",cursor:page.nextCursor!})).toThrow("cursor");
+  });
   it("returns exact UTF-8 pages, empty sources and boundaries without reading changed external files", () => {
     const {material} = open(), doc = document("unicode", "a".repeat(65535) + "中😀end"); material.publish(doc, "root");
     expect(material.read("root", {reference:doc.description.reference,offset:65534,length:4}).text).toBe("a中");

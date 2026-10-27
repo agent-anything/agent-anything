@@ -7,11 +7,11 @@ import type {
   SerializableValue,
 } from "@agent-anything/canonical-action/subject";
 import type { OperationBindingResolverRegistration } from "@agent-anything/operation-catalog/binding";
-import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
+import type { RegisteredOperationDefinition } from "@agent-anything/operation-catalog/catalog";
 import type { OperationRequestOrigin } from "@agent-anything/operation-catalog/catalog";
 import type {
   OperationBindingRevisionRef,
-  OperationRevisionRef,
+  OperationDefinitionRevisionRef,
 } from "@agent-anything/operation-catalog/identity";
 import type {
   ToolAnnotations,
@@ -25,7 +25,7 @@ import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import type { RemoteOperationTransportPort } from "../transport/index.js";
 
 export interface TrustedRemoteOperationRegistration {
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
   readonly binding: OperationBindingRevisionRef;
   readonly bindingKind: "direct" | "hosted";
   readonly hostedEndpointRef: string | null;
@@ -69,7 +69,7 @@ export interface CreateRemoteOperationContributionInput<TOutput = unknown> {
 }
 
 export interface RemoteOperationContribution {
-  readonly operations: readonly RegisteredOperation[];
+  readonly operations: readonly RegisteredOperationDefinition[];
   readonly bindings: readonly OperationBindingResolverRegistration[];
   readonly tools: readonly ToolRegistrationInput[];
   readonly actionRegistrations: ActionRegistrationSnapshot;

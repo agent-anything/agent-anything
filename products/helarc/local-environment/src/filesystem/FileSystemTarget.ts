@@ -77,6 +77,7 @@ export async function createCodeAgentCanonicalWorkspaceRoots(input: {
 }
 
 export async function prepareFileSystemTarget(input: {
+  readonly inspection?: {maxBytes: number; signal: AbortSignal};
   readonly workspace: WorkspaceSelection | null;
   readonly workspaceRoots: readonly CanonicalWorkspaceRootIdentity[];
   readonly platform: FileSystemPlatform;
@@ -138,7 +139,7 @@ export async function prepareFileSystemTarget(input: {
 
   const baseline = input.operation === "write" && "created" in target && target.created
     ? ({ kind: "absent" } as const)
-    : await createBaseline(target.canonicalTarget, target.stats, input.platform);
+    : await createBaseline(target.canonicalTarget, target.stats, input.platform, input.inspection);
   const isWorkspaceRootTarget = sameCanonicalPath(
     target.canonicalTarget,
     target.canonicalRoot,
@@ -181,6 +182,7 @@ export async function prepareFileSystemTarget(input: {
 }
 
 export async function inspectPreparedFileSystemTarget(input: {
+  readonly inspection?: {maxBytes: number; signal: AbortSignal};
   readonly platform: FileSystemPlatform;
   readonly operation: CodeFileOperationKind | "directory";
   readonly expectedBaseline: FileBaseline;
@@ -228,7 +230,7 @@ export async function inspectPreparedFileSystemTarget(input: {
       throw new TypeError("File target resolution changed.");
     }
     const stats = await stat(resolvedTarget);
-    baseline = await createBaseline(resolvedTarget, stats, input.platform);
+    baseline = await createBaseline(resolvedTarget, stats, input.platform, input.inspection);
   }
 
   const isWorkspaceRootTarget = sameCanonicalPath(
@@ -293,9 +295,10 @@ async function createBaseline(
   target: string,
   stats: Stats,
   platform: FileSystemPlatform,
+  inspection?: {maxBytes: number; signal: AbortSignal},
 ): Promise<FileBaseline> {
   const entryKind = stats.isFile() ? "file" : stats.isDirectory() ? "directory" : "other";
-  const content = stats.isFile() ? await inspectFileContent(target) : null;
+  const content = stats.isFile() ? await inspectFileContent(target, inspection) : null;
   if (content && !sameFileIdentity(stats, content.stats)) throw new TypeError("File identity changed while its baseline was prepared.");
   const contentDigest = content?.digest ?? null;
   return Object.freeze({

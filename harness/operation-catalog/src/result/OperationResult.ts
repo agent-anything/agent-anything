@@ -1,5 +1,5 @@
 import type { OperationBindingRevisionRef, OperationInvocationRef } from "../identity/index.js";
-import { operationRevisionKey, snapshotOperationBindingRevisionRef, snapshotOperationInvocationRef } from "../identity/index.js";
+import { operationDefinitionRevisionKey, snapshotOperationBindingRevisionRef, snapshotOperationInvocationRef } from "../identity/index.js";
 import type { OperationLimitFailureDetail } from "./OperationLimitFailureDetail.js";
 
 export interface OperationResultRef {
@@ -63,7 +63,7 @@ export function createOperationResult<TOutput>(
   requireToken(input.ref.id, "OperationResult.ref.id");
   const invocation = snapshotOperationInvocationRef(input.ref.invocation);
   const binding = snapshotOperationBindingRevisionRef(input.binding);
-  if (operationRevisionKey(invocation.operation) !== operationRevisionKey(binding.operation)) {
+  if (operationDefinitionRevisionKey(invocation.operation) !== operationDefinitionRevisionKey(binding.operation)) {
     throw new TypeError("OperationResult binding must match its invocation.");
   }
   requireToken(input.semanticOwner, "OperationResult.semanticOwner");

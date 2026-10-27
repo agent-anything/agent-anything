@@ -1,4 +1,4 @@
-import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import type { OperationDefinitionRevisionRef } from "@agent-anything/operation-catalog/identity";
 
 export interface ToolKey {
   readonly namespace: string;
@@ -19,7 +19,7 @@ export interface ToolSchemaRevisionRefs {
 
 export interface ToolOperationBindingRef {
   readonly kind: "operation";
-  readonly operation: OperationRevisionRef;
+  readonly operation: OperationDefinitionRevisionRef;
   readonly revision: string;
 }
 

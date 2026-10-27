@@ -1,7 +1,7 @@
-import type { RunnerContextProjection } from "@agent-anything/agent-runtime/runner";
+import type { DecisionSourceProjection } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { ContextProjectionEstimationInput } from "@agent-anything/context/projection";
 
-export function createTestContextProjection(): RunnerContextProjection {
+export function createTestContextProjection(): DecisionSourceProjection {
   const estimator = Object.freeze({
     ref: Object.freeze({
       id: "test-context-utf8",

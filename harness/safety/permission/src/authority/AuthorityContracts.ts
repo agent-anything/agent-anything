@@ -10,7 +10,7 @@ export interface ApprovalApplicabilityKey {
   readonly value: string;
 }
 
-export interface ValidatedActionAuthority {
+export interface ValidatedActionAuthorizationBasis {
   readonly id: string;
   readonly runId: string;
   readonly actionId: string;
@@ -40,7 +40,7 @@ export interface RunPermissionGrant {
   readonly createdAt: string;
 }
 
-export interface SessionAuthorityContext {
+export interface SessionAuthorizationScope {
   readonly hostSessionId: string;
   readonly authorityContextKey: string;
   readonly workspaceId: string | null;
@@ -48,9 +48,9 @@ export interface SessionAuthorityContext {
   readonly environmentId: string;
 }
 
-export interface SessionAuthorityProposal {
+export interface SessionAuthorizationProposal {
   readonly proposalRef: string;
-  readonly context: SessionAuthorityContext;
+  readonly context: SessionAuthorizationScope;
   readonly category: ApprovalCategory;
   readonly applicabilityKeys: readonly [
     ApprovalApplicabilityKey,
@@ -59,7 +59,7 @@ export interface SessionAuthorityProposal {
   readonly defaultGrantedPermissions: CanonicalAdditionalPermissions | null;
 }
 
-export interface SessionAuthorityRecord extends SessionAuthorityContext {
+export interface SessionAuthorizationBasis extends SessionAuthorizationScope {
   readonly id: string;
   readonly category: ApprovalCategory;
   readonly applicabilityKeys: readonly [
@@ -72,7 +72,7 @@ export interface SessionAuthorityRecord extends SessionAuthorityContext {
   readonly createdAt: string;
 }
 
-export interface SessionAuthorityRecordInput extends SessionAuthorityContext {
+export interface SessionAuthorizationBasisInput extends SessionAuthorizationScope {
   readonly id: string;
   readonly category: ApprovalCategory;
   readonly applicabilityKeys: readonly ApprovalApplicabilityKey[];
@@ -82,27 +82,27 @@ export interface SessionAuthorityRecordInput extends SessionAuthorityContext {
   readonly createdAt: string;
 }
 
-export interface SessionAuthorityLookup {
-  readonly context: SessionAuthorityContext;
+export interface SessionAuthorizationLookup {
+  readonly context: SessionAuthorizationScope;
   readonly category: ApprovalCategory | null;
   readonly applicabilityKeys: readonly ApprovalApplicabilityKey[];
 }
 
-export interface SessionAuthorityCommit {
+export interface SessionAuthorizationCommit {
   readonly commitId: string;
-  readonly record: SessionAuthorityRecord;
+  readonly record: SessionAuthorizationBasis;
 }
 
-export type SessionAuthorityCommitFailureCode =
+export type SessionAuthorizationCommitFailureCode =
   | "session_authority_invalid"
   | "session_authority_conflict"
   | "session_authority_storage_failed";
 
-export type SessionAuthorityCommitResult =
-  | { readonly kind: "applied"; readonly record: SessionAuthorityRecord }
+export type SessionAuthorizationCommitResult =
+  | { readonly kind: "applied"; readonly record: SessionAuthorizationBasis }
   | {
       readonly kind: "not_applied";
-      readonly code: SessionAuthorityCommitFailureCode;
+      readonly code: SessionAuthorizationCommitFailureCode;
       readonly message: string;
     }
   | {
@@ -115,20 +115,20 @@ export type SessionAuthorityCommitResult =
       readonly message: string;
     };
 
-export interface SessionAuthorityPort {
+export interface SessionAuthorizationStore {
   listApplicable(
-    input: SessionAuthorityLookup,
+    input: SessionAuthorizationLookup,
     context: InvocationInterruptionContext,
-  ): Promise<readonly SessionAuthorityRecord[]>;
+  ): Promise<readonly SessionAuthorizationBasis[]>;
 
   commit(
-    input: SessionAuthorityCommit,
+    input: SessionAuthorizationCommit,
     context: InvocationInterruptionContext,
-  ): Promise<SessionAuthorityCommitResult>;
+  ): Promise<SessionAuthorizationCommitResult>;
 }
 
 export function createActionApprovalCoverage(
-  authority: ValidatedActionAuthority,
+  authority: ValidatedActionAuthorizationBasis,
 ): ActionApprovalCoverage {
   return deepFreeze({
     id: authority.id,

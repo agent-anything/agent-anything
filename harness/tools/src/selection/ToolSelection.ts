@@ -1,5 +1,5 @@
-import type { OperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
-import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import type { OperationDefinitionCatalog } from "@agent-anything/operation-catalog/catalog";
+import { operationDefinitionRevisionKey } from "@agent-anything/operation-catalog/identity";
 import type { ToolDescriptor } from "../catalog/index.js";
 import { createToolCatalogSnapshot } from "../catalog/index.js";
 import { createToolContractIdentity, toolRevisionKey, type ToolRevisionRef } from "../identity/index.js";
@@ -36,7 +36,7 @@ export class ToolSelectionValidationError extends TypeError {
 
 export function createFixedLocalToolSelection(
   registrations: ToolRegistrationSnapshot,
-  operationCatalog: OperationCatalogSnapshot,
+  operationCatalog: OperationDefinitionCatalog,
   inputs: readonly ToolSelectionInput[],
 ): ToolSelectionRevision {
   if (registrations.operationCatalogId !== operationCatalog.id || registrations.operationCatalogRevision !== operationCatalog.revision) {
@@ -164,8 +164,8 @@ function bindingRegistrationMatchesDescriptor(
   switch (registration.binding.kind) {
     case "operation":
       return descriptor.binding.kind === "operation" &&
-        operationRevisionKey(registration.binding.operation.operation.ref) ===
-          operationRevisionKey(descriptor.binding.operation) &&
+        operationDefinitionRevisionKey(registration.binding.operation.operation.ref) ===
+          operationDefinitionRevisionKey(descriptor.binding.operation) &&
         registration.binding.operation.binding.ref.revision === descriptor.binding.revision;
     case "interaction":
       return descriptor.binding.kind === "interaction" &&

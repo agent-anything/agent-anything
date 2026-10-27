@@ -6,7 +6,7 @@ export interface ExecutionErrorDetails {
   readonly cause: ExecutionErrorDetails | null;
 }
 
-const fields = ["code", "commitId", "recordId", "runId", "path", "errno", "syscall"] as const;
+const fields = ["code", "commitId", "recordId", "runId", "path", "dest", "errno", "syscall", "stage"] as const;
 
 export function diagnosticText(value: string, limit = 4096): string {
   const redacted = value

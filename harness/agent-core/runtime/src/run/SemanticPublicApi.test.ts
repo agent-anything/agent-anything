@@ -72,7 +72,7 @@ describe("Agent Core Run public API", () => {
 
   it("keeps Run semantics separate from Runner and Action Execution values", () => {
     expect(runApi).toHaveProperty("createRunResult");
-    expect(runApi).not.toHaveProperty("Runner");
+    expect(runApi).not.toHaveProperty("RunExecutionCoordinator");
     expect(runApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runApi).not.toHaveProperty("createSandboxExecutionGateway");
   });

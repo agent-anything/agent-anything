@@ -39,7 +39,6 @@ function fixture() {
       runId: "work",
       sequence: 1,
       result: null,
-      qualification: {},
       continuation: null,
       commands: [],
       responses: {
@@ -318,7 +317,7 @@ describe("collaboration reads", () => {
       label: "Inspect dependencies", objective: "Internal delegation prompt." };
     Object.assign(p.product.presentation, { labels: [...p.product.presentation.labels, label] });
     Object.assign(p.host, { retry: { diagnostic: "retry-detail" } });
-    Object.assign(p.product, { qualification: { diagnostic: "qualification-detail" } });
+    Object.assign(p.product, { });
     const child = await api.readTaskDetails({ ...scope, runId: "child" });
     const root = await api.readTaskDetails(scope);
     expect(child).toMatchObject({ task: { label: "Subtask: Inspect dependencies", objective: null }, problem: null });

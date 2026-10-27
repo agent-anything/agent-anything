@@ -1,7 +1,7 @@
 import { allowsRetainedFileRead } from "@agent-anything/permission";
 import { ExecutionMaterialAccessError, type HelarcExecutionMaterialReader } from "@agent-anything/helarc/tools";
 import type { FileSupportServices } from "@agent-anything/helarc-local-environment/filesystem";
-import type { RetainedRunTreeMember } from "@agent-anything/agent-runtime/runner";
+import type { RetainedRunTreeMember } from "@agent-anything/agent-runtime/execution-coordinator";
 import type { HelarcExecutionStore } from "./HelarcExecutionStore.js";
 
 /** Current Run authority controls retained reads independently of reference visibility. */

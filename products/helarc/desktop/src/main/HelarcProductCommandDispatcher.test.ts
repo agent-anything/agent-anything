@@ -33,7 +33,7 @@ describe("Helarc Product command dispatcher", () => {
     const dispatcher = createHelarcProductCommandDispatcher({ handlers });
     expect(await dispatcher.dispatch(command("provider.save", "connection", {
       providerKind: "openai-compatible", displayName: "Remote", baseUrl: "https://provider.test",
-      model: "", timeoutMs: 30000, ollamaRuntime: null, qualificationPolicy: "allow_experimental",
+      model: "", timeoutMs: 30000, ollamaRuntime: null,
       apiKeyUpdate: "set", apiKey: "fixture-key",
     }), "provider.save")).toMatchObject({ status: "handled" });
     expect(handlers["provider.save"]).toHaveBeenCalledOnce();
@@ -207,7 +207,6 @@ describe("Helarc Product command dispatcher", () => {
         model: "model",
         timeoutMs: 30_000,
         ollamaRuntime: null,
-        qualificationPolicy: "allow_experimental",
         apiKeyUpdate: "set",
         apiKey: secret,
       }),
@@ -226,9 +225,6 @@ function createHandlers(
 ): HelarcProductCommandHandlers {
   return {
     "workspace.choose": vi.fn(() => snapshot()),
-    "qualification.start": vi.fn(() => ({ ok: true as const })),
-    "qualification.cancel": vi.fn(() => ({ ok: true as const })),
-    "qualification.publish": vi.fn(() => ({ ok: true as const })),
     "project.select": vi.fn(() => snapshot()),
     "project.save": vi.fn(() => ({ ok: true, error: null, snapshot: snapshot() })),
     "project.chooseFolder": vi.fn(() => ({ profile: null, error: null, snapshot: snapshot() })),

@@ -117,26 +117,6 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
   assertProductCommandKind(candidate.kind, "Helarc Product command kind");
 
   switch (candidate.kind) {
-    case "qualification.start": {
-      assertRecord(candidate.payload, "Qualification start");
-      assertExactKeys(candidate.payload, ["targetId"], "Qualification start");
-      return envelope(commandId, candidate.kind, { targetId: identity(candidate.payload.targetId, "Qualification target") });
-    }
-    case "qualification.cancel": {
-      assertRecord(candidate.payload, "Qualification cancel");
-      assertExactKeys(candidate.payload, ["campaignId"], "Qualification cancel");
-      return envelope(commandId, candidate.kind, { campaignId: identity(candidate.payload.campaignId, "Qualification campaign") });
-    }
-    case "qualification.publish": {
-      assertRecord(candidate.payload, "Qualification publish");
-      assertExactKeys(candidate.payload, ["targetId", "campaignId", "reviewed"], "Qualification publish");
-      if (typeof candidate.payload.reviewed !== "boolean") invalid("Qualification review acknowledgement is required.");
-      return envelope(commandId, candidate.kind, {
-        targetId: identity(candidate.payload.targetId, "Qualification target"),
-        campaignId: identity(candidate.payload.campaignId, "Qualification campaign"),
-        reviewed: candidate.payload.reviewed,
-      });
-    }
     case "project.chooseFolder":
       return envelope(commandId, candidate.kind, snapshotEmptyPayload(candidate.payload));
     case "project.select": {
@@ -222,12 +202,6 @@ function invokeHandler(
 ): Promise<HelarcProductCommandResultMap[HelarcProductCommandKind]>
   | HelarcProductCommandResultMap[HelarcProductCommandKind] {
   switch (command.kind) {
-    case "qualification.start":
-      return handlers[command.kind](command.payload);
-    case "qualification.cancel":
-      return handlers[command.kind](command.payload);
-    case "qualification.publish":
-      return handlers[command.kind](command.payload);
     case "project.save":
       return handlers[command.kind](command.payload);
     case "project.select":
@@ -299,7 +273,6 @@ function snapshotProviderSave(
       "model",
       "timeoutMs",
       "ollamaRuntime",
-      "qualificationPolicy",
       "apiKeyUpdate",
       "apiKey",
       ...["profileId", "expectedRevision", "modelSettings", "credential"].filter(key => Object.hasOwn(candidate, key)),
@@ -327,12 +300,7 @@ function snapshotProviderSave(
     candidate.providerKind,
     candidate.ollamaRuntime,
   );
-  if (
-    candidate.qualificationPolicy !== "require_qualified" &&
-    candidate.qualificationPolicy !== "allow_experimental"
-  ) {
-    invalid("Provider model qualification policy is invalid.");
-  }
+
   return Object.freeze({
     providerKind: candidate.providerKind,
     ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId === null ? null : identity(candidate.profileId, "Provider id") }),
@@ -343,7 +311,6 @@ function snapshotProviderSave(
     model: boundedString(candidate.model, "Provider model", MODEL_MAX_LENGTH),
     timeoutMs: candidate.timeoutMs as number,
     ollamaRuntime,
-    qualificationPolicy: candidate.qualificationPolicy,
     apiKeyUpdate: candidate.apiKeyUpdate,
     ...(candidate.credential === undefined ? {} : { credential: snapshotCredentialSelection(candidate.credential) }),
     apiKey: boundedString(candidate.apiKey, "Provider API key", API_KEY_MAX_LENGTH),
@@ -465,9 +432,6 @@ function assertHandlers(handlers: HelarcProductCommandHandlers): void {
 }
 
 const PRODUCT_COMMAND_KINDS = [
-  "qualification.start",
-  "qualification.cancel",
-  "qualification.publish",
   "project.save",
   "project.select",
   "project.chooseFolder",

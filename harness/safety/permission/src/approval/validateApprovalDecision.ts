@@ -3,9 +3,9 @@ import { normalizePolicyAmendment } from "@agent-anything/governance/amendment";
 import type { PermissionResolutionEnvironmentInput } from "../profile/PermissionProfile.js";
 import type {
   RunPermissionGrant,
-  SessionAuthorityProposal,
-  SessionAuthorityRecord,
-  ValidatedActionAuthority,
+  SessionAuthorizationProposal,
+  SessionAuthorizationBasis,
+  ValidatedActionAuthorizationBasis,
 } from "../authority/AuthorityContracts.js";
 import type {
   ApprovalDecisionOption,
@@ -111,7 +111,7 @@ function validateAccept(
     : null;
   if (granted && "status" in granted) return granted;
 
-  const authority: ValidatedActionAuthority = {
+  const authority: ValidatedActionAuthorizationBasis = {
     id: input.identities.actionAuthorityId,
     runId: input.request.runId,
     actionId: input.request.actionId,
@@ -379,7 +379,7 @@ function validateGrant(
 function findSessionProposal(
   request: ApprovalRequest,
   ref: string,
-): SessionAuthorityProposal | Extract<ValidateApprovalDecisionResult, { status: "invalid" }> {
+): SessionAuthorizationProposal | Extract<ValidateApprovalDecisionResult, { status: "invalid" }> {
   const found = findProposal(request, ref, "session_authority");
   if (isInvalid(found)) return found;
   if (
@@ -421,9 +421,9 @@ function findProposal<TKind extends ApprovalTrustedProposal["kind"]>(
 
 function createSessionRecord(
   input: ValidateApprovalDecisionInput,
-  proposal: SessionAuthorityProposal,
+  proposal: SessionAuthorizationProposal,
   permissions: GrantedPermissions | null,
-): SessionAuthorityRecord {
+): SessionAuthorizationBasis {
   return deepFreezeApproval({
     id: input.identities.sessionAuthorityRecordId,
     ...proposal.context,

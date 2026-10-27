@@ -1,6 +1,6 @@
 import type {
   ModelMessage,
-  ModelToolCall,
+  ModelCallableRequest,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import { assessModelContext } from "@agent-anything/model-interaction";
@@ -606,6 +606,26 @@ describe("OllamaProvider", () => {
     expect(provider.descriptor.capabilities.continuation).toEqual({ supported: false });
   });
 
+  it.each(["structured", "wrapped", "text"])("recognizes current context rejection (%s)", async form => {
+    const detail = {code: 400, type: "exceed_context_size_error", n_prompt_tokens: 23823, n_ctx: 16384,
+      message: "request (23823 tokens) exceeds the available context size (16384 tokens), try increasing it"};
+    const error = form === "wrapped" ? JSON.stringify({error: detail}) : form === "text" ? detail.message : detail;
+    const provider = new OllamaProvider(config(), async () => ({ok: false, status: 400, async json() {return {error};}}));
+    const result = await provider.send(request(provider), context());
+    expect(result).toMatchObject({kind: "failed", failure: {code: "provider_context_window_exceeded", statusCode: 400}});
+    if (result.kind !== "failed") throw new Error("Expected failure");
+    expect(JSON.parse(JSON.stringify(result.failure))).toEqual(result.failure);
+    expect(Object.hasOwn(result.failure, "retryAfterMs")).toBe(false);
+    if (form !== "text") expect(result.failure.metadata.providerCapacityDiagnostic)
+      .toEqual({source: "provider_reported", inputTokens: 23823, contextTokens: 16384});
+  });
+
+  it.each([{error: {type: "invalid_parameter", message: "num_ctx must be positive", n_ctx: -1}},
+    {error: "{broken json"}, {error: {message: "unknown model"}}])("does not turn unrelated 400 responses into capacity rejection", async body => {
+    const provider = new OllamaProvider(config(), async () => ({ok: false, status: 400, async json() {return body;}}));
+    expect(await provider.send(request(provider), context())).toMatchObject({kind: "failed", failure: {code: "provider_http_error"}});
+  });
+
   it("projects trusted HTTP retry metadata into ProviderFailure", async () => {
     const provider = new OllamaProvider(config(), async () => ({
       ok: false,
@@ -964,7 +984,7 @@ function okResponse(value: unknown) {
 }
 
 function createFailedToolResultMessage(
-  call: ModelToolCall,
+  call: ModelCallableRequest,
 ): Extract<ModelMessage, { readonly role: "tool" }> {
   return {
     role: "tool",

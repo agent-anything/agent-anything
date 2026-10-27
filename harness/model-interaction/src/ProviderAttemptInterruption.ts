@@ -1,5 +1,6 @@
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type { ProviderCallResult } from "./Provider.js";
+import { snapshotProviderFailure } from "./ProviderResponse.js";
 
 export type ProviderAttemptInterruptionCause =
   | {
@@ -144,10 +145,10 @@ function freezeFailure(
   message: string,
   metadata: Record<string, unknown> = {},
 ) {
-  return Object.freeze({
+  return snapshotProviderFailure({
     category,
     code,
     message,
-    metadata: Object.freeze({ ...metadata }),
+    metadata,
   });
 }

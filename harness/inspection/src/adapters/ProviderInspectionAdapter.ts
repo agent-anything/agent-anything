@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { providerResponseUsage } from "@agent-anything/model-interaction";
-import { retainInputPresentation } from "@agent-anything/agent-runtime/controller";
+import { retainInputPresentation } from "@agent-anything/agent-runtime/decision";
 import type { ModelInputSourceRef } from "@agent-anything/model-interaction/input";
 import { modelInputSectionLocations } from "@agent-anything/model-interaction/input";
 import type { ProviderObservation, ProviderObserver } from "@agent-anything/model-interaction/transport";

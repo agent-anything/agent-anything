@@ -26,7 +26,7 @@ export interface ProviderCallRef {
   readonly id: string;
 }
 
-export interface ModelToolCall {
+export interface ModelCallableRequest {
   readonly modelCallRef: ModelCallRef;
   readonly providerCallRef: ProviderCallRef | null;
   readonly name: string;
@@ -132,8 +132,8 @@ export function snapshotProviderCallRef(
   });
 }
 
-export function snapshotModelToolCall(input: ModelToolCall): ModelToolCall {
-  strictRecord(input, "ModelToolCall", [
+export function snapshotModelCallableRequest(input: ModelCallableRequest): ModelCallableRequest {
+  strictRecord(input, "ModelCallableRequest", [
     "modelCallRef", "providerCallRef", "name", "input", "ordinal",
   ]);
   const callInput = snapshotJsonValue(input.input, "ModelToolCall.input");
