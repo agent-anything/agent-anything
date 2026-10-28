@@ -19,6 +19,8 @@
     "test:recovery:electron": "node scripts/verify-execution-recovery.mjs",
     "test:files:electron": "node scripts/verify-file-tools.mjs",
     "test:persistence:electron": "node scripts/verify-projection-persistence.mjs",
+    "test:handoffs:electron": "node scripts/verify-activity-handoffs.mjs",
+    "test:context-foundation:electron": "node scripts/verify-activity-handoffs.mjs --context-foundation",
     "test:command-delivery:electron": "node scripts/verify-command-delivery.mjs",
     "test:recovery:timeout": "node scripts/verify-execution-timeout.mjs",
     "dev": "vite --host 127.0.0.1",

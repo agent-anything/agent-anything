@@ -197,7 +197,7 @@ async function main() {
         if (scenario === "terminal_delivery") assert(diagnosticRecords.some(value =>
           value.outcome === "recovered" && value.code === "terminal_delivery_recovered" && value.runId === seed.productRunId));
       } else assert.equal(entries.length, 0);
-      assert.equal(providerCalls, stage === "resume" && interruptedScenario ? 1 : 0);
+      assert.equal(providerCalls, 0, "An interrupted unknown Provider request cannot be sent again implicitly");
       assert.equal(await readFile(marker, "utf8"), "x", "A completed effect must not execute again");
       const [entry] = await execution.listProductRuns();
       assert.equal(entry.terminal, true); assert.equal(entry.delivered, true);
@@ -207,11 +207,15 @@ async function main() {
       const records = (await readFile(transcriptPath, "utf8")).trim().split("\n").map(JSON.parse);
       assert.deepEqual(records, checkpoint.state.items.map(createRunTranscriptRecord), "No missing or duplicated interaction records");
       const thread = await threads.loadThread(seed.threadId);
-      assert.equal(thread.messages.filter(message => message.role === "assistant").length, 1);
-      if (replyRecovery) assert(JSON.stringify(thread.messages).includes(report), "The retained report is adopted, not replaced by an acknowledgement");
+      if (!interruptedScenario) assert.equal(thread.messages.filter(message => message.role === "assistant").length, 1);
+      if (replyRecovery) assert(JSON.stringify(records).includes(report), "The prior report remains an actual interaction even when the subsequent request is unknown");
       assert(checkpoint.state.items.some(item => item.payload.kind === "observation" &&
         item.payload.observation.payload.result?.metadata?.compositeSettlement), "Raw composite evidence remains recoverable");
-      assert.equal(thread.runs[0].terminal.host.status, "completed");
+      assert.equal(thread.runs[0].terminal.host.status, interruptedScenario ? "failed" : "completed");
+      if (interruptedScenario) {
+        assert(JSON.stringify(thread).includes("provider_attempt_interrupted"));
+        assert((await execution.listRetentionPins()).some(pin=>pin.reason==="activity_handoff"), "Unknown external responsibility remains retained");
+      }
       assert.equal((await controller.listRecoverableWork()).length, 0);
       if (stage === "verify") {
         const original = await readFile(threadPath, "utf8");

@@ -121,7 +121,7 @@ export function packExecutionContent(value: unknown, encoder?: ExecutionContentE
   const encodedStrings = new Map<string, {node: Node; bytes: number}>();
   const heights: number[] = [];
   const immutable: boolean[] = [];
-  const reusableChildren: boolean[] = [];
+  const reusableChildren: number[] = [];
   const reusableValues: [object, Omit<EncodedSubtree, "blocks">][] = [];
   let bytes = 0;
   let retainedBytes = 0;
@@ -176,7 +176,7 @@ export function packExecutionContent(value: unknown, encoder?: ExecutionContentE
       merge(retained);
       encoder?.statistics.add("encode.reusedNodes");
       encoder?.statistics.add("encode.reusedBytes", retained.bytes);
-      if (reusableChildren.length) reusableChildren[reusableChildren.length - 1] = true;
+      if (reusableChildren.length) reusableChildren[reusableChildren.length - 1] = Math.max(reusableChildren.at(-1)!,retained.bytes);
       return retained.node;
     }
     const previous = encodedStrings.get(text);
@@ -191,7 +191,7 @@ export function packExecutionContent(value: unknown, encoder?: ExecutionContentE
     encodedStrings.set(text, {node, bytes: bytes - before});
     if (encoder && bytes - before >= 4096 && bytes - before <= 512 * 1024) {
       retain(text, node, bytes - before, 0);
-      if (reusableChildren.length) reusableChildren[reusableChildren.length - 1] = true;
+      if (reusableChildren.length) reusableChildren[reusableChildren.length - 1] = Math.max(reusableChildren.at(-1)!,bytes-before);
     }
     return node;
   };
@@ -254,14 +254,14 @@ export function packExecutionContent(value: unknown, encoder?: ExecutionContentE
       if (shared) merge(shared); else charge(previous.bytes);
       if (heights.length) heights[heights.length - 1] = Math.max(heights.at(-1)!, previous.height + 1);
       if (immutable.length && !previous.immutable) immutable[immutable.length - 1] = false;
-      if (shared && reusableChildren.length) reusableChildren[reusableChildren.length - 1] = true;
+      if (shared && reusableChildren.length) reusableChildren[reusableChildren.length - 1] = Math.max(reusableChildren.at(-1)!,previous.bytes);
       return previous.node;
     }
     const before = bytes;
     encoder?.statistics.add("encode.nodes");
     heights.push(0);
     immutable.push(!object || Object.isFrozen(input));
-    reusableChildren.push(false);
+    reusableChildren.push(0);
     const node = walk(input, depth);
     const height = heights.pop()!;
     const frozen = immutable.pop()!;
@@ -270,15 +270,16 @@ export function packExecutionContent(value: unknown, encoder?: ExecutionContentE
       if (frozen) {immutableValues.add(input); validatedImmutableShapes.add(input);}
       encodedObjects.set(input, {node, bytes: bytes - before, height, immutable: frozen});
       if (frozen && scope && reusableValues.length < EXECUTION_CONTENT_LIMITS.blocks) reusableValues.push([input, {node, bytes: bytes - before, height}]);
-      // Retain a frontier, not every overlapping ancestor of the same payload.
-      if (frozen && encoder && !reusable && bytes - before >= 4096 && bytes - before <= 512 * 1024) {
+      // Promote geometrically larger containers; cached leaves must not force
+      // repeated structural traversal. Every retained closure keeps its full cost.
+      if (frozen && encoder && bytes-before>=4*reusable && bytes - before >= 4096 && bytes - before <= 512 * 1024) {
         retain(input, node, bytes - before, height);
-        reusable = true;
+        reusable = bytes-before;
       }
     }
     if (heights.length) heights[heights.length - 1] = Math.max(heights.at(-1)!, height + 1);
     if (immutable.length && !frozen) immutable[immutable.length - 1] = false;
-    if (reusable && reusableChildren.length) reusableChildren[reusableChildren.length - 1] = true;
+    if (reusable && reusableChildren.length) reusableChildren[reusableChildren.length - 1] = Math.max(reusableChildren.at(-1)!,reusable);
     return node;
   };
   const root = put(["value", visit(value, 0)]);

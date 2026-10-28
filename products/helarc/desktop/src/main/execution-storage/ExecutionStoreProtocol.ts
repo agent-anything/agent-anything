@@ -37,7 +37,7 @@ export interface ExecutionRecordReceipt {
 
 export interface ExecutionRetentionPin {
   readonly ownerId: string;
-  readonly reason: "unfinished_run" | "undelivered_result" | "unsettled_process" | "file_material" | "context_material";
+  readonly reason: "unfinished_run" | "undelivered_result" | "unsettled_process" | "file_material" | "context_material" | "activity_handoff";
 }
 
 export type FileMaterialStoreCommand =
@@ -54,6 +54,13 @@ export type FileMaterialStoreCommand =
 export type FileMaterialStoreValue = FileMaterialRecord | readonly FileMaterialRecord[] | FileMaterialReservation | FileMaterialRead | null;
 
 export type ExecutionStoreCommand =
+  | {readonly kind:"accept_shared";readonly proposal:import("@agent-anything/agent-runtime/activity").SharedAcceptanceProposal}
+  | {readonly kind:"material_custody";readonly command:import("@agent-anything/context/custody").MaterialCustodyCommand}
+  | {readonly kind:"representation";readonly command:import("@agent-anything/context/representation").RepresentationCommand}
+  | {readonly kind:"context_selection";readonly command:import("@agent-anything/context/selection").ContextSelectionCommand}
+  | {readonly kind:"context_foundation_facts";readonly runId:string;readonly after:number;readonly limit:number}
+  | {readonly kind: "query_acceptance"; readonly id: string}
+  | {readonly kind: "activity_handoff"; readonly command: import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand}
   | {readonly kind: "register_recording"; readonly recording: import("./ExecutionRecording.js").ExecutionRecording}
   | {readonly kind: "context_preparation"; readonly command: import("./ContextPreparationDatabase.js").ContextPreparationCommand}
   | {readonly kind: "context_material"; readonly command: ContextMaterialCommand}
@@ -102,8 +109,15 @@ export type ExecutionStoreWireCommand = ExecutionStoreCommand
   | {readonly kind: "read_content"; readonly ids: readonly string[]};
 
 export type FileMaterialFinalizationPage = {readonly records: readonly FileMaterialRecord[]; readonly next: string | null};
-export type ExecutionStoreValue = import("./ExecutionRecording.js").ExecutionRecordingRegistration | {preparationValue: unknown} | ContextMaterialValue | readonly ExecutionReferenceTransfer[] | ExecutionReferencePage | FileMaterialFinalizationPage | FileMaterialStoreValue | ExecutionEvidenceRecord | CompensationAssociation | ExecutionRecordReceipt | ActionRecoveryRecords | ExecutionOwnerCommit | RunCommitReceipt | RunTreeCommit | RunTreeCommitReceipt | RunTreeRecoveryRecords | AgentHookInvocationCheckpoint | readonly AgentHookInvocationCheckpoint[] | readonly ProcessCheckpoint[] | ShellSessionCommit | HelarcExecutionAdmission | readonly HelarcExecutionDiscovery[] | readonly ExecutionRetentionPin[] | null;
+export type ExecutionStoreValue =
+  {custodyValue:import("@agent-anything/context/custody").MaterialCustodyValue} |
+  {representationValue:import("@agent-anything/context/representation").RepresentationValue} |
+  {selectionValue:import("@agent-anything/context/selection").ContextSelectionValue} |
+  {contextFacts:readonly import("./ContextFoundationRecords.js").ContextFoundationFact[]} |
+  {acceptanceValue: import("@agent-anything/agent-runtime/activity").SharedAcceptanceReceipt | null} | {activityValue: import("@agent-anything/agent-runtime/activity").ActivityHandoffValue} | import("./ExecutionRecording.js").ExecutionRecordingRegistration | {preparationValue: unknown} | ContextMaterialValue | readonly ExecutionReferenceTransfer[] | ExecutionReferencePage | FileMaterialFinalizationPage | FileMaterialStoreValue | ExecutionEvidenceRecord | CompensationAssociation | ExecutionRecordReceipt | ActionRecoveryRecords | ExecutionOwnerCommit | RunCommitReceipt | RunTreeCommit | RunTreeCommitReceipt | RunTreeRecoveryRecords | AgentHookInvocationCheckpoint | readonly AgentHookInvocationCheckpoint[] | readonly ProcessCheckpoint[] | ShellSessionCommit | HelarcExecutionAdmission | readonly HelarcExecutionDiscovery[] | readonly ExecutionRetentionPin[] | null;
 export type ExecutionStoreReply =
+  | {readonly kind:"context_foundation_observation";readonly fact:import("./ContextFoundationRecords.js").ContextFoundationFact}
+  | {readonly kind: "activity_observation"; readonly fact: import("@agent-anything/agent-runtime/activity").ActivityHandoffFact}
   | {readonly kind: "context_material_observation"; readonly observation: import("./ContextMaterialObservation.js").ContextMaterialObservation}
   | {readonly kind: "performance"; readonly event: ExecutionPerformanceEvent}
   | {readonly kind: "content_staged"; readonly id: number}

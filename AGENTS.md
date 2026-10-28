@@ -2,6 +2,30 @@
 
 ## Highest-Priority Engineering Method
 
+Project-wide principle: requirements and a reasoned, coherent target design
+take precedence over preserving existing architecture. No existing concept,
+definition, responsibility, Contract or implementation is exempt from necessary
+revision, including the core. Current accepted meaning coordinates the system;
+it is not a limit on future design. If it obstructs the target, first revise
+the authoritative definition, relationships and corresponding implementation
+before dependent new behavior relies on them. Do not weaken the target or add
+workarounds/private meanings merely to preserve an unsuitable old concept.
+Include required prerequisites across layers; leave unrelated work out. Change
+impact informs migration, resources and regression verification, not protection
+of existing structure. Assess reuse against the coherent target afterward.
+The full rule is "Design Goals Before Existing Architecture" in
+`../agent-anything-design/standards/problem-analysis-and-change-method.md` when
+available; this principle applies independently of that file's availability.
+
+Review and revise concepts at two explicit points: assess their suitability
+against the goal at project/Phase initiation before detailed design, then
+reassess whenever design exposes a problem in existing concepts. The first
+assessment is not a freeze and need not settle every detail. At either point,
+resolve known conflicts in shared definitions and relationships, update the
+affected design and corresponding implementation dependencies, and do not defer
+the issue to coding workarounds. An implementation-discovered concept defect
+returns to design review; it does not justify a private code-only definition.
+
 For every design change, including one discovered during implementation,
 verify affected concept names against their confirmed responsibilities. Prefer
 the smallest semantic scope that fully covers the responsibility, without
@@ -23,11 +47,13 @@ or repeat completed work on recovery. Protocol validity alone is insufficient:
 verify actual encoded requests against independent expected facts. Keep source,
 authority, transformations and missing information explicit.
 
-For context selection and representation changes, also apply
-`../agent-anything-design/standards/context-transformation-correctness-and-effectiveness.md`
-when available. Check whole-input continuity, local responsibilities and known
-relationships, then repeated use and recovery before judging savings. Structural
-validation is not semantic preservation; do not add per-Turn semantic review.
+For context management across an interaction, also apply
+`../agent-anything-design/standards/context-management-process-acceptance.md`
+when available. Check the actual request sequence, including auxiliary work and
+intervals without transformation: information duties, preparation timing,
+foreground/background cooperation, adoption and recovery before total cost.
+Provider refusal is a bounded recovery path, not the main operating strategy.
+Structural validation is not semantic preservation; do not add per-Turn review.
 
 Core principle: model input is a truthful, coherent working conversation, not
 a mirror of internal state. Preserve truthfulness, coherence, and consistency

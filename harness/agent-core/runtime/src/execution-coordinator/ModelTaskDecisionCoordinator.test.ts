@@ -1769,11 +1769,17 @@ describe("ModelTaskDecisionCoordinator native streaming", () => {
     const context = {...callContext(undefined, {maxRetries: 1, retryableCategories: ["transport"]}), checkpoints};
     await expect(controller.next(createControllerInput(), context)).rejects.toMatchObject({name: "RetryCheckpointError"});
     expect(lost).toBe(true);
-    expect((await controller.recover(createControllerInput(), context)).kind).toBe("propose_completion");
-    expect(sent).toBe(1);
+    if (point === "intent") {
+      await expect(controller.recover(createControllerInput(), context)).rejects.toMatchObject({operationSettlement:"unsettled",
+        failure:{failure:{metadata:{providerErrorCode:"provider_attempt_interrupted"}}}});
+      expect(sent).toBe(0);
+    } else {
+      expect((await controller.recover(createControllerInput(), context)).kind).toBe("propose_completion");
+      expect(sent).toBe(1);
+    }
     const retry = [...records.values()].map(value => (value as {value: Record<string, unknown>}).value)
       .find(value => value.attempt && value.outcome) as {attempt: {attemptNumber: number}};
-    expect(retry.attempt.attemptNumber).toBe(point === "intent" ? 2 : 1);
+    expect(retry.attempt.attemptNumber).toBe(1);
   });
 
   it("does not interpret partial output and maps accepted text to validated model items", async () => {

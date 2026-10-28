@@ -10,6 +10,8 @@ import { FinalReplyInspectionAdapter } from "./FinalReplyInspectionAdapter.js";
 import { ExecutionEvidenceInspectionAdapter } from "@agent-anything/inspection/adapters";
 import { FileMaterialInspectionAdapter } from "./FileMaterialInspectionAdapter.js";
 import {ContextMaterialInspectionAdapter} from "./ContextMaterialInspectionAdapter.js";
+import {ActivityHandoffInspectionAdapter} from "./ActivityHandoffInspectionAdapter.js";
+import {ContextFoundationInspectionAdapter} from "./ContextFoundationInspectionAdapter.js";
 
 const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: true, provider: true, execution: true });
 
@@ -24,6 +26,8 @@ export class HelarcInspection {
   readonly evidenceObserver: ExecutionEvidenceInspectionAdapter | undefined;
   readonly fileMaterialObserver: FileMaterialInspectionAdapter | undefined;
   readonly contextMaterialObserver: ContextMaterialInspectionAdapter | undefined;
+  readonly activityObserver: ActivityHandoffInspectionAdapter | undefined;
+  readonly contextFoundationObserver:ContextFoundationInspectionAdapter|undefined;
   readonly traceObserver: RunTraceInspectionAdapter | undefined;
   readonly processObserver: import("@agent-anything/helarc-local-environment/command").ProcessExecutionObserver | undefined;
   readonly commandConstraintObserver: import("@agent-anything/helarc-local-environment/command").CommandConstraintObserver | undefined;
@@ -43,6 +47,8 @@ export class HelarcInspection {
     this.evidenceObserver = recorder ? new ExecutionEvidenceInspectionAdapter(recorder) : undefined;
     this.fileMaterialObserver = recorder ? new FileMaterialInspectionAdapter(recorder) : undefined;
     this.contextMaterialObserver = recorder ? new ContextMaterialInspectionAdapter(recorder) : undefined;
+    this.activityObserver = recorder ? new ActivityHandoffInspectionAdapter(recorder) : undefined;
+    this.contextFoundationObserver=recorder?new ContextFoundationInspectionAdapter(recorder):undefined;
     this.traceObserver = recorder ? new RunTraceInspectionAdapter(recorder) : undefined;
     this.executionFlow = recorder ? {observer: new ExecutionFlowInspectionAdapter(recorder)} : undefined;
     this.processObserver = recorder ? new ProcessInspectionAdapter(recorder,this.executionFlow!).observe : undefined;
@@ -99,7 +105,7 @@ export class HelarcInspection {
         contents: [{name: "Recovery binding check", class: "execution", stage: "checked", mediaType: "application/json", value: input}]});
     } catch { /* Observation is not recovery authority. */ }
   }
-  async registerExecutionRecording(runId: string, recovery: boolean, store: Pick<import("../execution-storage/HelarcExecutionStore.js").HelarcExecutionStore, "registerRecording">): Promise<void> {
+  async registerExecutionRecording(runId: string, recovery: boolean, store: Pick<import("../execution-storage/HelarcExecutionStore.js").HelarcExecutionStore, "registerRecording"> & Partial<Pick<import("../execution-storage/HelarcExecutionStore.js").HelarcExecutionStore,"activityHandoffs"|"contextFoundationFacts"|"readRunTree">>): Promise<void> {
     const r = this.recorder;
     if (!r || !this.settings.enabled || !r.health().available) return;
     let target: import("../execution-storage/ExecutionRecording.js").ExecutionRecording | null = null;
@@ -109,6 +115,21 @@ export class HelarcInspection {
       if (!target) limitation = "previous_recording_not_registered";
     } catch { limitation = "recording_registration_unavailable"; }
     if (!recovery) return;
+    const runIds=new Set([runId]);
+    if(store.readRunTree) {
+      try{for(const member of (await store.readRunTree(runId))?.members??[])runIds.add(member.head.state.run.id);}
+      catch{limitation="activity_tree_replay_incomplete";}
+    }
+    for(const memberRunId of runIds) {
+    if (store.activityHandoffs) {
+      try {await this.activityObserver?.replay(memberRunId,store.activityHandoffs);}
+      catch {limitation = "activity_fact_replay_incomplete";}
+    }
+    if(store.contextFoundationFacts) {
+      try{await this.contextFoundationObserver?.replay(memberRunId,store.contextFoundationFacts.bind(store));}
+      catch{limitation="context_fact_replay_incomplete";}
+    }
+    }
     const subject = r.ref("helarc", "contribution", `${runId}:recording-recovery`, runId);
     r.offer({subject, occurredAt: new Date().toISOString(),
       payload: {kind: "recording_link", stage: "recovery_prepared", target, limitation},

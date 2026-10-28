@@ -36,6 +36,7 @@ import { StructuredOutputError, snapshotStructuredOutputFailure, type ProviderRe
 export type BuildProviderRequest<TOutput = unknown> = (input: TaskDecisionInputSources<TOutput>, context: ProviderRequestBuildContext) => ProviderRequest | Promise<ProviderRequest>;
 export type ParseProviderResponse<TOutput = unknown> = (response: ProviderResponse, input: TaskDecisionInputSources<TOutput>, executionFlow?: ExecutionFlowContext) => TaskDecisionProposal<TOutput> | Promise<TaskDecisionProposal<TOutput>>;
 export interface ModelTaskDecisionCoordinatorOptions<TOutput = unknown> {
+  readonly activityJournal?: import("../model-access/ModelActivityJournal.js").ModelActivityJournalSupport;
   readonly provider: Provider;
   readonly buildRequest: BuildProviderRequest<TOutput>;
   readonly parseResponse: ParseProviderResponse<TOutput>;
@@ -210,6 +211,7 @@ export class ModelTaskDecisionCoordinator<TOutput = unknown> implements TaskDeci
         throwIfCancelled(callContext);
         parse.check("output_complete", response.turn.finish.kind === "output_limit" ? "not_satisfied" : "passed", { finish: response.turn.finish.kind, recoveryAttempt, maximumRecoveryAttempts });
         if (response.turn.finish.kind === "output_limit") {
+          await this.acceptModelProcessing(actualRequest,controllerInput,{kind:"response_not_usable",reason:"output_limit"});
           delivery.finish("rejected");
           parse.check("decision_contract", "not_evaluated", { reason: "output_limit" });
           if (recoveryAttempt >= maximumRecoveryAttempts) {
@@ -528,7 +530,9 @@ export class ModelTaskDecisionCoordinator<TOutput = unknown> implements TaskDeci
       purpose: request.purpose, owner: auxiliary ? { kind: auxiliary.purpose, inputOwner: "activity" }
         : { kind: "task_decision", inputOwner: "context_representation" }
     });
-    return this.modelAccess.execute(request, callContext, providerRequestNumber, activity, delivery);
+    const result = await this.modelAccess.execute(request, callContext, providerRequestNumber, activity, delivery);
+    if (!auxiliary && result.kind === "continuation_rejected") await this.modelAccess.accept(request,activity,{kind:"continuation_rejected",providerCode:result.providerCode});
+    return result;
   }
   private async advanceContinuation(preparation: ModelContinuationPreparation, response: ProviderResponse): Promise<void> {
     const capability = this.input.provider.descriptor.capabilities.continuation;
@@ -573,19 +577,29 @@ export class ModelTaskDecisionCoordinator<TOutput = unknown> implements TaskDeci
     return this.input.responseProtocol;
   }
   private async parseResponse(response: ProviderResponse, input: TaskDecisionInputSources<TOutput>, request: ProviderRequest, callContext: AgentActivityExecutionContext, executionFlow?: ExecutionFlowContext): Promise<TaskDecisionProposal<TOutput>> {
+    const activity = createModelActivityBinding({
+      runId: input.runId, activityId: input.toolExposure.controllerRequestId,
+      purpose: request.purpose, owner: { kind: "task_decision", inputOwner: "context_representation" }
+    });
+    let decision: TaskDecisionProposal<TOutput>;
     try {
-      const activity = createModelActivityBinding({
-        runId: input.runId, activityId: input.toolExposure.controllerRequestId,
-        purpose: request.purpose, owner: { kind: "task_decision", inputOwner: "context_representation" }
-      });
-      return await this.taskDecisionMaker.decide({ kind: "model_response", source: input, activity, request, response }, { signal: callContext.cancellation.signal, executionFlow });
+      decision = await this.taskDecisionMaker.decide({ kind: "model_response", source: input, activity, request, response }, { signal: callContext.cancellation.signal, executionFlow });
     }
     catch (error) {
       if (error instanceof TaskDecisionActivityError || error instanceof StructuredOutputError) {
+        await this.modelAccess.accept(request,activity,{kind:"response_not_usable",reason:error.message});
         throw error;
       }
+      await this.modelAccess.accept(request,activity,{kind:"response_not_usable",reason:"parsing_failed"});
       throw invalidOutput("Provider output parsing failed.", errorMetadata(error));
     }
+    await this.modelAccess.accept(request,activity,{kind:"task_interpretation",decision});
+    return decision;
+  }
+  private async acceptModelProcessing(request: ProviderRequest, input: TaskDecisionInputSources<TOutput>, progress: unknown): Promise<void> {
+    const activity = createModelActivityBinding({runId:input.runId,activityId:input.toolExposure.controllerRequestId,
+      purpose:request.purpose,owner:{kind:"task_decision",inputOwner:"context_representation"}});
+    await this.modelAccess.accept(request,activity,progress);
   }
   private async acceptContinuation(request: Pick<ProviderRequest, "requestId" | "purpose">, input: TaskDecisionInputSources<TOutput>, context: AgentActivityExecutionContext, sequence: number, maximumContinuations: number, cause: ActivityContinuationCause, sourceResponseId: string | null): Promise<AcceptedActivityContinuationRef> {
     const activity = createModelActivityBinding({

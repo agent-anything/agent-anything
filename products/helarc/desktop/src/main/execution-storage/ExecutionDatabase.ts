@@ -1,4 +1,10 @@
 import Database from "better-sqlite3";
+import {ActivityHandoffDatabase, ACTIVITY_HANDOFF_SCHEMA} from "./ActivityHandoffDatabase.js";
+import {SharedAcceptanceDatabase, SHARED_ACCEPTANCE_SCHEMA} from "./SharedAcceptanceDatabase.js";
+import {ContextFoundationRecords,CONTEXT_FOUNDATION_FACT_SCHEMA} from "./ContextFoundationRecords.js";
+import {MaterialCustodyDatabase,MATERIAL_CUSTODY_SCHEMA} from "./MaterialCustodyDatabase.js";
+import {RepresentationDatabase,REPRESENTATION_SCHEMA} from "./RepresentationDatabase.js";
+import {ContextSelectionDatabase,CONTEXT_SELECTION_SCHEMA} from "./ContextSelectionDatabase.js";
 import {assertExecutionRecording, type ExecutionRecording, type ExecutionRecordingRegistration} from "./ExecutionRecording.js";
 import {ContextPreparationDatabase, CONTEXT_PREPARATION_SCHEMA, type ContextPreparationCommand} from "./ContextPreparationDatabase.js";
 import {unpackExecutionContent, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentScope, ExecutionContentStatistics, snapshotEncodedExecutionContent, EXECUTION_CONTENT_LIMITS,
@@ -30,7 +36,7 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 21;
+const FORMAT = 23;
 const SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -79,6 +85,12 @@ CREATE TABLE compensation_associations (
 ${FILE_MATERIAL_SCHEMA}
 ${CONTEXT_MATERIAL_SCHEMA}
 ${CONTEXT_PREPARATION_SCHEMA}
+${ACTIVITY_HANDOFF_SCHEMA}
+${SHARED_ACCEPTANCE_SCHEMA}
+${CONTEXT_FOUNDATION_FACT_SCHEMA}
+${MATERIAL_CUSTODY_SCHEMA}
+${REPRESENTATION_SCHEMA}
+${CONTEXT_SELECTION_SCHEMA}
 `;
 interface ProcessRow { execution_id: string; run_id: string; revision: number; digest: string; value: string; }
 interface StoredActionRow {
@@ -94,6 +106,12 @@ export class ExecutionDatabase {
   private readonly fileMaterials: FileMaterialDatabase;
   private readonly contextMaterials: ContextMaterialDatabase;
   private readonly contextPreparations: ContextPreparationDatabase;
+  private readonly activityHandoffs: ActivityHandoffDatabase;
+  private readonly sharedAcceptance: SharedAcceptanceDatabase;
+  private readonly contextFoundationRecords:ContextFoundationRecords;
+  private readonly materialCustody:MaterialCustodyDatabase;
+  private readonly representations:RepresentationDatabase;
+  private readonly contextSelections:ContextSelectionDatabase;
   private closed = false;
   private readonly statements = new Map<string, Database.Statement>();
   private readonly contentStatistics: ExecutionContentStatistics;
@@ -136,6 +154,15 @@ export class ExecutionDatabase {
       this.fileMaterials = new FileMaterialDatabase(data);
       this.contextMaterials = new ContextMaterialDatabase(data);
       this.contextPreparations = new ContextPreparationDatabase(data, value => this.retainContent(value), root => this.hydrateContent(root));
+      this.activityHandoffs = new ActivityHandoffDatabase(data, value => this.retainContent(value), root => this.hydrateContent(root),()=>this.generation);
+      this.contextFoundationRecords=new ContextFoundationRecords(data);
+      this.materialCustody=new MaterialCustodyDatabase(data,this.contextFoundationRecords,undefined,hold=>this.contextSelections.mayRelease(hold));
+      this.representations=new RepresentationDatabase(data,this.contextFoundationRecords,this.materialCustody,record=>!record.method||
+        this.activityHandoffs.confirmProfessionalResult(record.runId,record.owner,record.method.activityId,record.method.rawResultId,record.method.acceptanceId));
+      this.contextSelections=new ContextSelectionDatabase(data,this.contextFoundationRecords,this.materialCustody,this.representations,
+        value=>this.retainContent(value),root=>this.hydrateContent(root),(...args)=>this.activityHandoffs.confirmInputResult(...args),
+        (...args)=>this.activityHandoffs.confirmInputAttempt(...args),path=>this.activityHandoffs.pathSettled(path));
+      this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants()]);
       data.pragma("trusted_schema = OFF");
       data.pragma("journal_mode = WAL");
       data.pragma("synchronous = FULL");
@@ -237,6 +264,44 @@ export class ExecutionDatabase {
     this.assertOwner(generation);
     return this.timed(`context_preparation.${command.kind}`, () => this.contextPreparations.command(command));
   }
+
+  activityHandoffCommand(generation: number, command: import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand) {
+    this.assertOwner(generation);
+    if (command.kind === "claim_processing" && command.claim.executor.generation !== generation ||
+        command.kind === "accept" && command.executor.generation !== generation) throw new ExecutionStoreError("activity_processing_owner_stale");
+    return this.timed(`activity_handoff.${command.kind}`, () => {
+      if (command.kind === "accept") {
+        const stage = this.activityHandoffs.command({kind:"read_stage",requestId:command.receipt.requestId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState | null;
+        const path = stage ? this.activityHandoffs.command({kind:"read_path",pathId:stage.request.pathId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState : null;
+        if (!path) throw new ExecutionStoreError("activity_stage_missing");
+        const receipt = this.sharedAcceptance.accept({id:command.receipt.id,scope:path.intent.runId,actor:command.receipt.owner,
+          parts:[{owner:"activity",kind:"professional_acceptance",proposal:command},...(command.participants??[])]});
+        if (receipt.outcome === "rejected") throw new ExecutionStoreError(receipt.rejection!.code);
+        return this.activityHandoffs.command({kind:"read_stage",requestId:command.receipt.requestId});
+      }
+      return this.activityHandoffs.command(command);
+    });
+  }
+
+  querySharedAcceptance(generation: number, id: string) {this.assertOwner(generation); return this.sharedAcceptance.query(id);}
+  takeActivityObservations() {return this.closed ? [] : this.activityHandoffs.takeObservations();}
+  acceptShared(generation:number,proposal:import("@agent-anything/agent-runtime/activity").SharedAcceptanceProposal) {
+    this.assertOwner(generation);
+    return this.timed("shared_acceptance",()=>({acceptanceValue:this.sharedAcceptance.accept(proposal)}));
+  }
+  materialCustodyCommand(generation:number,command:import("@agent-anything/context/custody").MaterialCustodyCommand) {
+    this.assertOwner(generation);return this.timed(`custody.${command.kind}`,()=>({custodyValue:this.materialCustody.command(command)}));
+  }
+  representationCommand(generation:number,command:import("@agent-anything/context/representation").RepresentationCommand) {
+    this.assertOwner(generation);return this.timed(`representation.${command.kind}`,()=>({representationValue:this.representations.command(command)}));
+  }
+  selectionCommand(generation:number,command:import("@agent-anything/context/selection").ContextSelectionCommand) {
+    this.assertOwner(generation);return this.timed(`selection.${command.kind}`,()=>({selectionValue:this.contextSelections.command(command)}));
+  }
+  contextFoundationFacts(runId:string,after:number,limit:number) {
+    this.assertOwner(this.generation);return {contextFacts:this.contextFoundationRecords.facts(runId,after,limit)};
+  }
+  takeContextFoundationObservations() {return this.closed?[]:this.contextFoundationRecords.takeObservations();}
 
   commitExecutionEvidence(generation: number, input: ExecutionEvidenceRecord): void {
     this.assertOwner(generation);
@@ -442,6 +507,8 @@ export class ExecutionDatabase {
     this.assertOwner(this.generation);
     return this.data.transaction(() => {
       const pins: import("./ExecutionStoreProtocol.js").ExecutionRetentionPin[] = [];
+      for (const ownerId of this.activityHandoffs.retainedRuns()) pins.push({ownerId,reason:"activity_handoff"});
+      for (const ownerId of this.materialCustody.retainedRuns()) pins.push({ownerId,reason:"context_material"});
       for (const ownerId of this.contextMaterials.retainedOwners()) pins.push({ownerId, reason: "context_material"});
         for (const ownerId of this.fileMaterials.pinnedOwners()) pins.push({ownerId, reason: "file_material"});
       const owners = this.data.prepare("SELECT DISTINCT owner_id FROM execution_commits WHERE owner='run'").all() as {owner_id: string}[];
@@ -1110,7 +1177,7 @@ export class ExecutionDatabase {
 
   private validateSchema(): void {
     const objects = this.data.prepare("SELECT name,type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all() as { name: string; type: string }[];
-    if (objects.length !== 31 || !["execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
+    if (objects.length !== 61 || !["material_custodies","material_custody_chunks","material_versions","material_holds","material_grants","context_foundation_facts","context_representations","context_judgments","context_reuse_checks","context_use_scopes","context_selection_versions","context_input_bindings","context_recipient_deliveries","context_input_sends","activity_facts", "shared_acceptances", "activity_paths", "activity_stages", "activity_attempts", "activity_raw_results", "activity_processing_receipts", "activity_handoffs", "execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
         !objects.some(row => row.name === "execution_content" && row.type === "table") ||
         !objects.some(row => row.name === "run_tree_commits" && row.type === "table") ||
         !objects.some(row => row.name === "file_materials" && row.type === "table") ||

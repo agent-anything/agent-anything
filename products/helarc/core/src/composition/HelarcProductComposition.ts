@@ -96,6 +96,7 @@ type HelarcProductProjectionUpdatePayload =
     : never;
 
 export interface CreateHelarcProductCompositionInput {
+  readonly activityJournal?: import("@agent-anything/agent-runtime/model-access").ModelActivityJournalSupport;
   readonly contextMaterials?: import("@agent-anything/context/material").ContextMaterialAccessPort;
   readonly contextPreparation?: import("@agent-anything/agent-runtime/context-representation").ContextRepresentationPreparationSupport;
   readonly materialHandoff?: HelarcMaterialHandoff;
@@ -261,6 +262,7 @@ export async function createHelarcProductComposition(
     }),
   });
   const modelCoordinator = new ModelTaskDecisionCoordinator<HelarcAgentOutput>({
+      activityJournal: input.activityJournal,
       provider: input.provider,
       contextPreparation: input.contextPreparation,
       delivery: {mode:input.responseDelivery ?? "buffered", observer:{observe:event => previews.observe(event)}},

@@ -22,6 +22,23 @@ export function environmentFixtureCipher(): ExecutionEnvironmentCipher {
   };
 }
 
-export function openExecutionStoreFixture(...args: Parameters<typeof HelarcExecutionStore.open>): Promise<HelarcExecutionStore> {
-  return HelarcExecutionStore.open(args[0], args[1], args[2], args[3], args[4], args[5] ?? environmentFixtureCipher());
+export async function openExecutionStoreFixture(...args: Parameters<typeof HelarcExecutionStore.open>): Promise<HelarcExecutionStore> {
+  const timings=new Map<string,{count:number;totalMs:number;maxMs:number;counters:Record<string,number>}>();
+  const observer=process.env.HELARC_TEST_STORAGE_TIMINGS==="1"?{
+    record:(...values:Parameters<NonNullable<typeof args[4]>["record"]>)=>args[4]?.record(...values),
+    performance(event:import("../../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent){
+      args[4]?.performance?.(event);
+      if(event.kind!=="finished")return;
+      const key=`${event.stage}:${event.context.command??event.context.commandKind??event.context.sourceKind??""}`;
+      const aggregate=timings.get(key)??{count:0,totalMs:0,maxMs:0,counters:{}};
+      aggregate.count++;aggregate.totalMs+=event.durationMs;aggregate.maxMs=Math.max(aggregate.maxMs,event.durationMs);timings.set(key,aggregate);
+      for(const [name,value] of Object.entries(event.counters??{}))aggregate.counters[name]=(aggregate.counters[name]??0)+value;
+    },
+  }:args[4];
+  const store=await HelarcExecutionStore.open(args[0],args[1],args[2],args[3],observer,args[5]??environmentFixtureCipher(),args[6],args[7],args[8]);
+  if(observer!==args[4]){
+    const close=store.close.bind(store);let printed=false;
+    store.close=async()=>{try{await close();}finally{if(!printed){printed=true;console.info("Execution fixture timing summary",JSON.stringify(Object.fromEntries(timings)));}}};
+  }
+  return store;
 }

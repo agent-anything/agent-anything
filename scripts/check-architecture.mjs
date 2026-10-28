@@ -144,6 +144,9 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/context/persistence",
       "@agent-anything/context/material",
       "@agent-anything/context/preparation",
+      "@agent-anything/context/custody",
+      "@agent-anything/context/representation",
+      "@agent-anything/context/selection",
     ]),
   ],
   [
@@ -781,6 +784,9 @@ function checkContextHostAndMcpSourceTopology() {
       packagePath: "harness/context",
       sourceAreas: [
         "active-context",
+        "custody",
+        "representation",
+        "selection",
         "contract",
         "contribution",
         "evidence",
@@ -792,6 +798,9 @@ function checkContextHostAndMcpSourceTopology() {
       allowedSourceEntries: [
         "PublicApi.test.ts",
         "active-context",
+        "custody",
+        "representation",
+        "selection",
         "contract",
         "contribution",
         "evidence",

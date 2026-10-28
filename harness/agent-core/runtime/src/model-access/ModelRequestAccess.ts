@@ -14,12 +14,19 @@ import { RetryExecutor } from "../retry/RetryExecutor.js";
 import { RetryInvocationInvalidatedError } from "../retry/RetryWaitControl.js";
 import { MODEL_ACCESS_EXECUTION_FLOW } from "./ModelAccessExecutionFlow.js";
 import { assertModelActivityRequest, type ModelActivityBinding } from "./ModelActivityBinding.js";
+import {ModelActivityJournal, type ModelActivityJournalSupport} from "./ModelActivityJournal.js";
 export class ModelRequestAccess {
+  private readonly journal: ModelActivityJournal | undefined;
   constructor(private readonly input: {
     readonly provider: Provider;
     readonly retryExecutor: RetryExecutor;
     readonly retryClock: RetryClock;
-  }) { }
+    readonly activityJournal?: ModelActivityJournalSupport;
+  }) {this.journal = input.activityJournal ? new ModelActivityJournal(input.activityJournal, () => input.retryClock.now().toISOString()) : undefined;}
+
+  async accept(request: ProviderRequest, activity: ModelActivityBinding, progress: unknown): Promise<void> {
+    await this.journal?.accept(request,activity,progress);
+  }
   async execute(request: ProviderRequest, context: AgentActivityExecutionContext, requestNumber: number, activity: ModelActivityBinding, delivery?: ModelResponseDelivery): Promise<ProviderRequestSettlement> {
     context.cancellation.signal.throwIfAborted();
     assertModelActivityRequest(activity, request);
@@ -40,7 +47,25 @@ export class ModelRequestAccess {
       step.output(flow.material("Model activity binding", "bound", activity, "execution", { owner: "agent-runtime", kind: "model_activity", id: activity.id, revision: String(activity.version) }));
       step.check("activity_scope", "passed");
       flow.advance("request", { requestId: request.requestId });
-      const result = await this.send(request, activity, { ...context, executionFlow: flow.callContext }, requestNumber, delivery);
+      // Existing product preparation keeps its own checkpoint authority until its
+      // professional handlers migrate. Never give one preparation two journals.
+      const journal = activity.owner.kind === "task_decision" ? this.journal : undefined;
+      const stage = await journal?.bind(request,activity,context.retry.deadlineAt);
+      const dispatched = stage && !stage.result ? await this.journal!.dispatch(stage) : null;
+      let result: ProviderRequestSettlement;
+      const retained = stage?.result?.value as ProviderRequestSettlement | RetainedActivityFailure | undefined;
+      try {
+        if (retained?.kind === "activity_failure") throw restoreActivityFailure(retained);
+        result = retained ?? await this.send(request, activity, { ...context, executionFlow: flow.callContext }, requestNumber, delivery, dispatched?.granted ?? true);
+      } catch (error) {
+        if (journal && dispatched && error instanceof TaskDecisionActivityError && error.operationSettlement === "settled_failure") {
+          await journal.save(dispatched.stage,{kind:"activity_failure",failure:error.failure,deadline:error.deadline} satisfies RetainedActivityFailure);
+          await journal.accept(request,activity,{kind:"execution_failure_delivered",failure:error.failure});
+        }
+        if (journal && retained?.kind === "activity_failure") await journal.accept(request,activity,{kind:"execution_failure_delivered",failure:retained.failure});
+        throw error;
+      }
+      if (dispatched) await journal!.save(dispatched.stage,result);
       flow.advance("result", { kind: result.kind, recipient: activity.owner.kind });
       flow.close("returned");
       return result;
@@ -50,7 +75,7 @@ export class ModelRequestAccess {
       throw error;
     }
   }
-  private async send(request: ProviderRequest, activity: ModelActivityBinding, callContext: AgentActivityExecutionContext, providerRequestNumber: number, delivery?: ModelResponseDelivery): Promise<ProviderRequestSettlement> {
+  private async send(request: ProviderRequest, activity: ModelActivityBinding, callContext: AgentActivityExecutionContext, providerRequestNumber: number, delivery?: ModelResponseDelivery, dispatchGranted = true): Promise<ProviderRequestSettlement> {
     callContext.auxiliaryUsage?.assertAvailable();
     const records = new ModelActivityCheckpoint(callContext.checkpoints);
     const requestKey = JSON.stringify([request.requestId, request.continuation]);
@@ -101,6 +126,7 @@ export class ModelRequestAccess {
         events: callContext.retry.events,
         waitControl: callContext.retry.waitControl,
       }, async (attempt) => {
+        if (!dispatchGranted) throw new ActivityCheckpointError("provider_dispatch_already_accepted_without_recoverable_response");
         callContext.auxiliaryUsage?.assertAvailable();
         const providerResult = await this.input.provider.send(recreateProviderRequest(request), createInvocationInterruptionContext(callContext, attempt), delivery?.invocation(attempt.attempt.attemptId, request.requestId, attempt.signal) ?? {
           mode: "buffered", invocationId: attempt.attempt.attemptId,
@@ -173,6 +199,14 @@ type ProviderRequestSettlement = {
   readonly continuationId: string;
   readonly providerCode: string | null;
 };
+interface RetainedActivityFailure {
+  readonly kind: "activity_failure";
+  readonly failure: TaskDecisionActivityFailure;
+  readonly deadline: DecisionActivityDeadline | null;
+}
+function restoreActivityFailure(value: RetainedActivityFailure): TaskDecisionActivityError {
+  return new TaskDecisionActivityError(value.failure,"settled_failure",value.deadline);
+}
 function throwIfCancelled(context: AgentActivityExecutionContext): void {
   if (context.cancellation.signal.aborted) {
     throw context.cancellation.signal.reason;
@@ -309,6 +343,7 @@ function retainedProviderFailure(failure: unknown): ProviderFailure {
 }
 function classifyProviderAttemptFailure(error: ProviderAttemptFailure): RetryClassification<ProviderRetryCategory> {
   const failure = error.failure;
+  if (failure.code === "provider_attempt_interrupted") return classification(failure, "transport", "non_retryable");
   if (error.deadlineReason !== null &&
     failure.code === "provider_operation_deadline") {
     return classification(failure, "deadline", "deadline_exceeded");
@@ -457,7 +492,7 @@ function providerRetryFailureError(failure: RetryFailure, providerId: string): T
     providerRequestId: failure.requestId ?? null,
     providerStatusCode: failure.statusCode ?? null,
     providerRetryAfterMs: failure.retryAfterMs ?? null,
-  }, "settled_failure", failure.category);
+  }, failure.code === "provider_attempt_interrupted" ? "unsettled" : "settled_failure", failure.category);
 }
 function providerRetryExhaustedError(reason: "retry_budget_exhausted", operationId: string, totalAttempts: number, totalRetryDelayMs: number, lastFailure: RetryFailure | null, providerId: string): TaskDecisionActivityError {
   return createControllerError("provider", "provider_retry_exhausted", "Provider request Retry was exhausted.", false, {

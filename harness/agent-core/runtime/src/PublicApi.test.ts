@@ -50,7 +50,8 @@ describe("Agent Core Runtime public API", () => {
     ].sort());
     expect(Object.keys(contextApi).sort()).toEqual(["ContextRepresentationManager", "unsupportedModelInputRecovery"]);
     expect(Object.keys(accessApi).sort()).toEqual(["ModelRequestAccess", "assertModelActivityRequest", "createModelActivityBinding"]);
-    expect(Object.keys(activityApi)).toEqual(["ActivityCheckpointError"]);
+    expect(Object.keys(activityApi).sort()).toEqual(["ActivityCheckpointError", "ActivityPurposeRegistry", "ActivityHandoffProcessor",
+      "activityToken", "activityCount", "validateActivityPurpose", "validateActivityPath", "validateActivityStage", "validateActivityExecutor"].sort());
     expect(Object.keys(delegationApi).sort()).toEqual([
       "DelegationRequestValidationError",
       "DelegationResultValidationError",

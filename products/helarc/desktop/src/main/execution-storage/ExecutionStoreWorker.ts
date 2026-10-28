@@ -40,6 +40,13 @@ try {
       const endDispatch = beginExecutionTiming(timingSink, "storage.worker.dispatch", timingContext);
       try {
       switch (request.command.kind) {
+        case "accept_shared": send({kind:"result",id:request.id,value:database.acceptShared(request.generation,request.command.proposal)});break;
+        case "material_custody": send({kind:"result",id:request.id,value:database.materialCustodyCommand(request.generation,request.command.command)});break;
+        case "representation": send({kind:"result",id:request.id,value:database.representationCommand(request.generation,request.command.command)});break;
+        case "context_selection": send({kind:"result",id:request.id,value:database.selectionCommand(request.generation,request.command.command)});break;
+        case "context_foundation_facts": send({kind:"result",id:request.id,value:database.contextFoundationFacts(request.command.runId,request.command.after,request.command.limit)});break;
+        case "query_acceptance": send({kind:"result",id:request.id,value:{acceptanceValue:database.querySharedAcceptance(request.generation,request.command.id)}}); break;
+        case "activity_handoff": send({kind: "result", id: request.id, value: database.activityHandoffCommand(request.generation, request.command.command)}); break;
         case "register_recording": send({kind: "result", id: request.id, value: database.registerRecording(request.generation, request.command.recording)}); break;
         case "context_preparation": send({kind: "result", id: request.id, value: database.contextPreparationCommand(request.generation, request.command.command)}); break;
         case "context_material": send({kind: "result", id: request.id, value: database.contextMaterialCommand(request.generation, request.command.command)}); break;
@@ -83,6 +90,12 @@ try {
       failed = true;
       send({ kind: "rejected", id: wire.id, code: code(error), error: captureExecutionError(error) });
     } finally {
+      try {
+        for (const fact of database.takeActivityObservations()) port.postMessage({kind:"activity_observation",fact} satisfies ExecutionStoreReply);
+      } catch { /* Independent export; durable facts remain queryable. */ }
+      try {
+        for(const fact of database.takeContextFoundationObservations())port.postMessage({kind:"context_foundation_observation",fact} satisfies ExecutionStoreReply);
+      } catch { /* Independent export; recovery can replay committed domain facts. */ }
       for (const observation of database.takeContextMaterialObservations()) if (!failed) {
         try {port.postMessage({kind: "context_material_observation", observation} satisfies ExecutionStoreReply);} catch { /* Independent observation. */ }
       }

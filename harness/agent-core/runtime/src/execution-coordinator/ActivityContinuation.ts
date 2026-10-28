@@ -21,7 +21,7 @@ export interface ActivityContinuationArrangement {
 }
 export function createActivityContinuationArrangement(input: Omit<ActivityContinuationArrangement, "version" | "id">): ActivityContinuationArrangement {
   const activity = createModelActivityBinding(input.activity);
-  if (activity.id !== input.activity.id || input.activity.version !== 1 ||
+  if (activity.id !== input.activity.id || input.activity.version !== activity.version ||
     !Number.isSafeInteger(input.sequence) || input.sequence < 1 ||
     typeof input.sourceRequestId !== "string" || !input.sourceRequestId.trim() ||
     input.sourceResponseId !== null && (typeof input.sourceResponseId !== "string" || !input.sourceResponseId.trim()) ||

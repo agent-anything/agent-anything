@@ -1,4 +1,6 @@
 import { Worker } from "node:worker_threads";
+import {CustodyMaterialAccess,type MaterialRecipient} from "@agent-anything/context/custody";
+import {randomUUID} from "node:crypto";
 import {CONTEXT_MATERIAL_LIMITS, ContextMaterialError, type ContextMaterialAccessPort, type ContextMaterialPage, type ContextMaterialSearchPage} from "@agent-anything/context/material";
 import { restoreExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
 import { reportExecutionFailure, type ExecutionDiagnosticSink, type ExecutionDiagnosticContext } from "../diagnostics/HelarcExecutionDiagnostics.js";
@@ -55,6 +57,14 @@ interface PendingRequest {
 
 /** Bounded acknowledgement-based writer; queue admission is not persistence. */
 export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRecordPort, RunCommitPort, CompositeCommitPort, RunTreeCommitPort, AgentHookRecordPort, ProcessRecordPort, ShellSessionRecordPort, ExecutionEvidenceRecordPort, FileMaterialRecordPort {
+  readonly hostSession = randomUUID();
+  get activityJournal(): import("@agent-anything/agent-runtime/model-access").ModelActivityJournalSupport {
+    return {port:this.activityHandoffs,executor:{hostSession:this.hostSession,worker:`model-access:main:${process.pid}`,generation:this.generation}};
+  }
+  /** Composition supplies the recipient; Tool arguments cannot choose authority. */
+  createCustodyMaterialAccess(recipient:MaterialRecipient):ContextMaterialAccessPort {
+    return new CustodyMaterialAccess(this.materialCustody,structuredClone(recipient));
+  }
   async registerRecording(recording: import("./ExecutionRecording.js").ExecutionRecording): Promise<import("./ExecutionRecording.js").ExecutionRecordingRegistration> {
     return await this.request({kind: "register_recording", recording}) as import("./ExecutionRecording.js").ExecutionRecordingRegistration;
   }
@@ -77,7 +87,9 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
 
   private constructor(private readonly worker: Worker, readonly generation: number, private readonly evidenceObserver?: ExecutionEvidenceObserver,
     private readonly fileMaterialObserver?: FileMaterialObserver, private readonly diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher,
-    private readonly contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver) {
+    private readonly contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver,
+    private readonly activityObserver?: import("@agent-anything/agent-runtime/activity").ActivityHandoffObserver,
+    private readonly contextFoundationObserver?:import("./ContextFoundationRecords.js").ContextFoundationObserver) {
     this.contentEncoder = new ExecutionContentEncoder(undefined, new ExecutionContentStatistics(Boolean(diagnostics?.performance)));
     this.environments = new ExecutionEnvironmentProtection(environmentCipher);
     this.exited = new Promise(resolve => worker.once("exit", code => {
@@ -87,6 +99,14 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     }));
     worker.on("error", error => this.fail("execution_storage_acknowledgement_unknown", error, "storage_worker_error"));
     worker.on("message", (reply: ExecutionStoreReply) => {
+      if(reply.kind==="context_foundation_observation") {
+        try{this.contextFoundationObserver?.observe(reply.fact);}catch{ /* Observation does not change execution acknowledgement. */ }
+        return;
+      }
+      if (reply.kind === "activity_observation") {
+        try {this.activityObserver?.observe(reply.fact);} catch { /* Execution acknowledgement is independent of diagnostic projection. */ }
+        return;
+      }
       if (reply.kind === "context_material_observation") {
         try {this.contextMaterialObserver?.observe(reply.observation);} catch { /* Observation cannot invalidate a durable commit. */ }
         return;
@@ -164,7 +184,9 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
 
   static async open(directory: string, workerUrl = new URL("./ExecutionStoreWorker.js", import.meta.url), evidenceObserver?: ExecutionEvidenceObserver,
     fileMaterialObserver?: FileMaterialObserver, diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher,
-    contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver): Promise<HelarcExecutionStore> {
+    contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver,
+    activityObserver?: import("@agent-anything/agent-runtime/activity").ActivityHandoffObserver,
+    contextFoundationObserver?:import("./ContextFoundationRecords.js").ContextFoundationObserver): Promise<HelarcExecutionStore> {
     const endStartup = beginExecutionTiming(diagnostics, "storage.host.startup");
     let worker: Worker;
     try {worker = new Worker(workerUrl, { workerData: { directory, performanceDiagnostics: Boolean(diagnostics?.performance) } });}
@@ -182,7 +204,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       const message = (reply: ExecutionStoreReply) => {
         if (reply.kind === "startup_failed") { failed(new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)})); return; }
         if (reply.kind !== "ready") { failed(new ExecutionStoreError("execution_storage_protocol_invalid")); return; }
-        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher, contextMaterialObserver);
+        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher, contextMaterialObserver,activityObserver,contextFoundationObserver);
         endStartup();
         cleanup();
         resolve(store);
@@ -234,6 +256,42 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     write: async (id, stage, value) => {await this.contextPreparationRequest({kind: "write", id, stage, value});},
     retire: async (id, reason) => {await this.contextPreparationRequest({kind: "retire", id, reason});},
   };
+  readonly activityHandoffs: import("@agent-anything/agent-runtime/activity").ActivityHandoffPort = {
+    command: async command => {
+      const result = await this.request({kind: "activity_handoff", command});
+      if (!result || typeof result !== "object" || !("activityValue" in result)) throw new ExecutionStoreError("activity_handoff_reply_invalid");
+      return result.activityValue;
+    },
+  };
+  async querySharedAcceptance(id: string): Promise<import("@agent-anything/agent-runtime/activity").SharedAcceptanceReceipt | null> {
+    const result = await this.request({kind:"query_acceptance",id});
+    if (!result || typeof result !== "object" || !("acceptanceValue" in result)) throw new ExecutionStoreError("acceptance_reply_invalid");
+    return result.acceptanceValue;
+  }
+  readonly sharedAcceptance:import("@agent-anything/agent-runtime/activity").SharedAcceptancePort={
+    accept:async proposal=>{
+      const result=await this.request({kind:"accept_shared",proposal});
+      if(!result || !("acceptanceValue" in result) || !result.acceptanceValue)throw new ExecutionStoreError("acceptance_reply_invalid");
+      return result.acceptanceValue;
+    },
+    query:id=>this.querySharedAcceptance(id),
+  };
+  readonly materialCustody:import("@agent-anything/context/custody").MaterialCustodyPort={command:async command=>{
+    const result=await this.request({kind:"material_custody",command});
+    if(!result || !("custodyValue" in result))throw new ExecutionStoreError("custody_reply_invalid");return result.custodyValue;
+  }};
+  readonly representations:import("@agent-anything/context/representation").RepresentationCatalogPort={command:async command=>{
+    const result=await this.request({kind:"representation",command});
+    if(!result || !("representationValue" in result))throw new ExecutionStoreError("representation_reply_invalid");return result.representationValue;
+  }};
+  readonly contextSelections:import("@agent-anything/context/selection").ContextSelectionPort={command:async command=>{
+    const result=await this.request({kind:"context_selection",command});
+    if(!result || !("selectionValue" in result))throw new ExecutionStoreError("selection_reply_invalid");return result.selectionValue;
+  }};
+  async contextFoundationFacts(runId:string,after:number,limit:number):Promise<readonly import("./ContextFoundationRecords.js").ContextFoundationFact[]> {
+    const result=await this.request({kind:"context_foundation_facts",runId,after,limit});
+    if(!result || !("contextFacts" in result))throw new ExecutionStoreError("context_facts_reply_invalid");return result.contextFacts;
+  }
   private async contextPreparationRequest(command: import("./ContextPreparationDatabase.js").ContextPreparationCommand): Promise<unknown> {
     const result = await this.request({kind: "context_preparation", command});
     if (!result || !("preparationValue" in result)) throw new ExecutionStoreError("execution_storage_protocol_invalid");

@@ -316,6 +316,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     now,
   });
   const product = await createHelarcProductComposition({
+    activityJournal: input.executionStore?.activityJournal,
     contextMaterials: input.executionStore?.contextMaterials,
     contextPreparation: input.executionStore ? createHelarcContextPreparation(input.executionStore) : undefined,
     materialHandoff: input.executionStore ? createHelarcMaterialHandoff(input.executionStore) : undefined,

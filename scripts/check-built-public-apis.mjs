@@ -33,11 +33,14 @@ const packageExportKeys = {
     "./active-context",
     "./contract",
     "./contribution",
+    "./custody",
     "./evidence",
     "./material",
     "./persistence",
     "./preparation",
     "./projection",
+    "./representation",
+    "./selection",
   ],
   "harness/tools": [
     "./activation",
@@ -286,6 +289,9 @@ const expectedLowerValueExports = {
   "@agent-anything/context/preparation": [
     "InMemoryContextPreparationStore", "contextPreparationDigest", "validateContextPreparationIntent",
   ],
+  "@agent-anything/context/custody": ["CustodyMaterialAccess", "MaterialCustodyError", "containsMaterialRange", "custodyCount", "custodyToken", "sameMaterialVersion"],
+  "@agent-anything/context/representation": [],
+  "@agent-anything/context/selection": [],
   "@agent-anything/tools/identity": [
     "createToolContractIdentity",
     "toolRevisionKey",
@@ -914,7 +920,7 @@ const expectedValueExports = {
     "snapshotRunSuspendRequestInput",
     "toRunCancellationSummary",
   ],
-  "@agent-anything/agent-runtime/activity": ["ActivityCheckpointError"],
+  "@agent-anything/agent-runtime/activity": ["ActivityCheckpointError", "ActivityHandoffProcessor", "ActivityPurposeRegistry", "activityCount", "activityToken", "validateActivityExecutor", "validateActivityPath", "validateActivityPurpose", "validateActivityStage"],
   "@agent-anything/agent-runtime/context-representation": ["ContextRepresentationManager", "unsupportedModelInputRecovery"],
   "@agent-anything/agent-runtime/model-access": ["ModelRequestAccess", "assertModelActivityRequest", "createModelActivityBinding"],
   "@agent-anything/agent-runtime/execution-coordinator": [

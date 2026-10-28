@@ -14,6 +14,14 @@ function roundTrip(value: unknown) {
 
 describe("execution content", () => {
   const immutable = <T>(value: T): T => {packExecutionContent(value); return snapshotEncodedExecutionContent(value);};
+  it("reuses a verified immutable container even when its large leaf strings are already cached",()=>{
+    const statistics=new ExecutionContentStatistics(true),encoder=new ExecutionContentEncoder(undefined,statistics);
+    const history=immutable(Array.from({length:48},(_,index)=>({index,content:`entry ${index} `.repeat(700),metadata:{owner:"model",revision:"1"}})));
+    const expected=packExecutionContent({history});
+    expect(encoder.pack({history})).toEqual(expected);statistics.take();
+    expect(encoder.pack({history})).toEqual(expected);
+    expect(statistics.take()["encode.nodes"]).toBeLessThan(10);
+  });
   it("shares large representations only within the command and preserves encoding order and accounting", () => {
     const stats = new ExecutionContentStatistics(true), encoder = new ExecutionContentEncoder(0, stats);
     const scope = new ExecutionContentScope();

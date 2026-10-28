@@ -7,6 +7,9 @@ import * as persistenceApi from "./persistence/index.js";
 import * as projectionApi from "./projection/index.js";
 import * as materialApi from "./material/index.js";
 import * as preparationApi from "./preparation/index.js";
+import * as custodyApi from "./custody/index.js";
+import * as representationApi from "./representation/index.js";
+import * as selectionApi from "./selection/index.js";
 import type { ActiveContext } from "./active-context/index.js";
 import type { ContextContribution } from "./contribution/index.js";
 import type { ContextProjection } from "./projection/index.js";
@@ -50,6 +53,9 @@ describe("Context public API", () => {
       "snapshotEvidenceContribution",
     ]);
     expect(Object.keys(persistenceApi)).toEqual([]);
+    expect(Object.keys(custodyApi).sort()).toEqual(["CustodyMaterialAccess", "MaterialCustodyError", "containsMaterialRange", "custodyCount", "custodyToken", "sameMaterialVersion"]);
+    expect(Object.keys(representationApi)).toEqual([]);
+    expect(Object.keys(selectionApi)).toEqual([]);
     expect(Object.keys(preparationApi).sort()).toEqual(["InMemoryContextPreparationStore", "contextPreparationDigest", "validateContextPreparationIntent"]);
     expect(Object.keys(materialApi).sort()).toEqual([
       "CONTEXT_MATERIAL_LIMITS", "ContextMaterialError", "contextMaterialDigest",
