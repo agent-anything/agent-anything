@@ -38,3 +38,10 @@ export {
   modelInputFromComposition,
 } from "./ModelInputComposition.js";
 export * from "./ModelInputAccounts.js";
+export * from "./EncodedModelInput.js";
+export * from "./InputContribution.js";
+export * from "./InputCapacityEvidence.js";
+export * from "./InputCombinationSearch.js";
+export * from "./InputContributionOrganization.js";
+export * from "./InputCapacityAllocation.js";
+export * from "./RemoteInputMeasurement.js";

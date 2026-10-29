@@ -43,6 +43,7 @@ export interface ActivityRawResult {
   readonly recordedAt: string;
 }
 export interface ActivityProcessingReceipt {
+  readonly interpretationMs?:number;
   readonly id: string;
   readonly requestId: string;
   readonly resultId: string;
@@ -65,6 +66,7 @@ export interface ActivityPathState {
   readonly progress: unknown;
   readonly admittedStages: number;
   readonly dispatchedAttempts: number;
+  readonly resourceUse: {readonly admittedStages:number;readonly dispatchedAttempts:number};
 }
 export interface ActivityStageState {
   readonly request: ActivityStageRequest;
@@ -105,7 +107,11 @@ export interface ActivityHandoffFact {
   readonly occurredAt: string;
   readonly details: Readonly<Record<string, unknown>>;
 }
-export interface ActivityHandoffObserver {observe(fact: ActivityHandoffFact): void;}
+export interface ActivityHandoffObserver {
+  observe(fact: ActivityHandoffFact): void;
+  /** Durable content, supplementary to facts; projections are never execution authority. */
+  observeStage?(runId:string,stage:ActivityStageState):void;
+}
 export type ActivityHandoffValue = ActivityPathState | ActivityStageState | ActivityDispatchReceipt | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | null;
 export interface ActivityHandoffPort {command(command: ActivityHandoffCommand): Promise<ActivityHandoffValue>;}
 

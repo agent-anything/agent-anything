@@ -5,6 +5,8 @@ export interface ProviderDeliveryOptions {
   readonly mode: "buffered" | "streaming";
   readonly invocationId: string;
   readonly observer?: ProviderDeliveryObserver;
+  /** Adapter-produced, durably accepted model payload. Transport credentials remain late-bound. */
+  readonly encodedInput?: import("./input/EncodedModelInput.js").EncodedModelInput;
 }
 
 export interface ProviderResponsePartMapping {

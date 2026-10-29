@@ -30,6 +30,11 @@ export class ContextFoundationInspectionAdapter implements ContextFoundationObse
       for(const [id,owner,relation] of [[method.activityId,"activity","produces"],[method.rawResultId,"activity","transforms"],[method.acceptanceId,"shared_acceptance","settles"]] as const)
         if(typeof id==="string")links.push(inspectionLink(relation,r.ref(owner,"contribution",id,fact.runId),object));
     }
+    if(fact.owner==="representation"&&fact.kind==="judgment_recorded"&&fact.details.dependencies&&typeof fact.details.dependencies==="object") {
+      const dependencies=fact.details.dependencies as Record<string,unknown>;
+      for(const field of ["stage","rawResult"]){const id=dependencies[field];if(typeof id==="string")links.push(inspectionLink("observes",object,r.ref("activity","contribution",id,fact.runId)));}
+      if(typeof dependencies.reusedJudgment==="string")links.push(inspectionLink("includes",r.ref("representation","contribution",dependencies.reusedJudgment,fact.runId),object));
+    }
     if(fact.owner==="context_delivery"&&fact.kind==="accepted"&&typeof fact.details.inputId==="string")links.push(inspectionLink("delivers",object,r.ref("context_selection","contribution",fact.details.inputId,fact.runId)));
     if(fact.kind==="read"||fact.kind==="search"||fact.kind==="structure_read")links.push(inspectionLink("observes",subject,r.ref("material_custody","contribution",String(fact.details.instanceId),fact.runId)));
     r.offer({subject,occurredAt:fact.occurredAt,payload:{kind:"event",name:`${fact.owner}.${fact.kind}`,sequence:fact.sequence,code:null},links,

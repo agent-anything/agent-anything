@@ -36,7 +36,7 @@ import {
   type ProviderTransportAccounting,
   type ProviderTransportLimit,
 } from "@agent-anything/model-interaction/transport";
-import type { ModelInputComposition } from "@agent-anything/model-interaction/input";
+import {createEncodedModelInput, verifyEncodedModelInput, type EncodedModelInput, type ModelInputComposition} from "@agent-anything/model-interaction/input";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
 import {
   classifyProviderHttpFailure,
@@ -194,6 +194,18 @@ export class OllamaProvider implements Provider {
 
   private readonly config: Readonly<OllamaProviderConfig>;
 
+  verifyEncodedInput(request:ProviderRequest,input:EncodedModelInput):void {
+    verifyEncodedModelInput(input,{request,target:encodedTarget(this.config),adapterRevision:"ollama.api.adapter.v8",endpoint:this.endpointUrl(request.interaction),mode:input.mode});
+  }
+
+  encodeInput(request: ProviderRequest, mode: "buffered" | "streaming" = "buffered"): EncodedModelInput {
+    request = snapshotProviderRequest(request);
+    if (mode === "streaming" && request.interaction.kind !== "native_tool_turn") throw new TypeError("provider_streaming_unsupported");
+    return createEncodedModelInput({request, target: encodedTarget(this.config), adapterRevision: "ollama.api.adapter.v8",
+      endpoint: this.endpointUrl(request.interaction), mode,
+      body: encodeOllamaRequest(this.config, request.instructions, request.messages, request.interaction, mode === "streaming")});
+  }
+
   async send(
     request: ProviderRequest,
     context: InvocationInterruptionContext,
@@ -259,6 +271,7 @@ export class OllamaProvider implements Provider {
       endpoint,
       this.requestBodyTransportLimit,
       delivery.options.mode === "streaming",
+      delivery.options.encodedInput,
     );
     if (encoded.kind === "failed") return encoded.result;
 
@@ -390,6 +403,7 @@ function prepareEncodedRequest(
   endpoint: string,
   limit: ProviderTransportLimit,
   streaming: boolean,
+  accepted?: EncodedModelInput,
 ): { readonly kind: "encoded"; readonly body: string; readonly accounting: ProviderTransportAccounting } |
   { readonly kind: "failed"; readonly result: ProviderCallResult } {
   if (request.modelContext.assessment === null) {
@@ -403,7 +417,9 @@ function prepareEncodedRequest(
     });
   }
   try {
-    const body = encodeOllamaRequest(
+    if (accepted) verifyEncodedModelInput(accepted, {request, target: encodedTarget(config),
+      adapterRevision: "ollama.api.adapter.v8", endpoint, mode: streaming ? "streaming" : "buffered"});
+    const body = accepted?.body ?? encodeOllamaRequest(
       config,
       request.instructions,
       request.messages,
@@ -438,6 +454,11 @@ function prepareEncodedRequest(
       ),
     });
   }
+}
+
+function encodedTarget(config: Readonly<OllamaProviderConfig>) {
+  const {timeoutMs: _timeout, requestBodyTransportLimit: _limit, ...target} = config;
+  return target;
 }
 
 function transportBinding(endpoint: string) {

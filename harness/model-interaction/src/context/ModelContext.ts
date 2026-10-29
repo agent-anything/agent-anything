@@ -334,7 +334,7 @@ export function snapshotModelContextAssessment(
   return snapshot;
 }
 
-function snapshotModelInputMeasurement(
+export function snapshotModelInputMeasurement(
   input: ModelInputMeasurement,
   compositionId: string,
 ): ModelInputMeasurement {

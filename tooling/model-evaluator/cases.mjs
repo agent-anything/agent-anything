@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { contextCases, contextScenario } from './context-cases.mjs';
 
-export const suiteRevision = 'model-capability-baseline.v1';
-export const cases = [
+export const suiteRevision = 'model-capability-and-context.v3';
+const baselineCases = [
   { id: 'instruction', title: 'Exact instruction following' },
   { id: 'json', title: 'Structured response' },
   { id: 'tool', title: 'Tool selection and arguments' },
@@ -9,14 +10,32 @@ export const cases = [
   { id: 'calls', title: 'Multiple independent calls' },
   { id: 'correction', title: 'Correct a rejected argument' },
 ];
+export const cases = [...baselineCases.map(c => ({ ...c, dimension: 'baseline' })), ...contextCases];
+export const suites = [
+  { id: 'baseline', title: 'Basic capabilities', cases: baselineCases.map(c => c.id) },
+  { id: 'context-generation', title: 'Context generation', cases: contextCases.filter(c => c.dimension !== 'checking').map(c => c.id) },
+  { id: 'context-checking', title: 'Context checking', cases: contextCases.filter(c => c.dimension === 'checking').map(c => c.id) },
+  { id: 'context', title: 'Full context suite', cases: contextCases.map(c => c.id) },
+  { id: 'all', title: 'All cases', cases: cases.map(c => c.id) },
+];
+export function selectedCases(id = 'baseline') {
+  const suite = suites.find(s => s.id === id);
+  if (!suite) throw Error('Unknown evaluation suite.');
+  return cases.filter(c => suite.cases.includes(c.id));
+}
 export const limitations = [
   'Small synthetic cases, not a coding benchmark or a product qualification.',
   'Results describe this model, endpoint, settings and suite at the recorded time.',
   'Passing repeated trials does not guarantee reliability in long or real-world tasks.',
   'Tools are simulated. No model-proposed code, command or file operation is executed.',
+  'Context generation uses structured representations with fixed answer keys, not an arbitrary-prose semantic grader.',
+  'Context checking uses controlled prose candidates; false acceptance and false rejection are measured separately.',
+  'No automatic capability publishing. Passing does not waive runtime preservation checks or establish a safe window size.',
 ];
 
 export function scenario(id) {
+  if (contextCases.some(c => c.id === id)) return contextScenario(id);
+  if (!baselineCases.some(c => c.id === id)) throw Error('Unknown evaluation case.');
   const marker = randomUUID();
   const tool = { type: 'function', function: { name: 'lookup_record', description: 'Read the record with the exact supplied key.',
     parameters: { type: 'object', properties: { key: { type: 'string', description: 'Exact record key.' } }, required: ['key'], additionalProperties: false } } };

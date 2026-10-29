@@ -161,7 +161,18 @@ export class ExecutionDatabase {
         this.activityHandoffs.confirmProfessionalResult(record.runId,record.owner,record.method.activityId,record.method.rawResultId,record.method.acceptanceId));
       this.contextSelections=new ContextSelectionDatabase(data,this.contextFoundationRecords,this.materialCustody,this.representations,
         value=>this.retainContent(value),root=>this.hydrateContent(root),(...args)=>this.activityHandoffs.confirmInputResult(...args),
-        (...args)=>this.activityHandoffs.confirmInputAttempt(...args),path=>this.activityHandoffs.pathSettled(path));
+        (...args)=>this.activityHandoffs.confirmInputAttempt(...args),path=>this.activityHandoffs.pathSettled(path),
+        (runId,input)=>{
+          const stage=this.activityHandoffs.command({kind:"read_stage",requestId:input.preparationStageId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null;
+          if(!stage || stage.status!=="accepted" || !stage.result || stage.result.outcome!=="returned")return false;
+          const path=this.activityHandoffs.command({kind:"read_path",pathId:stage.request.pathId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState;
+          const result=stage.receipt?.progress as {state?:string;prepared?:unknown}|undefined;
+          const preparation=stage.request.input as {request?:{kind?:string;demand?:unknown}};
+          return path.intent.runId===runId && path.intent.purpose.contract.inputOwner==="context-representation" &&
+            ["organize","measure"].includes(stage.request.stageKind) && preparation.request?.kind==="context_input_preparation" &&
+            modelInputValueDigest(preparation.request.demand)===modelInputValueDigest(input.demand) && result?.state==="prepared" &&
+            modelInputValueDigest(result.prepared)===modelInputValueDigest(input);
+        });
       this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants()]);
       data.pragma("trusted_schema = OFF");
       data.pragma("journal_mode = WAL");
@@ -1241,3 +1252,4 @@ function token(value: string): void {
   if (typeof value !== "string" || value.length === 0 || value.length > 4096) invalidReference();
 }
 function isBusy(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && error.code === "SQLITE_BUSY"; }
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";

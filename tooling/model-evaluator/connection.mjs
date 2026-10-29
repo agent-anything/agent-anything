@@ -1,3 +1,5 @@
+import { selectedCases } from './cases.mjs';
+
 const MAX_RESPONSE = 2 * 1024 * 1024;
 
 export function configuration(input) {
@@ -8,7 +10,8 @@ export function configuration(input) {
   const config = { kind: input.kind, baseUrl: url.href.replace(/\/$/, ''), model: String(input.model ?? '').trim(),
     apiKey: String(input.apiKey || process.env.MODEL_EVALUATOR_API_KEY || ''),
     timeoutMs: Number(input.timeoutMs ?? 300000), repetitions: Number(input.repetitions ?? 3),
-    parameters: input.parameters ?? {} };
+    parameters: input.parameters ?? {}, suite: input.suite ?? 'baseline' };
+  selectedCases(config.suite);
   if (!Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || config.timeoutMs > 1800000 ||
       !Number.isInteger(config.repetitions) || config.repetitions < 1 || config.repetitions > 10 || config.model.length > 512 ||
       config.apiKey.length > 16384 || !config.parameters || Array.isArray(config.parameters) || typeof config.parameters !== 'object') throw Error('Invalid connection settings or limits.');
@@ -33,8 +36,9 @@ async function request(config, route, body, signal) {
       size += value.length; if (size > MAX_RESPONSE) throw Error('Response exceeds the evidence size limit.'); chunks.push(value); }
   } finally { await reader.cancel().catch(() => {}); }
   const raw = Buffer.concat(chunks).toString('utf8');
-  if (!response.ok) throw Error(`HTTP ${response.status}: ${raw.slice(0, 1500)}`);
-  try { return JSON.parse(raw); } catch { throw Error('Response is not valid JSON.'); }
+  const failure = message => Object.assign(Error(message), { response: { httpStatus: response.status, body: raw } });
+  if (!response.ok) throw failure(`HTTP ${response.status}: ${raw.slice(0, 1500)}`);
+  try { return JSON.parse(raw); } catch { throw failure('Response is not valid JSON.'); }
 }
 
 export async function discover(config, signal = new AbortController().signal) {
@@ -62,9 +66,16 @@ export async function exchange(config, messages, tools, signal, evidence) {
     const message = config.kind === 'ollama' ? raw.message : raw.choices?.[0]?.message;
     if (!message || message.role !== 'assistant') throw Error('Missing assistant response.');
     const finish = config.kind === 'ollama' ? raw.done_reason : raw.choices?.[0]?.finish_reason;
-    const calls = (message.tool_calls ?? []).map((call, i) => ({ id: call.id ?? `call-${i}`, name: call.function?.name,
-      arguments: typeof call.function?.arguments === 'string' ? JSON.parse(call.function.arguments) : call.function?.arguments }));
+    const calls = (message.tool_calls ?? []).map((call, i) => {
+      let args = call.function?.arguments;
+      if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = null; } }
+      return { id: call.id ?? `call-${i}`, name: call.function?.name, arguments: args };
+    });
     return { message, calls, text: message.content ?? '', truncated: ['length', 'max_tokens'].includes(finish) };
+  } catch (error) {
+    if (error.response) entry.response = error.response;
+    entry.error = String(error.message ?? error);
+    throw error;
   } finally { entry.elapsedMs = Math.round(performance.now() - start); }
 }
 

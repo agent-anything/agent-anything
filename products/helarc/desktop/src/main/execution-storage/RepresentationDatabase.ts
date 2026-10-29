@@ -42,6 +42,7 @@ export class RepresentationDatabase {
   command(command:RepresentationCommand):RepresentationValue {
     switch(command.kind) {
       case "read":return this.read(command.ref);
+      case "read_judgment":return this.judgment(command.id);
       case "record":return this.record(command.record);
       case "judge":return this.judge(command.judgment);
       case "reuse":return this.reuse(command.request);
@@ -99,7 +100,7 @@ export class RepresentationDatabase {
     for(const range of judgment.coverage)if(!judgment.inputs.some(input=>containsMaterialRange(input,range)))throw new TypeError("representation_judgment_coverage_invalid");
     this.db.transaction(()=>{
       this.records.sql("INSERT INTO context_judgments VALUES (?,?,?)").run(judgment.id,JSON.stringify(judgment),modelInputValueDigest(judgment));
-      this.records.fact(subjects[0]!.runId,"representation",judgment.id,"judgment_recorded",{kind:judgment.kind,subjects:judgment.subjects,conclusion:judgment.conclusion,coverage:judgment.coverage,limitations:judgment.limitations});
+      this.records.fact(subjects[0]!.runId,"representation",judgment.id,"judgment_recorded",{kind:judgment.kind,subjects:judgment.subjects,conclusion:judgment.conclusion,coverage:judgment.coverage,limitations:judgment.limitations,dependencies:judgment.dependencies,basis:judgment.basis});
     })();return judgment;
   }
   private reuse(request:RepresentationReuse):RepresentationValue {

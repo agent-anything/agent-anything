@@ -48,7 +48,7 @@ describe("Agent Core Runtime public API", () => {
       "snapshotModelConversationSeed",
       "validateTaskDecisionProposal",
     ].sort());
-    expect(Object.keys(contextApi).sort()).toEqual(["ContextRepresentationManager", "unsupportedModelInputRecovery"]);
+    expect(Object.keys(contextApi).sort()).toEqual(["ContextRepresentationManager", "unsupportedModelInputRecovery", "CONTEXT_INPUT_PREPARATION_PURPOSE", "ContextInputPreparationHandler", "ContextInputPreparationWork", "PreparedInputExecution", "contextInputAcceptance", "firstContextInputPreparationStage", "validatePreparedContextInput", "REPRESENTATION_METHOD_PURPOSE", "RepresentationMethodWork"].sort());
     expect(Object.keys(accessApi).sort()).toEqual(["ModelRequestAccess", "assertModelActivityRequest", "createModelActivityBinding"]);
     expect(Object.keys(activityApi).sort()).toEqual(["ActivityCheckpointError", "ActivityPurposeRegistry", "ActivityHandoffProcessor",
       "activityToken", "activityCount", "validateActivityPurpose", "validateActivityPath", "validateActivityStage", "validateActivityExecutor"].sort());

@@ -57,6 +57,7 @@ export interface RepresentationReuse {
 export type RepresentationCommand =
   | {readonly kind:"record";readonly record:RepresentationRecord}
   | {readonly kind:"read";readonly ref:RepresentationRef}
+  | {readonly kind:"read_judgment";readonly id:string}
   | {readonly kind:"judge";readonly judgment:RepresentationJudgment}
   | {readonly kind:"reuse";readonly request:RepresentationReuse};
 export type RepresentationValue = RepresentationRecord | RepresentationJudgment | null |

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { configuration, discover } from './connection.mjs';
 import { Evaluation } from './evaluation.mjs';
+import { cases, suites } from './cases.mjs';
 
 export async function startServer({ port = 51130, directory = join(homedir(), '.model-evaluator') } = {}) {
   const evaluator = new Evaluation(directory);
@@ -28,6 +29,7 @@ export async function startServer({ port = 51130, directory = join(homedir(), '.
       const provided = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
       if (Buffer.byteLength(provided) !== Buffer.byteLength(token) || !timingSafeEqual(Buffer.from(provided), Buffer.from(token))) return send(401, { error: 'Open the access URL printed by this evaluator process.' });
       if (req.method === 'GET' && url.pathname === '/api/reports') return send(200, evaluator.list());
+      if (req.method === 'GET' && url.pathname === '/api/cases') return send(200, { cases, suites });
       if (req.method === 'GET' && url.pathname.startsWith('/api/report/')) {
         const report = evaluator.reports.get(url.pathname.slice('/api/report/'.length));
         return report ? send(200, report) : send(404, { error: 'Report not found.' });

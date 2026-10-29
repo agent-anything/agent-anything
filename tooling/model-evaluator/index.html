@@ -6,8 +6,9 @@
 <label>Base URL<input name="baseUrl" required value="http://localhost:11434" autocomplete="off"></label>
 <label>API key<input name="apiKey" type="password" autocomplete="off"></label>
 <div class="model"><label>Model<input name="model" list="models" autocomplete="off" required></label><button type="button" id="discover">Query models</button><datalist id="models"></datalist></div>
+<label>Evaluation suite<select name="suite"><option value="baseline">Basic capabilities</option></select></label>
 <div class="pair"><label>Trials per case<input name="repetitions" type="number" min="1" max="10" value="3" required></label><label>Request timeout (seconds)<input name="timeout" type="number" min="1" max="1800" value="300" required></label></div>
 <label>Generation parameters (JSON)<textarea name="parameters" rows="4" spellcheck="false">{}</textarea></label>
 <div class="actions"><button type="submit" class="primary">Run evaluation</button><button type="button" id="cancel" disabled>Cancel</button></div>
-</form><p id="error" role="alert"></p><h2>Coverage</h2><ul id="coverage"><li>Exact instruction following</li><li>Structured response</li><li>Tool selection and arguments</li><li>Tool-result use</li><li>Independent calls</li><li>Argument correction</li></ul></section>
+</form><p id="error" role="alert"></p><h2>Coverage</h2><ul id="coverage"></ul></section>
 <section class="results"><h2>Evaluations</h2><div id="history"></div><article id="report" hidden></article></section></main><script type="module" src="/app.js"></script></body></html>

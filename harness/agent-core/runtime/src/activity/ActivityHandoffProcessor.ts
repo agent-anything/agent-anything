@@ -72,11 +72,13 @@ export class ActivityHandoffProcessor {
             const claimed = stage.processing?.id === claimId ? stage : await this.port.command({kind:"claim_processing",
               claim:{id:claimId,requestId:stage.request.id,previousClaimId:stage.processing?.id ?? null,executor:this.executor},expectedControlRevision:path.controlRevision}) as ActivityStageState;
             const acceptanceId=`${stage.request.id}:processing-receipt:${path.progressRevision}`;
+            const interpretationStarted=performance.now();
             const outcome = await handler.interpret(path,claimed,signal,{id:acceptanceId});
+            const interpretationMs=performance.now()-interpretationStarted;
             signal.throwIfAborted();
             await this.port.command({kind:"accept",receipt:{id:acceptanceId,requestId:stage.request.id,
               resultId:claimed.result!.id,owner:path.intent.owner,expectedProgressRevision:path.progressRevision,
-              progress:outcome.progress,next:outcome.next},executor:this.executor,expectedControlRevision:path.controlRevision,
+              progress:outcome.progress,next:outcome.next,interpretationMs},executor:this.executor,expectedControlRevision:path.controlRevision,
               ...(outcome.participants?{participants:outcome.participants}:{})});
             break;
           }

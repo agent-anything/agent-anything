@@ -53,6 +53,7 @@ import { decodeStructuredGenerationOutput } from "../structured-generation/Struc
 
 const PROVIDER_ID = "openai-compatible.chat-completions";
 import { nativeInputAccounting, normalizedUsageMetadata, isOfficialDeepSeek, deepSeekGenerationRoom, DEEPSEEK_ACCOUNTING_REVISION } from "../accounting/ProviderInputAccounting.js";
+import {createEncodedModelInput, verifyEncodedModelInput, type EncodedModelInput} from "@agent-anything/model-interaction/input";
 const MAX_RESPONSE_TEXT_LENGTH = 64_000;
 
 interface OpenAICompatibleHttpErrorDiagnostic {
@@ -192,6 +193,18 @@ export class OpenAICompatibleProvider implements Provider {
 
   private readonly config: Readonly<OpenAICompatibleProviderConfig>;
 
+  verifyEncodedInput(request:ProviderRequest,input:EncodedModelInput):void {
+    verifyEncodedModelInput(input,{request,target:encodedTarget(this.config),adapterRevision:"openai-compatible.encoded.v1",endpoint:this.endpointUrl(),mode:input.mode});
+  }
+
+  encodeInput(request: ProviderRequest, mode: "buffered" | "streaming" = "buffered"): EncodedModelInput {
+    request = snapshotProviderRequest(request);
+    if (mode === "streaming" && request.interaction.kind !== "native_tool_turn") throw new TypeError("provider_streaming_unsupported");
+    return createEncodedModelInput({request, target: encodedTarget(this.config), adapterRevision: "openai-compatible.encoded.v1",
+      endpoint: this.endpointUrl(), mode, body: encodeOpenAIRequest(this.config.model, this.config.maximumOutputTokens,
+        request.instructions, request.messages, request.interaction, mode === "streaming", this.config.thinking, this.config)});
+  }
+
   async send(
     request: ProviderRequest,
     context: InvocationInterruptionContext,
@@ -257,6 +270,7 @@ export class OpenAICompatibleProvider implements Provider {
       endpoint,
       this.requestBodyTransportLimit,
       delivery.options.mode === "streaming",
+      delivery.options.encodedInput,
     );
     if (encoded.kind === "failed") return encoded.result;
 
@@ -386,6 +400,7 @@ function prepareEncodedRequest(
   endpoint: string,
   limit: ProviderTransportLimit,
   streaming: boolean,
+  accepted?: EncodedModelInput,
 ): { readonly kind: "encoded"; readonly body: string; readonly accounting: ProviderTransportAccounting } |
   { readonly kind: "failed"; readonly result: ProviderCallResult } {
   if (request.modelContext.assessment === null) {
@@ -399,7 +414,9 @@ function prepareEncodedRequest(
     });
   }
   try {
-    const body = encodeOpenAIRequest(
+    if (accepted) verifyEncodedModelInput(accepted, {request, target: encodedTarget(config),
+      adapterRevision: "openai-compatible.encoded.v1", endpoint, mode: streaming ? "streaming" : "buffered"});
+    const body = accepted?.body ?? encodeOpenAIRequest(
       config.model,
       config.maximumOutputTokens,
       request.instructions,
@@ -437,6 +454,11 @@ function prepareEncodedRequest(
       ),
     });
   }
+}
+
+function encodedTarget(config: Readonly<OpenAICompatibleProviderConfig>) {
+  const {apiKey: _secret, timeoutMs: _timeout, requestBodyTransportLimit: _limit, ...target} = config;
+  return target;
 }
 
 function transportBinding(endpoint: string) {

@@ -71,6 +71,15 @@ describe("durable activity handoff", () => {
     expect(send({kind:"read_path",pathId:intent.id})).toMatchObject({progressRevision:0,progress:null});
     expect(send({kind:"read_stage",requestId:request.id})).toMatchObject({status:"raw_result",receipt:null});
   });
+  it("shares prepared immutable content across progress and stage participants in one acceptance",()=>{
+    const {send}=open();seed(send);send({kind:"save_raw",result});claim(send);
+    const receipt={id:"joined",requestId:request.id,resultId:result.id,owner:"method",expectedProgressRevision:0,progress:{inputAccepted:true,nested:{value:"new immutable progress"}},next:[]};
+    const next={...request,id:"accepted-input-dispatch",stageKind:"check",input:{exact:"frozen input"}};
+    const command={kind:"accept" as const,receipt,executor,expectedControlRevision:0,participants:[{owner:"activity",kind:"stage_submission",proposal:next}]};
+    send(command);send(command);
+    expect(send({kind:"read_path",pathId:"path"})).toMatchObject({progressRevision:1,progress:receipt.progress});
+    expect(send({kind:"read_stage",requestId:next.id})).toMatchObject({request:next,status:"submitted"});
+  });
   it("preserves late evidence after cancellation without allowing stale advancement", () => {
     const {send} = open(); seed(send); send({kind:"cancel",pathId:intent.id,expectedControlRevision:0}); send({kind:"save_raw",result});
     expect(send({kind:"read_stage",requestId:request.id})).toMatchObject({result});

@@ -5,6 +5,7 @@ import type {ContextAcceptancePart,ContextDelivery,ContextInputBinding,ContextSe
   ContextSelectionSnapshot,ContextSelectionValue,ContextUseControl,ContextUseScope} from "@agent-anything/context/selection";
 import type {RepresentationRef} from "@agent-anything/context/representation";
 import type {SharedAcceptanceProposal} from "@agent-anything/agent-runtime/activity";
+import {validatePreparedContextInput,type PreparedContextInput} from "@agent-anything/agent-runtime/context-representation";
 import type {ExecutionContentRoot} from "./ExecutionContent.js";
 import {SharedAcceptanceRejection,type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
 import {ContextFoundationRecords,checkedJson,requireSame} from "./ContextFoundationRecords.js";
@@ -27,12 +28,14 @@ export class ContextSelectionDatabase {
     private readonly retain:(value:unknown)=>ExecutionContentRoot,private readonly hydrate:(root:ExecutionContentRoot)=>unknown,
     private readonly confirmResult:(runId:string,pathId:string,inputDigest:string,resultId:string)=>boolean,
     private readonly confirmAttempt:(runId:string,pathId:string,requestId:string,inputDigest:string,attemptId:string)=>boolean,
-    private readonly pathSettled:(pathId:string)=>boolean) {}
+    private readonly pathSettled:(pathId:string)=>boolean,
+    private readonly confirmPreparation:(runId:string,input:PreparedContextInput)=>boolean) {}
   command(command:ContextSelectionCommand):ContextSelectionValue {
     switch(command.kind) {
       case "scope":return this.registerScope(command.scope);
       case "control":return this.control(command.control,command.expectedRevision);
       case "current":{const scope=this.scope(command.scopeId);return scope.currentId?this.selection(scope.currentId):null;}
+      case "current_control":return this.scope(command.scopeId).control;
       case "binding":return this.binding(command.inputId,command.checkCurrentControl);
       case "delivery":return this.delivery(command.id);
       case "sent":return this.sent(command.inputId,command.attemptId);
@@ -47,6 +50,13 @@ export class ContextSelectionDatabase {
         const scope=this.scope(proposal.scopeId).scope;
         if(acceptance.id!==proposal.id || acceptance.scope!==scope.runId || acceptance.actor!==scope.owner)reject("selection_actor_invalid");
         const {exactInput,...metadata}=proposal.input;
+        if(exactInput && typeof exactInput==="object" && "kind" in exactInput && exactInput.kind==="prepared_context_input") {
+          const prepared=exactInput as PreparedContextInput;
+          validatePreparedContextInput(prepared);
+          if(prepared.demand.runId!==scope.runId || prepared.demand.recipient!==scope.recipient || prepared.demand.purpose!==scope.purpose ||
+            prepared.demand.targetRevision!==scope.target || !this.confirmPreparation(scope.runId,prepared))reject("input_preparation_unconfirmed");
+          if(modelInputValueDigest(prepared.deliveries)!==modelInputValueDigest(proposal.input.deliveries))reject("input_prepared_delivery_mismatch");
+        }
         const submission=acceptance.parts.find(part=>part.owner==="activity"&&part.kind==="stage_submission");
         const request=submission?.proposal as import("@agent-anything/agent-runtime/activity").ActivityStageRequest|undefined;
         if(!request || request.id!==proposal.input.stageRequestId || request.pathId!==proposal.input.activityId ||
@@ -119,7 +129,7 @@ export class ContextSelectionDatabase {
     const ranges:MaterialRange[]=[];
     for(const ref of selection.representations) {
       const representation=this.representations.read(ref);if(!representation)reject("selection_representation_missing");
-      ranges.push(representation.body,...representation.details);
+      ranges.push(representation.body,...representation.details,...representation.inputs.map(input=>input.material));
     }
     for(const range of ranges) {
       const hold=selection.holds.find(h=>containsMaterialRange(h.range,range));
@@ -140,7 +150,8 @@ export class ContextSelectionDatabase {
     }
     this.records.sql("INSERT INTO context_input_bindings VALUES (?,?,?,?,?,NULL)").run(input.id,scope.id,acceptance.id,JSON.stringify(input),modelInputValueDigest(input));
     this.records.fact(scope.runId,"context_selection",input.id,"input_bound",{acceptanceId:acceptance.id,scopeId:scope.id,selectionId:selection.id,activityId:input.activityId,
-      deliveryIds:input.deliveries.map(d=>d.id),holds:input.holds.map(h=>h.id),changedSelection:proposal.selection!==null});
+      deliveryIds:input.deliveries.map(d=>d.id),holds:input.holds.map(h=>h.id),changedSelection:proposal.selection!==null,
+      exactInputDigest:input.exactInputDigest});
   }
   private binding(id:string,checkCurrentControl:boolean):ContextSelectionSnapshot {
     // Read all related metadata in one view, then hydrate the immutable body outside it.

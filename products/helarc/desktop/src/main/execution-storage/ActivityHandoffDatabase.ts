@@ -42,6 +42,7 @@ export class ActivityHandoffDatabase {
   private readonly statements = new Map<string, Database.Statement>();
   private observationCursor: number | null = null;
   private currentPreparation:PreparedContent|null=null;
+  private readonly acceptanceContent=new WeakMap<object,{bodies:Map<string,unknown>;digests:Map<unknown,string>}>();
   constructor(private readonly db: Database.Database,
     private readonly retain: (value: unknown) => ExecutionContentRoot,
     private readonly hydrate: (root: ExecutionContentRoot) => unknown,
@@ -60,13 +61,13 @@ export class ActivityHandoffDatabase {
         const command={kind:"submit" as const,request:part.proposal as ActivityStageRequest};
         const path=this.requirePath(command.request.pathId);
         if(path.intent.runId!==proposal.scope || path.intent.owner!==proposal.actor)throw new SharedAcceptanceRejection("activity","activity_submission_scope_invalid");
-        return {command,prepared:this.prepare(command)};
+        return {command,prepared:this.sharePrepared(proposal,this.prepare(command))};
       }
       const command = part.proposal as Extract<ActivityHandoffCommand,{kind:"accept"}>;
       if (!command || command.kind !== "accept" || command.receipt.owner !== proposal.actor || command.receipt.id !== proposal.id) throw new SharedAcceptanceRejection("activity","activity_acceptance_identity_invalid");
       const stage = this.requireStage(command.receipt.requestId), path = this.requirePath(stage.request.pathId);
       if (path.intent.runId !== proposal.scope) throw new SharedAcceptanceRejection("activity","activity_acceptance_scope_invalid");
-      return {command,prepared:this.prepare(command)};
+      return {command,prepared:this.sharePrepared(proposal,this.prepare(command))};
     },apply: value => {
       const {command,prepared} = value as {command:ActivityHandoffCommand;prepared:PreparedContent};
       try {this.withPrepared(prepared,()=>this.execute(command,prepared));} catch (error) {
@@ -74,6 +75,15 @@ export class ActivityHandoffDatabase {
         throw error;
       }
     }};
+  }
+
+  private sharePrepared(proposal:object,prepared:PreparedContent):PreparedContent {
+    const shared=this.acceptanceContent.get(proposal)??{bodies:new Map<string,unknown>(),digests:new Map<unknown,string>()};
+    for(const [key,value] of prepared.bodies)shared.bodies.set(key,value);
+    for(const [key,value] of prepared.digests)shared.digests.set(key,value);
+    this.acceptanceContent.set(proposal,shared);
+    // One acceptance may update progress and submit another stage. Both see the same prepared immutable roots.
+    return Object.assign(prepared,shared);
   }
 
   private prepare(command: ActivityHandoffCommand): PreparedContent {
@@ -231,6 +241,7 @@ export class ActivityHandoffDatabase {
         activityToken(receipt.id); activityToken(receipt.owner); validateActivityExecutor(command.executor);
         if(command.executor.generation!==this.generation())fail("processing_owner_stale");
         activityCount(receipt.expectedProgressRevision, true);
+        if(receipt.interpretationMs!==undefined&&(!Number.isFinite(receipt.interpretationMs)||receipt.interpretationMs<0))fail("interpretation_timing_invalid");
         const old = this.value<ActivityProcessingReceipt>("activity_processing_receipts", receipt.id, true);
         if (old) {this.same(old, receipt); return this.requireStage(receipt.requestId);}
         const stage = this.requireStage(receipt.requestId), path = this.requirePath(stage.request.pathId);
@@ -300,8 +311,10 @@ export class ActivityHandoffDatabase {
     const intent = JSON.parse(row.intent) as ActivityPathIntent;
     validateActivityPath(intent);
     if (row.digest !== modelInputValueDigest(intent) || intent.id !== row.id || intent.runId !== row.run_id) fail("corrupt");
+    const resources=this.resourceUse(intent);
     return {intent, controlRevision: row.control_revision, cancelled: row.cancelled === 1, progressRevision: row.progress_revision,
-      progress: row.progress ? this.body(row.progress) : null, admittedStages: row.admitted, dispatchedAttempts: row.attempts};
+      progress: row.progress ? this.body(row.progress) : null, admittedStages: row.admitted, dispatchedAttempts: row.attempts,
+      resourceUse:{admittedStages:resources.admitted,dispatchedAttempts:resources.attempts}};
   }
   private stage(id: string): ActivityStageState | null {
     const row = this.sql("SELECT * FROM activity_stages WHERE id=?").get(id) as StageRow | undefined;

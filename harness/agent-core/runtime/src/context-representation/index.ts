@@ -4,3 +4,11 @@ export type {ContextRepresentationPreparationSupport} from "./ContextRepresentat
 export type {ContextPreparationLifecycle} from "./ContextPreparationLifecycle.js";
 export type {ModelInputRecoveryCapability, ModelInputRecoveryInput, ModelInputRecoveryPort, ModelInputRecoveryResult} from "./ModelInputRecovery.js";
 export {unsupportedModelInputRecovery} from "./ModelInputRecovery.js";
+export * from "./ContextInputPreparation.js";
+export * from "./PreparedInputExecution.js";
+export * from "./ContextInputAcceptance.js";
+export * from "./ContextInputPreparationWork.js";
+export {REPRESENTATION_METHOD_PURPOSE} from "./methods/RepresentationMethod.js";
+export type * from "./methods/RepresentationMethod.js";
+export {RepresentationMethodWork} from "./methods/RepresentationMethodWork.js";
+export type {RepresentationMethodDependencies} from "./methods/RepresentationMethodPath.js";

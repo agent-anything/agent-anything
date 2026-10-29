@@ -18,6 +18,7 @@ export {
   snapshotModelContextAssessment,
   snapshotModelContextCapacity,
   snapshotModelContextHeadroom,
+  snapshotModelInputMeasurement,
   snapshotProviderInputPreservationConformance,
   snapshotProviderModelTarget,
   snapshotProviderRequestedOutput,

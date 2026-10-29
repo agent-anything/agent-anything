@@ -260,6 +260,14 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     command: async command => {
       const result = await this.request({kind: "activity_handoff", command});
       if (!result || typeof result !== "object" || !("activityValue" in result)) throw new ExecutionStoreError("activity_handoff_reply_invalid");
+      const state=result.activityValue;
+      if(this.activityObserver?.observeStage && ["submit","save_raw","accept"].includes(command.kind) && state && "request" in state) {
+        try {
+          const pathReply=await this.request({kind:"activity_handoff",command:{kind:"read_path",pathId:state.request.pathId}});
+          if(pathReply && "activityValue" in pathReply && pathReply.activityValue && "intent" in pathReply.activityValue)
+            this.activityObserver.observeStage(pathReply.activityValue.intent.runId,state);
+        } catch { /* Durable facts permit replay; observation cannot alter acceptance. */ }
+      }
       return result.activityValue;
     },
   };

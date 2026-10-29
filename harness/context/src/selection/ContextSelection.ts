@@ -67,6 +67,7 @@ export type ContextSelectionCommand =
   | {readonly kind:"scope";readonly scope:ContextUseScope}
   | {readonly kind:"control";readonly control:ContextUseControl;readonly expectedRevision:number}
   | {readonly kind:"current";readonly scopeId:string}
+  | {readonly kind:"current_control";readonly scopeId:string}
   | {readonly kind:"binding";readonly inputId:string;readonly checkCurrentControl:boolean}
   | {readonly kind:"sent";readonly inputId:string;readonly attemptId:string}
   | {readonly kind:"retire_input";readonly inputId:string;readonly basis:string}

@@ -33,6 +33,10 @@ export interface Provider {
   readonly descriptor: ProviderDescriptor;
   readonly modelContext: ProviderModelContext;
   readonly requestBodyTransportLimit: ProviderTransportLimit;
+  readonly inputMeasurement?:import("./input/RemoteInputMeasurement.js").RemoteInputMeasurement;
+  /** Explicit capability: accepted-input consumers must require it, never silently re-encode. */
+  encodeInput?(request: ProviderRequest, mode: "buffered" | "streaming"): import("./input/EncodedModelInput.js").EncodedModelInput;
+  verifyEncodedInput?(request:ProviderRequest,input:import("./input/EncodedModelInput.js").EncodedModelInput):void;
   send(
     request: ProviderRequest,
     context: InvocationInterruptionContext,
