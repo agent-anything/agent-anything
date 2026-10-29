@@ -59,7 +59,12 @@ exports.verifyContracts=async function({store,work,processor,signal,now,request,
   const unsupported=await finish("native-text");assert.equal(unsupported.kind,"gap");assert.equal(unsupported.progress.gap.code,"representation_text_method_unsupported");assert.equal(unsupported.progress.modelCalls,0);results.unsupportedTextSettled=true;
   await submit("revoked",{...base,method:"preserve",sources:[native]});
   await m({kind:"grant",grant:{...grant,revision:1,allowed:false,basis:"revoked before dispatch"},expectedRevision:0});
-  await assert.rejects(()=>processor.drain(recipient.runId,signal),/disclos|grant|permission|unavailable/);
+  await assert.rejects(()=>processor.drain(recipient.runId,signal),error=>{
+    assert(error instanceof AggregateError);
+    assert.equal(error.errors.length,1);
+    assert.match(String(error.errors[0]),/disclos|grant|permission|unavailable/);
+    return true;
+  });
   assert.equal((await a({kind:"read_stage",requestId:"revoked:stage:1"})).status,"submitted");await work.cancel("revoked");results.currentPermissionChecked=true;
 
   // Cancel after actual Provider return, before interpretation: raw survives, no candidate or successor is accepted.

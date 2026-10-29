@@ -12,6 +12,19 @@ export interface ActivityPathIntent {
   readonly maximumAttempts: number;
   readonly maximumConcurrent: number;
   readonly deadlineAt: string;
+  /** Original work identity is stable across paths, stages and task requests. */
+  readonly scheduledWorkId?: string;
+  readonly resourceLimits?:Readonly<Record<string,number>>;
+}
+export interface ActivityResourceReservation {
+  readonly id:string;
+  readonly pathId:string;
+  readonly requestId:string;
+  readonly amounts:Readonly<Record<string,number>>;
+}
+export interface ActivityResourceAllowance {
+  readonly limits:Readonly<Record<string,number>>;
+  readonly reserved:Readonly<Record<string,number>>;
 }
 export interface ActivityStageRequest {
   readonly id: string;
@@ -75,20 +88,26 @@ export interface ActivityStageState {
   readonly result: ActivityRawResult | null;
   readonly receipt: ActivityProcessingReceipt | null;
   readonly processing: ActivityProcessingClaim | null;
+  readonly dispatchRestriction?: {readonly code:string;readonly message:string} | null;
 }
 export type ActivityHandoffCommand =
+  | import("./ActivityScheduling.js").ActivitySchedulingCommand
+  | import("./ActivityReconsideration.js").ActivityReconsiderationCommand
   | {readonly kind: "facts"; readonly runId: string; readonly after: number; readonly limit: number}
   | {readonly kind: "open_path"; readonly intent: ActivityPathIntent}
   | {readonly kind: "submit"; readonly request: ActivityStageRequest}
   | {readonly kind: "admit"; readonly requestId: string; readonly expectedControlRevision: number}
+  | {readonly kind: "restrict_dispatch"; readonly requestId:string;readonly restriction:{readonly code:string;readonly message:string}|null;readonly expectedControlRevision:number}
   | {readonly kind: "dispatch"; readonly attempt: ActivityAttempt; readonly expectedControlRevision: number}
   | {readonly kind: "save_raw"; readonly result: ActivityRawResult}
   | {readonly kind: "claim_processing"; readonly claim: ActivityProcessingClaim; readonly expectedControlRevision: number}
   | {readonly kind: "accept"; readonly receipt: ActivityProcessingReceipt; readonly executor: ActivityExecutorIdentity; readonly expectedControlRevision: number; readonly participants?:readonly import("./SharedAcceptance.js").SharedAcceptancePart[]}
   | {readonly kind: "cancel"; readonly pathId: string; readonly expectedControlRevision: number}
+  | {readonly kind:"reserve_resources";readonly reservation:ActivityResourceReservation;readonly expectedControlRevision:number}
+  | {readonly kind:"resource_allowance";readonly pathId:string}
   | {readonly kind: "read_path"; readonly pathId: string}
   | {readonly kind: "read_stage"; readonly requestId: string}
-  | {readonly kind: "pending"; readonly runId: string; readonly after: number; readonly limit: number};
+  | {readonly kind: "pending"; readonly runId: string; readonly after: number; readonly limit: number;readonly pathId?:string};
 
 export interface ActivityHandoffItem {
   readonly sequence: number;
@@ -97,13 +116,13 @@ export interface ActivityHandoffItem {
   readonly requestId: string;
   readonly kind: "admission" | "execution" | "reconciliation" | "interpretation";
 }
-export interface ActivityDispatchReceipt {readonly kind: "dispatch"; readonly stage: ActivityStageState; readonly granted: boolean;}
+export interface ActivityDispatchReceipt {readonly kind: "dispatch"; readonly stage: ActivityStageState; readonly granted: boolean; readonly scheduling?: import("./ActivityScheduling.js").ActivitySchedulingDispatch;}
 export interface ActivityHandoffFact {
   readonly sequence: number;
   readonly runId: string;
   readonly pathId: string;
   readonly requestId: string | null;
-  readonly kind: "path_opened" | "stage_submitted" | "stage_admitted" | "dispatched" | "raw_saved" | "processing_claimed" | "accepted" | "cancelled";
+  readonly kind: "path_opened" | "stage_submitted" | "stage_admitted" | "dispatch_restricted" | "dispatched" | "raw_saved" | "processing_claimed" | "accepted" | "cancelled" | "scheduling_accepted" | "scheduling_closed" | "scheduling_limited" | "scheduling_wait" | "fact_published" | "reconsideration_registered" | "reconsideration_accepted" | "resources_reserved";
   readonly occurredAt: string;
   readonly details: Readonly<Record<string, unknown>>;
 }
@@ -112,11 +131,19 @@ export interface ActivityHandoffObserver {
   /** Durable content, supplementary to facts; projections are never execution authority. */
   observeStage?(runId:string,stage:ActivityStageState):void;
 }
-export type ActivityHandoffValue = ActivityPathState | ActivityStageState | ActivityDispatchReceipt | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | null;
+export type ActivityHandoffValue = ActivityPathState | ActivityStageState | ActivityDispatchReceipt | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] |
+  readonly import("./ActivityReconsideration.js").ActivityReconsiderationState[] |
+  import("./ActivityScheduling.js").ActivityResourcePool | import("./ActivityScheduling.js").ActivitySchedulingAcceptance | import("./ActivityScheduling.js").ActivitySchedulingReview | readonly import("./ActivityScheduling.js").ActivitySchedulingCandidate[] |
+  import("./ActivityReconsideration.js").ActivityFactSource | import("./ActivityReconsideration.js").ActivityPublishedFact | import("./ActivityReconsideration.js").ActivityReconsiderationState | import("./ActivityReconsideration.js").ActivityReconsiderationSnapshot | null;
 export interface ActivityHandoffPort {command(command: ActivityHandoffCommand): Promise<ActivityHandoffValue>;}
 
 export function validateActivityPath(intent: ActivityPathIntent): void {
   [intent.id, intent.runId, intent.owner, intent.permissionBasis, intent.resourceScope].forEach(activityToken);
+  if(intent.scheduledWorkId!==undefined)activityToken(intent.scheduledWorkId);
+  if(intent.resourceLimits) {
+    if(Object.keys(intent.resourceLimits).length>32)throw new TypeError("activity_resource_dimensions_invalid");
+    for(const [key,value] of Object.entries(intent.resourceLimits)){activityToken(key);activityCount(value,true);}
+  }
   validateActivityPurpose(intent.purpose.contract);
   if (modelInputValueDigest(intent.purpose.contract) !== intent.purpose.digest || intent.owner !== intent.purpose.contract.acceptanceOwner) throw new TypeError("activity_path_owner_invalid");
   [intent.maximumStages, intent.maximumAttempts, intent.maximumConcurrent].forEach(value => activityCount(value));

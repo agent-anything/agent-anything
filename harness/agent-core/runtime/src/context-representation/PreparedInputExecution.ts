@@ -27,7 +27,7 @@ export class PreparedInputExecution implements ActivityPurposeHandler {
     const dispatchedAt=performance.now();
     const result:ProviderCallResult=await this.dependencies.provider.send(prepared.request,{signal,interruption:null},
       {mode:prepared.encoded.mode,invocationId:attempt.id,encodedInput:prepared.encoded});
-    return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:result,
+    return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:result.kind==="cancellation_unconfirmed"?"unknown":"returned",value:result,
       usage:{...(result.kind==="succeeded"?(result.response.kind==="native_tool_turn"?result.response.turn.usage:result.response.usage):{}),providerElapsedMs:performance.now()-dispatchedAt,preDispatchMs:dispatchedAt-started},recordedAt:this.dependencies.now()};
   }
   reconcile(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal):Promise<ActivityRawResult|null> {

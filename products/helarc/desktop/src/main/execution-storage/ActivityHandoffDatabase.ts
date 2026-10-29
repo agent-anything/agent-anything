@@ -1,19 +1,23 @@
 import type Database from "better-sqlite3";
 import {isDeepStrictEqual} from "node:util";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {activityCount, activityToken, validateActivityExecutor, validateActivityPath, validateActivityStage,
+import {activityCount, activityToken, activityFactSourceId, validateActivityExecutor, validateActivityPath, validateActivityStage,
   type ActivityHandoffCommand, type ActivityHandoffValue, type ActivityPathIntent, type ActivityPathState,
   type ActivityStageRequest, type ActivityStageState, type ActivityAttempt, type ActivityRawResult,
   type ActivityProcessingReceipt, type ActivityProcessingClaim, type ActivityHandoffItem, type ActivityHandoffFact} from "@agent-anything/agent-runtime/activity";
 import type {ExecutionContentRoot} from "./ExecutionContent.js";
 import {SharedAcceptanceRejection, type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
+import {ActivitySchedulingDatabase,ACTIVITY_SCHEDULING_SCHEMA} from "./ActivitySchedulingDatabase.js";
+import {ActivityReconsiderationDatabase,ACTIVITY_RECONSIDERATION_SCHEMA} from "./ActivityReconsiderationDatabase.js";
+import {ActivityResourceDatabase,ACTIVITY_RESOURCE_SCHEMA} from "./ActivityResourceDatabase.js";
 
 export const ACTIVITY_HANDOFF_SCHEMA = `
 CREATE TABLE activity_paths(id TEXT PRIMARY KEY, run_id TEXT NOT NULL, intent TEXT NOT NULL, digest TEXT NOT NULL,
  control_revision INTEGER NOT NULL, cancelled INTEGER NOT NULL, progress_revision INTEGER NOT NULL, progress TEXT,
  admitted INTEGER NOT NULL, attempts INTEGER NOT NULL);
 CREATE TABLE activity_stages(id TEXT PRIMARY KEY, path_id TEXT NOT NULL REFERENCES activity_paths(id),
- request TEXT NOT NULL, digest TEXT NOT NULL, status TEXT NOT NULL, attempt_id TEXT, result_id TEXT, receipt_id TEXT, processing TEXT);
+ request TEXT NOT NULL, digest TEXT NOT NULL, status TEXT NOT NULL, attempt_id TEXT, result_id TEXT, receipt_id TEXT, processing TEXT,
+ scheduling_metadata TEXT NOT NULL,scheduling_digest TEXT NOT NULL,dispatch_restriction TEXT);
 CREATE INDEX activity_stages_path ON activity_stages(path_id,status);
 CREATE TABLE activity_attempts(id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES activity_stages(id), value TEXT NOT NULL, digest TEXT NOT NULL);
 CREATE TABLE activity_raw_results(id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES activity_attempts(id), value TEXT NOT NULL, digest TEXT NOT NULL);
@@ -25,11 +29,14 @@ CREATE TABLE activity_handoffs(sequence INTEGER PRIMARY KEY, run_id TEXT NOT NUL
 CREATE INDEX activity_handoff_pending ON activity_handoffs(run_id,pending,sequence);
 CREATE TABLE activity_facts(sequence INTEGER PRIMARY KEY,run_id TEXT NOT NULL,path_id TEXT NOT NULL,request_id TEXT,kind TEXT NOT NULL,occurred_at TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL);
 CREATE INDEX activity_facts_run ON activity_facts(run_id,sequence);
+${ACTIVITY_SCHEDULING_SCHEMA}
+${ACTIVITY_RECONSIDERATION_SCHEMA}
+${ACTIVITY_RESOURCE_SCHEMA}
 `;
 interface PathRow {id:string;run_id:string;intent:string;digest:string;control_revision:number;cancelled:number;
   progress_revision:number;progress:string|null;admitted:number;attempts:number;}
 interface StageRow {id:string;path_id:string;request:string;digest:string;status:ActivityStageState["status"];
-  attempt_id:string|null;result_id:string|null;receipt_id:string|null;processing:string|null;}
+  attempt_id:string|null;result_id:string|null;receipt_id:string|null;processing:string|null;dispatch_restriction:string|null;}
 interface ValueRow {value:string;digest:string;}
 interface PreparedContent {
   (value:unknown):string;
@@ -43,24 +50,92 @@ export class ActivityHandoffDatabase {
   private observationCursor: number | null = null;
   private currentPreparation:PreparedContent|null=null;
   private readonly acceptanceContent=new WeakMap<object,{bodies:Map<string,unknown>;digests:Map<unknown,string>}>();
+  private readonly scheduling:ActivitySchedulingDatabase;
+  private readonly reconsideration:ActivityReconsiderationDatabase;
+  private readonly resources:ActivityResourceDatabase;
   constructor(private readonly db: Database.Database,
     private readonly retain: (value: unknown) => ExecutionContentRoot,
     private readonly hydrate: (root: ExecutionContentRoot) => unknown,
-    private readonly generation:()=>number) {}
+    private readonly generation:()=>number) {
+    this.resources=new ActivityResourceDatabase(db);
+    this.reconsideration=new ActivityReconsiderationDatabase(db,(runId,subject,kind,details)=>this.recordFact(runId,subject,null,kind,details));
+    this.scheduling=new ActivitySchedulingDatabase(db,(runId,workId,kind,details)=>{
+      this.recordFact(runId,workId,null,kind,details);
+      const sourceId=activityFactSourceId("scheduling",workId),id=`scheduling-fact:${modelInputValueDigest({workId,kind,details})}`;
+      this.reconsideration.source({id:sourceId,runId,owner:"activity-scheduling"});
+      this.reconsideration.publish({id,sourceId,ref:{owner:"activity-scheduling",kind,id:workId,revision:id}});
+    });
+  }
 
   command(command: ActivityHandoffCommand): {activityValue: ActivityHandoffValue} {
     this.beginObservations();
     const prepared = this.prepare(command);
-    return {activityValue:this.withPrepared(prepared,()=>this.db.transaction(() => this.execute(command, prepared))())};
+    try {return {activityValue:this.withPrepared(prepared,()=>this.db.transaction(() => this.execute(command, prepared))())};}
+    catch(error) {
+      if(command.kind==="schedule_work"&&error&&typeof error==="object"&&"code" in error&&["activity_schedule_pool_missing","activity_schedule_resource_unavailable"].includes(String(error.code))) {
+        this.db.transaction(()=>this.scheduling.recordLimitation(command.intent,String(error.code)))();
+      }
+      if(command.kind==="dispatch"&&error&&typeof error==="object"&&"code" in error&&["activity_schedule_not_ready","activity_schedule_turn_waiting"].includes(String(error.code))) {
+        this.db.transaction(()=>this.scheduling.recordWait(command.attempt.requestId))();
+      }
+      throw error;
+    }
   }
 
   acceptanceParticipant(): SharedAcceptanceParticipant {
-    return {owner:"activity",kinds:["professional_acceptance","stage_submission"],prepare:(part, proposal) => {
+    return {owner:"activity",kinds:["professional_acceptance","stage_submission","path_opening","fact_publication","reconsideration_acceptance","scheduling_acceptance","path_cancellation","scheduling_closure"],prepare:(part, proposal) => {
+      if(part.kind==="path_cancellation") {
+        const command=part.proposal as Extract<ActivityHandoffCommand,{kind:"cancel"}>;
+        const path=this.requirePath(command.pathId);
+        if(command.kind!=="cancel"||path.intent.runId!==proposal.scope||path.intent.owner!==proposal.actor)
+          throw new SharedAcceptanceRejection("activity","activity_cancellation_scope_invalid");
+        return {command,prepared:this.prepare(command)};
+      }
+      if(part.kind==="scheduling_closure") {
+        const command=part.proposal as Extract<ActivityHandoffCommand,{kind:"close_scheduled_work"}>;
+        const work=this.scheduling.read(command.workId);
+        if(command.kind!=="close_scheduled_work"||!work||work.intent.runId!==proposal.scope||work.intent.owner!==proposal.actor)
+          throw new SharedAcceptanceRejection("activity","activity_closure_scope_invalid");
+        return {command,prepared:this.prepare(command)};
+      }
       this.beginObservations();
+      const permitsPath=(intent:ActivityPathIntent)=>{
+        if(intent.runId!==proposal.scope)return false;
+        if(intent.owner===proposal.actor)return true;
+        if(!intent.scheduledWorkId)return false;
+        const pending=proposal.parts.find(p=>p.owner==="activity"&&p.kind==="scheduling_acceptance"&&
+          (p.proposal as Extract<ActivityHandoffCommand,{kind:"schedule_work"}>)?.intent?.workId===intent.scheduledWorkId)?.proposal as Extract<ActivityHandoffCommand,{kind:"schedule_work"}>|undefined;
+        const schedule=pending?.intent??this.scheduling.read(intent.scheduledWorkId)?.intent;
+        return schedule?.owner===proposal.actor&&schedule.runId===proposal.scope&&schedule.delegatedPathOwners?.includes(intent.owner)===true;
+      };
+      if(part.kind==="path_opening") {
+        const command={kind:"open_path" as const,intent:part.proposal as ActivityPathIntent};
+        validateActivityPath(command.intent);
+        if(!permitsPath(command.intent))throw new SharedAcceptanceRejection("activity","activity_path_delegation_invalid");
+        return {command,prepared:this.sharePrepared(proposal,this.prepare(command))};
+      }
+      if(part.kind==="fact_publication") {
+        const command={kind:"publish_fact" as const,fact:part.proposal as import("@agent-anything/agent-runtime/activity").ActivityPublishedFact};
+        const source=this.reconsideration.sourceState(command.fact.sourceId);
+        if(!source||source.runId!==proposal.scope||source.owner!==proposal.actor)throw new SharedAcceptanceRejection("activity","activity_publication_scope_invalid");
+        return {command,prepared:this.prepare(command)};
+      }
+      if(part.kind==="reconsideration_acceptance") {
+        const command={kind:"accept_reconsideration" as const,receipt:part.proposal as import("@agent-anything/agent-runtime/activity").ActivityReconsiderationReceipt};
+        const state=this.reconsideration.state(command.receipt.subscriptionId);
+        if(!state||state.subscription.runId!==proposal.scope||state.subscription.owner!==proposal.actor||command.receipt.id!==proposal.id)throw new SharedAcceptanceRejection("activity","activity_reconsideration_scope_invalid");
+        return {command,prepared:this.prepare(command)};
+      }
+      if(part.kind==="scheduling_acceptance") {
+        const command=part.proposal as Extract<ActivityHandoffCommand,{kind:"schedule_work"}>;
+        if(command?.kind!=="schedule_work"||command.intent.runId!==proposal.scope||command.intent.owner!==proposal.actor)throw new SharedAcceptanceRejection("activity","activity_schedule_scope_invalid");
+        return {command,prepared:this.prepare(command)};
+      }
       if(part.kind==="stage_submission") {
         const command={kind:"submit" as const,request:part.proposal as ActivityStageRequest};
-        const path=this.requirePath(command.request.pathId);
-        if(path.intent.runId!==proposal.scope || path.intent.owner!==proposal.actor)throw new SharedAcceptanceRejection("activity","activity_submission_scope_invalid");
+        const opening=proposal.parts.find(p=>p.owner==="activity"&&p.kind==="path_opening"&&(p.proposal as ActivityPathIntent)?.id===command.request.pathId)?.proposal as ActivityPathIntent|undefined;
+        const intent=opening??this.requirePath(command.request.pathId).intent;
+        if(!permitsPath(intent))throw new SharedAcceptanceRejection("activity","activity_submission_scope_invalid");
         return {command,prepared:this.sharePrepared(proposal,this.prepare(command))};
       }
       const command = part.proposal as Extract<ActivityHandoffCommand,{kind:"accept"}>;
@@ -103,7 +178,8 @@ export class ActivityHandoffDatabase {
         if(key){const value=this.sql(`SELECT value FROM ${table} WHERE id=?`).get(key) as {value:string}|undefined;if(value)warm(value.value);}
       }
     };
-    if("pathId" in command)path(command.pathId);
+    if("pathId" in command&&command.pathId!==undefined)path(command.pathId);
+    if(command.kind==="reserve_resources")stage(command.reservation.requestId);
     if("requestId" in command)stage(command.requestId);
     if(command.kind==="open_path")path(command.intent.id);
     if(command.kind==="dispatch") {
@@ -147,22 +223,47 @@ export class ActivityHandoffDatabase {
 
   private execute(command: ActivityHandoffCommand, prepared: (value: unknown) => string): ActivityHandoffValue {
     switch (command.kind) {
+      case "bind_resource_pool": return this.scheduling.bind(command.pool);
+      case "schedule_work": return this.scheduling.accept(command.intent,command.expectedRevision);
+      case "read_schedule": return this.scheduling.read(command.workId);
+      case "review_scheduling": return this.scheduling.review();
+      case "close_scheduled_work": return this.scheduling.close(command.workId,command.expectedRevision,command.basis);
+      case "scheduling_candidates": return this.scheduling.candidates(command.limit);
+      case "register_fact_source": return this.reconsideration.source(command.source);
+      case "publish_fact": return this.reconsideration.publish(command.fact);
+      case "subscribe_reconsideration": return this.reconsideration.subscribe(command.subscription);
+      case "read_reconsideration": return this.reconsideration.snapshot(command.subscriptionId,command.limit);
+      case "pending_reconsiderations": return this.reconsideration.pending(command.runId,command.afterId,command.limit);
+      case "accept_reconsideration": return this.reconsideration.accept(command.receipt);
       case "open_path": {
         const old = this.path(command.intent.id);
         if (old) {this.same(old.intent, command.intent); return old;}
         const intent = command.intent;
+        this.scheduling.validatePath(intent);
         const peers=this.sql("SELECT intent,digest FROM activity_paths WHERE run_id=? AND json_extract(intent,'$.resourceScope')=?").all(intent.runId,intent.resourceScope) as {intent:string;digest:string}[];
         for(const peer of peers){
           const established=JSON.parse(peer.intent) as ActivityPathIntent;
           if(modelInputValueDigest(established)!==peer.digest)fail("corrupt");
-          if(established.maximumStages!==intent.maximumStages || established.maximumAttempts!==intent.maximumAttempts || established.maximumConcurrent!==intent.maximumConcurrent || established.permissionBasis!==intent.permissionBasis)fail("resource_scope_conflict");
+          if(established.maximumStages!==intent.maximumStages || established.maximumAttempts!==intent.maximumAttempts || established.maximumConcurrent!==intent.maximumConcurrent || established.permissionBasis!==intent.permissionBasis||established.deadlineAt!==intent.deadlineAt||modelInputValueDigest(established.resourceLimits??{})!==modelInputValueDigest(intent.resourceLimits??{}))fail("resource_scope_conflict");
         }
         this.sql("INSERT INTO activity_paths VALUES (?,?,?,?,0,0,0,NULL,0,0)")
           .run(intent.id, intent.runId, JSON.stringify(intent), modelInputValueDigest(intent));
         this.fact(intent,null,"path_opened",{purpose:intent.purpose,resourceScope:intent.resourceScope});
+        this.reconsideration.source({id:activityFactSourceId("progress",intent.id),runId:intent.runId,owner:intent.owner});
+        this.reconsideration.source({id:activityFactSourceId("control",intent.id),runId:intent.runId,owner:"activity-control"});
         return this.path(intent.id);
       }
       case "read_path": return this.path(command.pathId);
+      case "resource_allowance":return this.resources.allowance(this.requirePath(command.pathId).intent);
+      case "reserve_resources": {
+        const reservation=command.reservation,path=this.requirePath(reservation.pathId),stage=this.requireStage(reservation.requestId);
+        if(stage.request.pathId!==path.intent.id||!stage.attempt)fail("resource_stage_invalid");
+        const old=this.resources.original(reservation.id);
+        if(!old){this.control(path,command.expectedControlRevision);if(Date.now()>=Date.parse(path.intent.deadlineAt))fail("deadline_exceeded");}
+        const allowance=this.resources.reserve(path.intent,reservation);
+        if(!old)this.fact(path.intent,stage.request.id,"resources_reserved",{reservation,allowance});
+        return reservation;
+      }
       case "read_stage": return this.stage(command.requestId);
       case "submit": {
         this.submit(command.request, prepared(command.request));
@@ -179,15 +280,28 @@ export class ActivityHandoffDatabase {
         this.fact(path.intent,stage.request.id,"stage_admitted",{controlRevision:path.controlRevision});
         return this.stage(stage.request.id);
       }
+      case "restrict_dispatch": {
+        const stage=this.requireStage(command.requestId),path=this.requirePath(stage.request.pathId);
+        this.control(path,command.expectedControlRevision);
+        if(stage.attempt)fail("dispatch_already_started");
+        if(command.restriction){activityToken(command.restriction.code);activityToken(command.restriction.message);}
+        if(isDeepStrictEqual(stage.dispatchRestriction??null,command.restriction))return stage;
+        this.sql("UPDATE activity_stages SET dispatch_restriction=? WHERE id=?").run(command.restriction?JSON.stringify({value:command.restriction,digest:modelInputValueDigest(command.restriction)}):null,stage.request.id);
+        this.fact(path.intent,stage.request.id,"dispatch_restricted",{restriction:command.restriction,controlRevision:path.controlRevision});
+        this.reconsideration.publish({id:`dispatch-restriction:${stage.request.id}:${this.lastFactSequence()}`,sourceId:activityFactSourceId("control",path.intent.id),
+          ref:{owner:"activity-control",kind:"dispatch_restriction",id:stage.request.id,revision:String(this.lastFactSequence())}});
+        return this.stage(stage.request.id);
+      }
       case "dispatch": {
         const attempt = command.attempt;
         activityToken(attempt.id); validateActivityExecutor(attempt.executor);
         const old = this.value<ActivityAttempt>("activity_attempts", attempt.id);
-        if (old) {this.same(old, attempt); return {kind:"dispatch",stage:this.requireStage(attempt.requestId),granted:false};}
+        if (old) {this.same(old, attempt); const scheduling=this.scheduling.originalDispatch(attempt.id); return {kind:"dispatch",stage:this.requireStage(attempt.requestId),granted:false,...(scheduling?{scheduling}:{})};}
         if(attempt.executor.generation!==this.generation())fail("execution_owner_stale");
         const stage = this.requireStage(attempt.requestId), path = this.requirePath(stage.request.pathId);
         this.control(path, command.expectedControlRevision);
         if (stage.status !== "admitted" || stage.attempt) fail("dispatch_not_available");
+        if(stage.dispatchRestriction)fail("dispatch_restricted");
         if (this.digest(stage.request.input) !== attempt.inputDigest) fail("input_mismatch");
         if (!Number.isFinite(Date.parse(attempt.startedAt)) || Date.parse(attempt.startedAt) >= Date.parse(path.intent.deadlineAt)) fail("deadline");
         for (const dependency of stage.request.dependencies) {
@@ -197,13 +311,14 @@ export class ActivityHandoffDatabase {
         const inFlight = this.sql("SELECT COUNT(*) AS count FROM activity_stages s JOIN activity_paths p ON p.id=s.path_id WHERE p.run_id=? AND json_extract(p.intent,'$.resourceScope')=? AND s.status='dispatched'").get(path.intent.runId,path.intent.resourceScope) as {count:number};
         if (inFlight.count >= path.intent.maximumConcurrent) fail("slot_waiting");
         if (this.resourceUse(path.intent).attempts >= path.intent.maximumAttempts) fail("attempt_limit");
+        const scheduling=this.scheduling.dispatch(path.intent,stage.request,attempt.id);
         this.sql("INSERT INTO activity_attempts VALUES (?,?,?,?)").run(attempt.id, attempt.requestId, JSON.stringify(attempt), modelInputValueDigest(attempt));
         this.sql("UPDATE activity_stages SET status='dispatched',attempt_id=? WHERE id=?").run(attempt.id, attempt.requestId);
         this.sql("UPDATE activity_paths SET attempts=attempts+1 WHERE id=?").run(path.intent.id);
         this.closeHandoff(stage.request.id, "execution");
         this.handoff(path, stage.request.id, "reconciliation");
-        this.fact(path.intent,stage.request.id,"dispatched",{attempt});
-        return {kind:"dispatch",stage:this.requireStage(stage.request.id),granted:true};
+        this.fact(path.intent,stage.request.id,"dispatched",{attempt,...(scheduling?{scheduling}:{})});
+        return {kind:"dispatch",stage:this.requireStage(stage.request.id),granted:true,...(scheduling?{scheduling}:{})};
       }
       case "save_raw": {
         const result = command.result;
@@ -217,6 +332,7 @@ export class ActivityHandoffDatabase {
         this.sql("INSERT INTO activity_raw_results VALUES (?,?,?,?)").run(result.id, result.attemptId, prepared(result), this.digest(result));
         this.fact(path.intent,stage.request.id,"raw_saved",{resultId:result.id,attemptId:result.attemptId,completeness:result.completeness,outcome:result.outcome,usage:result.usage});
         if (stage.attempt?.id === attempt.id && !stage.result && result.completeness === "complete" && result.outcome !== "unknown") {
+          this.scheduling.release(attempt.id);
           this.sql("UPDATE activity_stages SET result_id=?,status='raw_result' WHERE id=?").run(result.id, stage.request.id);
           this.closeHandoff(stage.request.id, "reconciliation");
           if(!path.cancelled)this.handoff(path, stage.request.id, "interpretation");
@@ -255,6 +371,8 @@ export class ActivityHandoffDatabase {
         this.sql("UPDATE activity_paths SET progress_revision=progress_revision+1,progress=? WHERE id=?").run(prepared(receipt.progress), path.intent.id);
         this.closeHandoff(receipt.requestId, "interpretation");
         this.fact(path.intent,stage.request.id,"accepted",{receiptId:receipt.id,resultId:receipt.resultId,progressRevision:path.progressRevision+1,next:receipt.next.map(value=>value.id)});
+        this.reconsideration.publish({id:`${receipt.id}:progress`,sourceId:activityFactSourceId("progress",path.intent.id),
+          ref:{owner:path.intent.owner,kind:"accepted_progress",id:path.intent.id,revision:String(path.progressRevision+1)}});
         for (const next of receipt.next) {
           if (next.pathId !== path.intent.id) fail("continuation_scope_invalid");
           this.submit(next, prepared(next));
@@ -268,13 +386,16 @@ export class ActivityHandoffDatabase {
         this.sql("UPDATE activity_paths SET cancelled=1,control_revision=control_revision+1 WHERE id=?").run(command.pathId);
         this.sql("UPDATE activity_handoffs SET pending=0 WHERE path_id=? AND kind<>'reconciliation'").run(command.pathId);
         this.fact(path.intent,null,"cancelled",{controlRevision:path.controlRevision+1});
+        this.reconsideration.publish({id:`${path.intent.id}:cancelled:${path.controlRevision+1}`,sourceId:activityFactSourceId("control",path.intent.id),
+          ref:{owner:"activity-control",kind:"cancelled",id:path.intent.id,revision:String(path.controlRevision+1)}});
         return this.path(command.pathId);
       }
       case "pending": {
         activityToken(command.runId); activityCount(command.after, true); activityCount(command.limit);
+        if(command.pathId!==undefined)activityToken(command.pathId);
         if (command.limit > 256) fail("page_limit");
-        return (this.sql("SELECT sequence,run_id,path_id,request_id,kind FROM activity_handoffs WHERE run_id=? AND pending=1 AND sequence>? ORDER BY sequence LIMIT ?")
-          .all(command.runId, command.after, command.limit) as {sequence:number;run_id:string;path_id:string;request_id:string;kind:ActivityHandoffItem["kind"]}[])
+        return (this.sql("SELECT sequence,run_id,path_id,request_id,kind FROM activity_handoffs WHERE run_id=? AND pending=1 AND sequence>? AND (? IS NULL OR path_id=?) ORDER BY sequence LIMIT ?")
+          .all(command.runId, command.after, command.pathId??null,command.pathId??null,command.limit) as {sequence:number;run_id:string;path_id:string;request_id:string;kind:ActivityHandoffItem["kind"]}[])
           .map(row => ({sequence:row.sequence, runId:row.run_id, pathId:row.path_id, requestId:row.request_id, kind:row.kind}));
       }
       case "facts": return this.facts(command.runId,command.after,command.limit);
@@ -291,7 +412,9 @@ export class ActivityHandoffDatabase {
     if (count.count >= path.intent.maximumStages) fail("stage_limit");
     // Only existing producers may be referenced: incremental extension cannot create a cycle.
     for (const dependency of request.dependencies) if (this.requireStage(dependency.requestId).request.pathId !== path.intent.id) fail("dependency_scope_invalid");
-    this.sql("INSERT INTO activity_stages VALUES (?,?,?,?,'submitted',NULL,NULL,NULL,NULL)").run(request.id, request.pathId, root, this.digest(request));
+    const schedulingMetadata={capabilities:request.capabilities,dependencies:request.dependencies};
+    this.sql("INSERT INTO activity_stages VALUES (?,?,?,?,'submitted',NULL,NULL,NULL,NULL,?,?,NULL)")
+      .run(request.id,request.pathId,root,this.digest(request),JSON.stringify(schedulingMetadata),modelInputValueDigest(schedulingMetadata));
     this.handoff(path, request.id, "admission");
     const input = request.input && typeof request.input === "object" ? request.input as Record<string,unknown> : null;
     this.fact(path.intent,request.id,"stage_submitted",{stageKind:request.stageKind,inputDigest:this.digest(request.input),
@@ -324,8 +447,15 @@ export class ActivityHandoffDatabase {
     return {request, status:row.status, attempt:row.attempt_id ? this.requireAttempt(row.attempt_id) : null,
       result:row.result_id ? this.value<ActivityRawResult>("activity_raw_results", row.result_id, true) : null,
       receipt:row.receipt_id ? this.value<ActivityProcessingReceipt>("activity_processing_receipts", row.receipt_id, true) : null,
-      processing: row.processing ? JSON.parse(row.processing) as ActivityProcessingClaim : null};
+      processing: row.processing ? JSON.parse(row.processing) as ActivityProcessingClaim : null,
+      dispatchRestriction:this.dispatchRestriction(row.dispatch_restriction)};
   }
+  private dispatchRestriction(raw:string|null):ActivityStageState["dispatchRestriction"] {
+    if(!raw)return null;
+    const parsed=JSON.parse(raw) as {value:NonNullable<ActivityStageState["dispatchRestriction"]>;digest:string};
+    if(modelInputValueDigest(parsed.value)!==parsed.digest)fail("corrupt");return parsed.value;
+  }
+  private lastFactSequence():number{return (this.sql("SELECT COALESCE(MAX(sequence),0) AS n FROM activity_facts").get() as {n:number}).n;}
   private requirePath(id: string): ActivityPathState {const value = this.path(id); if (!value) fail("path_missing"); return value;}
   private requireStage(id: string): ActivityStageState {const value = this.stage(id); if (!value) fail("stage_missing"); return value;}
   private requireAttempt(id: string): ActivityAttempt {const value = this.value<ActivityAttempt>("activity_attempts", id); if (!value) fail("attempt_missing"); return value;}
@@ -342,7 +472,7 @@ export class ActivityHandoffDatabase {
   private closeHandoff(requestId: string, kind: ActivityHandoffItem["kind"]): void {this.sql("UPDATE activity_handoffs SET pending=0 WHERE request_id=? AND kind=?").run(requestId,kind);}
   private sql(sql: string): Database.Statement {let statement = this.statements.get(sql); if (!statement) {statement = this.db.prepare(sql); this.statements.set(sql, statement);} return statement;}
   retainedRuns(): readonly string[] {
-    return (this.sql("SELECT DISTINCT run_id FROM activity_handoffs WHERE pending=1").all() as {run_id:string}[]).map(row=>row.run_id);
+    return [...new Set([...(this.sql("SELECT DISTINCT run_id FROM activity_handoffs WHERE pending=1").all() as {run_id:string}[]).map(row=>row.run_id),...this.reconsideration.retainedRuns()])];
   }
   confirmInputResult(runId:string,pathId:string,inputDigest:string,resultId:string):boolean {
     const path=this.sql("SELECT run_id FROM activity_paths WHERE id=?").get(pathId) as {run_id:string}|undefined;
@@ -384,7 +514,10 @@ export class ActivityHandoffDatabase {
     this.observationCursor ??= (this.sql("SELECT COALESCE(MAX(sequence),0) AS n FROM activity_facts").get() as {n:number}).n;
   }
   private fact(intent:ActivityPathIntent,requestId:string|null,kind:ActivityHandoffFact["kind"],details:Readonly<Record<string,unknown>>): void {
-    const fact = {runId:intent.runId,pathId:intent.id,requestId,kind,occurredAt:new Date().toISOString(),details};
+    this.recordFact(intent.runId,intent.id,requestId,kind,details);
+  }
+  private recordFact(runId:string,pathId:string,requestId:string|null,kind:ActivityHandoffFact["kind"],details:Readonly<Record<string,unknown>>): void {
+    const fact = {runId,pathId,requestId,kind,occurredAt:new Date().toISOString(),details};
     this.sql("INSERT INTO activity_facts(run_id,path_id,request_id,kind,occurred_at,value,digest) VALUES (?,?,?,?,?,?,?)")
       .run(fact.runId,fact.pathId,fact.requestId,fact.kind,fact.occurredAt,JSON.stringify(fact),modelInputValueDigest(fact));
   }

@@ -57,10 +57,14 @@ interface PendingRequest {
 
 /** Bounded acknowledgement-based writer; queue admission is not persistence. */
 export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRecordPort, RunCommitPort, CompositeCommitPort, RunTreeCommitPort, AgentHookRecordPort, ProcessRecordPort, ShellSessionRecordPort, ExecutionEvidenceRecordPort, FileMaterialRecordPort {
+  private readonly activityListeners=new Set<()=>void>();
+  onActivityChange(listener:()=>void):()=>void {this.activityListeners.add(listener);return ()=>{this.activityListeners.delete(listener);};}
   readonly hostSession = randomUUID();
   get activityJournal(): import("@agent-anything/agent-runtime/model-access").ModelActivityJournalSupport {
-    return {port:this.activityHandoffs,executor:{hostSession:this.hostSession,worker:`model-access:main:${process.pid}`,generation:this.generation}};
+    return {port:this.activityHandoffs,executor:{hostSession:this.hostSession,worker:`model-access:main:${process.pid}`,generation:this.generation},scheduling:{pool:this.modelExecutionPool}};
   }
+  /** Host-declared competition scope, not inferred from a model name or URL. */
+  readonly modelExecutionPool={id:"helarc:model-execution",revision:"1",authority:"helarc-host",capacity:1} as const;
   /** Composition supplies the recipient; Tool arguments cannot choose authority. */
   createCustodyMaterialAccess(recipient:MaterialRecipient):ContextMaterialAccessPort {
     return new CustodyMaterialAccess(this.materialCustody,structuredClone(recipient));
@@ -105,6 +109,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       }
       if (reply.kind === "activity_observation") {
         try {this.activityObserver?.observe(reply.fact);} catch { /* Execution acknowledgement is independent of diagnostic projection. */ }
+        for(const listener of this.activityListeners){try{listener();}catch{/* Durable discovery remains authoritative. */}}
         return;
       }
       if (reply.kind === "context_material_observation") {
@@ -295,6 +300,13 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   readonly contextSelections:import("@agent-anything/context/selection").ContextSelectionPort={command:async command=>{
     const result=await this.request({kind:"context_selection",command});
     if(!result || !("selectionValue" in result))throw new ExecutionStoreError("selection_reply_invalid");return result.selectionValue;
+  }};
+  readonly contextPolicy:import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecisionStore={query:async query=>{
+    const result=await this.request({kind:"context_policy",query});
+    if(!result||!("contextPolicyValue" in result))throw new ExecutionStoreError("context_policy_reply_invalid");return result.contextPolicyValue;
+  },investments:async input=>{
+    const result=await this.request({kind:"context_policy_investments",input});
+    if(!result||!("contextPolicyInvestments" in result))throw new ExecutionStoreError("context_policy_reply_invalid");return result.contextPolicyInvestments;
   }};
   async contextFoundationFacts(runId:string,after:number,limit:number):Promise<readonly import("./ContextFoundationRecords.js").ContextFoundationFact[]> {
     const result=await this.request({kind:"context_foundation_facts",runId,after,limit});

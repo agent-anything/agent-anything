@@ -12,7 +12,8 @@ async function main(){
   const load=path=>import(pathToFileURL(join(__dirname,"../../dist/main",path)));
   const {HelarcExecutionStore}=await load("execution-storage/HelarcExecutionStore.js");
   const {bindHelarcRepresentationMethods}=await load("context/HelarcRepresentationMethods.js");
-  const {ActivityPurposeRegistry,ActivityHandoffProcessor}=await import("@agent-anything/agent-runtime/activity");
+  const {ActivityPurposeRegistry}=await import("@agent-anything/agent-runtime/activity");
+  const {bindHelarcContextExecution}=await load("context/HelarcContextExecution.js");
   const {OllamaProvider}=await import("@agent-anything/provider-integrations/ollama");
   const {OpenAICompatibleProvider}=await import("@agent-anything/provider-integrations/openai-compatible");
   const {composeModelInput,modelInputValueDigest:digest}=await import("@agent-anything/model-interaction/input");
@@ -28,7 +29,8 @@ async function main(){
   }
   const registry=new ActivityPurposeRegistry(),signal=new AbortController().signal,now=()=>new Date().toISOString();
   const work=bindHelarcRepresentationMethods({store,provider,registry,now,authorize:async path=>assert.equal(path.intent.permissionBasis,"isolated-method-permission")});
-  const processor=new ActivityHandoffProcessor(store.activityHandoffs,registry,store.activityJournal.executor,now);
+  const execution=bindHelarcContextExecution({store,registry,now,purposeIds:["context.representation-method","context.input-preparation","parent-after-method"]});
+  const processor=execution.processor;
   const recipient={runId:"parent",recipient:"context-representation",purpose:"context-method-verification"};
   const c=command=>store.materialCustody.command(command),a=command=>store.activityHandoffs.command(command);
   const accept=async proposal=>{const value=await store.sharedAcceptance.accept(proposal);assert.equal(value.outcome,"accepted",JSON.stringify(value));};
@@ -59,13 +61,22 @@ async function main(){
       requirements:[{id:"agreement",revision:"1",basis:"user agreement and scoped correction",description:"Keep radius 3 before image 6, radius 5 from image 6, preserve alpha, and distinguish unverified version information."}],relationships:[{id:"scoped-correction",sources:["s0","s1"],basis:"explicit source relationship",description:"The later correction changes radius only from image 6 onward.",requiresCommonEvidence:true}],sourceBoundary:"both-child-reports-v1",deliveryIds:["delivery-0","delivery-1"],combinationDigest:null,combine:"keep",omission:null,search:null,template,targetRevision:target,
       capacity:{limits:process.env.ACTIVITY_LAYERED?[{id:"layered-fixture-transport",targetRevision:target,dimension:"request_bytes",maximum:36000,source:"controlled exact encoded byte bound: whole source exceeds it, single source plus checker fits"}]:[],reservations:[],policy:{id:"fixture",revision:"1",purpose:recipient.purpose,basis:"bounded fixture in a deployed 32k target; tokenization unavailable is explicit",allowEstimatedFit:true,allowUnknown:true},maximumCombinations:4,maximumMeasurements:0},bounds:{readBytes:1000000,storedBytes:1000000,modelCalls:process.env.ACTIVITY_LAYERED?24:6,repairs:1,levels:8,pageBytes:1024,ranges:64}};
     if(process.env.ACTIVITY_LAYERED)request.combine="merge";
+    request.deliveryIds=sources.map((_,i)=>`delivery-${i}`);
     if(process.env.ACTIVITY_LINES){request.sources[0].division={kind:"text_lines",basis:"contract permits complete log lines as access units; not independent semantics"};request.relationships=[];}
     if(process.env.ACTIVITY_SIMPLE){request.objective="Retain the current staging port and its correction history.";request.requirements=[{id:"port",revision:"1",basis:"user correction",description:"7542 is current; 7431 is superseded."}];request.relationships=[{id:"correction",sources:["s0","s1"],basis:"explicit correction",description:"Later source replaces the earlier port; do not present two current ports.",requiresCommonEvidence:true}];}
     if(process.env.ACTIVITY_DISTRIBUTED){request.relationships=[];request.capacity.limits=[{id:"distributed-check-fixture",targetRevision:target,dimension:"request_bytes",maximum:24000,source:"controlled exact encoded byte bound: generation fits but whole check does not"}];request.bounds.modelCalls=12;}
     await writeFile(join(directory,"request.json"),JSON.stringify(request));
-    await work.submit({id:"method-path",runId:"parent",permissionBasis:"isolated-method-permission",resourceScope:"method-resource",maximumStages:process.env.ACTIVITY_LAYERED?256:128,maximumAttempts:process.env.ACTIVITY_LAYERED?256:128,maximumConcurrent:1,deadlineAt:"2030-01-01T00:00:00.000Z"},request);
+    const intent={id:"method-path",runId:"parent",permissionBasis:"isolated-method-permission",resourceScope:"method-resource",maximumStages:process.env.ACTIVITY_LAYERED?256:128,maximumAttempts:process.env.ACTIVITY_LAYERED?256:128,maximumConcurrent:1,deadlineAt:"2030-01-01T00:00:00.000Z"};
+    if(process.env.ACTIVITY_NORMAL_POLICY)await require("./normal-context-policy.cjs").acceptNormalPreparation({store,provider,registry,work,processor,signal,now,request,texts,intent});
+    else await work.submit(intent,request);
     // Leave one durable original page un-interpreted; later processes must not recreate the report.
     await processor.drain("parent",signal);await processor.drain("parent",signal);app.exit(73);return;
+  }
+  if(process.env.ACTIVITY_NORMAL_POLICY) {
+    assert.equal((await store.querySharedAcceptance("normal-policy-accept")).outcome,"accepted");
+    const original=(await store.contextPolicy.investments({scopeId:"normal-policy-scope",afterWorkId:null,limit:64}))[0];
+    assert.equal(original.decision.foreground.kind,"continue");assert.equal(original.investment.pathId,"method-path");
+    assert.equal((await a({kind:"read_path",pathId:"method-path"})).intent.scheduledWorkId,original.investment.workId);
   }
   if(phase==="generated"||phase==="checked") {
     for(let i=0;i<300;i++) {
@@ -91,8 +102,10 @@ async function main(){
     await processor.drain("parent",signal);
   }
   const result=await work.result("method-path");assert.equal(result.kind,"ready",JSON.stringify(result));
+  if(process.env.ACTIVITY_NORMAL_POLICY)await require("./normal-context-policy.cjs").verifyNormalReconsideration({store,work,signal});
   if(!process.env.ACTIVITY_LIVE_MODEL&&!process.env.ACTIVITY_LAYERED&&!process.env.ACTIVITY_DISTRIBUTED){assert.equal(result.progress.modelCalls,2);assert.equal(result.progress.candidates.length,1);assert.equal(result.progress.assessments.length,1);}
   const candidate=result.progress.candidates.find(c=>result.progress.resultIds.includes(c.id));assert(candidate);const page=await c({kind:"read",access:candidate.access,offset:0,length:candidate.access.range.end});
+  const revision=process.env.ACTIVITY_NORMAL_REVISION?await require("./normal-context-revision.cjs").verifyRevision({store,work,processor,signal}):null;
   if(process.env.ACTIVITY_SIMPLE)assert(page.text.includes("7542")&&page.text.includes("7431"),page.text);
   else assert(page.text.includes("3")&&page.text.includes("5")&&page.text.toLowerCase().includes("alpha"),page.text);
   const sources=JSON.parse(await readFile(join(directory,"request.json"),"utf8")).sources;
@@ -101,12 +114,13 @@ async function main(){
   if(process.env.ACTIVITY_ADOPTION)adoption=await require("./representation-adoption.cjs").verifyAdoption({app,store,provider,registry,work,processor,signal,now,directory,phase,candidate,body:page.text,target,template,lineage});
   const contracts=process.env.ACTIVITY_CONTRACTS?await require("./representation-contracts.cjs").verifyContracts({store,work,processor,signal,now,request:JSON.parse(await readFile(join(directory,"request.json"),"utf8")),initial:result.progress}):null;
   await work.releaseInputs("method-path");await work.releaseInputs("method-path");
+  if(process.env.ACTIVITY_NORMAL_POLICY&&process.env.ACTIVITY_ADOPTION)await require("./normal-context-policy.cjs").closeNormalPreparation({store,work,signal});
   const {HelarcInspection}=await load("inspection/HelarcInspection.js");const {InspectionQueryService}=await import("@agent-anything/inspection/query");
   inspection=await HelarcInspection.create(join(directory,"inspection-settings.json"),join(directory,"inspection"));
   await inspection.activityObserver.replay("parent",store.activityHandoffs);await inspection.contextFoundationObserver.replay("parent",store.contextFoundationFacts.bind(store));
-  await inspection.recorder.flush();assert.equal(inspection.recorder.health().rejected,0,JSON.stringify(inspection.recorder.health()));
   queries=new InspectionQueryService(join(directory,"inspection"));
-  const selection=(await queries.query({kind:"get_snapshot",sourceId:inspection.recorder.source.sourceId,datasetId:inspection.recorder.manifest.datasetId})).selection;
+  const inspectionSettlement=await require("./inspection-settlement.cjs").settleInspection(inspection.recorder,queries);
+  const selection=inspectionSettlement.selection;
   const checkStage=await a({kind:"read_stage",requestId:result.progress.assessments[0].rawResultId.replace(/:attempt:1:raw$/,"" )});
   assert(checkStage?.result);
   const rawSubject=inspection.recorder.ref("activity","contribution",checkStage.result.id,"parent");
@@ -115,18 +129,25 @@ async function main(){
   const rawPage=await queries.query({...selection,kind:"get_content",contentId:rawContent.id,length:65536});assert(rawPage.content.text.includes(checkStage.result.id));
   const requestSubject=inspection.recorder.ref("model-interaction","request",checkStage.request.input.request.requestId,"parent");
   const actualRequest=await queries.query({...selection,kind:"get_subject",subject:requestSubject});assert(actualRequest.records.some(r=>r.payload.kind==="request"));
+  if(process.env.ACTIVITY_NORMAL_POLICY) {
+    const decision=await store.contextPolicy.query({kind:"latest",scopeId:"normal-policy-scope"});
+    const visible=await queries.query({...selection,kind:"get_subject",subject:inspection.recorder.ref("context-representation","contribution",decision.decision.id,"parent")});
+    assert(visible.records.some(r=>r.contents.some(c=>c.name==="Context policy decision and evidence")),"The policy owner used by scheduling and reconsideration must resolve to a recorded decision");
+  }
   await queries.close();queries=null;
-  const timing={localMs:0,providerMs:0,preDispatchMs:0,interpretationMs:0,rawStages:0};
+  const timing={localMs:0,providerMs:0,preDispatchMs:0,interpretationMs:0,rawStages:0,unmeasuredRawStages:0};
   for(let after=0;;) {
     const facts=await a({kind:"facts",runId:"parent",after,limit:256});
     for(const fact of facts.filter(f=>f.kind==="raw_saved")) {
-      const usage=fact.details.usage;timing.rawStages++;timing.localMs+=usage.localMs??0;timing.providerMs+=usage.providerElapsedMs??0;timing.preDispatchMs+=usage.preDispatchMs??0;
+      const usage=fact.details.usage;timing.rawStages++;
+      if(!usage)timing.unmeasuredRawStages++;
+      else {timing.localMs+=usage.localMs??0;timing.providerMs+=usage.providerElapsedMs??0;timing.preDispatchMs+=usage.preDispatchMs??0;}
       const stage=await a({kind:"read_stage",requestId:fact.requestId});timing.interpretationMs+=stage.receipt?.interpretationMs??0;
     }
     if(facts.length<256)break;after=facts.at(-1).sequence;
   }
-  await writeFile(join(directory,"verification.json"),JSON.stringify({electron:process.versions.electron,generation:store.generation,modelCalls:result.progress.modelCalls,totalProviderCalls:result.progress.modelCalls+(adoption?.additionalProviderCalls??0)+(contracts?.additionalProviderCalls??0),adoption,contracts,candidates:result.progress.candidates.length,assessments:result.progress.assessments.length,checkGroups:result.progress.checkGroups.length,sourceReads:result.progress.pages.length,readBytes:result.progress.readBytes,storedBytes:result.progress.storedBytes,body:page.text,timing,inspection:inspection.recorder.health()},null,2));
-  await inspection.close();inspection=null;await store.close();store=null;app.exit(0);
+  await writeFile(join(directory,"verification.json"),JSON.stringify({electron:process.versions.electron,generation:store.generation,modelCalls:result.progress.modelCalls,totalProviderCalls:result.progress.modelCalls+(adoption?.additionalProviderCalls??0)+(contracts?.additionalProviderCalls??0)+(revision?.additionalProviderCalls??0),adoption,contracts,revision,candidates:result.progress.candidates.length,assessments:result.progress.assessments.length,checkGroups:result.progress.checkGroups.length,sourceReads:result.progress.pages.length,readBytes:result.progress.readBytes,storedBytes:result.progress.storedBytes,body:page.text,timing,inspectionSettlement,inspection:inspection.recorder.health()},null,2));
+  execution.close();await inspection.close();inspection=null;await store.close();store=null;app.exit(0);
 }
 main().catch(async error=>{console.error(error);if(store){try{console.error("Pending at failure",JSON.stringify(await store.activityHandoffs.command({kind:"pending",runId:"parent",after:0,limit:256})));}catch{}}
   if(queries)await queries.close().catch(()=>{});if(inspection)await inspection.close().catch(()=>{});if(store)await store.close().catch(()=>{});app.exit(1);});

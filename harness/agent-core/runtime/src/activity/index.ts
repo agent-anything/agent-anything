@@ -3,4 +3,8 @@ export {ActivityCheckpointError} from "./ActivityCheckpoint.js";
 export * from "./ActivityPurpose.js";
 export * from "./ActivityHandoff.js";
 export * from "./ActivityHandoffProcessor.js";
+export * from "./ActivityHandoffPump.js";
+export * from "./ActivityScheduling.js";
+export * from "./ActivityReconsideration.js";
+export * from "./ActivityReconsiderationProcessor.js";
 export * from "./SharedAcceptance.js";

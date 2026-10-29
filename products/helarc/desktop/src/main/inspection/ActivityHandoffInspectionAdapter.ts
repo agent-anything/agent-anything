@@ -1,6 +1,7 @@
 import {InspectionRecorder} from "@agent-anything/inspection/recording";
 import {inspectionLink} from "@agent-anything/inspection/adapters";
-import type {ActivityHandoffFact, ActivityHandoffObserver,ActivityStageState} from "@agent-anything/agent-runtime/activity";
+import type {ActivityHandoffFact, ActivityHandoffObserver,ActivityStageState,ActivitySchedulingAcceptance,ActivitySchedulingDispatch,
+  ActivityPublishedFact,ActivityReconsiderationReceipt,ActivityReconsiderationSubscription} from "@agent-anything/agent-runtime/activity";
 
 export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver {
   constructor(private readonly recorder: InspectionRecorder) {}
@@ -56,11 +57,59 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
   observe(fact: ActivityHandoffFact): void {
     const r = this.recorder;
     const subject = r.ref("activity","event",`${fact.runId}:handoff:${fact.sequence}`,fact.runId);
-    const path = r.ref("activity","contribution",fact.pathId,fact.runId);
+    const subjectOwner=fact.kind.startsWith("scheduling_")?"activity-scheduling":fact.kind.startsWith("reconsideration_")?"activity-reconsideration":fact.kind==="fact_published"?"activity-source":"activity";
+    const path = r.ref(subjectOwner,"contribution",fact.pathId,fact.runId);
     const stage = fact.requestId ? r.ref("activity","contribution",fact.requestId,fact.runId) : null;
     if(stage)r.offer({subject:stage,occurredAt:fact.occurredAt,payload:{kind:"execution",phase:fact.kind==="accepted"?"settled":fact.kind==="dispatched"?"started":"pending",
       executionKind:"purpose_bound_stage",status:fact.kind,code:null,effectCertainty:null}});
     const related=[];
+    if(fact.kind==="scheduling_accepted") {
+      const acceptance=fact.details.acceptance as ActivitySchedulingAcceptance;
+      const work=r.ref("activity-scheduling","contribution",acceptance.intent.workId,fact.runId);
+      const decision=r.ref(acceptance.intent.owner,"contribution",acceptance.intent.decisionId,fact.runId);
+      const accepted=r.ref("activity-scheduling","contribution",acceptance.intent.id,fact.runId);
+      related.push(inspectionLink("trigger",decision,accepted),inspectionLink("binding",accepted,work),inspectionLink("observes",subject,accepted));
+      r.offer({subject:accepted,occurredAt:fact.occurredAt,payload:{kind:"execution",phase:"settled",executionKind:"scheduling_acceptance",status:"accepted",code:null,effectCertainty:null},
+        contents:[{name:"Original scheduling acceptance",class:"execution",stage:"accepted",mediaType:"application/json",value:JSON.parse(JSON.stringify(acceptance))}]});
+      for(const pool of (fact.details.pools??[]) as readonly import("@agent-anything/agent-runtime/activity").ActivityResourcePool[])
+        r.offer({subject:r.ref("activity-resource","contribution",pool.id,null),occurredAt:fact.occurredAt,
+          payload:{kind:"execution",phase:"settled",executionKind:"resource_binding",status:"bound",code:null,effectCertainty:null},
+          contents:[{name:"Trusted resource pool binding",class:"execution",stage:"binding",mediaType:"application/json",value:JSON.parse(JSON.stringify(pool))}]});
+      for(const claim of acceptance.intent.resources)related.push(inspectionLink("binding",work,r.ref("activity-resource","contribution",claim.poolId,null)));
+      r.offer({subject:work,occurredAt:fact.occurredAt,payload:{kind:"execution",phase:"pending",executionKind:"scheduled_work",status:acceptance.service,code:null,effectCertainty:null},
+        contents:[{name:"Accepted service, timing and resource basis",class:"execution",stage:"scheduling",mediaType:"application/json",value:JSON.parse(JSON.stringify(acceptance))}]});
+    }
+    if(fact.kind==="scheduling_wait") {
+      const work=r.ref("activity-scheduling","contribution",fact.pathId,fact.runId);
+      const waiting=r.ref("activity","contribution",String(fact.details.requestId),fact.runId);
+      related.push(inspectionLink("observes",subject,work),inspectionLink("observes",subject,waiting));
+    }
+    if(stage&&fact.kind==="dispatched"&&fact.details.scheduling) {
+      const dispatch=fact.details.scheduling as ActivitySchedulingDispatch;
+      const work=r.ref("activity-scheduling","contribution",dispatch.workId,fact.runId);
+      related.push(inspectionLink("includes",work,stage),inspectionLink("binding",r.ref("activity-scheduling","contribution",dispatch.acceptanceId,fact.runId),stage));
+      for(const claim of dispatch.claims)related.push(inspectionLink("binding",stage,r.ref("activity-resource","contribution",claim.poolId,null)));
+    }
+    if(fact.kind==="fact_published") {
+      const published=fact.details.fact as ActivityPublishedFact;
+      const original=r.ref(published.ref.owner,"contribution",published.ref.id,fact.runId,published.ref.revision);
+      const publication=r.ref("activity-publication","contribution",published.id,fact.runId);
+      related.push(inspectionLink("produces",original,publication),inspectionLink("includes",r.ref("activity-source","contribution",published.sourceId,fact.runId),publication),inspectionLink("observes",subject,publication));
+      r.offer({subject:publication,occurredAt:fact.occurredAt,payload:{kind:"execution",phase:"settled",executionKind:"fact_publication",status:"published",code:null,effectCertainty:null},
+        contents:[{name:"Published fact reference",class:"execution",stage:"published",mediaType:"application/json",value:JSON.parse(JSON.stringify(published))}]});
+    }
+    if(fact.kind==="reconsideration_registered") {
+      const subscription=fact.details.subscription as ActivityReconsiderationSubscription;
+      for(const source of subscription.sources)related.push(inspectionLink("observes",r.ref("activity-reconsideration","contribution",subscription.id,fact.runId),r.ref("activity-source","contribution",source,fact.runId)));
+    }
+    if(fact.kind==="reconsideration_accepted") {
+      const receipt=fact.details.receipt as ActivityReconsiderationReceipt;
+      const decision=r.ref(receipt.decision.owner,"contribution",receipt.decision.id,fact.runId,
+        receipt.decision.kind==="context_preparation_decision"?null:receipt.decision.revision);
+      for(const id of receipt.factIds)related.push(inspectionLink("trigger",r.ref("activity-publication","contribution",id,fact.runId),decision));
+      related.push(inspectionLink("settles",r.ref("shared_acceptance","contribution",receipt.id,fact.runId),decision),
+        inspectionLink("includes",r.ref("activity-reconsideration","contribution",receipt.subscriptionId,fact.runId),decision));
+    }
     if(stage&&Array.isArray(fact.details.dependencies))for(const dependency of fact.details.dependencies){
       if(dependency&&typeof dependency==="object"&&typeof dependency.requestId==="string"&&["accepted","raw_result"].includes(String(dependency.condition)))
         related.push(inspectionLink("prerequisite",r.ref("activity","contribution",dependency.requestId,fact.runId),stage,

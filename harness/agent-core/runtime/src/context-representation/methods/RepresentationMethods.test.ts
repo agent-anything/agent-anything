@@ -7,6 +7,7 @@ import {parseRepresentationMethodOutput,representationMethodOutputFormat,represe
 import {splitMethodJob,distributedMethodChecks,methodCoverageGaps,remainingMethodRelations,methodJobKey,nextMethodFinalJobs} from "./RepresentationMethodPlanning.js";
 import {methodAssessmentConditions,findMethodAssessmentReuse} from "./RepresentationMethodReuse.js";
 import {methodLineUnits} from "./RepresentationMethodRanges.js";
+import {quoteRepresentationMethod} from "./RepresentationMethodQuotation.js";
 
 const recipient={runId:"run",recipient:"context-representation",purpose:"aux"};
 function request():RepresentationMethodRequest {
@@ -26,6 +27,25 @@ function candidate():MethodCandidate {
     segments:r.sources.map((s,i)=>({id:`c_s${i}`,sources:[s.alias],range:{...range,start:i*20,end:(i+1)*20}}))};
 }
 describe("representation method contracts and bounded professional planning",()=>{
+  it("quotes the complete method duties without treating execution ceilings as predicted costs",()=>{
+    const r={...request(),combine:"merge" as const,relationships:[{id:"relation",basis:"contract",sources:["a","b"],description:"joint correction",requiresCommonEvidence:true}]};
+    const quote=quoteRepresentationMethod(r);
+    expect(quote.phases.map(p=>p.kind)).toEqual(["read","input","generate","check","relation","merge","repair","retain"]);
+    expect(quote.minimum).toMatchObject({stages:12,modelCalls:2,readBytes:600});
+    expect(quote.costs.modelCalls.maximum).toBeNull();
+    expect(quote.costs.elapsedMs.maximum).toBeNull();
+    expect(quote.limits.modelCalls).toBe(10);
+    expect(quote.handoff).toContain("recipient_combination_judgment");
+    expect(quoteRepresentationMethod({...r,bounds:{...r.bounds,modelCalls:1}}).gaps).toContain("known_model_work_exceeds_limit");
+    expect(quoteRepresentationMethod({...r,targetRevision:"different"}).id).not.toBe(quote.id);
+  });
+  it("does not charge a model generation for exact methods or claim known output bytes",()=>{
+    const r={...request(),method:"excerpt" as const},quote=quoteRepresentationMethod(r);
+    // Source discovery and exact evidence assembly are separate bounded reads.
+    expect(quote.minimum).toEqual({stages:3,attempts:3,modelCalls:0,readBytes:400});
+    expect(quote.costs.storedBytes.maximum).toBeNull();
+    expect(quoteRepresentationMethod({...r,method:"preserve"}).minimum).toEqual({stages:1,attempts:1,modelCalls:0,readBytes:0});
+  });
   it("accepts restoration only at an exact valid byte range of the original version",()=>{
     const r=request(),source=r.sources[0]!,restoration={lossId:"loss",sourceAlias:source.alias,range:source.access.range,description:"restore this lost value"};
     expect(()=>validateRepresentationMethodRequest({...r,method:"restore",restorations:[restoration]})).not.toThrow();

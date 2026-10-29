@@ -20,6 +20,7 @@
     "test:files:electron": "node scripts/verify-file-tools.mjs",
     "test:persistence:electron": "node scripts/verify-projection-persistence.mjs",
     "test:handoffs:electron": "node scripts/verify-activity-handoffs.mjs",
+    "test:scheduling:electron": "node scripts/verify-activity-scheduling.mjs",
     "test:context-foundation:electron": "node scripts/verify-activity-handoffs.mjs --context-foundation",
     "test:context-input:electron": "node scripts/verify-activity-handoffs.mjs --context-input",
     "test:representation-methods:electron": "node scripts/verify-representation-methods.mjs",

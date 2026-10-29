@@ -43,6 +43,7 @@ export class ContextSelectionDatabase {
       case "withdraw":return this.withdraw(command);
     }
   }
+  registeredScope(id:string):{scope:ContextUseScope;control:ContextUseControl} {return this.scope(id);}
   participants():readonly SharedAcceptanceParticipant[] {
     return [
       {owner:"context_selection",kinds:["selection_input"],prepare:(part,acceptance)=>{

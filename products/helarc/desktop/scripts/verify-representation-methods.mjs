@@ -14,15 +14,21 @@ const lines=process.argv.includes("--line-ranges");
 const layered=process.argv.includes("--layered")||lines;
 const distributed=process.argv.includes("--distributed");
 const contracts=process.argv.includes("--contracts");
+const normalPolicy=process.argv.includes("--normal-policy");
+const normalRevision=process.argv.includes("--normal-revision");
 const simple=process.argv.includes("--simple");
 const wholeCheckTarget=process.argv.includes("--whole-check-target-capacity");
 const inFlight=new Set();
-let calls=0;const bodies=[];
+let calls=0;const bodies=[],methodBodies=[];
 const server=createServer(async(req,res)=>{
   try {
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     const body=JSON.parse(Buffer.concat(chunks).toString("utf8"));bodies.push(body);calls++;
     assert(!body.tools?.length);assert(!body.max_tokens&&!body.options?.num_predict);
+    const text=body.prompt??body.messages.map(m=>m.content).join("\n");
+    const objects=text.split("\n").flatMap(line=>{try{return [JSON.parse(line.replace(/^user: /,""))];}catch{return [];}});
+    const work=objects.findLast(v=>v.job&&v.outputContract);assert(work||adoption&&text.includes("Based on the Child reports"),"method work data missing");
+    if(work)methodBodies.push(body);
     if(live) {
       const controller=new AbortController();inFlight.add(controller);
       try {
@@ -30,11 +36,8 @@ const server=createServer(async(req,res)=>{
         res.writeHead(response.status,{"Content-Type":"application/json"});res.end(await response.text());return;
       }finally{inFlight.delete(controller);}
     }
-    const text=body.prompt??body.messages.map(m=>m.content).join("\n");
-    const objects=text.split("\n").flatMap(line=>{try{return [JSON.parse(line.replace(/^user: /,""))];}catch{return [];}});
-    const work=objects.findLast(v=>v.job&&v.outputContract);assert(work||adoption&&text.includes("Based on the Child reports"),"method work data missing");
     const check=work&&["check","relation","combination"].includes(work.job.kind);
-    const output=!work?"Image 5: radius 3. Image 6: radius 5. Preserve alpha throughout. TARGET: 7391. The version remains unverified.":check?{kind:"assessment",findings:Object.fromEntries(["source_to_candidate","candidate_to_source","relationships","precision"].map(direction=>[direction,{conclusion:"supported",sources:work.job.scope,candidates:work.job.candidates,basis:"Controlled fixture explicitly preserves the original agreement and correction",unknowns:[]}])),requirements:work.requirements.map(r=>({id:r.id,conclusion:"supported",basis:"controlled source evidence"})),missing:[]}:
+    const output=!work?(simple?"The current staging port is 7542; 7431 is superseded.":"Image 5: radius 3. Image 6: radius 5. Preserve alpha throughout. TARGET: 7391. The version remains unverified."):check?{kind:"assessment",findings:Object.fromEntries(["source_to_candidate","candidate_to_source","relationships","precision"].map(direction=>[direction,{conclusion:"supported",sources:work.job.scope,candidates:work.job.candidates,basis:"Controlled fixture explicitly preserves the original agreement and correction",unknowns:[]}])),requirements:work.requirements.map(r=>({id:r.id,conclusion:"supported",basis:"controlled source evidence"})),missing:[]}:
       {kind:"candidate",parts:layered||distributed?work.job.scope.map(alias=>{const evidence=objects.find(v=>v.alias===alias);assert(evidence);return {text:evidence.originalRole==="derived_representation"?evidence.text:evidence.text.includes("User agreement")?"Original agreement: radius 3 for images 2 through 10, preserve alpha. TARGET: 7391.":evidence.text.includes("User correction")?"Later correction: from image 6 use radius 5. Image 5 used radius 3. Preserve alpha. Child B's version is unverified.":"Repeated read-only inspections recorded no changes.",sources:[alias]};}):[{text:"For images 2-5 use radius 3 and preserve alpha. From image 6 through 10 use radius 5, preserving alpha. The output version is unverified according to Child B. TARGET: 7391.",sources:work.job.scope}],covered:work.job.scope,background:[],losses:[],relationships:[],unknowns:[],missing:[]};
     if(layered&&work?.job.kind==="merge") {
       const texts=work.job.scope.map(alias=>objects.find(v=>v.alias===alias).text);
@@ -54,8 +57,9 @@ try {
     const result=await run(phase,endpoint);assert.equal(result.code,phase==="finish"?0:73,result.output);console.log(`${phase}: passed`);
   }
   const verification=JSON.parse(await readFile(join(root,"verification.json"),"utf8"));
-  assert.equal(calls,verification.totalProviderCalls);if(!live&&!layered&&!distributed&&!contracts)assert.equal(calls,adoption?4:2);if(layered||distributed)assert(calls>2);if(distributed)assert(verification.checkGroups>0);assert.equal(verification.inspection.dropped,0);assert.equal(verification.inspection.rejected,0);
-  assert(bodies.slice(0,adoption?-1:undefined).every(body=>JSON.stringify(body).includes("read_only_background")));
+  assert.equal(calls,verification.totalProviderCalls);if(!live&&!layered&&!distributed&&!contracts)assert.equal(calls,(adoption?4:2)+(verification.revision?.additionalProviderCalls??0));if(layered||distributed)assert(calls>2);if(distributed)assert(verification.checkGroups>0);assert.equal(verification.inspection.dropped,0);assert.equal(verification.inspection.rejected,0);
+  assert.equal(bodies.length-methodBodies.length,adoption?1:0,"Only the adopted Parent request is task work");
+  assert(methodBodies.every(body=>JSON.stringify(body).includes("read_only_background")));
   console.log(JSON.stringify({...verification,inspection:{captured:verification.inspection.coverage.captured,dropped:verification.inspection.dropped,rejected:verification.inspection.rejected}},null,2));
   console.log(`Provider: ${live?"actual Ollama gemma4:e4b":"controlled endpoint"}; protocol: ${openai?"OpenAI-compatible":"Ollama"}; calls: ${calls}`);success=true;
 } finally {
@@ -73,6 +77,8 @@ function run(phase,endpoint) {
     if(lines)env.ACTIVITY_LINES="1";
     if(distributed)env.ACTIVITY_DISTRIBUTED="1";
     if(contracts)env.ACTIVITY_CONTRACTS="1";
+    if(normalPolicy)env.ACTIVITY_NORMAL_POLICY="1";
+    if(normalRevision)env.ACTIVITY_NORMAL_REVISION="1";
     if(simple)env.ACTIVITY_SIMPLE="1";
     if(wholeCheckTarget)env.ACTIVITY_WHOLE_CHECK_TARGET="1";
     const child=spawn(electron,[fixture,root,phase,endpoint],{env,windowsHide:true,stdio:["ignore","pipe","pipe"]});

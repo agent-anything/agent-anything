@@ -66,13 +66,19 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     const started=performance.now();
     try {return await this.executeStage(path,stage,attempt,signal);}
     catch(error) {
-      if(!(error instanceof MethodEvidenceUnavailable))throw error;
+      if(!(error instanceof MethodEvidenceUnavailable)&&!this.resourceExhausted(error))throw error;
       return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:{kind:"gap",code:error.message},usage:{localMs:performance.now()-started},recordedAt:this.ports.now()};
     }
   }
   private async executeStage(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
-    if(stage.request.stageKind==="model")return this.execution.execute(path,stage,attempt,signal);
-    if(["organize","measure"].includes(stage.request.stageKind))return this.preparation.execute(path,stage,attempt,signal);
+    if(stage.request.stageKind==="model") {
+      await this.reserve(path,stage,"model",{modelCalls:1});
+      return this.execution.execute(path,stage,attempt,signal);
+    }
+    if(["organize","measure"].includes(stage.request.stageKind)) {
+      if(stage.request.stageKind==="measure")await this.reserve(path,stage,"measurement",{measurementCalls:1});
+      return this.preparation.execute(path,stage,attempt,signal);
+    }
     signal.throwIfAborted();const started=performance.now(),method=this.state(path,stage),input=stage.request.input as Input;
     let value:unknown;
     if(stage.request.stageKind==="read") {
@@ -82,9 +88,11 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
       const remaining=method.request.bounds.readBytes-method.readBytes,offset=input.offset??source.access.range.start;
       if(remaining<=0&&offset<source.access.range.end)value={kind:"gap",code:"representation_read_budget_exhausted"};
       else if(method.request.method==="search"&&source.role==="source") {
+        await this.reserve(path,stage,"source-read",{readBytes:Math.min(method.request.bounds.pageBytes,remaining,source.access.range.end-offset)});
         const page=await this.ports.materials.command({kind:"search",request:{...source.access,...method.request.search!,scanBytes:Math.min(method.request.bounds.pageBytes,remaining),...(input.cursor?{cursor:input.cursor}:{})}}) as MaterialSearchPage;
         value={kind:"search",source:source.alias,page} satisfies ReadValue;
       } else {
+        await this.reserve(path,stage,"source-read",{readBytes:Math.min(method.request.bounds.pageBytes,remaining,source.access.range.end-offset)});
         const page=await this.ports.materials.command({kind:"read",access:source.access,offset,length:Math.min(method.request.bounds.pageBytes,remaining,source.access.range.end-offset)}) as MaterialReadPage;
         value={kind:"read",source:source.alias,page} satisfies ReadValue;
       }
@@ -93,6 +101,7 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
       if(reuse)return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:{kind:"reused_assessment",...reuse},usage:{localMs:performance.now()-started},recordedAt:this.ports.now()};
       const size=this.inputSources(method,method.current!).reduce((n,s)=>n+s.access.range.end-s.access.range.start,0);
       if(size>method.request.bounds.readBytes-method.readBytes)return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:{kind:"gap",code:"representation_read_budget_exhausted"},usage:{localMs:performance.now()-started},recordedAt:this.ports.now()};
+      await this.reserve(path,stage,"evidence-read",{readBytes:size});
       const evidence=await this.evidence(method,method.current!,signal);
       const readBytes=evidence.reduce((sum,e)=>sum+Buffer.byteLength(e.text,"utf8"),0);
       if(method.readBytes+readBytes>method.request.bounds.readBytes)value={kind:"gap",code:"representation_read_budget_exhausted"};
@@ -102,10 +111,12 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     } else if(stage.request.stageKind==="bind") {
       value=await this.bindValue(path,stage,method,input.preparationStageId!,signal);
     } else if(stage.request.stageKind==="exact") {
+      if(method.request.method!=="preserve")await this.reserve(path,stage,"exact-read",{readBytes:method.request.sources.filter(s=>s.role==="source").reduce((n,s)=>n+s.access.range.end-s.access.range.start,0)});
       value={kind:"exact",evidence:method.request.method==="preserve"?[]:await this.originalEvidence(method,method.request.sources.filter(s=>s.role==="source").map(s=>s.alias),signal)};
     } else if(stage.request.stageKind==="ranges") {
       const size=method.request.sources.filter(s=>s.division).reduce((sum,s)=>sum+s.access.range.end-s.access.range.start,0);
       if(size>method.request.bounds.readBytes-method.readBytes)return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:{kind:"gap",code:"representation_read_budget_exhausted"},usage:{localMs:performance.now()-started},recordedAt:this.ports.now()};
+      await this.reserve(path,stage,"range-read",{readBytes:size});
       const evidence=await this.originalEvidence(method,method.request.sources.filter(s=>s.division).map(s=>s.alias),signal);
       const units=evidence.flatMap(e=>methodLineUnits(method.request.sources.find(s=>s.alias===e.alias)!,e.text,method.request.bounds.pageBytes));
       value=units.length>method.request.bounds.ranges?{kind:"gap",code:"representation_range_budget_exhausted"}:{kind:"ranges",units,readBytes:size};
@@ -118,7 +129,12 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     return this.execute(path,stage,stage.attempt!,signal);
   }
   async interpret(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,acceptance:{id:string}):Promise<Outcome> {
-    const outcome=await this.interpretStage(path,stage,signal,acceptance);
+    let outcome:Outcome;
+    try {outcome=await this.interpretStage(path,stage,signal,acceptance);}
+    catch(error) {
+      if(!this.resourceExhausted(error))throw error;
+      return this.gap(this.state(path,stage),stage,"representation_shared_allowance_exhausted",{code:(error as Error).message});
+    }
     if(outcome.next.length&&!this.hasStageRoom(path)) {
       const method=(outcome.progress as {method:RepresentationMethodProgress}).method;
       return {...this.gap(method,stage,"representation_execution_budget_exhausted",{resources:path.resourceUse}),participants:outcome.participants};
@@ -126,6 +142,7 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     return outcome;
   }
   private async interpretStage(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,acceptance:{id:string}):Promise<Outcome> {
+    if((stage.result?.value as {kind?:string;code?:string}|undefined)?.code==="activity_resource_limit_exceeded")return this.gap(this.state(path,stage),stage,"representation_shared_allowance_exhausted",stage.result!.value);
     if(stage.request.stageKind==="model")return this.execution.interpret(path,stage,signal,acceptance);
     const method=this.state(path,stage);signal.throwIfAborted();
     if(!stage.result||stage.result.completeness!=="complete"||stage.result.outcome!=="returned")return this.gap(method,stage,"representation_stage_result_incomplete",stage.result);
@@ -296,6 +313,7 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     signal.throwIfAborted();
     const id=`candidate_${modelInputValueDigest(job.id).replace("sha256:","").slice(0,24)}`;
     const materialId=`${path.intent.id}:${id}`,request=method.request;
+    await this.reserve(path,stage,`material:${materialId}`,{storedBytes:Buffer.byteLength(output.body,"utf8")});
     const staged=await stageMethodMaterial({materials:this.ports.materials,request,id:materialId,pathId:path.intent.id,recordId:stage.result!.id,text:output.body,
       remainingBytes:request.bounds.storedBytes-method.storedBytes,occurredAt:stage.result!.recordedAt});
     const sources=this.inputSources(method,job),records:RepresentationRecord[]=[];
@@ -318,6 +336,10 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     const candidate:MethodCandidate={id,representation:record.ref,access:staged.access,sources:job.sources,losses,relationships:discoveredRelationships(materialId,output),unknowns:output.unknowns,generatedBy:job.id,level:job.level,segments};
     return {candidate,bytes:staged.bytes,parts:[...staged.parts,{owner:"representation",kind:"record",proposal:record}] satisfies SharedAcceptancePart[]};
   }
+  private async reserve(path:ActivityPathState,stage:ActivityStageState,label:string,amounts:Readonly<Record<string,number>>):Promise<void> {
+    await this.ports.activities.command({kind:"reserve_resources",reservation:{id:`${stage.request.id}:allowance:${label}`,pathId:path.intent.id,requestId:stage.request.id,amounts},expectedControlRevision:path.controlRevision});
+  }
+  private resourceExhausted(error:unknown):error is Error&{code:"activity_resource_limit_exceeded"} {return error instanceof Error&&"code" in error&&error.code==="activity_resource_limit_exceeded";}
   private async afterAssessment(path:ActivityPathState,stage:ActivityStageState,method:RepresentationMethodProgress,output:AssessedRepresentation,acceptanceId:string):Promise<Outcome> {
     const job=method.current!,supported=representationAssessmentSupported(output,job.checkScope??"both"),subjects:RepresentationRecord["ref"][]=[];
     for(const source of this.inputSources(method,job).filter(s=>job.candidates.includes(s.alias)))subjects.push((await originalMethodRepresentation(method.request,source,this.ports.representations)).ref);

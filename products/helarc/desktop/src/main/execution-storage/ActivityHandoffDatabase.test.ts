@@ -33,6 +33,22 @@ function claim(send:ReturnType<typeof open>["send"]) {
   send({kind:"claim_processing",claim:{id:"claim:1",requestId:request.id,previousClaimId:null,executor},expectedControlRevision:0});
 }
 describe("durable activity handoff", () => {
+  it("retains per-work resource claims across replacement paths and process loss without refunding unknown work",()=>{
+    const first=open(),bound={...intent,resourceLimits:{modelCalls:2,readBytes:100}};
+    first.send({kind:"open_path",intent:bound});first.send({kind:"submit",request});first.send({kind:"admit",requestId:request.id,expectedControlRevision:0});
+    first.send({kind:"dispatch",attempt,expectedControlRevision:0});
+    const reservation={id:"claim-call",pathId:intent.id,requestId:request.id,amounts:{modelCalls:1,readBytes:60}};
+    first.send({kind:"reserve_resources",reservation,expectedControlRevision:0});first.db.close();
+    const recovered=open(first.directory);recovered.send({kind:"reserve_resources",reservation,expectedControlRevision:0});
+    expect(recovered.send({kind:"resource_allowance",pathId:intent.id})).toEqual({limits:bound.resourceLimits,reserved:{modelCalls:1,readBytes:60}});
+    recovered.send({kind:"open_path",intent:{...bound,id:"replacement"}});
+    expect(recovered.send({kind:"resource_allowance",pathId:"replacement"})).toMatchObject({reserved:{modelCalls:1,readBytes:60}});
+    expect(()=>recovered.send({kind:"reserve_resources",reservation:{...reservation,id:"over-budget",amounts:{readBytes:41}},expectedControlRevision:0})).toThrow("resource_limit_exceeded");
+    expect(()=>recovered.send({kind:"reserve_resources",reservation:{...reservation,amounts:{readBytes:1}},expectedControlRevision:0})).toThrow("resource_identity_conflict");
+    expect(()=>recovered.send({kind:"open_path",intent:{...bound,id:"extended",deadlineAt:"2031-01-01T00:00:00Z"}})).toThrow("resource_scope_conflict");
+    recovered.send({kind:"cancel",pathId:intent.id,expectedControlRevision:0});
+    expect(()=>recovered.send({kind:"reserve_resources",reservation:{...reservation,id:"after-cancel"},expectedControlRevision:1})).toThrow("cancelled");
+  });
   it("does not reset a shared execution allowance when a second path is created",()=>{
     const {send}=open();
     const bound={...intent,maximumStages:2,maximumAttempts:1};

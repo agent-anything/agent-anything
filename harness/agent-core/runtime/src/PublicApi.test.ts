@@ -48,10 +48,10 @@ describe("Agent Core Runtime public API", () => {
       "snapshotModelConversationSeed",
       "validateTaskDecisionProposal",
     ].sort());
-    expect(Object.keys(contextApi).sort()).toEqual(["ContextRepresentationManager", "unsupportedModelInputRecovery", "CONTEXT_INPUT_PREPARATION_PURPOSE", "ContextInputPreparationHandler", "ContextInputPreparationWork", "PreparedInputExecution", "contextInputAcceptance", "firstContextInputPreparationStage", "validatePreparedContextInput", "REPRESENTATION_METHOD_PURPOSE", "RepresentationMethodWork"].sort());
-    expect(Object.keys(accessApi).sort()).toEqual(["ModelRequestAccess", "assertModelActivityRequest", "createModelActivityBinding"]);
-    expect(Object.keys(activityApi).sort()).toEqual(["ActivityCheckpointError", "ActivityPurposeRegistry", "ActivityHandoffProcessor",
-      "activityToken", "activityCount", "validateActivityPurpose", "validateActivityPath", "validateActivityStage", "validateActivityExecutor"].sort());
+    expect(Object.keys(contextApi).sort()).toEqual(["ContextRepresentationManager", "unsupportedModelInputRecovery", "CONTEXT_INPUT_PREPARATION_PURPOSE", "ContextInputPreparationHandler", "ContextInputPreparationWork", "PreparedInputExecution", "contextInputAcceptance", "firstContextInputPreparationStage", "validatePreparedContextInput", "REPRESENTATION_METHOD_PURPOSE", "RepresentationMethodWork", "quoteRepresentationMethod", "INITIAL_CONTEXT_PREPARATION_POLICY", "contextPreparationApplicabilityKey", "contextPreparationAdmissionKey", "decideContextPreparation", "timingSupportsPreparation", "contextObservationKey", "contextEmpiricalRange", "contextPreparationAcceptance", "contextPreparationAcceptanceId", "contextPreparationReconsideration", "contextPreparationAdoption"].sort());
+    expect(Object.keys(accessApi).sort()).toEqual(["ModelRequestAccess", "ModelTransportJournal", "assertModelActivityRequest", "createModelActivityBinding"]);
+    expect(Object.keys(activityApi).sort()).toEqual(["ActivityCheckpointError", "ActivityPurposeRegistry", "ActivityHandoffProcessor", "ActivityHandoffPump", "ActivityReconsiderationProcessor",
+      "activityToken", "activityCount", "activityFactSourceId", "validateActivityPurpose", "validateActivityPath", "validateActivityStage", "validateActivityExecutor", "validateActivitySchedulingIntent"].sort());
     expect(Object.keys(delegationApi).sort()).toEqual([
       "DelegationRequestValidationError",
       "DelegationResultValidationError",

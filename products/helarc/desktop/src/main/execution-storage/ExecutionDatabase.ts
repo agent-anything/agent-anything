@@ -5,6 +5,7 @@ import {ContextFoundationRecords,CONTEXT_FOUNDATION_FACT_SCHEMA} from "./Context
 import {MaterialCustodyDatabase,MATERIAL_CUSTODY_SCHEMA} from "./MaterialCustodyDatabase.js";
 import {RepresentationDatabase,REPRESENTATION_SCHEMA} from "./RepresentationDatabase.js";
 import {ContextSelectionDatabase,CONTEXT_SELECTION_SCHEMA} from "./ContextSelectionDatabase.js";
+import {ContextPreparationDecisionDatabase,CONTEXT_PREPARATION_DECISION_SCHEMA} from "./ContextPreparationDecisionDatabase.js";
 import {assertExecutionRecording, type ExecutionRecording, type ExecutionRecordingRegistration} from "./ExecutionRecording.js";
 import {ContextPreparationDatabase, CONTEXT_PREPARATION_SCHEMA, type ContextPreparationCommand} from "./ContextPreparationDatabase.js";
 import {unpackExecutionContent, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentScope, ExecutionContentStatistics, snapshotEncodedExecutionContent, EXECUTION_CONTENT_LIMITS,
@@ -36,7 +37,7 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 23;
+const FORMAT = 24;
 const SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -91,6 +92,7 @@ ${CONTEXT_FOUNDATION_FACT_SCHEMA}
 ${MATERIAL_CUSTODY_SCHEMA}
 ${REPRESENTATION_SCHEMA}
 ${CONTEXT_SELECTION_SCHEMA}
+${CONTEXT_PREPARATION_DECISION_SCHEMA}
 `;
 interface ProcessRow { execution_id: string; run_id: string; revision: number; digest: string; value: string; }
 interface StoredActionRow {
@@ -112,6 +114,7 @@ export class ExecutionDatabase {
   private readonly materialCustody:MaterialCustodyDatabase;
   private readonly representations:RepresentationDatabase;
   private readonly contextSelections:ContextSelectionDatabase;
+  private readonly contextPolicy:ContextPreparationDecisionDatabase;
   private closed = false;
   private readonly statements = new Map<string, Database.Statement>();
   private readonly contentStatistics: ExecutionContentStatistics;
@@ -162,18 +165,13 @@ export class ExecutionDatabase {
       this.contextSelections=new ContextSelectionDatabase(data,this.contextFoundationRecords,this.materialCustody,this.representations,
         value=>this.retainContent(value),root=>this.hydrateContent(root),(...args)=>this.activityHandoffs.confirmInputResult(...args),
         (...args)=>this.activityHandoffs.confirmInputAttempt(...args),path=>this.activityHandoffs.pathSettled(path),
-        (runId,input)=>{
-          const stage=this.activityHandoffs.command({kind:"read_stage",requestId:input.preparationStageId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null;
-          if(!stage || stage.status!=="accepted" || !stage.result || stage.result.outcome!=="returned")return false;
-          const path=this.activityHandoffs.command({kind:"read_path",pathId:stage.request.pathId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState;
-          const result=stage.receipt?.progress as {state?:string;prepared?:unknown}|undefined;
-          const preparation=stage.request.input as {request?:{kind?:string;demand?:unknown}};
-          return path.intent.runId===runId && path.intent.purpose.contract.inputOwner==="context-representation" &&
-            ["organize","measure"].includes(stage.request.stageKind) && preparation.request?.kind==="context_input_preparation" &&
-            modelInputValueDigest(preparation.request.demand)===modelInputValueDigest(input.demand) && result?.state==="prepared" &&
-            modelInputValueDigest(result.prepared)===modelInputValueDigest(input);
-        });
-      this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants()]);
+        (runId,input)=>this.confirmPreparedInput(runId,input));
+      this.contextPolicy=new ContextPreparationDecisionDatabase(this.contextFoundationRecords,value=>this.retainContent(value),root=>this.hydrateContent(root),
+        id=>this.contextSelections.registeredScope(id),id=>this.activityHandoffs.command({kind:"read_path",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState|null,
+        id=>this.activityHandoffs.pathSettled(id),
+        id=>this.activityHandoffs.command({kind:"resource_allowance",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityResourceAllowance,
+        (runId,input)=>this.confirmPreparedInput(runId,input),id=>this.sharedAcceptance.query(id));
+      this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants(),this.contextPolicy.participant()]);
       data.pragma("trusted_schema = OFF");
       data.pragma("journal_mode = WAL");
       data.pragma("synchronous = FULL");
@@ -281,6 +279,13 @@ export class ExecutionDatabase {
     if (command.kind === "claim_processing" && command.claim.executor.generation !== generation ||
         command.kind === "accept" && command.executor.generation !== generation) throw new ExecutionStoreError("activity_processing_owner_stale");
     return this.timed(`activity_handoff.${command.kind}`, () => {
+      if(command.kind==="accept_reconsideration") {
+        const snapshot=this.activityHandoffs.command({kind:"read_reconsideration",subscriptionId:command.receipt.subscriptionId,limit:1}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityReconsiderationSnapshot;
+        const receipt=this.sharedAcceptance.accept({id:command.receipt.id,scope:snapshot.state.subscription.runId,actor:snapshot.state.subscription.owner,
+          parts:[{owner:"activity",kind:"reconsideration_acceptance",proposal:command.receipt},...(command.participants??[])]});
+        if(receipt.outcome==="rejected")throw new ExecutionStoreError(receipt.rejection!.code);
+        return {activityValue:this.activityHandoffs.command({kind:"read_reconsideration",subscriptionId:command.receipt.subscriptionId,limit:1}).activityValue};
+      }
       if (command.kind === "accept") {
         const stage = this.activityHandoffs.command({kind:"read_stage",requestId:command.receipt.requestId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState | null;
         const path = stage ? this.activityHandoffs.command({kind:"read_path",pathId:stage.request.pathId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState : null;
@@ -308,6 +313,23 @@ export class ExecutionDatabase {
   }
   selectionCommand(generation:number,command:import("@agent-anything/context/selection").ContextSelectionCommand) {
     this.assertOwner(generation);return this.timed(`selection.${command.kind}`,()=>({selectionValue:this.contextSelections.command(command)}));
+  }
+  contextPolicyQuery(generation:number,query:import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecisionQuery) {
+    this.assertOwner(generation);return this.timed(`context_policy.${query.kind}`,()=>({contextPolicyValue:this.contextPolicy.query(query)}));
+  }
+  contextPolicyInvestments(generation:number,input:{scopeId:string;afterWorkId:string|null;limit:number}) {
+    this.assertOwner(generation);return this.timed("context_policy.investments",()=>({contextPolicyInvestments:this.contextPolicy.investments(input)}));
+  }
+  private confirmPreparedInput(runId:string,input:import("@agent-anything/agent-runtime/context-representation").PreparedContextInput):boolean {
+    const stage=this.activityHandoffs.command({kind:"read_stage",requestId:input.preparationStageId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null;
+    if(!stage || stage.status!=="accepted" || !stage.result || stage.result.outcome!=="returned")return false;
+    const path=this.activityHandoffs.command({kind:"read_path",pathId:stage.request.pathId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState;
+    const result=stage.receipt?.progress as {state?:string;prepared?:unknown}|undefined;
+    const preparation=stage.request.input as {request?:{kind?:string;demand?:unknown}};
+    return path.intent.runId===runId && path.intent.purpose.contract.inputOwner==="context-representation" &&
+      ["organize","measure"].includes(stage.request.stageKind) && preparation.request?.kind==="context_input_preparation" &&
+      modelInputValueDigest(preparation.request.demand)===modelInputValueDigest(input.demand) && result?.state==="prepared" &&
+      modelInputValueDigest(result.prepared)===modelInputValueDigest(input);
   }
   contextFoundationFacts(runId:string,after:number,limit:number) {
     this.assertOwner(this.generation);return {contextFacts:this.contextFoundationRecords.facts(runId,after,limit)};
@@ -1188,7 +1210,10 @@ export class ExecutionDatabase {
 
   private validateSchema(): void {
     const objects = this.data.prepare("SELECT name,type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all() as { name: string; type: string }[];
-    if (objects.length !== 61 || !["material_custodies","material_custody_chunks","material_versions","material_holds","material_grants","context_foundation_facts","context_representations","context_judgments","context_reuse_checks","context_use_scopes","context_selection_versions","context_input_bindings","context_recipient_deliveries","context_input_sends","activity_facts", "shared_acceptances", "activity_paths", "activity_stages", "activity_attempts", "activity_raw_results", "activity_processing_receipts", "activity_handoffs", "execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
+    if (objects.length !== 82 || !["context_policy_investment_history","activity_resource_allowances","activity_resource_reservations","context_policy_decisions","context_policy_heads","context_policy_investments","activity_fact_sources","activity_published_facts","activity_reconsiderations","activity_reconsideration_receipts","activity_resource_pools","activity_scheduled_work","activity_schedule_acceptances","activity_schedule_rounds","activity_schedule_tickets","activity_schedule_scope_rounds","activity_schedule_scope_tickets","activity_schedule_dispatches","material_custodies","material_custody_chunks","material_versions","material_holds","material_grants","context_foundation_facts","context_representations","context_judgments","context_reuse_checks","context_use_scopes","context_selection_versions","context_input_bindings","context_recipient_deliveries","context_input_sends","activity_facts", "shared_acceptances", "activity_paths", "activity_stages", "activity_attempts", "activity_raw_results", "activity_processing_receipts", "activity_handoffs", "execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
+        !objects.some(row => row.name === "activity_resource_scope" && row.type === "index") ||
+        !objects.some(row => row.name === "activity_publication_source" && row.type === "index") ||
+        !objects.some(row => row.name === "activity_schedule_remaining" && row.type === "index") ||
         !objects.some(row => row.name === "execution_content" && row.type === "table") ||
         !objects.some(row => row.name === "run_tree_commits" && row.type === "table") ||
         !objects.some(row => row.name === "file_materials" && row.type === "table") ||

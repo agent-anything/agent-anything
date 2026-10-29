@@ -15,14 +15,19 @@ import { RetryInvocationInvalidatedError } from "../retry/RetryWaitControl.js";
 import { MODEL_ACCESS_EXECUTION_FLOW } from "./ModelAccessExecutionFlow.js";
 import { assertModelActivityRequest, type ModelActivityBinding } from "./ModelActivityBinding.js";
 import {ModelActivityJournal, type ModelActivityJournalSupport} from "./ModelActivityJournal.js";
+import {ModelTransportJournal} from "./ModelTransportJournal.js";
 export class ModelRequestAccess {
   private readonly journal: ModelActivityJournal | undefined;
+  private readonly transportJournal:ModelTransportJournal|undefined;
   constructor(private readonly input: {
     readonly provider: Provider;
     readonly retryExecutor: RetryExecutor;
     readonly retryClock: RetryClock;
     readonly activityJournal?: ModelActivityJournalSupport;
-  }) {this.journal = input.activityJournal ? new ModelActivityJournal(input.activityJournal, () => input.retryClock.now().toISOString()) : undefined;}
+  }) {
+    this.journal = input.activityJournal ? new ModelActivityJournal(input.activityJournal, () => input.retryClock.now().toISOString()) : undefined;
+    this.transportJournal=input.activityJournal?.scheduling?new ModelTransportJournal(input.activityJournal,()=>input.retryClock.now().toISOString()):undefined;
+  }
 
   async accept(request: ProviderRequest, activity: ModelActivityBinding, progress: unknown): Promise<void> {
     await this.journal?.accept(request,activity,progress);
@@ -51,7 +56,7 @@ export class ModelRequestAccess {
       // professional handlers migrate. Never give one preparation two journals.
       const journal = activity.owner.kind === "task_decision" ? this.journal : undefined;
       const stage = await journal?.bind(request,activity,context.retry.deadlineAt);
-      const dispatched = stage && !stage.result ? await this.journal!.dispatch(stage) : null;
+      const dispatched = stage && !stage.result ? await this.journal!.dispatch(stage,context.cancellation.signal,context.retry.deadlineAt) : null;
       let result: ProviderRequestSettlement;
       const retained = stage?.result?.value as ProviderRequestSettlement | RetainedActivityFailure | undefined;
       try {
@@ -114,6 +119,11 @@ export class ModelRequestAccess {
     if (retainedUsage)
       await callContext.auxiliaryUsage?.record(retainedUsage);
     let result;
+    const transport=(attempt:RetryAttemptContext)=>{
+      const send=()=>this.input.provider.send(recreateProviderRequest(request),createInvocationInterruptionContext(callContext,attempt),
+        delivery?.invocation(attempt.attempt.attemptId,request.requestId,attempt.signal)??{mode:"buffered",invocationId:attempt.attempt.attemptId});
+      return this.transportJournal?.execute(request,activity,attempt.attempt.attemptId,callContext.retry.deadlineAt,attempt.signal,send)??send();
+    };
     try {
       result = await this.input.retryExecutor.execute<ProviderRequestSettlement, ProviderAttemptFailure, string>({
         operation,
@@ -128,9 +138,7 @@ export class ModelRequestAccess {
       }, async (attempt) => {
         if (!dispatchGranted) throw new ActivityCheckpointError("provider_dispatch_already_accepted_without_recoverable_response");
         callContext.auxiliaryUsage?.assertAvailable();
-        const providerResult = await this.input.provider.send(recreateProviderRequest(request), createInvocationInterruptionContext(callContext, attempt), delivery?.invocation(attempt.attempt.attemptId, request.requestId, attempt.signal) ?? {
-          mode: "buffered", invocationId: attempt.attempt.attemptId,
-        });
+        const providerResult=await transport(attempt);
         return providerAttemptResult(providerResult, callContext, attempt, this.input.retryClock);
       }, callContext.checkpoints ? {
         read: () => records.read<RetryCheckpoint<ProviderRequestSettlement, ProviderAttemptFailure, string>>(`retry:${operation.operationId}`),
@@ -140,14 +148,21 @@ export class ModelRequestAccess {
           if (usage && !callContext.checkpoints?.commitWithAuxiliaryUsage)
             await callContext.auxiliaryUsage?.record(usage);
         },
-        reconcile: async () => ({
+        reconcile: async (attempt) => {
+          const restored=await this.transportJournal?.restore(request,activity,attempt.attempt.attemptId);
+          if(restored)return providerAttemptResult(restored,callContext,attempt,this.input.retryClock);
+          // Absence of a physical dispatch is recoverable under the same attempt.
+          // An accepted dispatch without a confirmed result throws above instead.
+          if(this.transportJournal)return providerAttemptResult(await transport(attempt),callContext,attempt,this.input.retryClock);
+          return ({
           kind: "failed", error: {
             deadlineReason: null, failure: {
               code: "provider_attempt_interrupted", category: "transport", message: "The interrupted Provider attempt has no retained complete response.",
               metadata: { requestId: request.requestId, usage: "unknown" }, requestId: request.requestId,
             }
           }
-        }),
+          });
+        },
       } : undefined);
     }
     catch (error) {

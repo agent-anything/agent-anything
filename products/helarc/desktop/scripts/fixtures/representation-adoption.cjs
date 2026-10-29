@@ -15,7 +15,7 @@ exports.verifyAdoption=async function({app,store,provider,registry,work,processo
   const purpose=registry.register({ref:{id:"parent-after-method",revision:"1"},inputOwner:"context-representation",executionOwner:"model-access",interpretationOwner:"parent-agent",acceptanceOwner:"context-representation",recoveryOwner:"parent-agent",stageKinds:["model"],capabilities:["model-access"],continuationKinds:[]},
     new PreparedInputExecution({provider,selections:store.contextSelections,inputId:()=>"parent-input",now,authorize:async()=>{},interpret:async(_path,stage)=>{
       assert.equal(stage.result.value.kind,"succeeded",JSON.stringify(stage.result));
-      return {progress:{responseId:stage.result.id},next:[],participants:[{owner:"context_delivery",kind:"accept",proposal:{inputId:"parent-input",responseId:stage.result.id,detailHolds:["parent-detail-0","parent-detail-1"]}}]};
+      return {progress:{responseId:stage.result.id},next:[],participants:[{owner:"context_delivery",kind:"accept",proposal:{inputId:"parent-input",responseId:stage.result.id,detailHolds:base.sources.map((_,i)=>`parent-detail-${i}`)}}]};
     }}));
   if(phase==="adopt") {
     const descriptor=await c({kind:"describe",holdId:candidate.access.holdId,recipient:candidate.access.recipient});
@@ -28,7 +28,9 @@ exports.verifyAdoption=async function({app,store,provider,registry,work,processo
     const taskLineage={...lineage,auxiliary:null};
     for(const key of ["instructionBinding","agent","instructions","instructionRelease","instructionResolver","instructionContent","activeContext","contextProjection","projectionManifest","toolSelection","toolExposureContent","toolExposureBasis","toolExposureProof","toolGuidance","controllerControlGuidance","callableDefinitions","protocol","policy"])taskLineage[key]={owner:"isolated-host",kind:"record",id:key,revision:"1"};
     const composition=composeModelInput({id:"parent-final-input",providerId:provider.descriptor.id,model:provider.modelContext.target.model,interaction:{kind:"text_generation"},lineage:taskLineage,composedAt:"2026-10-29T00:00:00.000Z",sections:[
-      {id:"parent-objective",source:{owner:"user",kind:"task",id:"parent-task",revision:"1"},kind:"task",role:"user",necessity:"mandatory",content:{kind:"text",text:"Based on the Child reports, state the radius for images 5 and 6, the alpha rule, the TARGET value, and whether the version is verified. Do not process images."}},
+      {id:"parent-objective",source:{owner:"user",kind:"task",id:"parent-task",revision:"1"},kind:"task",role:"user",necessity:"mandatory",content:{kind:"text",text:process.env.ACTIVITY_SIMPLE?
+        "Based on the Child reports, state the current staging port and the superseded port. Do not configure a server.":
+        "Based on the Child reports, state the radius for images 5 and 6, the alpha rule, the TARGET value, and whether the version is verified. Do not process images."}},
       {id:"child-reports",source,kind:"evidence",role:"user",necessity:"mandatory",content:{kind:"text",text:`Derived representation of Child 0 and Child 1 reports; exact original reports remain accessible.\n${body}`}}]});
     const taskTemplate={...template,requestId:composition.id,purpose:"task",composition,instructions:composition.instructions,messages:composition.messages,interaction:composition.interaction};
     const demand=organizeOriginalInput({demand:{id:"parent-demand",runId:"parent",recipient:"parent-agent",purpose:"task",targetRevision:target,historyBoundary:"both-child-reports-v1",deliveryIds:base.deliveryIds,dependencies:{candidate:digest(candidate.representation)},maximumCombinations:4,maximumExternalMeasurements:0,maximumReadBytes:100000},composition,
@@ -39,7 +41,7 @@ exports.verifyAdoption=async function({app,store,provider,registry,work,processo
     assert.equal(prepared.request.instructions.content.length,0);
     const scope={...recipient,id:"parent-input-scope",continuity:"parent-original-thread",owner:"context-representation",target,authorityBasis:"isolated-method-permission"};
     await store.contextSelections.command({kind:"scope",scope});
-    const request={...base,method:"check_combination",combinationDigest:digest(prepared),combination:{prepared,scope,subjects:[candidate.representation]},sources:[...base.sources,{alias:"candidate",role:"candidate",access:candidate.access,representation:candidate.representation,order:2,label:"Candidate for Parent",originalRole:"derived_representation",indivisibleGroup:"candidate"}],combine:"keep",dependencyAccesses:dependencies.map(d=>({id:`combination-dependency:${d.hold.id}`,holdId:d.hold.id,recipient:candidate.access.recipient,range:d.hold.range}))};
+    const request={...base,method:"check_combination",combinationDigest:digest(prepared),combination:{prepared,scope,subjects:[candidate.representation]},sources:[...base.sources,{alias:"candidate",role:"candidate",access:candidate.access,representation:candidate.representation,order:base.sources.length,label:"Candidate for Parent",originalRole:"derived_representation",indivisibleGroup:"candidate"}],combine:"keep",dependencyAccesses:dependencies.map(d=>({id:`combination-dependency:${d.hold.id}`,holdId:d.hold.id,recipient:candidate.access.recipient,range:d.hold.range}))};
     // The optional fixture stresses generation with a narrower delegated transport
     // allowance; whole-input checking still obeys the same actual Provider target.
     // Without this option the narrow whole-evidence check must report its gap.
@@ -53,9 +55,13 @@ exports.verifyAdoption=async function({app,store,provider,registry,work,processo
     for(let i=0;i<ranges.length;i++)await c({kind:"grant",grant:{id:`parent-dependency-grant-${i}`,instanceId:ranges[i].instanceId,recipient,range:ranges[i].range,revision:0,allowed:true,basis:"explicit retained result dependency transfer"},expectedRevision:null});
     const holds=responsibility=>ranges.map((r,i)=>({id:`parent-${responsibility}-${i}`,instanceId:r.instanceId,consumer:recipient,responsibility,range:r.range,basis:responsibility==="selection"?"parent-selection":"parent-input",releaseCondition:"parent response settled"}));
     for(let i=0;i<base.sources.length;i++)await c({kind:"hold",hold:{id:`parent-detail-${i}`,instanceId:`source-${i}`,consumer:recipient,responsibility:"detail",range:base.sources[i].access.range,basis:"parent task detail",releaseCondition:"explicit parent release"}});
-    await a({kind:"open_path",intent:{...intent("parent-model"),owner:purpose.contract.acceptanceOwner,purpose}});
+    if(process.env.ACTIVITY_NORMAL_POLICY)await a({kind:"schedule_work",expectedRevision:0,intent:{id:"parent-task-scheduling",workId:"parent-task-work",runId:"parent",scopeId:"parent",owner:"parent-agent",delegatedPathOwners:[purpose.contract.acceptanceOwner],
+      decisionId:"parent-task-request",policyRevision:"isolated-host:1",reason:"task",delayImpact:"Parent input is ready for its task decision",timing:{kind:"unknown"},resources:[{poolId:"helarc:model-execution",capability:"model-access",units:1}]}});
+    await a({kind:"open_path",intent:{...intent("parent-model"),owner:purpose.contract.acceptanceOwner,purpose,
+      ...(process.env.ACTIVITY_NORMAL_POLICY?{scheduledWorkId:"parent-task-work"}:{})}});
     const proposal=await work.prepareAdoption("combination-check",{id:"parent-adoption",scope,expectedSelectionId:null,expectedControlRevision:0,selection:{id:"parent-selection",representations:[candidate.representation],judgmentIds:check.progress.assessments.at(-1).judgmentIds,holds:holds("selection")},retainedSelectionId:null,prepared,inputId:"parent-input",activityId:"parent-model",stageRequestId:"parent-model-call",stageKind:"model",capabilities:["model-access"],inputHolds:holds("input"),releaseHolds:[]});
-    await accept(proposal);await accept(proposal);
+    const acceptedProposal=process.env.ACTIVITY_NORMAL_POLICY?await require("./normal-context-policy.cjs").prepareNormalAdoption({store,work,prepared,scope,proposal}):proposal;
+    await accept(acceptedProposal);await accept(acceptedProposal);
     app.exit(73);return;
   }
   if(phase==="sent") {
@@ -63,13 +69,16 @@ exports.verifyAdoption=async function({app,store,provider,registry,work,processo
     throw new Error("Parent response not saved");
   }
   await processor.drain("parent",signal);
-  assert.equal((await a({kind:"read_stage",requestId:"parent-model-call"})).status,"accepted");
+  const settled=await a({kind:"read_stage",requestId:"parent-model-call"});assert.equal(settled.status,"accepted");
+  const finalText=settled.result.value.response.output;assert.equal(typeof finalText,"string");
+  if(process.env.ACTIVITY_SIMPLE)assert(finalText.includes("7542")&&finalText.includes("7431"),finalText);
+  else assert(finalText.includes("7391")&&finalText.toLowerCase().includes("alpha"),finalText);
   const binding=await store.contextSelections.command({kind:"binding",inputId:"parent-input",checkCurrentControl:true});
-  assert.equal(binding.input.deliveries.length,2);
+  assert.equal(binding.input.deliveries.length,base.deliveryIds.length);
   const facts=await allFacts();
   const deliveries=facts.filter(f=>f.owner==="context_delivery"&&f.kind==="accepted");
-  assert.deepEqual(deliveries.map(f=>f.subject).sort(),["delivery-0","delivery-1"]);
+  assert.deepEqual(deliveries.map(f=>f.subject).sort(),[...base.deliveryIds].sort());
   const check=await work.result("combination-check");assert.equal(check.kind,"ready");
   await work.releaseInputs("combination-check");
-  return {additionalProviderCalls:check.progress.modelCalls+1,acceptedInputDigest:digest(binding.input.exactInput),factCount:facts.length};
+  return {additionalProviderCalls:check.progress.modelCalls+1,acceptedInputDigest:digest(binding.input.exactInput),factCount:facts.length,finalText};
 };

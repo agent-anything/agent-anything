@@ -7,10 +7,25 @@ export class ContextFoundationInspectionAdapter implements ContextFoundationObse
   constructor(private readonly recorder:InspectionRecorder) {}
   observe(fact:ContextFoundationFact):void {
     const r=this.recorder,subject=r.ref(fact.owner,"event",`${fact.runId}:context-fact:${fact.sequence}`,fact.runId);
-    const object=r.ref(fact.owner,"contribution",fact.subject,fact.runId);
-    r.offer({subject:object,occurredAt:fact.occurredAt,payload:{kind:"execution",phase:["accepted","disposed","input_retired","content_deleted"].includes(fact.kind)?"settled":"pending",
-      executionKind:fact.owner,status:fact.kind,code:null,effectCertainty:null}});
+    const policy=fact.owner==="context_preparation_policy"&&fact.kind==="decision_accepted";
+    const object=r.ref(policy?"context-representation":fact.owner,"contribution",fact.subject,fact.runId);
+    r.offer({subject:object,occurredAt:fact.occurredAt,payload:{kind:"execution",phase:["accepted","disposed","input_retired","content_deleted","decision_accepted"].includes(fact.kind)?"settled":"pending",
+      executionKind:fact.owner,status:fact.kind,code:null,effectCertainty:null},
+      ...(fact.kind==="decision_accepted"?{contents:[{name:"Context policy decision and evidence",class:"agent" as const,stage:fact.kind,mediaType:"application/json",value:JSON.parse(JSON.stringify(fact.details))}]}:{})});
     const links=[inspectionLink("includes",r.ref("runtime","run",fact.runId,fact.runId),object),inspectionLink("includes",object,subject)];
+    if(fact.kind==="decision_accepted"&&fact.details.investment&&typeof fact.details.investment==="object") {
+      const investment=fact.details.investment as {workId?:unknown;pathId?:unknown;previousPathId?:unknown};
+      if(typeof investment.workId==="string")links.push(inspectionLink("produces",object,r.ref("activity-scheduling","contribution",investment.workId,fact.runId)));
+      if(typeof investment.pathId==="string")links.push(inspectionLink("produces",object,r.ref("activity","contribution",investment.pathId,fact.runId)));
+      if(typeof investment.previousPathId==="string")links.push(inspectionLink("observes",object,r.ref("activity","contribution",investment.previousPathId,fact.runId)));
+    }
+    if(policy) {
+      const decision=fact.details.decision as import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecision;
+      if(decision.foreground.kind==="continue")links.push(inspectionLink("observes",object,r.ref("model-input","contribution",decision.foreground.preparedInputId,fact.runId)));
+      if(decision.investment.kind==="reuse")links.push(inspectionLink("observes",object,r.ref("activity","contribution",decision.investment.pathId,fact.runId)));
+      if(decision.foreground.kind==="needs_result")links.push(inspectionLink("prerequisite",r.ref("activity","contribution",decision.foreground.pathId,fact.runId),object,
+        {condition:"result",operation:"required_context_result"}));
+    }
     for(const [field,owner] of [["instanceId","material_custody"],["selectionId","context_selection"],["inputId","context_selection"],
       ["acceptanceId","shared_acceptance"],["activityId","activity"],["responseId","activity"],["holdId","material_custody"],["detailHoldId","material_custody"]] as const) {
       const id=fact.details[field];if(typeof id==="string")links.push(inspectionLink("includes",r.ref(owner,"contribution",id,fact.runId),subject));

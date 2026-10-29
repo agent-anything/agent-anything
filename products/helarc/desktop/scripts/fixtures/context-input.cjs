@@ -13,7 +13,7 @@ async function main(){
   const {HelarcExecutionStore}=await load("execution-storage/HelarcExecutionStore.js");
   const {bindHelarcContextInputPreparation}=await load("context/HelarcContextInputPreparation.js");
   const {ActivityPurposeRegistry,ActivityHandoffProcessor}=await import("@agent-anything/agent-runtime/activity");
-  const {PreparedInputExecution,contextInputAcceptance,validatePreparedContextInput}=await import("@agent-anything/agent-runtime/context-representation");
+  const {PreparedInputExecution,contextInputAcceptance,validatePreparedContextInput,decideContextPreparation}=await import("@agent-anything/agent-runtime/context-representation");
   const {OllamaProvider}=await import("@agent-anything/provider-integrations/ollama");
   const {OpenAICompatibleProvider}=await import("@agent-anything/provider-integrations/openai-compatible");
   const {createNativeToolTurnInteraction}=await import("@agent-anything/model-interaction");
@@ -86,6 +86,20 @@ async function main(){
     const result=await work.result("preparation-path");assert.equal(result.kind,"prepared");const prepared=result.prepared;
     validatePreparedContextInput(prepared);assert.equal(prepared.request.instructions.content.length,0);assert.equal(prepared.request.messages.length,1);
     assert(prepared.encoded.body.includes("TARGET: 7391"));assert.equal(prepared.deliveries.length,1);
+    const policyInput={scope,boundary:prepared.demand.historyBoundary,requirementsDigest:"original-requirements:1",
+      current:{kind:"prepared",prepared,evidence:{id:prepared.preparationStageId,owner:"context-representation",kind:"fact",revision:"1"}},currentRejectedInputId:null,
+      alternatives:[],pressure:[],options:[],inFlight:[],explorationHistory:[],optionalInFlight:0,autoPrepare:true,consumerActive:true};
+    const decision=decideContextPreparation(policyInput);assert.equal(decision.foreground.kind,"continue");assert.equal(decision.investment.kind,"none");
+    await a({kind:"register_fact_source",source:{id:"policy-inputs",runId:"parent",owner:"context-representation"}});
+    await a({kind:"publish_fact",fact:{id:"prepared-for-policy",sourceId:"policy-inputs",ref:{owner:"context-representation",kind:"input",id:prepared.preparationStageId,revision:"1"}}});
+    await a({kind:"subscribe_reconsideration",subscription:{id:"policy-recheck",runId:"parent",owner:"context-representation",sources:["policy-inputs"]}});
+    const boundary=await a({kind:"read_reconsideration",subscriptionId:"policy-recheck",limit:16});
+    const receipt={id:"accept-context-policy",subscriptionId:"policy-recheck",expectedRevision:0,through:boundary.through,factIds:boundary.facts.map(f=>f.id),
+      decision:{owner:"context-representation",kind:"decision",id:decision.id,revision:"1"},close:false};
+    const participants=[{owner:"context_preparation_policy",kind:"decision",proposal:{input:policyInput,expectedDecisionId:null,expectedControlRevision:0,investment:null}}];
+    await a({kind:"accept_reconsideration",receipt,participants});
+    assert.equal((await store.contextPolicy.query({kind:"latest",scopeId:scope.id})).decision.id,decision.id);
+    await a({kind:"publish_fact",fact:{id:"later-policy-fact",sourceId:"policy-inputs",ref:{owner:"context-representation",kind:"input",id:"later-input",revision:"1"}}});
     await a({kind:"open_path",intent:{...path("model-path"),owner:"parent-agent",purpose}});
     const judgment={id:"combination",owner:"parent-agent",kind:"combination",subjects:[representation.ref],inputs:[range],purpose:recipient.purpose,target,
       methodRevision:"original-exact:1",dependencies:{inputDigest:digest(prepared)},coverage:[range],conclusion:"supported",limitations:["Original identity and known structure, not generated semantic preservation"],basis:"Original Child bytes, source and recipient retained without transformation"};
@@ -96,6 +110,9 @@ async function main(){
     await accept(proposal);await accept(proposal);assert.equal((await a({kind:"read_stage",requestId:"model-request"})).status,"submitted");app.exit(73);return;
   }
   if(phase==="execute") {
+    assert.equal((await store.querySharedAcceptance("accept-context-policy")).outcome,"accepted");
+    assert.equal((await store.contextPolicy.query({kind:"latest",scopeId:scope.id})).decision.foreground.kind,"continue");
+    assert.deepEqual((await a({kind:"read_reconsideration",subscriptionId:"policy-recheck",limit:16})).facts.map(f=>f.id),["later-policy-fact"]);
     const binding=await s({kind:"binding",inputId:"input",checkCurrentControl:true});validatePreparedContextInput(binding.input.exactInput);
     await processor.drain("parent",signal);await processor.drain("parent",signal);
     const stage=await a({kind:"read_stage",requestId:"model-request"});assert.equal(stage.status,"raw_result");assert.equal(stage.result.value.kind,"succeeded",JSON.stringify(stage.result));
@@ -114,6 +131,9 @@ async function main(){
   queries=new InspectionQueryService(join(directory,"inspection"));const selected=(await queries.query({kind:"get_snapshot",sourceId:inspection.recorder.source.sourceId,datasetId:inspection.recorder.manifest.datasetId})).selection;
   const records=await queries.query({...selected,kind:"list_records"});
   const all=JSON.stringify(records);assert(all.includes("input"));
+  const policy=await store.contextPolicy.query({kind:"latest",scopeId:scope.id});
+  const policyRead=await queries.query({...selected,kind:"get_subject",subject:inspection.recorder.ref("context-representation","contribution",policy.decision.id,"parent")});
+  assert(policyRead.records.some(record=>record.contents.some(content=>content.availability==="present")),"Policy evidence must be visible in Inspector");
   await writeFile(join(directory,"verification.json"),JSON.stringify({electron:process.versions.electron,generation:store.generation,providerCalls:1,
     rawPreparationRestored:true,acceptedInputRestored:true,responseRestored:true,detailRetained:true,encodedId:binding.input.exactInput.encoded.id,inspection:inspection.recorder.health()},null,2));
   await queries.close();queries=null;await inspection.close();inspection=null;await store.close();store=null;app.exit(0);
