@@ -41,3 +41,4 @@ export {
   selectHelarcWorkspaceProfile,
 } from "./HelarcWorkspaceProfile.js";
 export { snapshotHelarcProject, type HelarcProject, type HelarcProjectRef } from "./HelarcProject.js";
+export * from "./HelarcContextSettings.js";

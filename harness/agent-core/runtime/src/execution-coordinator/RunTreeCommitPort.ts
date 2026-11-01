@@ -2,6 +2,7 @@ import { sameRunCommitValue as same } from "./RunCommitValue.js";
 import type { RunCommit } from "./RunCommitPort.js";
 import { projectRunTreeTerminal, RunTreeExecution, type RunTreeCheckpoint } from "./RunTreeExecution.js";
 import { runTreeResourceDimensions } from "./RunTreeResourceAccount.js";
+import {snapshotDelegationResult,snapshotRetainedDelegationNarrative} from "../delegation/index.js";
 
 /** One logical transition, including every Run changed by admission or settlement. */
 export interface RunTreeCommit {
@@ -95,7 +96,14 @@ export function validateRunTreeRecoveryRecords({commit, members}: RunTreeRecover
             transfer.result.correlation.origin.parent.run.id !== parent.id ||
             !same(transfer.result.correlation.origin.parent.action, parentRunAction) ||
             transfer.result.correlation.relation.ref.id !== node.lineage.relation.id) invalid("Child transfer source");
-      } else if (transfer?.status === "failed" && (transfer.result !== null || transfer.code !== "delegation_result_invalid")) {
+        const result=snapshotDelegationResult(transfer.result);
+        if(!same(result.terminal.cause,state.settlementCause?.ref)||result.terminal.status!==state.status)
+          invalid("Child report terminal basis");
+        if(result.narrative) {
+          if(!transfer.narrative)invalid("Child narrative source missing");
+          snapshotRetainedDelegationNarrative(transfer.narrative!,result.narrative.source);
+        } else if(transfer.narrative!==null)invalid("unexpected Child narrative source");
+      } else if (transfer?.status === "failed" && (transfer.result !== null || transfer.narrative!==null || transfer.code !== "delegation_result_invalid")) {
         invalid("Child transfer failure");
       }
     }

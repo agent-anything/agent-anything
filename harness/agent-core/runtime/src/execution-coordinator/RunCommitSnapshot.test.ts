@@ -1,25 +1,25 @@
 import {describe, expect, it} from "vitest";
-import {retainControllerCheckpoint, snapshotRunCommit} from "./RunCommitSnapshot.js";
+import {retainRunCheckpointValue, snapshotRunCommit} from "./RunCommitSnapshot.js";
 import type {RunCommit} from "./RunCommitPort.js";
 
 describe("Controller checkpoint ownership", () => {
   it("snapshots external values once and shares only locally owned immutable values", () => {
     const input = {request: {messages: [{content: "original"}]}};
-    const retained = retainControllerCheckpoint(input);
+    const retained = retainRunCheckpointValue(input);
     input.request.messages[0]!.content = "changed";
     expect(retained.request.messages[0]!.content).toBe("original");
-    expect(retainControllerCheckpoint(retained)).toBe(retained);
+    expect(retainRunCheckpointValue(retained)).toBe(retained);
     expect(() => {retained.request.messages[0]!.content = "changed";}).toThrow();
   });
   it("does not trust a caller's shallow frozen flag", () => {
     const child = {value: 1};
-    const retained = retainControllerCheckpoint(Object.freeze({child}));
+    const retained = retainRunCheckpointValue(Object.freeze({child}));
     child.value = 2;
     expect(retained.child.value).toBe(1);
     expect(Object.isFrozen(retained.child)).toBe(true);
   });
   it("shares retained Controller history across commits but snapshots the changing state", () => {
-    const value = retainControllerCheckpoint({response: {content: "retained"}});
+    const value = retainRunCheckpointValue({response: {content: "retained"}});
     const state = {revision: 1};
     const input = {state, control: {controllerCheckpoints: [["turn", value]]}} as unknown as RunCommit;
     const first = snapshotRunCommit(input);
@@ -48,14 +48,14 @@ describe("Controller checkpoint ownership", () => {
   it("does not memoize frozen accessors, special objects or executable proxies", () => {
     let value = 1;
     const source = Object.freeze({get value() {return value;}});
-    expect(retainControllerCheckpoint(source).value).toBe(1);
+    expect(retainRunCheckpointValue(source).value).toBe(1);
     value = 2;
-    expect(retainControllerCheckpoint(source).value).toBe(2);
+    expect(retainRunCheckpointValue(source).value).toBe(2);
     const date = Object.freeze(new Date(0));
-    expect(retainControllerCheckpoint(date).getTime()).toBe(0);
+    expect(retainRunCheckpointValue(date).getTime()).toBe(0);
     date.setTime(1);
-    expect(retainControllerCheckpoint(date).getTime()).toBe(1);
+    expect(retainRunCheckpointValue(date).getTime()).toBe(1);
     const trap = () => {throw new Error("proxy trap ran");};
-    expect(() => retainControllerCheckpoint(new Proxy({}, {ownKeys: trap}))).toThrow();
+    expect(() => retainRunCheckpointValue(new Proxy({}, {ownKeys: trap}))).toThrow();
   });
 });

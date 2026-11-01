@@ -23,6 +23,8 @@ export interface ContextMaterialSearch {
   readonly query?: string; readonly in?: "content" | "description";
   readonly limit?: number; readonly cursor?: string;
   readonly references?: readonly ContextMaterialRef[];
+  /** Host composition may narrow a source query; this never grants material access. */
+  readonly bounds?: {readonly frontier:number;readonly bytes:number;readonly descriptions:number};
 }
 export interface ContextMaterialPage {
   readonly description: ContextMaterialDescription; readonly text: string;
@@ -34,7 +36,7 @@ export interface ContextMaterialSearchPage {
     readonly byteStart: number; readonly byteEnd: number}[];
   readonly nextCursor: string | null; readonly exhausted: boolean;
   readonly scannedBytes: number; readonly scannedDescriptions: number;
-  readonly frontier: number; readonly limitations: readonly string[];
+  readonly frontier: number | {readonly sources:readonly {readonly id:string;readonly frontier:number}[]}; readonly limitations: readonly string[];
   readonly stopReason?: "scope_exhausted" | "result_limit" | "execution_budget";
 }
 export interface ContextMaterialAccessPort {

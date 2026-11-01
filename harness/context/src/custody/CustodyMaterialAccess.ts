@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 import {CONTEXT_MATERIAL_LIMITS as LIMITS,ContextMaterialError,snapshotContextMaterialRef,snapshotContextMaterialRefs,
   type ContextMaterialAccessPort,type ContextMaterialDescription,type ContextMaterialRef,type ContextMaterialSearch,type ContextMaterialSearchPage} from "../material/ContextMaterial.js";
 import {type MaterialAccessDescription,type MaterialCustodyPort,type MaterialDiscoveryPage,type MaterialRecipient,type MaterialReadPage,type MaterialSearchPage} from "./MaterialCustody.js";
+import {materialViewReference} from "./MaterialViewReference.js";
 
 interface Cursor {
   binding:string;frontier:number|null;after:number;index:number;current:ContextMaterialRef|null;scan:string|null;discoveryDone:boolean;
@@ -12,7 +13,7 @@ const PREFIX="custody:";
 export class CustodyMaterialAccess implements ContextMaterialAccessPort {
   constructor(private readonly custody:MaterialCustodyPort,private readonly recipient:MaterialRecipient) {}
   reference(description:MaterialAccessDescription):ContextMaterialRef {
-    return snapshotContextMaterialRef({id:PREFIX+Buffer.from(description.hold.id).toString("base64url"),revision:description.version.digest});
+    return materialViewReference(description.hold.range,description.version);
   }
   async validate(runId:string,references:readonly ContextMaterialRef[]):Promise<void> {
     this.run(runId);
@@ -36,15 +37,19 @@ export class CustodyMaterialAccess implements ContextMaterialAccessPort {
     if(!Number.isSafeInteger(limit)||limit<1||limit>LIMITS.matches||typeof query!=="string"||Buffer.byteLength(query)>LIMITS.queryBytes||!["content","description"].includes(mode))fail("context_search_invalid");
     const references=input.references?snapshotContextMaterialRefs(input.references):null;
     if(references&&!references.length)fail("context_references_invalid");
-    const binding=digest({recipient:this.recipient,query,mode,references});
-    const cursor:Cursor=input.cursor?decode(input.cursor):{binding,frontier:null,after:0,index:0,current:null,scan:null,discoveryDone:false};
+    const bounds=input.bounds??{frontier:null,bytes:LIMITS.searchBytes,descriptions:LIMITS.descriptions};
+    if(bounds.frontier!==null&&(!Number.isSafeInteger(bounds.frontier)||bounds.frontier<0)||
+      !Number.isSafeInteger(bounds.bytes)||bounds.bytes<1||bounds.bytes>LIMITS.searchBytes||
+      !Number.isSafeInteger(bounds.descriptions)||bounds.descriptions<1||bounds.descriptions>LIMITS.descriptions)fail("context_search_bounds_invalid");
+    const binding=digest({recipient:this.recipient,query,mode,references,frontier:bounds.frontier});
+    const cursor:Cursor=input.cursor?decode(input.cursor):{binding,frontier:bounds.frontier,after:0,index:0,current:null,scan:null,discoveryDone:false};
     if(cursor.binding!==binding||!Number.isSafeInteger(cursor.after)||cursor.after<0||!Number.isSafeInteger(cursor.index)||cursor.index<0||
       (cursor.frontier!==null&&(!Number.isSafeInteger(cursor.frontier)||cursor.frontier<cursor.after))||typeof cursor.discoveryDone!=="boolean")fail("context_cursor_invalid");
     const matches:ContextMaterialSearchPage["matches"][number][]=[];
     let scannedBytes=0,scannedDescriptions=0,iterations=0;
     const deadline=Math.min(Date.now()+LIMITS.searchMs,deadlineAt?Date.parse(deadlineAt):Infinity);
     if(Number.isNaN(deadline))fail("context_deadline_invalid");
-    while(matches.length<limit&&scannedBytes<LIMITS.searchBytes&&scannedDescriptions<LIMITS.descriptions&&iterations<128&&Date.now()<deadline) {
+    while(matches.length<limit&&scannedBytes<bounds.bytes&&scannedDescriptions<bounds.descriptions&&iterations<128&&Date.now()<deadline) {
       signal.throwIfAborted();iterations++;
       if(!cursor.current) {
         if(references) {
@@ -64,7 +69,7 @@ export class CustodyMaterialAccess implements ContextMaterialAccessPort {
         cursor.current=null;cursor.scan=null;cursor.index++;continue;
       }
       const page=await this.call({kind:"search",request:{id:`${invocationId}:${iterations}`,holdId:material.hold.id,recipient:this.recipient,range:material.hold.range,
-        query,caseMode:"sensitive",maximumMatches:limit-matches.length,scanBytes:Math.min(LIMITS.scanBytes,LIMITS.searchBytes-scannedBytes),...(cursor.scan?{cursor:cursor.scan}:{})}}) as MaterialSearchPage;
+        query,caseMode:"sensitive",maximumMatches:limit-matches.length,scanBytes:Math.min(LIMITS.scanBytes,bounds.bytes-scannedBytes),...(cursor.scan?{cursor:cursor.scan}:{})}}) as MaterialSearchPage;
       scannedBytes+=page.scanned.end-page.scanned.start;
       matches.push(...page.matches.map(match=>({description,excerpt:match.text,byteStart:match.start-material.hold.range.start,byteEnd:match.end-material.hold.range.start})));
       cursor.scan=page.next;
@@ -81,8 +86,7 @@ export class CustodyMaterialAccess implements ContextMaterialAccessPort {
   private async describe(reference:ContextMaterialRef):Promise<MaterialAccessDescription> {
     const ref=snapshotContextMaterialRef(reference);
     if(!ref.id.startsWith(PREFIX))fail("context_reference_invalid");
-    const holdId=Buffer.from(ref.id.slice(PREFIX.length),"base64url").toString("utf8");
-    const description=await this.call({kind:"describe",holdId,recipient:this.recipient}) as MaterialAccessDescription;
+    const description=await this.call({kind:"resolve_reference",reference:ref,recipient:this.recipient}) as MaterialAccessDescription;
     if(this.reference(description).id!==ref.id||description.version.digest!==ref.revision)fail("context_material_unavailable");
     if(description.version.format==="opaque")fail("context_material_format_unsupported");
     return description;

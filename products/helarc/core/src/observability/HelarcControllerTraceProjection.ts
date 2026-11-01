@@ -71,6 +71,11 @@ export class HelarcTracingController<TOutput = unknown> implements TaskDecisionA
     return this.record(input, await this.inner.recover(input, context));
   }
 
+  async interrupt(input: TaskDecisionInputSources<TOutput>, context: AgentActivityExecutionContext): Promise<TaskDecisionProposal<TOutput> | null> {
+    const decision = this.inner.interrupt ? await this.inner.interrupt(input, context) : null;
+    return decision ? this.record(input, decision) : null;
+  }
+
   private record(input: TaskDecisionInputSources<TOutput>, decision: TaskDecisionProposal<TOutput>): TaskDecisionProposal<TOutput> {
     const metadata = decision.modelItems[0]?.metadata ?? {};
     const operationId = createControllerTurnTraceOperationId(input.iteration);

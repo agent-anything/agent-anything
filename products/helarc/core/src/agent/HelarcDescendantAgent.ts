@@ -14,6 +14,8 @@ import {snapshotExecutionEvidenceRef, type ExecutionEvidenceRef} from "@agent-an
 import type {HelarcExecutionHandoff} from "../tools/HelarcExecutionHandoff.js";
 import {snapshotContextMaterialRefs, type ContextMaterialAccessPort, type ContextMaterialRef} from "@agent-anything/context/material";
 import type {HelarcMaterialHandoff} from "../tools/HelarcMaterialHandoff.js";
+import type {HelarcReportHandoff} from "../tools/HelarcReportHandoff.js";
+import type {RunResult} from "@agent-anything/agent-runtime/run";
 
 export interface HelarcDescendantAgentContribution {
   readonly tools: readonly ToolRegistrationInput[];
@@ -26,6 +28,7 @@ export function createHelarcDescendantAgentContribution(
   executionHandoff?: HelarcExecutionHandoff,
   contextMaterials?: ContextMaterialAccessPort,
   materialHandoff?: HelarcMaterialHandoff,
+  reportHandoff?:HelarcReportHandoff,
 ): HelarcDescendantAgentContribution {
   const contract = findHelarcBaselineToolContract("Agent");
   const sendMessageContract = findHelarcBaselineToolContract("SendMessage");
@@ -169,7 +172,7 @@ export function createHelarcDescendantAgentContribution(
                   Object.freeze({ form: "artifacts" as const, required: false, maxItems: 64 }),
                   Object.freeze({ form: "effects" as const, required: false, maxItems: 64 }),
                 ]),
-                maxNarrativeCharacters: 16_000,
+                maxInlineNarrativeCodeUnits: 16_000,
               }),
               contextPlan: createDelegationContextPlan({
                 entries: Object.freeze([]),
@@ -247,27 +250,7 @@ export function createHelarcDescendantAgentContribution(
         project(
           input: Parameters<RunnerDelegationComposition["narrativeProjection"]["project"]>[0],
         ) {
-          if (input.childResult.status === "completed") {
-            return isHelarcOutput(input.childResult.finalOutput)
-              ? input.childResult.finalOutput.summary
-              : null;
-          }
-          for (const { payload } of [...input.childResult.items].reverse()) {
-            if (payload.kind !== "controller_turn") continue;
-            const blocks = payload.modelItems.flatMap((item) =>
-              item.kind === "assistant_text" && item.text.trim().length > 0
-                ? [item.text]
-                : []
-            );
-            if (blocks.length === 0) continue;
-            const narrative = blocks.join("\n\n");
-            const limit = 16_000;
-            const marker = "\n[Child report truncated.]";
-            return narrative.length <= limit
-              ? narrative
-              : narrative.slice(0, limit - marker.length) + marker;
-          }
-          return null;
+          return projectHelarcDescendantNarrative(input.childResult);
         },
       }),
       progressProjection: Object.freeze({
@@ -288,8 +271,20 @@ export function createHelarcDescendantAgentContribution(
         },
       }),
       resultProjection: Object.freeze({
-        async project(input: Parameters<typeof projectDescendantResult>[0]) {
+        async project(input: Parameters<RunnerDelegationComposition["resultProjection"]["project"]>[0]) {
           let outcome = projectDescendantResult(input);
+          if(input.result.narrative?.text===null) {
+            const publication=await reportHandoff?.publish(input.result,input.signal??new AbortController().signal);
+            const reference=publication?.status==="published"?publication.reference:null;
+            const reason=publication?.status==="unavailable"?publication.reason:"report_publication_unavailable";
+            const output={...outcome.output as object,
+              report:{status:reference?"retained_material":"unavailable",reference,
+                bytes:input.result.narrative.source.bytes,inline:false,
+                ...(reference?{}:{reason})}};
+            outcome=reference&&outcome.status==="succeeded"?{status:"succeeded",output,failure:null}:
+              {status:outcome.status==="failed"?"failed":"partial",output,failure:outcome.failure??
+                descendantFailure(reason,"Child report source is retained but has not been made accessible to this recipient.")};
+          }
           const materials = await materialHandoff?.project(input.result) ?? [];
           if (materials.length && outcome.output !== null) outcome = {...outcome, output: {...outcome.output as object, material_refs: materials}};
           if (!executionHandoff) return outcome;
@@ -370,7 +365,7 @@ function projectDescendantResult(
   }
   if (
     result.terminal.status === "completed" ||
-    output.summary.length > 0 ||
+    result.narrative !== null ||
     output.artifact_refs.length > 0
   ) {
     return Object.freeze({
@@ -416,6 +411,16 @@ function isHelarcOutput(candidate: unknown): candidate is HelarcAgentOutput {
   return candidate !== null && typeof candidate === "object" &&
     (candidate as { kind?: unknown }).kind === "complete" &&
     typeof (candidate as { summary?: unknown }).summary === "string";
+}
+
+function projectHelarcDescendantNarrative(input:{readonly status:string;readonly finalOutput:unknown;readonly items:RunResult["items"]}):string|null {
+  if(input.status==="completed")return isHelarcOutput(input.finalOutput)?input.finalOutput.summary:null;
+  for(const {payload} of [...input.items].reverse()) {
+    if(payload.kind!=="controller_turn")continue;
+    const blocks=payload.modelItems.flatMap(item=>item.kind==="assistant_text"&&item.text.trim().length>0?[item.text]:[]);
+    if(blocks.length)return blocks.join("\n\n");
+  }
+  return null;
 }
 
 function boundedText(candidate: unknown, maxLength: number, field: string): string {

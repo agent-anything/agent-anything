@@ -1,9 +1,11 @@
-import type { ProviderResponse } from "@agent-anything/model-interaction";
+import type { ProviderRequest,ProviderResponse } from "@agent-anything/model-interaction";
 import type { ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import type { TaskDecisionProposal, TaskDecisionInputSources } from "./TaskDecisionActivity.js";
 import { TaskDecisionActivityError } from "./TaskDecisionActivityError.js";
 import { StructuredOutputError } from "./StructuredOutput.js";
 import { assertModelActivityRequest } from "../model-access/ModelActivityBinding.js";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import {TaskResponseBindingError} from "./TaskResponseBindingError.js";
 import type { BoundTaskDecisionInput, TaskDecisionContext, TaskDecisionMaker } from "./TaskDecisionMaker.js";
 import { assertModelDecisionProvenance, validateTaskDecisionProposal } from "./TaskDecisionValidation.js";
 export type TaskResponseProtocol = {
@@ -14,16 +16,24 @@ export type TaskResponseProtocol = {
   readonly kind: "native_tool_turn";
   readonly maximumOutputRecoveryAttempts?: number;
 };
-export type InterpretTaskResponse<TOutput> = (response: ProviderResponse, source: TaskDecisionInputSources<TOutput>, executionFlow?: ExecutionFlowContext) => TaskDecisionProposal<TOutput> | Promise<TaskDecisionProposal<TOutput>>;
+export type InterpretTaskResponse<TOutput> = (response: ProviderResponse, source: TaskDecisionInputSources<TOutput>, request:ProviderRequest, executionFlow?: ExecutionFlowContext) => TaskDecisionProposal<TOutput> | Promise<TaskDecisionProposal<TOutput>>;
 /** Interprets an already completed exchange. It cannot prepare input or call a Provider. */
 export class ModelResponseTaskDecisionMaker<TOutput = unknown> implements TaskDecisionMaker<TOutput> {
   constructor(readonly protocol: TaskResponseProtocol, private readonly interpret: InterpretTaskResponse<TOutput>) { }
   async decide(input: BoundTaskDecisionInput<TOutput>, context: TaskDecisionContext): Promise<TaskDecisionProposal<TOutput>> {
     context.signal.throwIfAborted();
-    if (input.kind !== "model_response" || input.activity.owner.kind !== "task_decision" ||
-      input.activity.runId !== input.source.runId)
+    if (input.kind !== "model_response" || input.activity.runId !== input.source.runId)
       throw new TypeError("Task interpretation requires its bound task response.");
-    assertModelActivityRequest(input.activity, input.request);
+    if("kind" in input.activity) {
+      const {contract,purpose}=input.activity;
+      if(input.activity.kind!=="task_response_interpretation"||contract.digest!==modelInputValueDigest(contract.contract)||
+        contract.contract.interpretationOwner!=="task-decision"||purpose!==input.request.purpose||input.request.composition.lineage.auxiliary||
+        input.request.correlation?.controllerRequestId!==input.source.toolExposure.controllerRequestId)
+        throw new TypeError("task_response_interpretation_binding_invalid");
+    } else {
+      if(input.activity.owner.kind!=="task_decision")throw new TypeError("Task interpretation requires its bound task response.");
+      assertModelActivityRequest(input.activity, input.request);
+    }
     if (input.response.kind === "native_tool_turn" && input.response.turn.responseRef.requestId !== input.request.requestId) {
       throw new TypeError("Task response does not match its actual bound request.");
     }
@@ -41,17 +51,17 @@ export class ModelResponseTaskDecisionMaker<TOutput = unknown> implements TaskDe
     }
     let proposal: TaskDecisionProposal<TOutput>;
     try {
-      proposal = await this.interpret(input.response, input.source, context.executionFlow);
+      proposal = await this.interpret(input.response, input.source, input.request, context.executionFlow);
     }
     catch (error) {
-      if (error instanceof TaskDecisionActivityError || error instanceof StructuredOutputError)
+      if (error instanceof TaskResponseBindingError || error instanceof TaskDecisionActivityError || error instanceof StructuredOutputError)
         throw error;
       throw new TaskDecisionActivityError({
         kind: "model", failure: {
           code: "model_output_invalid", message: "Provider output parsing failed.",
           retryable: false, metadata: { errorName: error instanceof Error ? error.name : "unknown" }
         }
-      }, "settled_failure");
+      }, "settled_failure", null, {cause:error});
     }
     context.signal.throwIfAborted();
     const decision = validateTaskDecisionProposal(proposal, input.source);

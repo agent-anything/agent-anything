@@ -1,15 +1,17 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {decideContextPreparation,REPRESENTATION_METHOD_PURPOSE,type ContextPreparationDecisionProposal,type ContextPreparationDecisionRecord,
-  type ContextPreparationDecisionQuery,type PreparedContextInput} from "@agent-anything/agent-runtime/context-representation";
-import type {ActivityPathIntent,ActivityPathState,ActivityStageRequest,ActivitySchedulingIntent,ActivityResourceAllowance,SharedAcceptanceProposal,SharedAcceptanceReceipt} from "@agent-anything/agent-runtime/activity";
+import {decideContextPreparation,contextPreparationWorkKey,REPRESENTATION_METHOD_PURPOSE,type ContextPreparationDecisionProposal,type ContextPreparationDecisionRecord,
+  type ContextPreparationDecisionQuery,type PreparedContextInput,type ContextMethodInputPlan} from "@agent-anything/agent-runtime/context-representation";
+import type {ActivityPathIntent,ActivityPathState,ActivityStageRequest,ActivityStageState,ActivitySchedulingIntent,ActivityResourceAllowance,SharedAcceptanceProposal,SharedAcceptanceReceipt} from "@agent-anything/agent-runtime/activity";
 import type {ContextUseScope,ContextUseControl} from "@agent-anything/context/selection";
 import {ContextFoundationRecords} from "./ContextFoundationRecords.js";
 import type {ExecutionContentRoot} from "./ExecutionContent.js";
 import {SharedAcceptanceRejection,type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
+import {validateModelInputRecoveryStage,type ModelInputRecoveryProgress} from "@agent-anything/agent-runtime/model-access";
 
 export const CONTEXT_PREPARATION_DECISION_SCHEMA=`
 CREATE TABLE context_policy_decisions(id TEXT PRIMARY KEY,scope_id TEXT NOT NULL,run_id TEXT NOT NULL,acceptance_id TEXT NOT NULL,root TEXT NOT NULL,digest TEXT NOT NULL);
 CREATE TABLE context_policy_heads(scope_id TEXT PRIMARY KEY,decision_id TEXT NOT NULL);
+CREATE TABLE context_policy_observation_heads(scope_id TEXT PRIMARY KEY,decision_id TEXT NOT NULL);
 CREATE TABLE context_policy_investments(work_id TEXT PRIMARY KEY,path_id TEXT NOT NULL UNIQUE,scope_id TEXT NOT NULL,decision_id TEXT NOT NULL,exploration_key TEXT,
  UNIQUE(scope_id,exploration_key));
 CREATE TABLE context_policy_investment_history(path_id TEXT PRIMARY KEY,work_id TEXT NOT NULL,scope_id TEXT NOT NULL,decision_id TEXT NOT NULL,exploration_key TEXT,
@@ -26,18 +28,24 @@ export class ContextPreparationDecisionDatabase {
     private readonly pathSettled:(id:string)=>boolean,
     private readonly allowance:(id:string)=>ActivityResourceAllowance,
     private readonly confirmInput:(runId:string,input:PreparedContextInput)=>boolean,
-    private readonly receipt:(id:string)=>SharedAcceptanceReceipt|null) {}
+    private readonly receipt:(id:string)=>SharedAcceptanceReceipt|null,
+    private readonly stage:(id:string)=>ActivityStageState|null) {}
 
   query(query:ContextPreparationDecisionQuery):ContextPreparationDecisionRecord|null {
     let id:string|null=null;
     if(query.kind==="decision")id=query.id;
     if(query.kind==="latest")id=(this.records.sql("SELECT decision_id FROM context_policy_heads WHERE scope_id=?").get(query.scopeId) as {decision_id:string}|undefined)?.decision_id??null;
+    if(query.kind==="latest_observation") {
+      id=(this.records.sql("SELECT decision_id FROM context_policy_observation_heads WHERE scope_id=?").get(query.scopeId) as {decision_id:string}|undefined)?.decision_id??null;
+    }
     if(query.kind==="exploration")id=(this.records.sql("SELECT decision_id FROM context_policy_investment_history WHERE scope_id=? AND exploration_key=?").get(query.scopeId,query.key) as {decision_id:string}|undefined)?.decision_id??null;
     if(!id)return null;
     const row=this.records.sql("SELECT root,digest,acceptance_id,scope_id,run_id FROM context_policy_decisions WHERE id=?").get(id) as {root:string;digest:string;acceptance_id:string;scope_id:string;run_id:string}|undefined;
-    if(!row)return null;
+    if(!row){if(query.kind==="latest_observation")throw new Error("context_policy_observation_corrupt");return null;}
     const value=this.hydrate(JSON.parse(row.root) as ExecutionContentRoot) as ContextPreparationDecisionRecord;
     if(modelInputValueDigest(value)!==row.digest||value.decision.id!==id||value.acceptanceId!==row.acceptance_id||value.decision.scope.id!==row.scope_id||value.decision.scope.runId!==row.run_id)throw new Error("context_policy_record_corrupt");
+    if(query.kind==="latest_observation"&&(!value.input.observationReport||value.input.scope.id!==query.scopeId||value.decision.scope.id!==query.scopeId))
+      throw new Error("context_policy_observation_corrupt");
     return value;
   }
 
@@ -45,6 +53,7 @@ export class ContextPreparationDecisionDatabase {
     return {owner:"context_preparation_policy",kinds:["decision"],prepare:(part,acceptance)=>{
       const proposal=part.proposal as ContextPreparationDecisionProposal,decision=decideContextPreparation(proposal.input);
       if(acceptance.scope!==decision.scope.runId||acceptance.actor!=="context-representation")reject("decision_actor_invalid");
+      this.validateInputRejections(proposal);
       for(const limitation of proposal.input.admissionLimitations??[]) {
         const receipt=this.receipt(limitation.acceptanceId);
         if(receipt?.outcome!=="rejected"||receipt.scope!==acceptance.scope||receipt.rejection?.owner!=="activity"||receipt.rejection.code!==limitation.code)
@@ -61,20 +70,22 @@ export class ContextPreparationDecisionDatabase {
       return {proposal,record,root:this.retain(record),digest:modelInputValueDigest(record)} satisfies Prepared;
     },apply:(prepared,acceptance)=>{
       const {proposal,record,root,digest}=prepared as Prepared,{decision}=record;
-      const current=this.scope(decision.scope.id);
-      if(modelInputValueDigest(current.scope)!==modelInputValueDigest(decision.scope))reject("decision_scope_changed");
-      if(current.control.revision!==proposal.expectedControlRevision||!current.control.allowed&&proposal.input.consumerActive)reject("decision_control_changed");
       const head=this.records.sql("SELECT decision_id FROM context_policy_heads WHERE scope_id=?").get(decision.scope.id) as {decision_id:string}|undefined;
       if((head?.decision_id??null)!==proposal.expectedDecisionId)reject("decision_head_conflict");
       if(decision.investment.kind==="reuse") {
+        const {workId,pathId}=decision.investment;
         const path=this.path(decision.investment.pathId);
         const progress=(path?.progress as {method?:{state:string}}|null)?.method;
         const original=this.records.sql("SELECT decision_id FROM context_policy_investments WHERE work_id=? AND path_id=? AND scope_id=?")
           .get(decision.investment.workId,decision.investment.pathId,decision.scope.id) as {decision_id:string}|undefined;
         const producer=original?this.query({kind:"decision",id:original.decision_id}):null;
-        if(!path||path.cancelled||progress&&progress.state!=="working"||path.intent.runId!==decision.scope.runId||
-          path.intent.scheduledWorkId!==decision.investment.workId||producer?.decision.applicabilityKey!==decision.applicabilityKey)reject("producer_binding_changed");
+        const chosen=producer?.decision.investment.kind==="propose"?producer.input.options.find(o=>producer.decision.investment.kind==="propose"&&o.id===producer.decision.investment.optionId):null;
+        const reusable=proposal.input.reuseOptions?.filter(work=>work.workId===workId&&work.pathId===pathId).map(work=>work.option)??[];
+        if(!path||path.cancelled||(progress&&progress.state!=="working")||path.intent.runId!==decision.scope.runId||
+          path.intent.scheduledWorkId!==decision.investment.workId||!chosen||!producer||![...proposal.input.options,...reusable].some(option=>
+            contextPreparationWorkKey(decision.scope,option.request)===contextPreparationWorkKey(producer.input.scope,chosen.request)))reject("producer_binding_changed");
       }
+      this.validateReceptionHandoff(proposal,decision,acceptance);
       const old=this.records.sql("SELECT digest FROM context_policy_decisions WHERE id=?").get(decision.id) as {digest:string}|undefined;
       if(old&&old.digest!==digest)reject("decision_identity_conflict");
       if(record.investment) {
@@ -96,7 +107,25 @@ export class ContextPreparationDecisionDatabase {
       }
       if(!old)this.records.sql("INSERT INTO context_policy_decisions VALUES (?,?,?,?,?,?)").run(decision.id,decision.scope.id,decision.scope.runId,acceptance.id,JSON.stringify(root),digest);
       this.records.sql("INSERT INTO context_policy_heads VALUES (?,?) ON CONFLICT(scope_id) DO UPDATE SET decision_id=excluded.decision_id").run(decision.scope.id,decision.id);
-      this.records.fact(decision.scope.runId,"context_preparation_policy",decision.id,"decision_accepted",{decision,acceptanceId:acceptance.id,investment:record.investment});
+      if(record.input.observationReport)this.records.sql("INSERT INTO context_policy_observation_heads VALUES (?,?) ON CONFLICT(scope_id) DO UPDATE SET decision_id=excluded.decision_id")
+        .run(decision.scope.id,decision.id);
+      this.records.fact(decision.scope.runId,"context_preparation_policy",decision.id,"decision_accepted",{decision,acceptanceId:acceptance.id,investment:record.investment,
+        observationReport:proposal.input.observationReport??null,
+        methodSupplyReport:proposal.input.methodSupplyReport??null,
+        receptionOptions:proposal.input.receptionOptions??[],receptionSupplyReport:proposal.input.receptionSupplyReport??null,
+        inputReceptions:proposal.input.inputReceptions??[],
+        currentInputEvidence:proposal.input.current.evidence,
+        rejectedInputs:proposal.input.rejectedInputs??[],
+        admissionRejections:(proposal.input.admissionLimitations??[]).map(limitation=>this.receipt(limitation.acceptanceId)!)});
+    },validate:(prepared,acceptance)=>{
+      // A scope may be established by another participant in this same atomic acceptance.
+      const {proposal,record:{decision}}=prepared as Prepared;
+      const current=this.scope(decision.scope.id);
+      if(modelInputValueDigest(current.scope)!==modelInputValueDigest(decision.scope))reject("decision_scope_changed");
+      if(current.control.revision!==proposal.expectedControlRevision||!current.control.allowed&&proposal.input.consumerActive)reject("decision_control_changed");
+      this.validateInputRejections(proposal);
+      this.validateReceptionHandoff(proposal,decision,acceptance);
+      if(decision.investment.kind==="propose")this.validateHandoff(proposal,decision,acceptance);
     }};
   }
   investments(input:{scopeId:string;afterWorkId:string|null;limit:number}):readonly ContextPreparationDecisionRecord[] {
@@ -104,6 +133,66 @@ export class ContextPreparationDecisionDatabase {
     const rows=this.records.sql("SELECT decision_id FROM context_policy_investments WHERE scope_id=? AND work_id>? ORDER BY work_id LIMIT ?")
       .all(input.scopeId,input.afterWorkId??"",input.limit) as {decision_id:string}[];
     return rows.map(row=>{const record=this.query({kind:"decision",id:row.decision_id});if(!record?.investment)throw new Error("context_policy_investment_corrupt");return record;});
+  }
+  private validateReception(proposal:ContextPreparationDecisionProposal,option:NonNullable<ContextPreparationDecisionProposal["input"]["receptionOptions"]>[number],plan:ContextMethodInputPlan):void {
+    const scope=proposal.input.scope,members=[...option.members].sort((a,b)=>a.pathId<b.pathId?-1:a.pathId>b.pathId?1:0);
+    if(plan.revision!=="5"||plan.materialization.intent.id!==option.id||modelInputValueDigest(plan.scope)!==modelInputValueDigest(scope)||
+      plan.materialization.request.demand.historyBoundary!==proposal.input.boundary||plan.producers.length!==members.length||
+      members.some((m,i)=>plan.producers[i]!.pathId!==m.pathId||plan.materialization.request.demand.dependencies[`representationProducer:${i}:producerRequest`]!==m.requestDigest))
+      reject("input_reception_binding_changed");
+    for(const member of members) {
+      const row=this.records.sql("SELECT decision_id FROM context_policy_investments WHERE work_id=? AND path_id=? AND scope_id=?")
+        .get(member.workId,member.pathId,scope.id) as {decision_id:string}|undefined;
+      const original=row?this.query({kind:"decision",id:row.decision_id}):null;
+      const chosen=original?.decision.investment.kind==="propose"?original.input.options.find(o=>original.decision.investment.kind==="propose"&&o.id===original.decision.investment.optionId):null;
+      const path=this.path(member.pathId),progress=(path?.progress as {method?:{state:string;request:unknown}}|null)?.method;
+      if(!chosen||modelInputValueDigest(chosen.request)!==member.requestDigest||!path||path.cancelled||progress?.state!=="ready"||
+        modelInputValueDigest(progress.request)!==member.requestDigest||path.intent.runId!==scope.runId||path.intent.owner!==scope.owner||
+        path.intent.permissionBasis!==scope.authorityBasis||path.intent.scheduledWorkId!==member.workId)reject("producer_binding_changed");
+    }
+  }
+  private validateInputRejections(proposal:ContextPreparationDecisionProposal):void {
+    for(const rejected of proposal.input.rejectedInputs??[]) {
+      const stage=this.stage(rejected.stageId),path=stage?this.path(stage.request.pathId):null;
+      const progress=stage?.receipt?.progress as ModelInputRecoveryProgress|undefined;
+      if(!stage||!path||!progress?.sourceStageId||path.intent.runId!==proposal.input.scope.runId||path.intent.permissionBasis!==proposal.input.scope.authorityBasis)
+        reject("provider_input_rejection_unconfirmed");
+      let original:ModelInputRecoveryProgress;
+      try {original=validateModelInputRecoveryStage(path,stage,progress.sourceStageId);}catch {reject("provider_input_rejection_unconfirmed");}
+      const prepared=stage.request.input as PreparedContextInput,scope=proposal.input.scope;
+      if(original.rejected.rawResultId!==rejected.evidence.id||original.rejected.acceptanceId!==rejected.evidence.revision||rejected.evidence.owner!=="model-access"||
+        original.rejected.targetDigest!==rejected.targetRevision||original.rejected.bodyDigest!==rejected.bodyDigest||
+        prepared.demand.recipient!==scope.recipient||prepared.demand.purpose!==scope.purpose||prepared.demand.historyBoundary!==proposal.input.boundary)
+        reject("provider_input_rejection_scope_changed");
+    }
+  }
+  private validateReceptionHandoff(proposal:ContextPreparationDecisionProposal,decision:ContextPreparationDecisionRecord["decision"],acceptance:SharedAcceptanceProposal):void {
+    if(decision.investment.kind==="prepare_input") {
+      const id=decision.investment.optionId,option=proposal.input.receptionOptions?.find(o=>o.id===id);
+      const entries=acceptance.parts.filter(p=>p.owner==="activity"&&p.kind==="stage_submission")
+        .map(p=>p.proposal as ActivityStageRequest).filter(s=>s.id===`${id}:stage:1`);
+      const plan=(entries[0]?.input as {methodInputPlan?:ContextMethodInputPlan}|undefined)?.methodInputPlan;
+      if(entries.length!==1||!option||!plan)reject("input_reception_handoff_missing");
+      this.validateReception(proposal,option,plan);
+      const schedule=acceptance.parts.filter(p=>p.owner==="activity"&&p.kind==="scheduling_acceptance")
+        .map(p=>(p.proposal as {intent:ActivitySchedulingIntent}).intent).filter(s=>s.workId===plan.materialization.intent.scheduledWorkId);
+      if(schedule.length!==1||schedule[0]!.decisionId!==decision.id||schedule[0]!.reason!==decision.investment.reason)
+        reject("input_reception_handoff_changed");
+    }
+    if(decision.investment.kind==="reuse_input") {
+      const {pathId,workId}=decision.investment,path=this.path(pathId),stage=this.stage(`${pathId}:stage:1`);
+      const reception=proposal.input.inputReceptions?.find(r=>r.pathId===pathId&&r.workId===workId);
+      const plan=(stage?.request.input as {methodInputPlan?:ContextMethodInputPlan}|undefined)?.methodInputPlan;
+      if(!path||path.cancelled||path.intent.runId!==decision.scope.runId||path.intent.owner!==decision.scope.owner||
+        path.intent.permissionBasis!==decision.scope.authorityBasis||path.intent.scheduledWorkId!==workId||
+        !plan||plan.revision!=="5"||plan.materialization.intent.id!==pathId||plan.materialization.intent.scheduledWorkId!==workId||
+        !reception||reception.state!=="active"||
+        plan.materialization.request.demand.historyBoundary!==decision.boundary||modelInputValueDigest(plan.scope)!==modelInputValueDigest(decision.scope))
+        reject("input_reception_binding_changed");
+      const option=proposal.input.receptionOptions?.find(o=>o.id===reception.optionId);
+      if(!option)reject("input_reception_binding_changed");
+      this.validateReception(proposal,option,plan);
+    }
   }
   private validateHandoff(proposal:ContextPreparationDecisionProposal,decision:ContextPreparationDecisionRecord["decision"],acceptance:SharedAcceptanceProposal):void {
     const investment=proposal.investment!;
@@ -115,11 +204,38 @@ export class ContextPreparationDecisionDatabase {
     const schedule=schedules[0],path=paths[0],stage=stages[0];
     const methodRequest=(stage?.input as {method?:{request?:unknown}}|undefined)?.method?.request;
     if(!schedule||!path||!stage||(!investment.previousPathId&&schedule.expectedRevision!==0)||schedule.intent.workId!==investment.workId||schedule.intent.runId!==decision.scope.runId||
-      schedule.intent.scopeId!==decision.scope.runId||schedule.intent.decisionId!==decision.id||schedule.intent.owner!=="context-representation"||
+      !investment.schedulingScopeId?.trim()||schedule.intent.scopeId!==investment.schedulingScopeId||schedule.intent.decisionId!==decision.id||schedule.intent.owner!=="context-representation"||
       schedule.intent.reason!==decision.investment.reason||path.scheduledWorkId!==investment.workId||path.id!==investment.pathId||path.runId!==decision.scope.runId||
       stage.pathId!==path.id||!methodRequest||modelInputValueDigest(methodRequest)!==decision.investment.quotation.requestDigest||
       path.owner!=="context-representation"||modelInputValueDigest(path.purpose.contract)!==modelInputValueDigest(REPRESENTATION_METHOD_PURPOSE))reject("investment_handoff_mismatch");
     const replaces=decision.investment.replaces;
+    const selected=proposal.input.options.find(o=>decision.investment.kind==="propose"&&o.id===decision.investment.optionId)!;
+    if(selected.extendsReception) {
+      const receiver=proposal.input.inputReceptions?.find(r=>r.optionId===selected.extendsReception!.optionId);
+      const option=proposal.input.receptionOptions?.find(o=>o.id===selected.extendsReception!.optionId);
+      const receiverPath=receiver?this.path(receiver.pathId):null;
+      const plan=(receiver?this.stage(`${receiver.pathId}:stage:1`)?.request.input as {methodInputPlan?:ContextMethodInputPlan}|undefined:undefined)?.methodInputPlan;
+      const gap=receiver?.inputGap,assessment=gap?this.stage(gap.evidence.id):null;
+      const organization=plan?this.path(plan.materialization.request.preparationIntent.id):null;
+      const progress=organization?.progress as {state?:string;stageRequestId?:string;rawResultId?:string;gap?:unknown}|null;
+      if(!receiver||!receiverPath||!option||!plan||!organization||receiver.evidence.id!==receiver.pathId||
+        receiver.evidence.revision!==`${receiverPath.progressRevision}:${receiverPath.controlRevision}`)reject("reception_extension_gap_unconfirmed");
+      if(receiver.providerRejection) {
+        const current=organization.progress as {state?:string;prepared?:PreparedContextInput};
+        if(current.state!=="prepared"||current.prepared?.encoded.bodyDigest!==receiver.providerRejection.bodyDigest||
+          current.prepared.encoded.targetDigest!==receiver.providerRejection.targetRevision)reject("reception_extension_rejection_unconfirmed");
+      } else if(!gap||!assessment||progress?.state!=="gap"||
+        assessment.request.pathId!==organization.intent.id||assessment.request.id!==progress.stageRequestId||assessment.status!=="accepted"||
+        assessment.result?.completeness!=="complete"||assessment.result.outcome!=="returned"||assessment.result.id!==progress.rawResultId||
+        assessment.receipt?.resultId!==assessment.result.id||assessment.receipt.requestId!==assessment.request.id||
+        assessment.receipt.owner!==decision.scope.owner||assessment.receipt.expectedProgressRevision+1!==organization.progressRevision||
+        modelInputValueDigest(assessment.receipt.progress)!==modelInputValueDigest(organization.progress)||
+        gap.evidence.owner!=="activity"||gap.evidence.kind!=="fact"||gap.evidence.revision!==String(organization.progressRevision)||
+        modelInputValueDigest(progress.gap)!==modelInputValueDigest(gap.gap)||
+        gap.gap.demandId!==plan.materialization.request.demand.id||!gap.gap.capacity.some(c=>!c.allowed))
+        reject("reception_extension_gap_unconfirmed");
+      this.validateReception(proposal,option,plan);
+    }
     if(Boolean(replaces)!==Boolean(investment.previousPathId))reject("investment_predecessor_missing");
     if(replaces) {
       if(!this.pathSettled(replaces.pathId))reject("investment_predecessor_unsettled");

@@ -5,8 +5,8 @@ import type {RunTreeCommit} from "./RunTreeCommitPort.js";
 const owned = new WeakSet<object>();
 const immutableSources = new WeakMap<object, object>();
 
-/** Controller data crosses the ownership boundary once, not on every Run revision. */
-export function retainControllerCheckpoint<T>(value: T): T {
+/** Checkpoint data crosses the ownership boundary once, not on every Run revision. */
+export function retainRunCheckpointValue<T>(value: T): T {
   return snapshot(value);
 }
 

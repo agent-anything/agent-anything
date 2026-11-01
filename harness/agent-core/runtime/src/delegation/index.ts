@@ -73,6 +73,7 @@ export {
   snapshotDelegationResult,
 } from "./DelegationResult.js";
 export type { DelegationResultConstructionInput } from "./DelegationResultConstruction.js";
+export * from "./DelegationNarrativeSource.js";
 export { constructDelegationResult } from "./DelegationResultConstruction.js";
 export type {
   DelegationSteeringReceipt,

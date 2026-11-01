@@ -62,6 +62,41 @@ class FakeController implements TaskDecisionActivity<TestOutput> {
 }
 
 describe("AgentHookExtensions", () => {
+  it.each(["continue", "invalid", "expired", "cancelled"] as const)("uses an explicit original Hook recovery entry: %s", async mode => {
+    const values = new Map<string, unknown>();
+    let loseIntent = true;
+    let loseOutcome = mode === "continue";
+    const port: ActivityCheckpointPort = {read: key => structuredClone(values.get(key) ?? null), commit: async (key, value) => {
+      values.set(key, structuredClone(value));
+      if (!key.startsWith('["hook"')) return;
+      const saved = value as AgentHookInvocationCheckpoint;
+      if (loseIntent && !saved.outcome) {loseIntent = false; throw new ActivityCheckpointError(key);}
+      if (loseOutcome && saved.outcome) {loseOutcome = false; throw new ActivityCheckpointError(key);}
+    }};
+    const handle = vi.fn(() => ({disposition: "allow" as const}));
+    const recover = vi.fn(() => mode === "invalid" ? {disposition: "wrong"} as unknown as ReturnType<AgentStopHandler["handle"]>
+      : {disposition: "continue" as const, code: "original", message: "Use the original result."});
+    let current = NOW;
+    const make = () => new HookExecutionFixture({controller: new FakeController(() => complete("Done")),
+      composition: stopComposition([handler("stop", handle, 1000, recover)]), rootRunId: "run-1", now: () => current});
+    const controller = new AbortController();
+    const baseContext = callContext();
+    const context = {...baseContext, cancellation: {...baseContext.cancellation, signal: controller.signal}, checkpoints: port, runCheckpoints: port};
+    const notification = completionInput(controllerInput(), complete("Done"));
+    await expect(make().beforeCompletion(notification, context)).rejects.toBeInstanceOf(ActivityCheckpointError);
+    if (mode === "expired") current = new Date(Date.parse(NOW) + 1001).toISOString();
+    if (mode === "cancelled") controller.abort();
+    if (mode === "continue") await expect(make().recoverBeforeCompletion(notification, context)).rejects.toBeInstanceOf(ActivityCheckpointError);
+    const resumed = make();
+    const result = await resumed.recoverBeforeCompletion(notification, context);
+    expect(handle).not.toHaveBeenCalled();
+    expect(recover).toHaveBeenCalledTimes(mode === "expired" || mode === "cancelled" ? 0 : 1);
+    expect(result.kind).toBe(mode === "continue" ? "continue_with_feedback" : "allow");
+    expect(resumed.store.getProjection().recentInvocations[0]?.status).toBe({continue: "continued", invalid: "output_invalid", expired: "timed_out", cancelled: "cancelled"}[mode]);
+    const saved = [...values.entries()].find(([key]) => key.startsWith('["hook"'))![1] as AgentHookInvocationCheckpoint;
+    expect(saved.startedAt).toBe(NOW);
+    expect(saved.outcome?.startedAt).toBe(NOW);
+  });
   it.each(["intent", "outcome", "aggregate"] as const)("recovers a Hook %s acknowledgement loss without replay or resetting feedback count", async stage => {
     const values = new Map<string, unknown>();
     let lose = true;
@@ -351,6 +386,7 @@ function handler(
   id: string,
   handle: AgentStopHandler["handle"],
   timeoutMs = 1_000,
+  recover?: AgentStopHandler["recover"],
 ): StopTestBinding {
   const ref = Object.freeze({ id: `${id}-handler`, revision: "1" });
   return Object.freeze({
@@ -367,7 +403,7 @@ function handler(
       ref,
       point: "Stop" as const,
       mode: "blocking" as const,
-      handler: Object.freeze({ handle }),
+      handler: Object.freeze({ handle, ...(recover ? {recover} : {}) }),
     }),
   });
 }

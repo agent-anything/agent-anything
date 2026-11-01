@@ -2,6 +2,7 @@ import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 import {OperationCommitError} from "@agent-anything/operation-catalog/result";
 import type {HelarcMaterialHandoff} from "@agent-anything/helarc/tools";
 import type {HelarcExecutionStore} from "./HelarcExecutionStore.js";
+import {createHelarcMaterialAccess} from "../context/HelarcMaterialAccess.js";
 
 export function createHelarcMaterialHandoff(store: HelarcExecutionStore): HelarcMaterialHandoff {
   return {async project(result) {
@@ -15,7 +16,7 @@ export function createHelarcMaterialHandoff(store: HelarcExecutionStore): Helarc
     const output = head.state.finalOutput as {materialRefs?: unknown} | null;
     const references = snapshotContextMaterialRefs(output?.materialRefs ?? []);
     // The Child's accepted terminal checkpoint already transferred and retained these exact versions.
-    await store.contextMaterials.validate(parentId, references);
+    await createHelarcMaterialAccess(store).validate(parentId, references);
     return references;
   }};
 }

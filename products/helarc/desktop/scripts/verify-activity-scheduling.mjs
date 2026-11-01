@@ -47,6 +47,7 @@ try {
   await launch("continue-round",73);assert.deepEqual(effects.slice(0,3).map(e=>e.work),["task","child-task","preparation"]);
   assert(effects.length===3||effects.length===4,"A completed preparation may release capacity for the next original task stage in the same bounded scan");
   await launch("finish");assert.equal(effects.length,5);assert.equal(new Set(effects.map(e=>e.stage)).size,5,"Completed effects must not repeat");
+  await launch("verify-closure");assert.equal(effects.length,5,"Reopening a closed work must not repeat any accepted operation");
   console.log(await readFile(join(directory,"verification.json"),"utf8"));passed=true;
 } finally {
   server.closeAllConnections();await new Promise(done=>server.close(done));

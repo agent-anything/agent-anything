@@ -16,7 +16,7 @@ import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import { assessModelContext } from "@agent-anything/model-interaction";
-import { modelInputFromComposition, composeModelInput } from "@agent-anything/model-interaction/input";
+import { modelInputFromComposition, composeModelInput, modelInputValueDigest } from "@agent-anything/model-interaction/input";
 import type { HelarcInstructionSectionSetting } from "../instructions/HelarcProtocolInstructions.js";
 import {
   snapshotHelarcTaskFulfillmentAssessment,
@@ -26,7 +26,7 @@ import {
 } from "./HelarcTaskFulfillment.js";
 
 export const HELARC_TASK_FULFILLMENT_HOOK_REVISION =
-  "helarc.task-fulfillment-stop-hook.v4";
+  "helarc.task-fulfillment-stop-hook.v5";
 
 const hookRef = Object.freeze({
   owner: "helarc",
@@ -84,18 +84,52 @@ const interaction = Object.freeze({
   }),
 });
 
+export interface HelarcStopModelSource {
+  readonly kind: "helarc_stop_source";
+  readonly id: string;
+  readonly revision: string;
+  readonly event: AgentStopEvent;
+  readonly request: ProviderRequest;
+}
+export interface HelarcStopExecution {
+  execute(source: HelarcStopModelSource, interruption: InvocationInterruptionContext): Promise<HelarcTaskFulfillmentAssessment>;
+  recover(event: AgentStopEvent, interruption: InvocationInterruptionContext): Promise<HelarcTaskFulfillmentAssessment | null>;
+}
+export function createHelarcStopModelSource(provider: Provider, event: AgentStopEvent, instructions: string): HelarcStopModelSource {
+  if (!instructions.trim()) throw new TypeError("stop_source_requires_enabled_instructions");
+  const request = buildRequest(provider, event, instructions);
+  return {kind: "helarc_stop_source", id: `${event.ref.id}:stop-source`, revision: modelInputValueDigest({event, request}), event, request};
+}
+export function validateHelarcStopModelSource(source: HelarcStopModelSource): void {
+  if (source?.kind !== "helarc_stop_source" || source.id !== `${source.event?.ref.id}:stop-source` ||
+    source.revision !== modelInputValueDigest({event: source.event, request: source.request}) ||
+    source.event.run.id !== source.event.ref.run.id || source.request.metadata.runId !== source.event.run.id ||
+    source.request.metadata.completionCandidateId !== source.event.candidate.ref.id ||
+    source.request.metadata.completionCandidateRevision !== source.event.candidate.ref.revision ||
+    source.request.correlation?.controllerRequestId !== source.event.controllerRequestId ||
+    source.request.purpose !== "helarc.task-fulfillment" || modelInputValueDigest(source.request.interaction) !== modelInputValueDigest(interaction))
+    throw new TypeError("stop_source_binding_changed");
+}
+export function interpretHelarcStopModelResult(source: HelarcStopModelSource, result: ProviderCallResult, assessedAt: string): HelarcTaskFulfillmentAssessment {
+  validateHelarcStopModelSource(source);
+  return createAssessment(source.event, parseProviderResult(result), assessedAt);
+}
+
 export class HelarcTaskFulfillmentHook implements AgentStopHandler {
   private readonly assessments: HelarcTaskFulfillmentAssessment[] = [];
   private readonly instructions: string;
+  readonly recover?: AgentStopHandler["recover"];
 
   constructor(
     private readonly provider: Provider,
     stopInstructions: readonly HelarcInstructionSectionSetting[],
-    private readonly now: () => string = () => new Date().toISOString(),
+    private readonly execution?: HelarcStopExecution,
   ) {
     this.instructions = stopInstructions
       .filter(({ enabled, content }) => enabled && content.trim().length > 0)
       .map(({ content }) => content).join("\n\n");
+    if(this.instructions.length&&!execution)throw new TypeError("helarc_stop_execution_required");
+    if (execution) this.recover = (event, interruption, flow) => this.handleMode(event, interruption, flow, "recover");
   }
 
   getAssessments(): readonly HelarcTaskFulfillmentAssessment[] {
@@ -107,31 +141,37 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
     interruptionContext: InvocationInterruptionContext,
     executionFlow?: ExecutionFlowContext,
   ): Promise<AgentStopHandlerResult> {
+    return this.handleMode(event, interruptionContext, executionFlow, "execute");
+  }
+
+  private async handleMode(event: AgentStopEvent, interruptionContext: InvocationInterruptionContext,
+    executionFlow: ExecutionFlowContext | undefined, mode: "execute" | "recover"): Promise<AgentStopHandlerResult> {
     const flow = new ExecutionFlowPath(HELARC_STOP_EXECUTION_FLOW, executionFlow ?? {}, event.run.id, []);
     try {
-      const result = await this.handleWithFlow(event, interruptionContext, flow);
+      const result = await this.handleWithFlow(event, interruptionContext, flow, mode);
       flow.advance("decision", {disposition:result.disposition}).output(flow.material("Stop instruction decision", "returned", result));
       flow.close("returned");
       return result;
     } catch (error) { flow.close("failed"); throw error; }
   }
 
-  private async handleWithFlow(event: AgentStopEvent, interruptionContext: InvocationInterruptionContext, flow: ExecutionFlowPath): Promise<AgentStopHandlerResult> {
+  private async handleWithFlow(event: AgentStopEvent, interruptionContext: InvocationInterruptionContext, flow: ExecutionFlowPath, mode: "execute" | "recover"): Promise<AgentStopHandlerResult> {
     flow.advance("instructions", {}, [flow.material("Stop instruction input", "received", {event, instructions: this.instructions})])
       .check("effective_instructions", this.instructions.length ? "passed" : "not_applicable", {characterCount:this.instructions.length, assessmentEnabled:this.instructions.length > 0});
     if (this.instructions.length === 0) {
       return Object.freeze({ disposition: "allow" as const });
     }
     readHelarcTaskObjective(event);
-    const request = buildRequest(this.provider, event, this.instructions);
-    flow.advance("request", {providerId:this.provider.descriptor.id}, [{owner:"model-interaction",kind:"request",id:request.requestId,revision:null}]);
-    const result = await this.provider.send(request, interruptionContext);
-    const resultRef = flow.material("Stop model result", "returned", result, "provider");
-    flow.current?.output(resultRef);
-    const assessmentStep = flow.advance("assessment", {providerOutcome:result.kind}, [resultRef]);
-    const candidate = parseProviderResult(result);
-    const assessment = createAssessment(event, candidate, this.now());
-    this.assessments.push(assessment);
+    flow.advance("request", {mode, providerId:this.provider.descriptor.id}, [{owner:"model-interaction",kind:"request",id:`${event.ref.id}:task-fulfillment`,revision:null}]);
+    let assessment = mode === "recover" && this.execution ? await this.execution.recover(event, interruptionContext) : null;
+    if (!assessment) {
+      const source = createHelarcStopModelSource(this.provider, event, this.instructions);
+      assessment = await this.execution!.execute(source, interruptionContext);
+    }
+    const assessmentStep = flow.advance("assessment", {mode, assessmentId: assessment.id});
+    const prior = this.assessments.find(value => value.id === assessment.id);
+    if (prior && modelInputValueDigest(prior) !== modelInputValueDigest(assessment)) throw new TypeError("stop_assessment_changed");
+    if (!prior) this.assessments.push(assessment);
     assessmentStep.output(flow.material("Stop instruction assessment", "assessed", assessment));
     return assessment.disposition === "allow"
       ? Object.freeze({ disposition: "allow" as const })
@@ -146,12 +186,12 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
 export function createHelarcTaskFulfillmentHookComposition(
   provider: Provider,
   stopInstructions: readonly HelarcInstructionSectionSetting[],
-  now?: () => string,
+  execution?: HelarcStopExecution,
 ): Readonly<{
   hook: HelarcTaskFulfillmentHook;
   composition: AgentHookComposition;
 }> {
-  const hook = new HelarcTaskFulfillmentHook(provider, stopInstructions, now);
+  const hook = new HelarcTaskFulfillmentHook(provider, stopInstructions, execution);
   return Object.freeze({
     hook,
     composition: createAgentHookComposition({
@@ -192,7 +232,6 @@ function buildRequest(provider: Provider, event: AgentStopEvent, instructions: s
   const material = Object.freeze({
     originalTask: taskObjective,
     completionProposal: event.candidate.kind === "complete" ? event.candidate.output : null,
-    settledInteraction: event.interaction.messages,
     unsettledCallCount: event.interaction.unsettledCalls.length,
     settledCallCount: event.interaction.settledCallCount,
     completionBasis: Object.freeze({
@@ -238,6 +277,18 @@ function buildRequest(provider: Provider, event: AgentStopEvent, instructions: s
         }),
       }),
     }),
+    ...(event.interaction.messages.length ? [Object.freeze({
+      id: `${event.ref.id}:interaction`,
+      source: source("stop_interaction_evidence", event.interaction.id, event.interaction.revision),
+      kind: "stop_interaction_evidence", role: "user" as const, necessity: "mandatory" as const,
+      preservation: {obligations: [{id: "stop-evidence", requirement: "account" as const,
+        basis: "Preserve the original objective and corrections, what was actually requested and returned, failures, unresolved work, uncertainty, references and evidence for or against the completion claims. Do not infer task success from execution completion."}],
+        relationships: [{kind: "requires" as const, source: source("task_fulfillment_material", event.task.id, event.ref.revision)}]},
+      provenance: {purpose: "stop_interaction_evidence", recipientRunId: event.run.id, author: "host", originRunId: event.run.id,
+        sources: [source("model_interaction_projection", event.interaction.id, event.interaction.revision)],
+        presenter: source("product_hook", hookRef.id, hookRef.revision), coverage: [], limitations: []},
+      content: {kind: "text" as const, text: JSON.stringify({settledInteraction: event.interaction.messages})},
+    })] : []),
   ]);
   const composition = composeModelInput({
     id: `${event.ref.id}:task-fulfillment`,
@@ -292,9 +343,6 @@ function buildRequest(provider: Provider, event: AgentStopEvent, instructions: s
     assessedAt: event.emittedAt,
     revision: "helarc.task-fulfillment-context-assessment.v1",
   });
-  if (assessment.disposition === "proven_overflow") {
-    throw new TypeError("Task Fulfillment model input exceeds the admitted context capacity.");
-  }
   return Object.freeze({
     requestId: composition.id,
     purpose: "helarc.task-fulfillment",

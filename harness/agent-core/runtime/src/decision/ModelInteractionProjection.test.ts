@@ -9,7 +9,9 @@ import {
 import type { RunItem } from "../run/RunItem.js";
 import { createControllerModelItems } from "./TaskDecisionModelItems.js";
 import { createModelConversationSeed, selectConversationPresentations, canonicalConversationPresentations, importModelConversationSeed } from "./TaskConversation.js";
-import {createExactModelWorkingView, modelInputOccurrenceDigest, type ModelInputOwnerForm} from "@agent-anything/model-interaction/input";
+import {createExactModelWorkingView, modelInputOccurrenceDigest, modelInputValueDigest, type ModelInputOwnerForm} from "@agent-anything/model-interaction/input";
+import {inputNotificationDeliveryId} from "./SelectedInputDelivery.js";
+import {recipientContextDeliveryId} from "../context-representation/ContextDeliveryFacts.js";
 import { createControllerInputDeliveryReceipt, createInputDeliverySections, inputNotificationMessage, retainInputPresentation } from "./DecisionInputDelivery.js";
 import {
   ModelInteractionProjectionError,
@@ -17,6 +19,38 @@ import {
 } from "./ModelInteractionProjection.js";
 
 describe("ModelInteractionProjection", () => {
+  it.each(["decided", "interrupted"] as const)("replays jointly accepted input once even if the decision is %s",status=>{
+    const batch={id:"joint-batch",revision:"1",runId:"run-1",entries:[1,2].map(sequence=>({runId:"run-1",sequence,
+      source:{owner:"worker",kind:"finding",id:`finding-${sequence}`,revision:"1"},occurredAt:"2026-10-30T00:00:00Z",data:{finding:sequence}}))};
+    const presentation=retainInputPresentation({id:"joint-presentation",source:{owner:"representation",kind:"account",id:"joint-account",revision:"1"},
+      kind:"input_notification",role:"user",necessity:"mandatory",content:{kind:"text",text:"Both findings are retained together."},
+      provenance:{purpose:"later_outcome",recipientRunId:"run-1",author:"host",sources:batch.entries.map(entry=>entry.source),
+        presenter:{owner:"representation",kind:"method",id:"account",revision:"1"},coverage:["finding-1@1","finding-2@1"],limitations:[]}});
+    const original=createControllerInputDeliveryReceipt(batch,"request-2");
+    const via={kind:"provider" as const,requestId:"request-2",compositionId:"composition-2",workingViewId:"view-2",
+      sectionIds:[presentation.section.id],presentations:[presentation]};
+    const recipient={runId:batch.runId,recipient:"agent",purpose:"task"};
+    const basis={revision:"2" as const,inputId:"input-2",selectionId:"selection-2",inputAcceptanceId:"input-accept",responseAcceptanceId:"response-accept",recipient,
+      rawResultId:"raw-2",encodedInputId:"encoded-2",mapping:batch.entries.map(entry=>({sequence:entry.sequence,notificationId:inputNotificationDeliveryId(entry),
+        deliveryId:recipientContextDeliveryId(inputNotificationDeliveryId(entry),recipient),sectionIds:[presentation.section.id]}))};
+    const receipt={...original,via:{...via,selection:{...basis,digest:modelInputValueDigest({batch:original.batch,via,basis})}}};
+    const next=controllerTurn(modelTurn([],"turn-2","request-2"));if(next.kind!=="controller_turn")throw new Error("Invalid fixture");
+    const items=[runItem(1,{kind:"input_delivery",batch,receipt,turn:next.turn}),{...runItem(2,{...next,status}),committedInRevision:1}];
+    const projection=projectModelInteraction({runId:"run-1",runRevision:1,items:JSON.parse(JSON.stringify(items))});
+    expect(projection.messages.map(value=>value.role)).toEqual(["user","assistant"]);
+    expect(projection.notificationHistory?.map(value=>[value.sequence,value.messageIndex])).toEqual([[1,0],[2,0]]);
+    expect(projection.historyPresentations?.filter(value=>value.section.id===presentation.section.id)).toHaveLength(1);
+    const changed=JSON.parse(JSON.stringify(items));changed[0].payload.receipt.via.selection.mapping[1].deliveryId="other";
+    expect(()=>projectModelInteraction({runId:"run-1",runRevision:1,items:changed})).toThrow("selected_input_delivery_receipt_changed");
+    for(const field of ["notificationId","recipient","purpose"] as const) {
+      const changed=JSON.parse(JSON.stringify(items)),receipt=changed[0].payload.receipt;
+      const {selection,...via}=receipt.via,{digest:_,...basis}=selection;
+      if(field==="notificationId")basis.mapping[0].notificationId="substituted-notification";
+      else basis.recipient[field]="another-recipient-or-purpose";
+      receipt.via.selection={...basis,digest:modelInputValueDigest({batch:receipt.batch,via,basis})};
+      expect(()=>projectModelInteraction({runId:"run-1",runRevision:1,items:changed})).toThrow("selected_input_delivery_mapping_invalid");
+    }
+  });
   it("exports the selected owner form to a continued Child without rewriting canonical source history", () => {
     const source = {owner: "test-source", kind: "report", id: "finding", revision: "1", runId: "run-1"};
     const presentation = retainInputPresentation({id: "finding", source, kind: "interaction_history", role: "user", necessity: "mandatory",

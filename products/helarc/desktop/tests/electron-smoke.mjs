@@ -1,12 +1,6 @@
-import { app, BrowserWindow } from "electron";
+import { app, dialog } from "electron";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { createHelarcProvider } from "../dist/main/provider/createHelarcProvider.js";
-import { FileHelarcThreadStore } from "../dist/main/thread/index.js";
-import { fileURLToPath } from "node:url";
-import { HelarcMainController } from "../dist/main/HelarcMainController.js";
-import { registerHelarcIpc } from "../dist/main/ipc.js";
-import { createHelarcWindowOptions } from "../dist/main/windowOptions.js";
 if (process.env.HELARC_SMOKE_TRANSPORT_DIAGNOSTICS === "1") {
   const fetch = globalThis.fetch;
   globalThis.smokeTransportStats = [];
@@ -49,70 +43,27 @@ if (process.env.HELARC_SMOKE_TRANSPORT_DIAGNOSTICS === "1") {
   };
 }
 app.setPath("userData", process.env.HELARC_SMOKE_USER_DATA);
-void app
-  .whenReady()
-  .then(async () => {
-    const window = new BrowserWindow(
-      createHelarcWindowOptions(
-        fileURLToPath(new URL("../dist/preload/preload.cjs", import.meta.url)),
-      ),
-    );
-    const endpoint = process.env.HELARC_SMOKE_ENDPOINT;
-    const providerKind = process.env.HELARC_SMOKE_PROVIDER_KIND ?? "ollama";
-    const model = process.env.HELARC_SMOKE_MODEL ?? "test-model";
-    const timeoutMs = Number(process.env.HELARC_SMOKE_TIMEOUT_MS ?? 10000);
-    const ollamaRuntime =
-      providerKind === "ollama"
-        ? {
-            contextWindowTokens: Number(
-              process.env.HELARC_SMOKE_CONTEXT_WINDOW ?? 163840,
-            ),
-          }
-        : null;
-    const controller = new HelarcMainController(
-      endpoint
-        ? {
-            commandOutputDirectory: join(app.getPath("userData"), "command-output"),
-            responseDelivery: "streaming",
-            providerProfile: {
-              id: "test-provider",
-              providerKind,
-              displayName: "Smoke Provider",
-              baseUrl: endpoint,
-              baseUrlOrigin: endpoint,
-              endpointLabel: "127.0.0.1",
-              model,
-              timeoutMs,
-              ollamaRuntime,
-              credentialStatus: "empty_allowed",
-              isActive: true,
-            },
-            threadStore: new FileHelarcThreadStore(
-              join(app.getPath("userData"), "threads.json"),
-            ),
-            provider: createHelarcProvider({
-              providerKind,
-              baseUrl: endpoint,
-              model,
-              timeoutMs,
-              apiKey: "",
-              ollamaRuntime,
-            }),
-          }
-        : {},
-    );
-    if (endpoint) {
-      const workspace = join(app.getPath("userData"), "workspace");
-      await mkdir(workspace, { recursive: true });
-      controller.selectWorkspacePath(workspace);
-    }
-    registerHelarcIpc({ window, controller });
-    await window.loadFile(
-      fileURLToPath(new URL("../dist/renderer/index.html", import.meta.url)),
-    );
-    window.show();
-  })
-  .catch((error) => {
-    console.error(error);
-    app.exit(1);
+process.env.LOCALAPPDATA=join(app.getPath("userData"),"local");
+delete process.env.HELARC_RENDERER_DEV_SERVER_URL;
+const endpoint=process.env.HELARC_SMOKE_ENDPOINT;
+if(endpoint){
+  process.env.HELARC_PROVIDER_KIND=process.env.HELARC_SMOKE_PROVIDER_KIND??"ollama";
+  process.env.HELARC_PROVIDER_BASE_URL=endpoint;
+  process.env.HELARC_PROVIDER_MODEL=process.env.HELARC_SMOKE_MODEL??"test-model";
+  process.env.HELARC_PROVIDER_TIMEOUT_MS=process.env.HELARC_SMOKE_TIMEOUT_MS??"10000";
+  process.env.HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS=process.env.HELARC_SMOKE_CONTEXT_WINDOW??"163840";
+  delete process.env.HELARC_PROVIDER_API_KEY;
+  const workspace=join(app.getPath("userData"),"workspace");
+  await mkdir(workspace,{recursive:true});
+  dialog.showOpenDialog=async()=>({canceled:false,filePaths:[workspace]});
+  app.on("browser-window-created",(_event,window)=>{
+    window.webContents.once("did-finish-load",()=>{
+      void window.webContents.executeJavaScript('window.helarc.chooseWorkspace({commandId:"smoke-workspace"})')
+        .catch(error=>{console.error(error);app.exit(1);});
+    });
   });
+}else{
+  delete process.env.HELARC_PROVIDER_MODEL;
+}
+// Use the actual application composition, including shared activity/recovery ownership.
+await import("../dist/main/main.js");

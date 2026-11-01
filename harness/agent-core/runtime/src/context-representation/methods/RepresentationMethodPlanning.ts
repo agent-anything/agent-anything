@@ -1,6 +1,6 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {MethodJob,RepresentationMethodProgress,MethodRelationship,MethodCandidate} from "./RepresentationMethod.js";
-import {methodSources} from "./RepresentationMethodRanges.js";
+import {methodSources,methodLeafRanges} from "./RepresentationMethodRanges.js";
 
 export function initialMethodJobs(pathId:string,progress:RepresentationMethodProgress):readonly MethodJob[] {
   const request=progress.request,sources=request.sources.filter(s=>s.role==="source").sort((a,b)=>a.order-b.order).map(s=>s.alias),candidates=request.sources.filter(s=>s.role==="candidate").map(s=>s.alias);
@@ -11,7 +11,7 @@ export function splitMethodJob(progress:RepresentationMethodProgress,job:MethodJ
   if(job.kind!=="generate"||job.level>=progress.request.bounds.levels)return null;
   const groups=new Map<string,string[]>();
   for(const alias of job.sources) {
-    const units=progress.rangeUnits.filter(u=>u.originalAlias===alias);
+    const units=methodLeafRanges(progress,alias);
     if(units.length){for(const unit of units)groups.set(unit.source.indivisibleGroup,[unit.source.alias]);continue;}
     const source=methodSources(progress).find(s=>s.alias===alias);if(!source)return null;
     const group=groups.get(source.indivisibleGroup)??[];group.push(alias);groups.set(source.indivisibleGroup,group);
@@ -39,7 +39,10 @@ export function methodCandidateChecked(progress:RepresentationMethodProgress,id:
 }
 export function remainingMethodRelations(progress:RepresentationMethodProgress):readonly MethodRelationship[] {
   const relationships=[...progress.request.relationships,...progress.candidates.flatMap(c=>c.relationships)];
-  return relationships.filter(r=>r.requiresCommonEvidence&&!progress.assessments.some(a=>a.scope==="both"&&a.supported&&r.sources.every(s=>a.sourceAliases.includes(s))));
+  return relationships.filter(r=>r.requiresCommonEvidence&&!progress.assessments.some(a=>a.scope==="both"&&a.supported&&
+    (a.relationshipBasis?modelInputValueDigest(a.relationshipBasis.relationship)===modelInputValueDigest(r)&&
+      a.relationshipBasis.supportingJudgments.every(id=>progress.assessments.some(parent=>parent.supported&&parent.scope==="both"&&parent.judgmentIds.includes(id))):
+      r.sources.every(s=>a.sourceAliases.includes(s)))));
 }
 export function nextMethodFinalJobs(pathId:string,progress:RepresentationMethodProgress):readonly MethodJob[] {
   const candidates=progress.candidates.filter(c=>progress.resultIds.includes(c.id));
@@ -66,8 +69,10 @@ export function methodCoverageGaps(progress:RepresentationMethodProgress):readon
   if(progress.request.combine==="merge"&&selected.length>1)gaps.push("merge_level_limit");
   const covered=new Set(selected.flatMap(c=>methodSourceAncestors(progress,c)));
   for(const s of progress.request.sources.filter(s=>s.role==="source"))if(!covered.has(s.alias)) {
-    const units=progress.rangeUnits.filter(u=>u.originalAlias===s.alias);
-    if(!units.length||units.some(u=>!covered.has(u.source.alias)))gaps.push(`source_not_represented:${s.alias}`);
+    const units=methodLeafRanges(progress,s.alias);
+    const coveredUnit=(alias:string):boolean=>covered.has(alias)||!!progress.rangeUnits.find(u=>u.source.alias===alias)?.parentAlias&&
+      coveredUnit(progress.rangeUnits.find(u=>u.source.alias===alias)!.parentAlias!);
+    if(!units.length||units.some(u=>!coveredUnit(u.source.alias)))gaps.push(`source_not_represented:${s.alias}`);
   }
   for(const r of remainingMethodRelations(progress))gaps.push(`relationship_not_checked:${r.id}`);
   return gaps;

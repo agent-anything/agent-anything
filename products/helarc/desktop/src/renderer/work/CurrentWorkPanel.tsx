@@ -31,6 +31,7 @@ import { ResultLinks } from "./ResultContent.js";
 import { PlanView } from "../plan/PlanView.js";
 import { OperationDetail } from "./OperationDetail.js";
 import { isFinishedTask, selectWorkTasks, type WorkTaskGroup } from "./WorkTaskGroups.js";
+import { ExecutionActivitiesPanel } from "../activity/ExecutionActivities.js";
 
 type Detail =
   | { kind: "task"; scope: WorkbenchScope }
@@ -355,6 +356,8 @@ export function CurrentWorkPanel({
                 : "No work yet"}
           </p>
         ) : null}
+        <ExecutionActivitiesPanel scope={detail?.scope ?? (scope && page ? { ...scope, runId: page.rootRunId } : scope)}
+          visible={visible} revision={`${snapshot.activityRevision ?? 0}:${snapshot.run?.host.runRevision ?? 0}:${snapshot.run?.display.terminal ?? false}`} />
       </div>
     </aside>
   );

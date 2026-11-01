@@ -34,6 +34,12 @@ export interface AgentStopHandler {
     interruption: InvocationInterruptionContext,
     executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext,
   ): Promise<AgentStopHandlerResult> | AgentStopHandlerResult;
+  /** Reconcile the original durable work; arbitrary handle() calls are never replayed. */
+  recover?(
+    event: AgentStopEvent,
+    interruption: InvocationInterruptionContext,
+    executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext,
+  ): Promise<AgentStopHandlerResult> | AgentStopHandlerResult;
 }
 
 export interface AgentStopObserver {

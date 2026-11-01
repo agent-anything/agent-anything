@@ -8,11 +8,17 @@ import type { ExecutionFlowObservation } from "@agent-anything/observability/exe
 
 const key = HELARC_PROTOCOL_RECOVERY_POLICY.id;
 function input(iteration: number, runId = "root"): TaskDecisionInputSources<string> {
-  return {runId, iteration, toolExposure: {controllerRequestId: `${runId}:request:${iteration}`}} as TaskDecisionInputSources<string>;
+  return {runId, iteration, inputDelivery: null, interaction: {opening: null, latestTurn: null},
+    toolExposure: {controllerRequestId: `${runId}:request:${iteration}`}} as TaskDecisionInputSources<string>;
 }
 function decision(i: TaskDecisionInputSources<string>, kind: "missing" | "advance" | "final" | "other" = "missing"): TaskDecisionProposal<string> {
-  const modelItems = [{id: `item:${i.iteration}`, metadata: {}, kind: "model_turn_finish" as const,
-    turnId: `${i.runId}:turn:${i.iteration}`, finish: {kind: "normal" as const}}];
+  const turnId = `${i.runId}:turn:${i.iteration}`;
+  const modelItems = [
+    {id: `text:${i.iteration}`, metadata: {}, kind: "assistant_text" as const, turnId, contentBlockOrdinal: 0, text: "Actual last reply"},
+    {id: `item:${i.iteration}`, metadata: {}, kind: "model_turn_finish" as const, turnId, finish: {kind: "normal" as const}},
+    {id: `response:${i.iteration}`, metadata: {}, kind: "model_response_correlation" as const, turnId,
+      response: {providerId: "test", requestId: i.toolExposure.controllerRequestId, responseId: turnId}, usage: null},
+  ];
   if (kind === "final") return {kind: "propose_completion", completionSource: {kind: "controller"}, candidates: [], output: "Done", modelItems};
   if (kind === "advance") return {kind: "advance", candidates: [{kind: "tool_request"}] as never, modelItems};
   return {kind: "continue_with_feedback", modelItems, feedback: {
@@ -108,7 +114,7 @@ describe("Helarc protocol recovery", () => {
   });
 
   it.each([
-    {version: 2}, {runId: "another"}, {maximumConsecutiveMissing: 100}, {consecutiveMissing: -1}, {consecutiveMissing: 2},
+    {version: 1}, {runId: "another"}, {maximumConsecutiveMissing: 100}, {consecutiveMissing: -1}, {consecutiveMissing: 2},
     {policyRevision: "changed"}, {disposition: "reset"}, {iteration: 10}, {requestId: "another"},
   ])("rejects malformed or mismatched recovery state before calling the model: %j", async change => {
     const f = fixture();
@@ -136,5 +142,24 @@ describe("Helarc protocol recovery", () => {
       {disposition: "not_satisfied", basis: {consecutiveMissing: 3, maximumConsecutiveMissing: 3, requestId: "root:request:3"}},
     ]);
     expect(observations.filter(value => value.kind === "invocation_exited").at(-1)).toMatchObject({disposition: "failed"});
+  });
+  it("retains the final exchange on exhaustion and recovered interruption, never under a later request", async () => {
+    const f = fixture();
+    await f.controller.next(input(1), f.context); await f.controller.next(input(2), f.context);
+    const expected = {exchange: {modelItems: decision(input(3)).modelItems}};
+    await expect(f.controller.next(input(3), f.context)).rejects.toMatchObject(expected);
+    const fresh = new HelarcProtocolRecoveryController(f.inner);
+    await expect(fresh.recover(input(3), f.context)).rejects.toMatchObject(expected);
+    await expect(fresh.interrupt(input(3), f.context)).rejects.toMatchObject(expected);
+    await expect(fresh.next(input(4), f.context)).rejects.toMatchObject({exchange: null});
+    expect(f.next).toHaveBeenCalledTimes(3); expect(f.port.commit).toHaveBeenCalledTimes(3);
+  });
+  it("forwards original interruption without spending or clearing correction counts", async () => {
+    const f = fixture(); await f.controller.next(input(1), f.context);
+    const interrupted = decision(input(2), "final"), interrupt = vi.fn(async () => interrupted);
+    const wrapped = new HelarcProtocolRecoveryController({...f.inner, interrupt});
+    expect(await wrapped.interrupt(input(2), f.context)).toBe(interrupted);
+    expect(interrupt).toHaveBeenCalledTimes(1); expect(f.next).toHaveBeenCalledTimes(1);
+    expect(f.saved.get(key)).toMatchObject({consecutiveMissing: 1}); expect(f.port.commit).toHaveBeenCalledTimes(1);
   });
 });

@@ -18,6 +18,13 @@ export interface InvocationOperationDeadlineRef {
 
 export type InvocationInterruptionRef =
   | {
+      readonly kind: "activity_cancellation";
+      readonly cancellation: InvocationCancellationRef & {
+        readonly activityId: string;
+        readonly controlRevision: number;
+      };
+    }
+  | {
       readonly kind: "run_cancellation";
       readonly cancellation: InvocationCancellationRef;
     }

@@ -136,7 +136,7 @@ export class OllamaProvider implements Provider {
     });
     const modelContext: ProviderModelContext = Object.freeze({
       accounting: nativeInputAccounting({
-        basis: {endpoint: `${this.config.baseUrl}/api/chat`, generationEndpoint: `${this.config.baseUrl}/api/generate`,
+        basis: {endpoint: ollamaEndpoint(this.config,"chat"), generationEndpoint: ollamaEndpoint(this.config,"generate"),
           model: this.config.model, artifact: this.config.modelArtifact ?? null, adapter: inputPreservation.adapterRevision,
           mode: this.config.think ?? null, requestedContext: this.config.runtime.contextWindowTokens,
           runtimeVersion: null, deployedContext: null, templateRevision: null, preservation: inputPreservation.revision,
@@ -393,8 +393,12 @@ export class OllamaProvider implements Provider {
 
   private endpointUrl(interaction: ProviderInteraction): string {
     const operation = interaction.kind === "native_tool_turn" ? "chat" : "generate";
-    return `${this.config.baseUrl.replace(/\/+$/, "")}/api/${operation}`;
+    return ollamaEndpoint(this.config,operation);
   }
+}
+
+function ollamaEndpoint(config:Readonly<OllamaProviderConfig>,operation:"chat"|"generate"):string {
+  return `${config.baseUrl.replace(/\/+$/, "")}/api/${operation}`;
 }
 
 function prepareEncodedRequest(

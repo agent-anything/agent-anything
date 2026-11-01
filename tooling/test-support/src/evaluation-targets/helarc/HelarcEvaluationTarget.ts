@@ -19,7 +19,8 @@ import type {
   ActionRecordPort,
   ActionRetryDecisionPort,
 } from "@agent-anything/action-execution/enforcement";
-import { RunExecutionCoordinator, type RunTreeLimits } from "@agent-anything/agent-runtime/execution-coordinator";
+import { RunExecutionCoordinator,ModelTaskDecisionCoordinator,type RunTreeLimits } from "@agent-anything/agent-runtime/execution-coordinator";
+import {createSystemRetryExecutor} from "@agent-anything/agent-runtime/retry";
 import {
   createRunFailureCause,
   runSettlementCauseCode,
@@ -592,6 +593,14 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     throw new TypeError("Helarc Evaluation Provider profile is invalid.");
   }
   const product = await createHelarcProductComposition({
+    taskExecution:binding=>{
+      // This isolated evaluation owns its scripted execution; Product supplies no fallback.
+      const retryClock={now:()=>new Date(clock.now())};
+      const coordinator=new ModelTaskDecisionCoordinator({provider,buildRequest:binding.buildRequest,
+        parseResponse:binding.interpret,responseProtocol:binding.protocol,delivery:binding.delivery,
+        retryExecutor:createSystemRetryExecutor(retryClock),retryClock});
+      return {taskDecisions:coordinator,preparations:coordinator.preparations};
+    },
     instructionTarget: options.instructionTarget ?? "production",
     runId: productRunId,
     task: taskResult.task,

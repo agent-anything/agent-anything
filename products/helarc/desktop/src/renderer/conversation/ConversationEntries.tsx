@@ -18,6 +18,7 @@ import { ConversationActivity } from "./ConversationActivity.js";
 import { useResponsePreview } from "./useResponsePreview.js";
 import { useConversationCapacity } from "./ConversationReadingBudget.js";
 import { modelResponseProgress } from "../../shared/ModelResponsePresentation.js";
+import { ForegroundActivity } from "../activity/ExecutionActivities.js";
 import { conversationBlockGroups } from "./ConversationBlockGroups.js";
 import { DelegatedConversations, type ChildReadingPosition } from "./DelegatedConversations.js";
 import { ConversationExcerpt, ConversationFollowing, ConversationReading } from "./ConversationReading.js";
@@ -506,7 +507,8 @@ function ChildConversationContent(
         attempts={previews.attempts}
         syncedCommitKey={synced}
       />
-      <ModelResponseProgress attempts={previews.attempts} live={props.live} />
+      <ForegroundActivity scope={props.child} active={props.live}
+        responseProgress={props.live ? modelResponseProgress(previews.attempts.at(-1)) : null} />
       {page && !page.entries.length && !previews.attempts.length && (
         <p className="wb-muted">No retained response yet.</p>
       )}

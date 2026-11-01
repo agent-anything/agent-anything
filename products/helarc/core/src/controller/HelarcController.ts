@@ -27,6 +27,8 @@ import {
 } from "../prompt/HelarcPromptAssembly.js";
 import {
   findHelarcModelCallableBinding,
+  retainHelarcCallableBinding,
+  restoreHelarcCallableCatalog,
   type HelarcModelCallableCatalog,
 } from "./HelarcModelCallableCatalog.js";
 import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
@@ -70,11 +72,13 @@ export function buildHelarcProviderRequest(
     step.check("instruction_binding", "passed", {bindingId:input.instructionBinding.ref.id});
     step.check("settled_interaction", "passed");
     const compositionRef = flow.material("Model input composition", "composed", request.composition, "provider");
+    const sourceRef = flow.material("Task request source", "provided", request, "provider",
+      {owner:"model-input",kind:"contribution",id:request.requestId,revision:null,runId:input.runId});
     step.output(compositionRef);
     flow.advance("request", {compositionId:request.composition.id, workingViewId:request.composition.workingView.id,
       selectedOccurrenceCount:request.composition.workingView.entries.length,
       nativeExchangeGroupCount:request.composition.workingView.nativeGroups.length}, [compositionRef])
-      .output({owner:"model-interaction",kind:"request",id:request.requestId,revision:null});
+      .output(sourceRef);
     flow.close("returned");
     return request;
   } catch (error) { flow.close("failed"); throw error; }
@@ -182,6 +186,7 @@ function buildRequest(
       omittedToolCount: input.toolExposure.omittedToolCount,
       modelCallableCatalogRevision: callableCatalog.revision,
       modelCallableDefinitionsDigest: callableCatalog.definitionsDigest,
+      modelCallableBinding: retainHelarcCallableBinding(callableCatalog),
       toolGuidanceBindingId: toolGuidanceBinding.id,
       toolGuidanceReleaseId: toolGuidanceBinding.release.id,
       toolGuidanceReleaseRevision: toolGuidanceBinding.release.revision,
@@ -213,7 +218,7 @@ function buildRequest(
 export function parseHelarcProviderResponse(
   response: ProviderResponse,
   input: TaskDecisionInputSources<HelarcAgentOutput>,
-  protocol: HelarcControllerProtocolComposition,
+  request: ProviderRequest,
   executionFlow?: ExecutionFlowContext,
   materialReferenceError: string | null = null,
 ): TaskDecisionProposal<HelarcAgentOutput> {
@@ -221,7 +226,7 @@ export function parseHelarcProviderResponse(
   const interpretation = flow.advance("interpret", {controllerRequestId:input.toolExposure.controllerRequestId, responseKind:response.kind},
     [flow.material("Response to interpret", "received", response, "provider")]);
   try {
-    const decision = interpretResponse(response, input, protocol, materialReferenceError);
+    const decision = interpretResponse(response, input, restoreHelarcCallableCatalog(request,input.toolExposure), materialReferenceError);
     const decisionRef = flow.material("Interpreted Controller decision", "interpreted", decision);
     interpretation.output(decisionRef);
     if (decision.kind === "propose_completion" && decision.output.finalReply) {
@@ -241,13 +246,12 @@ export function parseHelarcProviderResponse(
 function interpretResponse(
   response: ProviderResponse,
   input: TaskDecisionInputSources<HelarcAgentOutput>,
-  protocol: HelarcControllerProtocolComposition,
+  catalog: HelarcModelCallableCatalog,
   materialReferenceError: string | null,
 ): TaskDecisionProposal<HelarcAgentOutput> {
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
   }
-  const catalog = protocol.createCallableCatalog(input.toolExposure, input.planLimits, input.plan !== null);
   assertTurnCorrelation(response, input);
   const modelItems = createControllerModelItems(
     response.turn,

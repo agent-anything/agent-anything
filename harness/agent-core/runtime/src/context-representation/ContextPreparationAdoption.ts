@@ -8,7 +8,7 @@ export function contextPreparationAdoption(input:{
   readonly checkedInput:SharedAcceptanceProposal;
 }):SharedAcceptanceProposal {
   const proposed=contextPreparationAcceptance(input.policy),decision=proposed.decision,checked=input.checkedInput;
-  if(decision.foreground.kind!=="continue"||decision.investment.kind==="propose"||
+  if(decision.foreground.kind!=="continue"||
     checked.id!==proposed.acceptance.id||checked.scope!==proposed.acceptance.scope||checked.actor!==proposed.acceptance.actor)
     throw new TypeError("context_adoption_decision_binding_invalid");
   const selections=checked.parts.filter(p=>p.owner==="context_selection"&&p.kind==="selection_input");

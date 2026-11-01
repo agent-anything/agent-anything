@@ -16,3 +16,4 @@ export * from "./guidance/index.js";
 export { ExecutionMaterialAccessError, type HelarcExecutionMaterialReader, type HelarcExecutionCollectionReader } from "./HelarcExecutionDetails.js";
 export type {HelarcExecutionHandoff} from "./HelarcExecutionHandoff.js";
 export type {HelarcMaterialHandoff} from "./HelarcMaterialHandoff.js";
+export type {HelarcReportHandoff,HelarcReportHandoffOutcome} from "./HelarcReportHandoff.js";

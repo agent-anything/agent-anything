@@ -1,0 +1,15 @@
+.context-settings fieldset {border:0; padding:0; margin:0 0 16px; min-width:0;}
+.context-settings button {display:inline-flex; align-items:center; gap:6px;}
+.context-observation-add {display:flex; align-items:end; flex-wrap:wrap; gap:12px; margin-bottom:16px;}
+.context-observation-add label,.context-observation-fields label {display:grid; gap:5px; min-width:0;}
+.context-observation {border-top:1px solid var(--border-color,#d6dadd); padding:16px 0;}
+.context-observation header {display:flex; align-items:center; justify-content:space-between; gap:12px;}
+.context-observation h4 {margin:0; overflow-wrap:anywhere; font-size:14px;}
+.context-observation-target {font-size:12px; color:var(--text-muted,#616b73); overflow-wrap:anywhere;}
+.context-observation-fields {display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px;}
+.context-observation-fields input,.context-observation-fields select,.context-observation-add select {width:100%; min-width:0;}
+.context-observation-dimensions {display:flex; flex-wrap:wrap; gap:8px 16px; margin:16px 0;}
+.context-observation-dimensions label {display:flex; align-items:center; gap:6px; font-size:12px;}
+.context-observation-note {display:grid; gap:5px; margin-top:10px;}
+.context-observation-note textarea {width:100%; resize:vertical; min-height:56px;}
+@media(max-width:560px) {.context-observation-fields {grid-template-columns:1fr;}}

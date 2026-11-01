@@ -1,181 +1,89 @@
-import { helarcProduct } from "@agent-anything/helarc";
-import { BrowserWindow, app, dialog } from "electron";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { HelarcMainController } from "./HelarcMainController.js";
-import { HelarcExecutionStore } from "./execution-storage/HelarcExecutionStore.js";
-import { ElectronSafeStorageCredentialCipher } from "./provider/ElectronSafeStorageCredentialCipher.js";
-import { reconcileInterruptedHooks } from "./execution-storage/reconcileInterruptedHooks.js";
-import { HelarcPersistenceDiagnostics } from "./persistence/HelarcPersistenceDiagnostics.js";
-import { HelarcExecutionDiagnostics } from "./diagnostics/HelarcExecutionDiagnostics.js";
-import { HelarcStorageService } from "./storage/HelarcStorageService.js";
-import { registerHelarcIpc } from "./ipc.js";
-import { FileHelarcContextManifestStore } from "./context-manifest/index.js";
-import { FileHelarcModelContinuationStore } from "./model-continuity/index.js";
-import { createHelarcProvider } from "./provider/createHelarcProvider.js";
-import { restoreHelarcProvider } from "./provider/restoreHelarcProvider.js";
-import { createElectronProviderCredentialStore } from "./provider/createElectronProviderCredentialStore.js";
-import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfileStore.js";
-import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
-import { FileHelarcThreadStore } from "./thread/index.js";
-import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
-import { FileHelarcProjectStore } from "./project/FileHelarcProjectStore.js";
-import { createHelarcWindowOptions } from "./windowOptions.js";
-import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
-import { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
-import { HelarcInspection } from "./inspection/HelarcInspection.js";
-import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
+import {helarcProduct} from "@agent-anything/helarc";
+import {BrowserWindow,app,dialog} from "electron";
+import {dirname,join} from "node:path";
+import {fileURLToPath} from "node:url";
+import {createHelarcApplicationServices} from "./HelarcApplicationServices.js";
+import {HelarcExecutionStore} from "./execution-storage/HelarcExecutionStore.js";
+import {ElectronSafeStorageCredentialCipher} from "./provider/ElectronSafeStorageCredentialCipher.js";
+import {reconcileInterruptedHooks} from "./execution-storage/reconcileInterruptedHooks.js";
+import {HelarcExecutionDiagnostics} from "./diagnostics/HelarcExecutionDiagnostics.js";
+import {registerHelarcIpc} from "./ipc.js";
+import {createHelarcWindowOptions} from "./windowOptions.js";
+import {HelarcInspection} from "./inspection/HelarcInspection.js";
+import {createHelarcActivityHost} from "./context/HelarcActivityHost.js";
+import {closeHelarcHost} from "./context/HelarcHostShutdown.js";
 
-const currentDir = dirname(fileURLToPath(import.meta.url));
-let inspection: Promise<HelarcInspection> | null = null;
-let inspectionClosed = false;
-let executionStore: Promise<HelarcExecutionStore> | null = null;
-let executionDiagnostics: HelarcExecutionDiagnostics | null = null;
+const currentDir=dirname(fileURLToPath(import.meta.url));
+let inspection:Promise<HelarcInspection>|null=null;
+let executionStore:Promise<HelarcExecutionStore>|null=null;
+let diagnostics:HelarcExecutionDiagnostics|null=null;
+let activityHost:ReturnType<typeof createHelarcActivityHost>|null=null;
+let services:Promise<Awaited<ReturnType<typeof createHelarcApplicationServices>>>|null=null;
+let closing=false;
 
-app.on("before-quit", (event) => {
-  if (!inspection || inspectionClosed) return;
-  event.preventDefault();
-  inspectionClosed = true;
-  void (async () => {
-    await executionStore?.then(store => store.close());
-    await inspection!.then((source) => source.close());
-  })().catch(() => {}).finally(async () => {
-    try { await executionDiagnostics?.flush(); } finally { app.quit(); }
-  });
-});
-
-app.whenReady().then(() => {
-  void createWindow().catch(reportWindowCreationFailure);
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      void createWindow().catch(reportWindowCreationFailure);
+app.on("before-quit",event=>{
+  if(!services||closing)return;
+  event.preventDefault();closing=true;
+  void closeHelarcHost({
+    activities:async remaining=>{await services?.catch(()=>{});return activityHost?.service.close(remaining);},
+    inspection:async()=>{await inspection?.then(source=>source.close());},
+    storage:async()=>{await services?.then(source=>source.close(),()=>{});await executionStore?.then(store=>store.close());},
+    diagnostics:async()=>{await diagnostics?.flush();},
+  }).then(result=>{
+    if(result.incomplete.length||result.failed.length){
+      try{console.warn("Helarc shutdown retained unconfirmed work.",result);}catch{/* Closed console does not change execution facts. */}
     }
-  });
+  }).finally(()=>app.quit());
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+app.whenReady().then(()=>{
+  void createWindow().catch(reportWindowCreationFailure);
+  app.on("activate",()=>{
+    if(!closing&&BrowserWindow.getAllWindows().length===0)void createWindow().catch(reportWindowCreationFailure);
+  });
 });
+app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit();});
 
-async function createWindow(): Promise<void> {
-  const window = new BrowserWindow(createHelarcWindowOptions(
-    join(currentDir, "../preload/preload.cjs"),
-  ));
-  const userDataPath = app.getPath("userData");
-  executionDiagnostics ??= new HelarcExecutionDiagnostics(join(userDataPath, "execution-diagnostics.json"));
-  inspection ??= HelarcInspection.create(join(userDataPath, "inspection-settings.json"));
-  const inspectionSource = await inspection;
-  executionStore ??= HelarcExecutionStore.open(join(userDataPath, "execution"), undefined, inspectionSource.evidenceObserver, inspectionSource.fileMaterialObserver, executionDiagnostics, new ElectronSafeStorageCredentialCipher(), inspectionSource.contextMaterialObserver,inspectionSource.activityObserver,inspectionSource.contextFoundationObserver).then(async store => {
-    try { await reconcileInterruptedHooks(store, record => inspectionSource.definitions?.recoveredHook(record)); return store; }
-    catch (error) { await store.close(); throw error; }
-  });
-  const executions = await executionStore;
-  const storage = new HelarcStorageService(userDataPath, () => inspectionSource.snapshot().health);
-  window.once("closed", () => storage.close());
-  const instructionSettingsStore = new FileHelarcInstructionSettingsStore(join(userDataPath, "instruction-settings.json"));
-  const providerCredentialStore = createElectronProviderCredentialStore(userDataPath);
-  const providerProfileStore = new FileHelarcProviderProfileStore(
-    join(userDataPath, "provider-profile.json"),
-  );
-  const storedProviderConfig = await providerProfileStore.resolveActiveProfile(providerCredentialStore);
-  const providerConfig = storedProviderConfig ?? resolveHelarcProviderConfig();
-  const providerReady = providerConfig.ok && providerConfig.config.model.trim().length > 0;
-  const providerConfigError = !providerConfig.ok ? providerConfig.error : providerReady ? null : {
-    code: "provider_config_missing" as const, message: "Select a model before starting work.",
-  };
-  const provider = providerReady ? createHelarcProvider(providerConfig.config, inspectionSource.providerObserver) : null;
-  const workspaceProfileStore = new FileHelarcWorkspaceProfileStore(
-    join(userDataPath, "workspace-profiles.json"),
-  );
-  const threadStore = new FileHelarcThreadStore(
-    join(userDataPath, "threads.json"),
-  );
-  const projectStore = new FileHelarcProjectStore(join(userDataPath, "projects.json"));
-  const modelContinuationStore = new FileHelarcModelContinuationStore(
-    join(userDataPath, "model-continuations.json"),
-  );
-  const contextManifestStore = new FileHelarcContextManifestStore(
-    join(userDataPath, "context-manifests.json"),
-  );
-  const runTranscriptStore = new FileHelarcRunTranscriptStore(
-    join(userDataPath, "run-transcripts"),
-  );
-  await Promise.all([
-    modelContinuationStore.listContinuations(),
-    contextManifestStore.listManifests(),
-  ]);
-  const controller = new HelarcMainController({
-    executionDiagnostics,
-    executionStore: executions,
-    async recoverProvider(saved) {
-      const resolved = await providerProfileStore.resolveProfile(saved.providerProfile.id, providerCredentialStore);
-      if (!resolved.ok || resolved.profile.revision !== saved.providerProfile.revision) {
-        throw new Error("The original Provider configuration or credential is unavailable.");
-      }
-      return restoreHelarcProvider(saved, resolved.config.apiKey, inspectionSource.providerObserver);
-    },
-    commandOutputDirectory: join(userDataPath, "command-output"),
-    projects: await projectStore.listProjects(),
-    responseDelivery: "streaming",
-    commandOutputRegistry: new CommandOutputRegistry(join(userDataPath, "command-output", "locators.json")),
-    inspection: inspectionSource,
-    instructionSettings: await instructionSettingsStore.load(),
-    provider,
-    providerConfigError,
-    providerProfile: providerConfig.ok ? providerConfig.profile : null,
-    workspaceProfiles: await workspaceProfileStore.listProfiles(),
-    threadSummaries: await threadStore.listThreadSummaries(),
-    threadStore,
-    persistenceDiagnostics: new HelarcPersistenceDiagnostics(join(userDataPath, "persistence-diagnostics.json")),
-    modelContinuationStore,
-    contextManifestPersistence: contextManifestStore,
-    runTranscriptPort: runTranscriptStore,
-  });
-  if (storedProviderConfig) {
-    const profiles = await providerProfileStore.listProfiles(providerCredentialStore);
-    controller.configureProvider({ provider, profile: profiles.find(p => p.isActive) ?? null, profiles, error: providerConfigError });
-  }
-  registerHelarcIpc({
-    storage,
-    projectStore,
-    inspection: inspectionSource,
-    instructionSettingsStore,
-    window,
-    controller,
-    workspaceProfileStore,
-    providerProfileStore,
-    providerCredentialStore,
-  });
+async function initializeServices(){
+  const userDataPath=app.getPath("userData");
+  diagnostics=new HelarcExecutionDiagnostics(join(userDataPath,"execution-diagnostics.json"));
+  inspection=HelarcInspection.create(join(userDataPath,"inspection-settings.json"));
+  const source=await inspection;
+  if(closing)throw new Error("Application is closing.");
+  executionStore=HelarcExecutionStore.open(join(userDataPath,"execution"),undefined,source.evidenceObserver,
+    source.fileMaterialObserver,diagnostics,new ElectronSafeStorageCredentialCipher(),source.contextMaterialObserver,
+    source.activityObserver,source.contextFoundationObserver);
+  const executions=await executionStore;
+  await reconcileInterruptedHooks(executions,record=>source.definitions?.recoveredHook(record));
+  if(closing)throw new Error("Application is closing.");
+  activityHost=createHelarcActivityHost(executions,{diagnostics});
+  return createHelarcApplicationServices({userDataPath,inspection:source,executions,diagnostics,activityHost});
+}
+
+async function createWindow():Promise<void>{
+  if(closing)return;
+  const window=new BrowserWindow(createHelarcWindowOptions(join(currentDir,"../preload/preload.cjs")));
+  services??=initializeServices();
+  const application=await services;
+  if(closing||window.isDestroyed())return;
+  registerHelarcIpc({...application,window});
   window.setTitle(helarcProduct.displayName);
-  window.once("ready-to-show", () => window.show());
-  const rendererDevServerUrl = readRendererDevServerUrl(process.env);
-  if (rendererDevServerUrl) {
-    void window.loadURL(rendererDevServerUrl);
-    return;
-  }
-
-  void window.loadFile(join(currentDir, "../renderer/index.html"));
+  window.once("ready-to-show",()=>window.show());
+  const url=readRendererDevServerUrl(process.env);
+  if(url)await window.loadURL(url);
+  else await window.loadFile(join(currentDir,"../renderer/index.html"));
 }
 
-function reportWindowCreationFailure(cause: unknown): void {
-  const message = cause instanceof Error ? cause.message : "Helarc window creation failed.";
-  console.error("Helarc window creation failed.", cause);
-  dialog.showErrorBox("Helarc failed to start", message);
+function reportWindowCreationFailure(cause:unknown):void{
+  if(closing)return;
+  const message=cause instanceof Error?cause.message:"Helarc window creation failed.";
+  try{console.error("Helarc window creation failed.",cause);}catch{/* Diagnostic sink may have closed. */}
+  dialog.showErrorBox("Helarc failed to start",message);
 }
 
-function readRendererDevServerUrl(env: NodeJS.ProcessEnv): string | null {
-  const value = env.HELARC_RENDERER_DEV_SERVER_URL?.trim();
-  if (!value) {
-    return null;
-  }
-
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
-  }
+function readRendererDevServerUrl(env:NodeJS.ProcessEnv):string|null{
+  const value=env.HELARC_RENDERER_DEV_SERVER_URL?.trim();
+  if(!value)return null;
+  try{const url=new URL(value);return url.protocol==="http:"||url.protocol==="https:"?url.toString():null;}
+  catch{return null;}
 }

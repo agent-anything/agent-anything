@@ -1,0 +1,27 @@
+.wb-execution-foreground,
+.wb-execution-child,
+.wb-execution-availability {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wb-execution-foreground { padding: 10px 0; font-size: 13px; }
+.wb-execution-child { padding: 4px 0; font-size: 12px; }
+.wb-execution-foreground > svg,
+.wb-execution-child > svg,
+.wb-execution-row > svg { flex: 0 0 14px; }
+.wb-execution-foreground > span,
+.wb-execution-child > span { min-width: 0; flex: 1; }
+.wb-execution-foreground small,
+.wb-execution-child small { flex: 0 1 auto; }
+.wb-execution-availability { font-size: 12px; }
+.wb-execution-activities h3 { font-size: 13px; margin: 0 0 12px; }
+.wb-execution-group h4 { font-size: 12px; margin: 12px 0 6px; font-weight: 500; }
+.wb-execution-row { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; }
+.wb-execution-row > svg { margin-top: 3px; }
+.wb-execution-row > div { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.wb-execution-row strong { font-size: 12px; font-weight: 500; }
+.wb-execution-row span,
+.wb-execution-row small { font-size: 12px; }

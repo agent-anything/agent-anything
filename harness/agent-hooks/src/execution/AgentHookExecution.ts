@@ -1,5 +1,5 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import { ActivityCheckpointError, type ActivityCheckpointPort } from "@agent-anything/agent-runtime/activity";
+import { ActivityCheckpointError, ActivityHostUnavailableError, type ActivityCheckpointPort } from "@agent-anything/agent-runtime/activity";
 import { ExecutionFlowPath, type ExecutionFlowContext } from "@agent-anything/observability/execution-flow";
 import { AGENT_HOOK_HANDLER_FLOW } from "./AgentHookExecutionFlow.js";
 import { hookInvocationId, interruptedAgentHook, type AgentHookInvocationCheckpoint,
@@ -190,14 +190,21 @@ async function invokeStopHandler(
 ): Promise<AgentStopHandlerResult | null> {
   const flow = new ExecutionFlowPath(AGENT_HOOK_HANDLER_FLOW, executionFlow ?? {}, event.run.id, []);
   flow.advance("invoke", {hookId:match.registration.ref.id, timeoutMs:match.registration.timeoutMs, mode:match.registration.mode}, [flow.material("Hook event and registration", "received", {event, registration: match.registration})]);
-  const result = await checkpointInvocation(match, event, checkpoints, now, async () => {
-    const returned = await invokeBounded(match, event, interruption, deadlineAt, now, async (context) =>
-      (match.binding.handler as AgentStopHandler).handle(event, context, flow.callContext));
+  const handler = match.binding.handler as AgentStopHandler;
+  const invoke = async (entry: AgentStopHandler["handle"], deadline: string) => {
+    const returned = await invokeBounded(match, event, interruption, deadline, now, async (context) =>
+      entry.call(handler, event, context, flow.callContext));
     if (returned.status !== "completed") return returned;
     const validated = validateStopResult(returned.value, match.registration.maximumResultBytes);
     return validated.decision ? {...returned, value: validated.decision}
-      : {status: "output_invalid", message: validated.message!, startedAt: returned.startedAt, completedAt: returned.completedAt};
-  }, records);
+      : {status: "output_invalid" as const, message: validated.message!, startedAt: returned.startedAt, completedAt: returned.completedAt};
+  };
+  const result = await checkpointInvocation(match, event, checkpoints, now, () => invoke(handler.handle, deadlineAt), records, undefined,
+    handler.recover ? original => {
+      flow.current?.check("recovery_entry", "passed", {invocationId: original.id, startedAt: original.startedAt});
+      return invoke(handler.recover!, new Date(Math.min(Date.parse(deadlineAt),
+        Date.parse(original.startedAt) + original.registration.timeoutMs)).toISOString());
+    } : undefined);
   let decision: AgentStopHandlerResult | null = null;
   let status: AgentHookInvocationStatus;
   let code: string | null = null;
@@ -261,16 +268,17 @@ async function invokeObserver(
 }
 
 type InvocationResult = AgentHookInvocationOutcome;
+type RecoverInvocation = (original: AgentHookInvocationCheckpoint) => Promise<InvocationResult>;
 
 async function checkpointInvocation(
   match: ReturnType<typeof matchingAgentHooks>[number], event: AgentStopEvent | AgentStopFailureEvent,
   port: ActivityCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
-  records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint,
+  records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint, recover?: RecoverInvocation,
 ): Promise<InvocationResult> {
   try {
-    return await invokeRecorded(match, event, port, now, invoke, records, prepared);
+    return await invokeRecorded(match, event, port, now, invoke, records, prepared, recover);
   } catch (error) {
-    if (error instanceof ActivityCheckpointError) throw error;
+    if (error instanceof ActivityHostUnavailableError || error instanceof ActivityCheckpointError) throw error;
     throw new ActivityCheckpointError(hookInvocationId(event, match.registration), {cause: error});
   }
 }
@@ -278,7 +286,7 @@ async function checkpointInvocation(
 async function invokeRecorded(
   match: ReturnType<typeof matchingAgentHooks>[number], event: AgentStopEvent | AgentStopFailureEvent,
   port: ActivityCheckpointPort | undefined, now: () => string, invoke: () => Promise<InvocationResult>,
-  records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint,
+  records?: AgentHookRecordPort, prepared?: AgentHookInvocationCheckpoint, recover?: RecoverInvocation,
 ): Promise<InvocationResult> {
   if (!port && !records) return invoke();
   const key = JSON.stringify(["hook", event.ref.id, match.registration.ref]);
@@ -292,10 +300,9 @@ async function invokeRecorded(
     event, registration: match.registration, startedAt: now(), outcome: null};
   const commit = (value: AgentHookInvocationCheckpoint) => records ? records.commitHookInvocation(value) : port!.commit(key, value);
   if (!saved && !prepared) await commit(intent);
-  // Arbitrary handler code is not replay-safe. Existing handler-failure policy
-  // receives an explicit interrupted outcome instead of an invented allow.
+  // Recovery is an explicit owner operation, not replay of arbitrary handler code.
   const result: InvocationResult = saved
-    ? interruptedAgentHook(intent, now()).outcome!
+    ? recover ? await recover(intent) : interruptedAgentHook(intent, now()).outcome!
     : await invoke();
   const outcome = {...result, startedAt: intent.startedAt};
   await commit({...intent, outcome});
@@ -344,6 +351,8 @@ async function invokeBounded(
   const startedAt = now();
   const local = new AbortController();
   const effectiveDeadline = Math.min(Date.parse(deadlineAt), Date.parse(startedAt) + match.registration.timeoutMs);
+  if (interruption.signal.aborted) return {status: "cancelled", message: "Agent Hook Handler was cancelled with the Run.", startedAt, completedAt: now()};
+  if (effectiveDeadline <= Date.parse(startedAt)) return {status: "timed_out", message: "Agent Hook Handler exceeded its original deadline.", startedAt, completedAt: now()};
   let timer: ReturnType<typeof setTimeout> | null = null;
   let abortListenerRegistered = false;
   const operation = Promise.resolve()

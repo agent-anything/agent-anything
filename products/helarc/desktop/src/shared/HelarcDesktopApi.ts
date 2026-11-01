@@ -538,6 +538,8 @@ export interface HelarcThreadSummarySnapshot {
 }
 
 export interface HelarcMainSnapshot {
+  /** Independent durable activity invalidation; older snapshots may omit it. */
+  activityRevision?: number;
   /** Live execution ownership, independent of the last retained Run projection. */
   execution: "idle" | "starting" | "active";
   projects: readonly HelarcProjectSnapshot[];
@@ -651,6 +653,7 @@ export interface HelarcProductCommandResultMap {
   readonly "project.save": { readonly ok: boolean; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
   readonly "project.chooseFolder": { readonly profile: HelarcWorkspaceProfileSnapshot | null; readonly snapshot: HelarcMainSnapshot; readonly error: string | null };
   readonly "instructions.save": import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot;
+  readonly "context.save":import("./HelarcContextSettings.js").HelarcContextSettingsSnapshot;
   readonly "inspection.save": import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot;
   readonly "storage.cleanup": import("./HelarcStorage.js").HelarcStorageCleanupResult;
   readonly "workspace.choose": HelarcMainSnapshot;
@@ -903,6 +906,7 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
+  readExecutionActivities(input: import("./HelarcExecutionActivities.js").ExecutionActivitiesQuery): Promise<import("./HelarcExecutionActivities.js").ExecutionActivitiesResult>;
   listRecoverableWork(): Promise<readonly import("./HelarcExecutionRecovery.js").HelarcRecoverableWork[]>;
   recoverWork(input: import("./HelarcExecutionRecovery.js").HelarcRecoverWorkInput): Promise<import("./HelarcExecutionRecovery.js").HelarcRecoverWorkResult>;
   readConversation(input: import("./HelarcWorkbench.js").ConversationQuery): Promise<import("./HelarcWorkbench.js").ConversationPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
@@ -921,6 +925,8 @@ export interface HelarcDesktopApi {
   readCommandOutput(input: import("./HelarcWorkbench.js").CommandOutputQuery): Promise<import("./HelarcWorkbench.js").CommandOutputPage>;
   openExternalLink(input: { url: string }): Promise<{ ok: boolean }>;
   getInstructionSettings(): Promise<import("./HelarcInstructionSettings.js").HelarcInstructionSettingsSnapshot>;
+  getContextSettings():Promise<import("./HelarcContextSettings.js").HelarcContextSettingsSnapshot>;
+  saveContextSettings(input:{readonly commandId:string;readonly settings:import("./HelarcContextSettings.js").HelarcContextSettings;readonly expectedRevision:string}):Promise<HelarcProductCommandReceipt<"context.save">>;
   getInspectionSettings(): Promise<import("./HelarcInspectionSettings.js").HelarcInspectionSettingsSnapshot>;
   getStorage(): Promise<import("./HelarcStorage.js").HelarcStorageSnapshot>;
   cleanupStorage(input: { readonly commandId: string; readonly recordingIds: readonly string[] }): Promise<HelarcProductCommandReceipt<"storage.cleanup">>;

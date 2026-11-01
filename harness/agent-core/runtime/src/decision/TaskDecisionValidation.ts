@@ -1,4 +1,6 @@
 import { snapshotProviderFailure } from "@agent-anything/model-interaction";
+import {applySelectedResultPresentations, snapshotSelectedResultPresentationReceipt, validateSelectedResultPresentationResponse} from "./SelectedResultPresentation.js";
+import {snapshotTaskModelResponseRejection} from "./TaskModelResponseRejection.js";
 import type {
 ModelAssistantContentBlock,
 ModelCallRef,
@@ -18,6 +20,7 @@ import type {
 TaskDecisionProposal,
 TaskDecisionInputSources,
 TaskDecisionModelItem,
+TaskModelExchange,
 ProgressionCandidate
 } from "./TaskDecisionActivity.js";
 import {
@@ -40,14 +43,8 @@ export function validateTaskDecisionProposal<TOutput>(
     throw decisionContractError("controller_decision_invalid");
   }
 
-  const modelItems = validateModelItems(candidate.modelItems);
-  const inputDeliveryReceipt = snapshotInputDeliveryReceipt(candidate.inputDeliveryReceipt, input.inputDelivery);
-  const openingReceipt = candidate.openingReceipt == null ? null : snapshotConversationOpeningReceipt(candidate.openingReceipt, input.runId);
-  if (openingReceipt && (input.interaction.opening || input.interaction.latestTurn)) throw decisionContractError("conversation_opening_repeated");
-  if (inputDeliveryReceipt?.via.kind === "controller" &&
-      inputDeliveryReceipt.via.controllerRequestId !== input.toolExposure.controllerRequestId) {
-    throw decisionContractError("controller_input_delivery_request_mismatch");
-  }
+  const {modelItems, inputDeliveryReceipt = null, openingReceipt = null, resultPresentationReceipt = null, responseRejection = null} = snapshotTaskModelExchange(candidate, input);
+  if(responseRejection&&candidate.kind!=="continue_with_feedback")throw decisionContractError("rejected_response_cannot_decide");
   const modelCalls = new Map(modelItems.flatMap((item) =>
     item.kind === "model_tool_call"
       ? [[modelCallRefKey(item.call.modelCallRef), item.call] as const]
@@ -107,6 +104,7 @@ export function validateTaskDecisionProposal<TOutput>(
         kind: "propose_completion",
         ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
         ...(openingReceipt === null ? {} : {openingReceipt}),
+        ...(resultPresentationReceipt === null ? {} : {resultPresentationReceipt}),
         candidates,
         completionSource,
         output: validation.output,
@@ -120,6 +118,7 @@ export function validateTaskDecisionProposal<TOutput>(
         kind: "advance",
         ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
         ...(openingReceipt === null ? {} : {openingReceipt}),
+        ...(resultPresentationReceipt === null ? {} : {resultPresentationReceipt}),
         candidates: candidates as readonly [ProgressionCandidate, ...ProgressionCandidate[]],
         modelItems,
       });
@@ -133,7 +132,9 @@ export function validateTaskDecisionProposal<TOutput>(
         kind: "continue_with_feedback",
         ...(inputDeliveryReceipt === null ? {} : {inputDeliveryReceipt}),
         ...(openingReceipt === null ? {} : {openingReceipt}),
+        ...(resultPresentationReceipt === null ? {} : {resultPresentationReceipt}),
         feedback: snapshotTaskDecisionFeedback(candidate.feedback),
+        ...(responseRejection === null ? {} : {responseRejection}),
         modelItems,
       });
     }
@@ -141,6 +142,38 @@ export function validateTaskDecisionProposal<TOutput>(
     default:
       throw decisionContractError("controller_decision_kind_invalid");
   }
+}
+
+/** Exchange validation does not validate a proposal or authorize its Calls. */
+export function snapshotTaskModelExchange<T>(candidate: TaskModelExchange,
+  input: Pick<TaskDecisionInputSources<T>, "runId" | "inputDelivery" | "interaction" | "toolExposure"> & {readonly agent: {readonly id:string}}): TaskModelExchange {
+  if (!isRecord(candidate)) throw decisionContractError("controller_exchange_invalid");
+  const modelItems = validateModelItems(candidate.modelItems);
+  const inputDeliveryReceipt = snapshotInputDeliveryReceipt(candidate.inputDeliveryReceipt, input.inputDelivery);
+  const openingReceipt = candidate.openingReceipt == null ? null : snapshotConversationOpeningReceipt(candidate.openingReceipt, input.runId);
+  if (openingReceipt && (input.interaction.opening || input.interaction.latestTurn)) throw decisionContractError("conversation_opening_repeated");
+  if (inputDeliveryReceipt?.via.kind === "controller" && inputDeliveryReceipt.via.controllerRequestId !== input.toolExposure.controllerRequestId)
+    throw decisionContractError("controller_input_delivery_request_mismatch");
+  const response = modelItems.find(item => item.kind === "model_response_correlation");
+  const responseRejection = candidate.responseRejection == null ? null : snapshotTaskModelResponseRejection(candidate.responseRejection);
+  if(responseRejection&&(modelItems.length||responseRejection.runId!==input.runId||responseRejection.controllerRequestId!==input.toolExposure.controllerRequestId))
+    throw decisionContractError("controller_response_rejection_binding_invalid");
+  const requestId=response?.response.requestId??responseRejection?.requestId;
+  const resultPresentationReceipt = candidate.resultPresentationReceipt == null ? null : snapshotSelectedResultPresentationReceipt(candidate.resultPresentationReceipt);
+  if (resultPresentationReceipt) {
+    if (!requestId || resultPresentationReceipt.recipient !== input.agent.id) throw decisionContractError("controller_result_presentation_binding_invalid");
+    validateSelectedResultPresentationResponse(resultPresentationReceipt, modelItems, responseRejection);
+    applySelectedResultPresentations(resultPresentationReceipt,
+      [...(input.interaction.opening?.presentations ?? []), ...(input.interaction.historyPresentations ?? [])].map(value => value.section),
+      input.runId, requestId, input.toolExposure.controllerRequestId);
+  }
+  if (requestId && (openingReceipt && openingReceipt.requestId !== requestId ||
+        inputDeliveryReceipt?.via.kind === "provider" && inputDeliveryReceipt.via.requestId !== requestId))
+    throw decisionContractError("controller_exchange_request_mismatch");
+  const calls = modelItems.flatMap(item => item.kind === "model_tool_call" ? [modelCallRefKey(item.call.modelCallRef)] : []);
+  if (new Set(calls).size !== calls.length) throw decisionContractError("controller_model_call_duplicated");
+  return Object.freeze({modelItems, ...(inputDeliveryReceipt ? {inputDeliveryReceipt} : {}), ...(openingReceipt ? {openingReceipt} : {}),
+    ...(resultPresentationReceipt ? {resultPresentationReceipt} : {}), ...(responseRejection ? {responseRejection} : {})});
 }
 
 export function snapshotTaskDecisionFeedback(candidate: unknown): import("./TaskDecisionActivity.js").TaskDecisionFeedback {
@@ -566,7 +599,7 @@ function decisionContractError(code: string): StructuredOutputError {
 }
 
 function createControllerError(
-  owner: TaskDecisionActivityFailure["kind"],
+  owner: "model" | "provider",
   code: TaskDecisionActivityFailureCode,
   message: string,
   retryable: boolean,

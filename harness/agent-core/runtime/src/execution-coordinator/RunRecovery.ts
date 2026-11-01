@@ -9,8 +9,8 @@ export interface RunRecoveryBindings {
 
 /** Unresolved recovery is not a new failed execution or permission to replay work. */
 export class RunRecoveryError extends Error {
-  constructor(readonly runId: string, readonly code: string, readonly subjectId: string) {
-    super(`Run recovery requires reconciliation: ${code} (${subjectId}).`);
+  constructor(readonly runId: string, readonly code: string, readonly subjectId: string,options?:ErrorOptions) {
+    super(`Run recovery requires reconciliation: ${code} (${subjectId}).`,options);
     this.name = "RunRecoveryError";
   }
 }

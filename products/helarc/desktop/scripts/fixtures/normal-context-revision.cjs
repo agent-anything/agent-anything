@@ -1,7 +1,7 @@
 const assert=require("node:assert/strict");
 
 exports.verifyRevision=async function({store,work,processor,signal}) {
-  const {contextPreparationAcceptance,contextPreparationApplicabilityKey,quoteRepresentationMethod}=await import("@agent-anything/agent-runtime/context-representation");
+  const {contextPreparationAcceptance,contextPreparationWorkKey,quoteRepresentationMethod}=await import("@agent-anything/agent-runtime/context-representation");
   const {modelInputValueDigest}=await import("@agent-anything/model-interaction/input");
   const a=command=>store.activityHandoffs.command(command);
   const original=(await store.contextPolicy.investments({scopeId:"normal-policy-scope",afterWorkId:null,limit:64}))[0];
@@ -19,7 +19,7 @@ exports.verifyRevision=async function({store,work,processor,signal}) {
   if(!head) {
     await store.contextSelections.command({kind:"scope",scope});
     const proposal=contextPreparationAcceptance({id:"revision-initial",input:basis,expectedDecisionId:null,expectedControlRevision:0,reconsideration:null,methods:work,
-      execution:{path:intent,workId:"revision-work",timing:{kind:"unknown"},resources:[{poolId:"helarc:model-execution",capability:"model-access",units:1},{poolId:"helarc:model-execution",capability:"model-measurement",units:1}]}});
+      execution:{path:intent,workId:"revision-work",schedulingScopeId:scope.runId,timing:{kind:"unknown"},resources:[{poolId:"helarc:model-execution",capability:"model-access",units:1},{poolId:"helarc:model-execution",capability:"model-measurement",units:1}]}});
     assert.equal((await store.sharedAcceptance.accept(proposal.acceptance)).outcome,"accepted");
     head=await store.contextPolicy.query({kind:"latest",scopeId:scope.id});
   }
@@ -35,8 +35,8 @@ exports.verifyRevision=async function({store,work,processor,signal}) {
     const input={...basis,options:[{...option,id:"preserve-original",request:replacement,replaces,
       entries:quotation.phases.map(p=>({phase:p.kind,state:"supported",evidence:ref(`replacement-entry:${p.kind}`)}))}],
       explorationHistory:head.decision.investment.explorationKey?[{key:head.decision.investment.explorationKey,decisionId:head.decision.id}]:[],
-      inFlight:[{workId:"revision-work",pathId:first.intent.id,applicabilityKey:contextPreparationApplicabilityKey(basis),producerState:"failed",evidence:ref("actual-method-gap")}]};
-    const execution={path:{...first.intent,id:"revision-preserve"},workId:"revision-work",timing:{kind:"unknown"},resources:schedule.intent.resources,original:{path:first,scheduling:schedule}};
+      inFlight:[{workId:"revision-work",pathId:first.intent.id,preparationKey:contextPreparationWorkKey(basis.scope,request),producerState:"failed",evidence:ref("actual-method-gap")}]};
+    const execution={path:{...first.intent,id:"revision-preserve"},workId:"revision-work",schedulingScopeId:scope.runId,timing:{kind:"unknown"},resources:schedule.intent.resources,original:{path:first,scheduling:schedule}};
     assert.throws(()=>contextPreparationAcceptance({id:"invalid-reset",input,expectedDecisionId:head.decision.id,expectedControlRevision:0,reconsideration:null,methods:work,
       execution:{...execution,path:{...execution.path,resourceScope:"reset-budget"}}}),/cannot_reset_original_work/);
     const proposal=contextPreparationAcceptance({id:"revision-accepted",input,expectedDecisionId:head.decision.id,expectedControlRevision:0,reconsideration:null,methods:work,execution});
@@ -59,6 +59,10 @@ exports.verifyRevision=async function({store,work,processor,signal}) {
     await a({kind:"save_raw",result:{id:"revision-unresolved:raw",attemptId:attempt.id,completeness:"complete",outcome:"failed",
       value:{code:"controlled_cancel_confirmed"},usage:null,recordedAt:new Date().toISOString()}});
     assert.equal((await work.describe(first.intent.id)).state,"cancelled");
+    const awaitingSettlement=await store.sharedAcceptance.accept({...proposal.acceptance,id:"revision-unsettled-result-rejected"});
+    assert.equal(awaitingSettlement.outcome,"rejected");assert.equal(awaitingSettlement.rejection.code,"investment_predecessor_unsettled");
+    await processor.drain("parent",signal);
+    assert((await a({kind:"read_stage",requestId:requestStage.id})).settlement,"Retained response still requires its original settlement");
     const costlyRequest={...request,objective:"An explicitly revised semantic attempt with no remaining model allowance"};
     const costlyQuote=quoteRepresentationMethod(costlyRequest);
     const costly=contextPreparationAcceptance({id:"revision-no-model-budget",input:{...input,options:[{...input.options[0],request:costlyRequest,

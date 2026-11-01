@@ -261,7 +261,7 @@ export class ContextRepresentationManager<TOutput = unknown> {
   }
 }
 export type BuildProviderRequest<TOutput = unknown> = (input: TaskDecisionInputSources<TOutput>, context: ProviderRequestBuildContext) => ProviderRequest | Promise<ProviderRequest>;
-function createControllerError(owner: TaskDecisionActivityFailure["kind"], code: TaskDecisionActivityFailureCode, message: string, retryable: boolean, metadata: Readonly<Record<string, unknown>>, operationSettlement: "unsettled" | "settled_failure" = "unsettled", providerCategory?: string, deadline: DecisionActivityDeadline | null = null): TaskDecisionActivityError {
+function createControllerError(owner: "model" | "provider", code: TaskDecisionActivityFailureCode, message: string, retryable: boolean, metadata: Readonly<Record<string, unknown>>, operationSettlement: "unsettled" | "settled_failure" = "unsettled", providerCategory?: string, deadline: DecisionActivityDeadline | null = null): TaskDecisionActivityError {
   const frozenMetadata = Object.freeze({ ...metadata });
   return new TaskDecisionActivityError(owner === "model"
     ? Object.freeze({

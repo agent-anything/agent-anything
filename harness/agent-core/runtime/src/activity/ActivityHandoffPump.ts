@@ -33,13 +33,13 @@ export class ActivityHandoffPump {
         if(this.reconsideration)reconsiderations.push({runId:scope.runId,result:await this.reconsideration.scan(scope.runId,scope.signal)});
         runs.push({runId:scope.runId,result:await this.processor.scan(scope.runId,scope.signal)});
       }
-      catch(error){failures.push({runId:scope.runId,error});}
+      catch(error){if(!scope.signal.aborted||error!==scope.signal.reason)failures.push({runId:scope.runId,error});}
     }
     return {runs,failures,review,reconsiderations};
   }
   async run(input:{
     readonly signal:AbortSignal;
-    readonly scopes:()=>readonly ActivityExecutionScope[];
+    readonly scopes:()=>readonly ActivityExecutionScope[]|Promise<readonly ActivityExecutionScope[]>;
     readonly report:(cycle:ActivityHandoffCycle)=>Promise<void>;
     readonly rediscoveryMs?:number;
   }):Promise<void> {
@@ -50,7 +50,7 @@ export class ActivityHandoffPump {
     try {
       while(!input.signal.aborted) {
         const revision=this.revision;
-        const cycle=await this.cycle(input.scopes());
+        const cycle=await this.cycle(await input.scopes());
         await input.report(cycle);
         if(input.signal.aborted)break;
         // Publication wakes discovery; an occasional durable scan covers lost process notifications.

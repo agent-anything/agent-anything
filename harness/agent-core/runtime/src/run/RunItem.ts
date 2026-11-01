@@ -68,6 +68,8 @@ export type RunItemPayload<TOutput = unknown> =
       readonly toolExposure: ControllerToolExposureRecord;
       readonly modelItems: readonly TaskDecisionModelItem[];
       readonly openingReceipt?: import("../decision/TaskConversation.js").ConversationOpeningReceipt | null;
+      readonly resultPresentationReceipt?: import("../decision/SelectedResultPresentation.js").SelectedResultPresentationReceipt | null;
+      readonly responseRejection?: import("../decision/TaskModelResponseRejection.js").TaskModelResponseRejection | null;
       readonly failure: RunFailureCause | null;
     }
   | { readonly kind: "run_action"; readonly action: RuntimeRunAction }

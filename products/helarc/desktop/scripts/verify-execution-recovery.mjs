@@ -5,8 +5,30 @@ import {tmpdir} from "node:os";
 import {basename, dirname, join, resolve, delimiter} from "node:path";
 import {fileURLToPath} from "node:url";
 import electron from "electron";
+import {baselineScenarios,recoveryChecks,planRecoveryVerification} from "./execution-recovery-coverage.mjs";
+
+const args=process.argv.slice(2),flags=args.filter(value=>value.startsWith("--")),selectors=args.filter(value=>!value.startsWith("--"));
+assert(flags.every(flag=>["--list","--baseline","--current"].includes(flag)),"Unknown recovery verification flag");
+assert(!(flags.includes("--baseline")&&flags.includes("--current")),"Choose baseline or current verification, not both");
+assert(!(flags.includes("--baseline")||flags.includes("--current"))||!selectors.length,"Collection flags cannot be mixed with scenario selectors");
+const plan=planRecoveryVerification(flags.includes("--baseline")?baselineScenarios:flags.includes("--current")?recoveryChecks.map(check=>check.id):selectors);
+if(flags.includes("--list")) {console.log(JSON.stringify(plan,null,2));process.exit(0);}
+for(const migration of plan.migrations)console.log(`${migration.retired}: migrated to ${[...migration.baseline,...migration.checks].join(", ")} (original checkpoint is retired)`);
 
 // No user's settings, credentials, execution store, or model endpoint is used.
+if(plan.baseline.length)await verifyBaseline(plan.baseline);
+for(const check of plan.checks) {
+  console.log(`Current recovery coverage ${check.id}: ${check.coverage}`);
+  await new Promise((accept,reject)=>{
+    const child=spawn(process.execPath,[fileURLToPath(new URL(`./${check.script}`,import.meta.url)),...check.args],
+      {windowsHide:true,stdio:["ignore","inherit","inherit"]});
+    child.once("error",reject);
+    child.once("close",(code,signal)=>code===0?accept():reject(new Error(`${check.id}: verifier exited ${code}, signal=${signal}`)));
+  });
+}
+console.log(`Recovery coverage passed: ${plan.baseline.length} Run/effect baseline scenarios and ${plan.checks.length} current shared-protocol verifiers.`);
+
+async function verifyBaseline(scenarios) {
 const root = await mkdtemp(join(tmpdir(), "helarc-electron-recovery-"));
 const driver = fileURLToPath(new URL("./fixtures/execution-recovery.cjs", import.meta.url));
 const oldAlias = join(root, "old-toolchain"), newAlias = join(root, "new-toolchain");
@@ -46,13 +68,7 @@ async function launch(directory, scenario, stage, expectedExit) {
 }
 
 let passed = false;
-const selected = process.argv.slice(2);
-const supportedScenarios = ["accepted", "effect", "child", "opening_prepared", "continued_child", "approval", "approval_applied", "ending_feedback", "ending_exhausted", "provider_failure_saved", "provider_capacity_saved",
-  "interaction_admitted", "interaction_prepared", "interaction_accepted", "interaction_call_feedback", "interaction_steering", "material_child", "material_read_prepared",
-  "context_intent", "context_candidate", "context_selected", "context_frozen", "context_returned", "context_accepted",
-  "semantic_generated", "semantic_assessed", "semantic_candidate", "semantic_leaf", "semantic_merge", "semantic_background", "semantic_background_adopt"];
-const scenarios = selected.length ? selected : supportedScenarios;
-assert(scenarios.every(value => supportedScenarios.includes(value)));
+assert(scenarios.every(value => baselineScenarios.includes(value)));
 try {
   for (const scenario of scenarios) {
     const directory = join(root, scenario); await mkdir(directory);
@@ -60,7 +76,7 @@ try {
     await launch(directory, scenario, "resume", 0);
     await launch(directory, scenario, "verify", 0);
     const report = JSON.parse(await readFile(join(directory, "resume.json"), "utf8"));
-    assert.equal(report.status, ["ending_exhausted", "provider_capacity_saved"].includes(scenario) ? "failed" : "completed"); assert.equal(report.effects, 1);
+    assert.equal(report.status, scenario === "ending_exhausted" ? "failed" : "completed"); assert.equal(report.effects, 1);
     console.log(JSON.stringify(report));
   }
   passed = true;
@@ -71,4 +87,5 @@ try {
     if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-electron-recovery-")) throw new Error("Unexpected cleanup target");
     await rm(target, {recursive: true, force: true});
   } else console.error(`Isolated failure evidence retained at ${root}`);
+}
 }

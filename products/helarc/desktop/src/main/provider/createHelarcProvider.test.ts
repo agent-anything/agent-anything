@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createHelarcProvider } from "./createHelarcProvider.js";
+import {resolveHelarcProviderConfig} from "./resolveHelarcProviderConfig.js";
+import {restoreHelarcProvider} from "./restoreHelarcProvider.js";
+import {retainHelarcProviderBinding} from "../execution-storage/HelarcExecutionAdmission.js";
 
 const settings = {
   providerKind: "openai-compatible" as const, displayName: "DeepSeek",
@@ -8,6 +11,16 @@ const settings = {
 };
 
 describe("Desktop Provider composition", () => {
+  it.each(["ollama","openai-compatible"] as const)("binds the actual normalized endpoint for %s recovery",providerKind=>{
+    for(const baseUrl of ["http://localhost:11435","http://localhost:11435/","http://localhost:11435/v1/"]) {
+      const resolved=resolveHelarcProviderConfig({HELARC_PROVIDER_KIND:providerKind,HELARC_PROVIDER_BASE_URL:baseUrl,HELARC_PROVIDER_MODEL:"fixture"});
+      expect(resolved.ok).toBe(true);if(!resolved.ok)throw new Error(resolved.error.message);
+      const provider=createHelarcProvider(resolved.config),binding=retainHelarcProviderBinding(provider);
+      expect(retainHelarcProviderBinding(restoreHelarcProvider({providerProfile:resolved.profile,providerBinding:binding},""))).toEqual(binding);
+      expect(()=>restoreHelarcProvider({providerProfile:{...resolved.profile,baseUrl:"http://localhost:11436"},providerBinding:binding},""))
+        .toThrow("original Provider implementation or effective configuration");
+    }
+  });
   it.each(["https://api.deepseek.com", "https://api.deepseek.com/", "https://api.deepseek.com/v1/"])(
     "selects explicit non-thinking mode for %s", baseUrl => {
       const provider = createHelarcProvider({ ...settings, baseUrl, modelSettings: { service: "deepseek", thinking: { mode: "disabled" } } });

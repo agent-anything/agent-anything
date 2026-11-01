@@ -6,7 +6,7 @@ import type {
   TaskDecisionInputSources,
 } from "@agent-anything/agent-runtime/decision";
 import type { AgentExecutionExtensions } from "@agent-anything/agent-runtime/execution-coordinator";
-import { ActivityCheckpointError } from "@agent-anything/agent-runtime/activity";
+import { ActivityCheckpointError, ActivityHostUnavailableError } from "@agent-anything/agent-runtime/activity";
 import { RetryCheckpointError } from "@agent-anything/agent-runtime/retry";
 import type { AgentHookComposition } from "../composition/index.js";
 import { ExecutionFlowPath } from "@agent-anything/observability/execution-flow";
@@ -53,7 +53,7 @@ export class AgentHookExtensions<TOutput = unknown> implements AgentExecutionExt
   }
 
   async onDecisionFailure(input: TaskDecisionInputSources<TOutput>, error: unknown, context: AgentActivityExecutionContext): Promise<void> {
-    if (error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError) return;
+    if (error instanceof ActivityHostUnavailableError || error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError) return;
     await this.input.prior?.onDecisionFailure?.(input, error, context);
     if (!this.input.composition?.registrations.length) return;
     this.restoreState(input.runId, context);

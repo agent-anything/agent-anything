@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { snapshotCredentialSelection } from "../shared/HelarcProviderCredentials.js";
-import { snapshotHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import { snapshotHelarcInstructionSettings,snapshotHelarcContextSettings } from "@agent-anything/helarc/configuration";
 import { snapshotHelarcInspectionSettings } from "../shared/HelarcInspectionSettings.js";
 import { snapshotStorageRecordingIds } from "../shared/HelarcStorage.js";
 import {
@@ -150,6 +150,10 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
       assertExactKeys(candidate.payload, ["settings"], "Inspection save payload");
       return envelope(commandId, candidate.kind, { settings: snapshotHelarcInspectionSettings(candidate.payload.settings) });
     }
+    case "context.save": {
+      assertRecord(candidate.payload,"Context settings");assertExactKeys(candidate.payload,["settings","expectedRevision"],"Context settings");
+      return envelope(commandId,candidate.kind,{settings:snapshotHelarcContextSettings(candidate.payload.settings),expectedRevision:identity(candidate.payload.expectedRevision,"Settings revision")});
+    }
     case "instructions.save": {
       assertRecord(candidate.payload, "Instructions save payload");
       assertExactKeys(candidate.payload, ["settings"], "Instructions save payload");
@@ -207,6 +211,8 @@ function invokeHandler(
     case "project.select":
       return handlers[command.kind](command.payload);
     case "project.chooseFolder":
+      return handlers[command.kind](command.payload);
+    case "context.save":
       return handlers[command.kind](command.payload);
     case "instructions.save":
       return handlers[command.kind](command.payload);
@@ -441,6 +447,7 @@ const PRODUCT_COMMAND_KINDS = [
   "provider.select",
   "provider.delete",
   "instructions.save",
+  "context.save",
   "inspection.save",
   "storage.cleanup",
   "run.start",

@@ -20,6 +20,7 @@ import { useRead } from "../workbench/useRead.js";
 import { ElapsedTime } from "../workbench/ElapsedTime.js";
 import { useConversationCapacity } from "./ConversationReadingBudget.js";
 import { ConversationExcerpt, ConversationReading } from "./ConversationReading.js";
+import { ChildExecutionActivity } from "../activity/ExecutionActivities.js";
 
 /** A group belongs to one contiguous set of calls in one model response. */
 export function ConversationActivity({
@@ -117,6 +118,7 @@ export function ConversationActivity({
                   {item.child?.activity && (
                     <DelegatedActivityRows activity={item.child.activity} visible={visible} />
                   )}
+                  {item.child && <ChildExecutionActivity scope={item.child.scope} />}
                   {expandedItem && (
                     <div className="wb-activity-content">
                       {item.detail?.kind === "command" ? (

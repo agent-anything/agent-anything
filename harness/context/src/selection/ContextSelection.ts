@@ -1,4 +1,4 @@
-import type {MaterialGrant, MaterialHold, MaterialRange, MaterialRecipient} from "../custody/MaterialCustody.js";
+import type {MaterialGrant, MaterialHold, MaterialRange, MaterialRecipient,MaterialAccessAdmission} from "../custody/MaterialCustody.js";
 import type {RepresentationRef, RepresentationRecord, RepresentationJudgment} from "../representation/RepresentationRecord.js";
 
 export interface ContextUseScope extends MaterialRecipient {
@@ -23,6 +23,32 @@ export interface ContextDelivery {
   readonly instanceId:string;
   readonly holdId:string;
   readonly detailHoldId:string|null;
+  /** Original publisher's limited responsibility for this delivery's protection. */
+  readonly lifetime?:ContextDeliveryLifetime;
+}
+export interface ContextDeliveryLifetime {
+  readonly owner:string;
+  readonly sourcePathId:string;
+  readonly subscriptionId:string;
+  readonly scope:{readonly source:{readonly id:string;readonly runId:string;readonly owner:string};readonly closedFactId:string};
+}
+export interface ContextDeliveryState {
+  readonly delivery:ContextDelivery;
+  readonly selectedInputId:string|null;
+  readonly selectedPathId:string|null;
+  readonly selectionSettled:boolean;
+  readonly acceptedResponseId:string|null;
+  readonly disposition:{readonly reason:"cancelled"|"withdrawn"|"unavailable";readonly basis:string}|null;
+}
+export interface ContextDeliveryFinalization {
+  readonly deliveryId:string;
+  readonly expected:Pick<ContextDeliveryState,"selectedInputId"|"acceptedResponseId"|"disposition">;
+  readonly closedFactId:string|null;
+}
+export interface ContextDeliveryPage {
+  readonly through:number;
+  readonly nextAfter:number|null;
+  readonly entries:readonly {readonly sequence:number;readonly delivery:ContextDelivery;readonly selectedInputId:string|null}[];
 }
 export interface ContextInputBinding {
   readonly id:string;
@@ -53,17 +79,28 @@ export interface ContextSelectionSnapshot {
   readonly deliveries:readonly ContextDelivery[];
 }
 /** Participant bodies for the existing shared acceptance boundary. */
+export interface ContextInputRetirement {
+  readonly inputIds:readonly string[];
+  readonly withdrawals:readonly {readonly scopeId:string;readonly expectedSelectionId:string;readonly expectedControlRevision:number}[];
+  readonly basis:string;
+}
 export type ContextAcceptancePart =
+  | {readonly owner:"context_selection";readonly kind:"input_retirement";readonly proposal:ContextInputRetirement}
+  | {readonly owner:"context_selection";readonly kind:"scope";readonly proposal:ContextUseScope}
   | {readonly owner:"representation";readonly kind:"record";readonly proposal:RepresentationRecord}
   | {readonly owner:"representation";readonly kind:"judge";readonly proposal:RepresentationJudgment}
   | {readonly owner:"material_custody";readonly kind:"publish";readonly proposal:{readonly intentId:string;readonly holds:readonly MaterialHold[];readonly grants:readonly MaterialGrant[]}}
+  | {readonly owner:"material_custody";readonly kind:"admit_access";readonly proposal:MaterialAccessAdmission}
   | {readonly owner:"material_custody";readonly kind:"holds";readonly proposal:{readonly acquire:readonly MaterialHold[];readonly release:readonly string[];readonly basis:string}}
   | {readonly owner:"context_selection";readonly kind:"selection_input";readonly proposal:ContextSelectionProposal}
   | {readonly owner:"context_delivery";readonly kind:"publish";readonly proposal:ContextDelivery}
   | {readonly owner:"context_delivery";readonly kind:"select";readonly proposal:{readonly inputId:string;readonly scopeId:string;readonly deliveryIds:readonly string[]}}
   | {readonly owner:"context_delivery";readonly kind:"accept";readonly proposal:{readonly inputId:string;readonly responseId:string;readonly detailHolds:readonly string[]}}
+  | {readonly owner:"context_delivery";readonly kind:"release_selection";readonly proposal:{readonly inputId:string;readonly basis:string}}
+  | {readonly owner:"context_delivery";readonly kind:"finalize";readonly proposal:ContextDeliveryFinalization}
   | {readonly owner:"context_delivery";readonly kind:"dispose";readonly proposal:{readonly deliveryId:string;readonly recipient:MaterialRecipient;readonly reason:"cancelled"|"withdrawn"|"unavailable";readonly basis:string}};
 export type ContextSelectionCommand =
+  | {readonly kind:"lookup_scope";readonly scopeId:string}
   | {readonly kind:"scope";readonly scope:ContextUseScope}
   | {readonly kind:"control";readonly control:ContextUseControl;readonly expectedRevision:number}
   | {readonly kind:"current";readonly scopeId:string}
@@ -72,7 +109,14 @@ export type ContextSelectionCommand =
   | {readonly kind:"sent";readonly inputId:string;readonly attemptId:string}
   | {readonly kind:"retire_input";readonly inputId:string;readonly basis:string}
   | {readonly kind:"withdraw";readonly scopeId:string;readonly expectedSelectionId:string;readonly expectedControlRevision:number;readonly basis:string}
-  | {readonly kind:"delivery";readonly id:string};
-export type ContextSelectionValue = ContextSelectionSnapshot | ContextUseScope | ContextUseControl | ContextDelivery | null |
+  | {readonly kind:"pending_deliveries";readonly recipient:MaterialRecipient;readonly after:number;readonly through:number|null;readonly limit:number}
+  | {readonly kind:"delivery";readonly id:string}
+  | {readonly kind:"delivery_state";readonly id:string};
+export interface ContextUseHead {
+  readonly scope:ContextUseScope;
+  readonly control:ContextUseControl;
+  readonly selection:ContextSelectionProposal["selection"];
+}
+export type ContextSelectionValue = ContextSelectionSnapshot | ContextUseHead | ContextUseScope | ContextUseControl | ContextDelivery | ContextDeliveryState | ContextDeliveryPage | null |
   {readonly id:string;readonly representations:readonly RepresentationRef[];readonly judgmentIds:readonly string[];readonly holds:readonly MaterialHold[]};
 export interface ContextSelectionPort {command(command:ContextSelectionCommand):Promise<ContextSelectionValue>;}

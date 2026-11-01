@@ -5,9 +5,12 @@ import { setTimeout as persistenceDelay } from "node:timers/promises";
 import { reportExecutionFailure, type ExecutionDiagnosticSink } from "./diagnostics/HelarcExecutionDiagnostics.js";
 import {measureExecutionAsync} from "./diagnostics/ExecutionPerformance.js";
 import { restoreHelarcTerminalResult } from "./execution-storage/restoreHelarcTerminalResult.js";
+import {HelarcHostRunRecovery} from "./run/HelarcHostRunRecovery.js";
+import {ActivityHostUnavailableError} from "@agent-anything/agent-runtime/activity";
 import {
   createDefaultHelarcInstructionSettings,
   snapshotHelarcInstructionSettings,
+  createDefaultHelarcContextSettings,contextSettingsSnapshot,type HelarcContextSettings,
   snapshotHelarcProject,
   type HelarcProject,
   type HelarcProjectRef,
@@ -76,7 +79,6 @@ import type { ContextManifestPersistencePort } from "@agent-anything/context/per
 import type { RunTranscriptPort } from "@agent-anything/agent-runtime/transcript";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { Provider } from "@agent-anything/model-interaction";
-import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
 import { basename, isAbsolute, normalize } from "node:path";
 import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
 import { HelarcWorkbenchQueries } from "./workbench/HelarcWorkbenchQueries.js";
@@ -193,6 +195,7 @@ export interface HelarcThreadLatestRunSnapshot {
 }
 
 export interface HelarcMainSnapshot {
+  activityRevision:number;
   execution: "idle" | "starting" | "active";
   projects: readonly HelarcProject[];
   selectedProjectId: string | null;
@@ -297,15 +300,18 @@ export type OpenHelarcThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  activityHost?:ReturnType<typeof import("./context/HelarcActivityHost.js").createHelarcActivityHost>;
   executionDiagnostics?: ExecutionDiagnosticSink;
   executionStore?: import("./execution-storage/HelarcExecutionStore.js").HelarcExecutionStore;
   recoverProvider?: (admission: import("./execution-storage/HelarcExecutionAdmission.js").HelarcExecutionAdmission) => Promise<Provider>;
+  bindRunProvider?: (provider:Provider,profile:HelarcProviderProfile)=>Promise<{provider:Provider;credential:import("./provider/HelarcRunProviderBinding.js").HelarcRunCredentialBinding}>;
   commandOutputDirectory: string;
   projects?: readonly HelarcProject[];
   responseDelivery?: "buffered" | "streaming";
   commandOutputRegistry?: CommandOutputRegistry;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   instructionSettings?: HelarcInstructionSettings;
+  contextSettings?: HelarcContextSettings;
   provider?: Provider | null;
   providerConfigError?: (HelarcMainError & { missingKeys?: string[] }) | null;
   providerProfile?: HelarcProviderProfile | null;
@@ -313,7 +319,6 @@ export interface HelarcMainControllerInput {
   threadSummaries?: HelarcThreadSummary[];
   threadStore?: HelarcThreadStore;
   persistenceDiagnostics?: HelarcPersistenceDiagnostics;
-  modelContinuationStore?: ModelContinuationStore;
   contextManifestPersistence?: ContextManifestPersistencePort;
   runTranscriptPort?: RunTranscriptPort;
 }
@@ -350,9 +355,12 @@ type DesktopActiveRunSlot =
     };
 
 export class HelarcMainController {
+  private readonly activityHost:HelarcMainControllerInput["activityHost"];
+  private readonly activityRecovery:import("./run/HelarcHostRunRecovery.js").HelarcHostRunRecovery|undefined;
   private readonly executionStore: HelarcMainControllerInput["executionStore"];
   private readonly executionDiagnostics: ExecutionDiagnosticSink | undefined;
   private readonly recoverProvider: HelarcMainControllerInput["recoverProvider"];
+  private readonly bindRunProvider: HelarcMainControllerInput["bindRunProvider"];
   private readonly commandOutputDirectory: string;
   private readonly responseDelivery: "buffered" | "streaming";
   readonly workbench: HelarcWorkbenchQueries;
@@ -369,7 +377,6 @@ export class HelarcMainController {
   private currentThreadRecord: HelarcThreadRecord | null = null;
   private readonly threadStore: HelarcThreadStore;
   private readonly persistenceDiagnostics: HelarcPersistenceDiagnostics | undefined;
-  private readonly modelContinuationStore: ModelContinuationStore | undefined;
   private readonly contextManifestPersistence:
     | ContextManifestPersistencePort
     | undefined;
@@ -377,6 +384,7 @@ export class HelarcMainController {
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private instructionSettings: HelarcInstructionSettings;
+  private contextSettings:HelarcContextSettings;
   private inactiveStatus: "idle" | "workspace_selected" = "idle";
   private nextTaskNumber = 1;
   private activeRunSlot: DesktopActiveRunSlot = { kind: "empty" };
@@ -414,11 +422,16 @@ export class HelarcMainController {
     maxRecords: 64,
   });
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
+  private activityRevision=0;
+  private activityUnsubscribe:(()=>void)|null=null;
+  private activityPublishTimer:ReturnType<typeof setTimeout>|null=null;
 
   constructor(input: HelarcMainControllerInput) {
+    this.activityHost=input.activityHost;
     this.executionStore = input.executionStore;
     this.executionDiagnostics = input.executionDiagnostics;
     this.recoverProvider = input.recoverProvider;
+    this.bindRunProvider = input.bindRunProvider;
     this.persistenceDiagnostics = input.persistenceDiagnostics;
     this.commandOutputDirectory = input.commandOutputDirectory;
     this.responseDelivery = input.responseDelivery ?? "buffered";
@@ -431,8 +444,11 @@ export class HelarcMainController {
           ? { projection: this.runProjection, handle: slot.handle } : null;
       },
       outputs: this.commandOutputRegistry,
+      activities:input.executionStore?async rootRunId=>await input.executionStore!.activityHandoffs.command({kind:"read_work_view",scopeId:`helarc-tree:${rootRunId}`,limit:64}) as
+        import("@agent-anything/agent-runtime/activity").ActivityWorkView:undefined,
     });
     this.inspection = input.inspection;
+    this.contextSettings=contextSettingsSnapshot(input.contextSettings??createDefaultHelarcContextSettings()).settings;
     this.instructionSettings = snapshotHelarcInstructionSettings(
       input.instructionSettings ?? createDefaultHelarcInstructionSettings(),
     );
@@ -442,7 +458,6 @@ export class HelarcMainController {
     this.threadSummaries = (input.threadSummaries ?? []).map(createThreadSummarySnapshot);
     this.nextTaskNumber = resolveNextTaskNumber(input.threadSummaries ?? []);
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
-    this.modelContinuationStore = input.modelContinuationStore;
     this.contextManifestPersistence = input.contextManifestPersistence;
     this.runTranscriptPort = input.runTranscriptPort;
     this.provider = input.providerConfigError
@@ -457,6 +472,16 @@ export class HelarcMainController {
           },
         }
       : createConfiguredProviderSnapshot(input.providerProfile, this.providerInstance);
+    if(input.activityHost){
+      if(!input.executionStore||!input.recoverProvider)throw new TypeError("host_activity_recovery_ports_required");
+      this.activityRecovery=new HelarcHostRunRecovery({activityHost:input.activityHost,executionStore:input.executionStore,
+        recoverProvider:input.recoverProvider,commandOutputDirectory:this.commandOutputDirectory,inspection:this.inspection,
+        contextManifestPersistence:this.contextManifestPersistence,runTranscriptPort:this.runTranscriptPort,
+        sessionAuthorityPort:this.sessionAuthorityStore,persistentPolicyAmendments:this.policyAmendmentStore,
+        retainCommandOutput:saved=>(runId,executionId,paths)=>this.commandOutputRegistry.register(
+          {threadId:saved.sessionId,productRunId:saved.productRunId,runId},executionId,this.commandOutputDirectory,paths)});
+      input.activityHost.setRecoveryResolver(id=>this.activityRecovery!.restoreScope(id));
+    }
   }
 
   configureProvider(input: {
@@ -487,6 +512,7 @@ export class HelarcMainController {
 
   getSnapshot(): HelarcMainSnapshot {
     return {
+      activityRevision:this.activityRevision,
       execution: this.activeRunSlot.kind === "reserved" ? "starting" : this.activeRunSlot.kind === "active" ? "active" : "idle",
       projects: this.projects,
       selectedProjectId: this.selectedProjectId,
@@ -505,6 +531,8 @@ export class HelarcMainController {
   getInstructionSettings() {
     return Object.freeze({ settings: this.instructionSettings, defaults: createDefaultHelarcInstructionSettings() });
   }
+  getContextSettings() {return contextSettingsSnapshot(this.contextSettings);}
+  configureContextSettings(settings:HelarcContextSettings) {this.contextSettings=contextSettingsSnapshot(settings).settings;return this.getContextSettings();}
 
   getModelConfiguration() {
     if (!this.providerInstance || !this.provider.configured) return null;
@@ -519,8 +547,14 @@ export class HelarcMainController {
 
   subscribeSnapshot(subscriber: (snapshot: HelarcMainSnapshot) => void): () => void {
     this.snapshotSubscribers.add(subscriber);
+    if(!this.activityUnsubscribe&&this.executionStore)this.activityUnsubscribe=this.executionStore.onActivityChange(()=>{
+      this.activityRevision++;
+      if(!this.activityPublishTimer)this.activityPublishTimer=setTimeout(()=>{this.activityPublishTimer=null;this.publishSnapshot();},100);
+    });
     return () => {
       this.snapshotSubscribers.delete(subscriber);
+      if(!this.snapshotSubscribers.size){this.activityUnsubscribe?.();this.activityUnsubscribe=null;
+        if(this.activityPublishTimer){clearTimeout(this.activityPublishTimer);this.activityPublishTimer=null;}}
     };
   }
 
@@ -630,6 +664,7 @@ export class HelarcMainController {
     const providerInstance = selection?.provider ?? this.providerInstance!;
     const providerProfile = selection?.profile ?? this.provider.activeProfile!;
     const instructionSettings = this.instructionSettings;
+    const contextSettings=this.contextSettings;
 
     if (!this.selectedWorkspace) {
       const error = this.setError("workspace_not_selected", "Choose a workspace before starting a task.");
@@ -704,16 +739,20 @@ export class HelarcMainController {
 
     let startCommitted = false;
     try {
+      const activityHost=this.activityHost,executionStore=this.executionStore;
+      if(!activityHost||!executionStore)throw new Error("The application execution services are unavailable.");
+      const boundProvider=await this.bindRunProvider?.(providerInstance,providerProfile);
       const threadWorkspace = preparedStart.prepared.workspace;
       const preparedHostRun = await measureExecutionAsync(this.executionDiagnostics, "host.prepare", {threadId, productRunId: runId}, () => prepareHelarcHostRun({
-        executionStore: this.executionStore,
+        activityHost,
+        executionStore,
         commandOutputDirectory: this.commandOutputDirectory,
         responseDelivery: this.responseDelivery,
         retainCommandOutput: async (harnessRunId, executionId, paths) => {
           await this.commandOutputRegistry.register({ threadId, productRunId: runId, runId: harnessRunId },
             executionId, this.commandOutputDirectory, paths);
         },
-        instructionSettings,
+        instructionSettings,contextSettings,
         task: preparedStart.prepared.task,
         workspaceResolver: createHelarcDesktopWorkspaceResolver(threadWorkspace),
         workspaceSelection: {
@@ -727,9 +766,9 @@ export class HelarcMainController {
         identitySelection: { kind: "anonymous" },
         productRunId: runId,
         sessionId: threadId,
-        provider: providerInstance,
+        provider: boundProvider?.provider ?? providerInstance,
+        providerCredential: boundProvider?.credential,
         providerProfile,
-        modelContinuationStore: this.modelContinuationStore,
         contextManifestPersistence: this.contextManifestPersistence,
         runTranscriptPort: this.runTranscriptPort,
         inspection: this.inspection,
@@ -738,6 +777,7 @@ export class HelarcMainController {
         sessionAuthorityPort: this.sessionAuthorityStore,
         persistentPolicyAmendments: this.policyAmendmentStore,
       }));
+      this.activityRecovery?.retain(preparedHostRun);
       const startCommitResult = this.createRunStartCommit({
         project,
         sequenceNumber,
@@ -798,6 +838,7 @@ export class HelarcMainController {
       if (startCommitted && this.nextTaskNumber === sequenceNumber) {
         this.nextTaskNumber += 1;
       }
+      reportExecutionFailure(this.executionDiagnostics,"run_start",{threadId,productRunId:runId,startCommitted},cause);
       this.releaseActiveRunSlot(token);
       const persistenceFailure = cause instanceof HelarcDesktopPersistenceError;
       const admissionFailure = cause instanceof HelarcProviderCompatibilityError
@@ -878,24 +919,10 @@ export class HelarcMainController {
         this.publishSnapshot();
         return {ok: true};
       }
-      if (!this.recoverProvider) throw new Error("Original Provider binding is unavailable.");
-      const provider = await this.recoverProvider(saved);
+      const recovery=this.activityRecovery;
+      if (!recovery) throw new Error("Original application execution bindings are unavailable.");
       const recoveryContext = {threadId: saved.sessionId, productRunId: saved.productRunId, runId: saved.rootRunId};
-      const prepared = await measureExecutionAsync(this.executionDiagnostics, "host.prepare_recovery", recoveryContext, () => prepareHelarcHostRun({executionStore: this.executionStore, recoveryAdmission: saved,
-        commandOutputDirectory: this.commandOutputDirectory, responseDelivery: saved.responseDelivery,
-        retainCommandOutput: (runId, executionId, paths) => this.commandOutputRegistry.register(
-          {threadId: saved.sessionId, productRunId: saved.productRunId, runId}, executionId, this.commandOutputDirectory, paths),
-        inspection: this.inspection, instructionSettings: saved.instructionSettings,
-        task: saved.task, inputItems: saved.inputItems, sessionId: saved.sessionId, productRunId: saved.productRunId,
-        workspaceResolver: {async resolve() {return saved.workspace;}},
-        workspaceSelection: {kind: "references", primaryRef: saved.workspace.primary.id, additionalRefs: saved.workspace.additional.map(root => root.id)},
-        identityResolver: {async resolve() {return saved.identity;}},
-        identitySelection: saved.identity.kind === "anonymous" ? {kind: "anonymous"} : {kind: "reference", identityRef: saved.identity.id},
-        provider, providerProfile: saved.providerProfile,
-        modelContinuationStore: this.modelContinuationStore, contextManifestPersistence: this.contextManifestPersistence,
-        runTranscriptPort: this.runTranscriptPort, permissionPreset: saved.permissionPreset, enforcement: saved.enforcement,
-        runLimits: saved.runLimits, runTreeLimits: saved.runTreeLimits, commandLimits: saved.commandLimits ?? undefined,
-        sessionAuthorityPort: this.sessionAuthorityStore, persistentPolicyAmendments: this.policyAmendmentStore}));
+      const prepared = await measureExecutionAsync(this.executionDiagnostics, "host.prepare_recovery", recoveryContext, () => recovery.prepare(saved.rootRunId));
       const composition = await measureExecutionAsync(this.executionDiagnostics, "host.recover", recoveryContext, () => prepared.recover(request.intent));
       this.acceptedTask = {id: saved.task.id, prompt: saved.task.input.prompt};
       this.attachActiveHostRun(token, saved.sessionId, saved.productRunId, composition.activeRun);
@@ -1126,7 +1153,8 @@ export class HelarcMainController {
     } catch (error) {
       const failedSlot = this.activeRunSlot;
       if (failedSlot.kind !== "active" || failedSlot.token !== token) return;
-      reportExecutionFailure(this.executionDiagnostics, "active_run_rejected", {
+      const hostInterrupted=error instanceof ActivityHostUnavailableError;
+      reportExecutionFailure(this.executionDiagnostics, hostInterrupted?"active_run_host_interrupted":"active_run_rejected", {
         threadId: failedSlot.threadId, productRunId: failedSlot.productRunId,
         runId: failedSlot.handle.runId, runRevision: this.runProjection?.host.runRevision ?? null,
         lastObservedStatus: this.runProjection?.host.status ?? null,
@@ -1137,7 +1165,7 @@ export class HelarcMainController {
       failedSlot.retryWait?.abort();
       await measureExecutionAsync(this.executionDiagnostics, "host.failed_projection_drain",
         {runId: failedSlot.handle.runId, threadId: failedSlot.threadId}, () => failedSlot.progressTail);
-      this.lastError = {
+      if(!hostInterrupted||error.reason==="failed")this.lastError = {
         code: "run_execution_failed",
         message: "Helarc could not settle the active Run.",
       };

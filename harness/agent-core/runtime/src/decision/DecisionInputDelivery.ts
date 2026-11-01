@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { snapshotModelMessage, type ModelMessage, type ProviderRequest } from "@agent-anything/model-interaction";
 import { modelInputSectionLocations, snapshotModelInputSection, selectModelWorkingView, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
 import type { RunInputNotification } from "../execution-coordinator/RunInputNotifications.js";
+import {snapshotSelectedInputDeliveryReceipt,type SelectedInputDeliveryBasis} from "./SelectedInputDelivery.js";
 
 export interface ControllerInputDeliveryBatch {
   readonly id: string;
@@ -17,7 +18,8 @@ export interface ControllerInputDeliveryReceipt {
     | { readonly kind: "controller"; readonly controllerRequestId: string }
     | { readonly kind: "provider"; readonly requestId: string; readonly compositionId: string;
         readonly workingViewId: string;
-        readonly sectionIds: readonly string[]; readonly presentations: readonly RetainedInputPresentation[] };
+        readonly sectionIds: readonly string[]; readonly presentations: readonly RetainedInputPresentation[];
+        readonly selection?:SelectedInputDeliveryBasis };
 }
 
 export interface RetainedInputPresentation {
@@ -126,6 +128,7 @@ export function snapshotInputDeliveryReceipt(
   if (value.via?.kind === "controller") {
     return createControllerInputDeliveryReceipt(batch, value.via.controllerRequestId);
   }
+  if(value.via?.kind==="provider"&&value.via.selection)return snapshotSelectedInputDeliveryReceipt(value,batch);
   if (value.via?.kind !== "provider" || JSON.stringify(value.via.sectionIds) !==
       JSON.stringify(batch.entries.map(entry => `${batch.id}:entry:${entry.sequence}`)) ||
       !Array.isArray(value.via.presentations) || value.via.presentations.length !== batch.entries.length) {

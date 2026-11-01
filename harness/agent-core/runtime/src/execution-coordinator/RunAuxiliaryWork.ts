@@ -1,10 +1,11 @@
 import type {AgentActivityExecutionContext} from "../decision/TaskDecisionActivity.js";
 import type {RunPreparationRecord, RunPreparationRegistration, RunPreparationWorkPort} from "../context-representation/RunPreparationWork.js";
 import {createRunCancellationController, type RunCancellationController, type CancellationContext} from "../run/RunCancellation.js";
-import {retainControllerCheckpoint} from "./RunCommitSnapshot.js";
+import {retainRunCheckpointValue} from "./RunCommitSnapshot.js";
 import {AUXILIARY_USAGE_KEY, snapshotControllerAuxiliaryUsage} from "../model-access/AuxiliaryModelUsage.js";
 import {TaskDecisionActivityError} from "../decision/TaskDecisionActivityError.js";
 import {ActivityCheckpointError} from "../activity/ActivityCheckpoint.js";
+import {ActivityHostUnavailableError} from "../activity/ActivityHostUnavailableError.js";
 import {RetryCheckpointError} from "../retry/RetryCheckpoint.js";
 import {ExecutionFlowPath, createExecutionFlowDefinition, type ExecutionFlowContext} from "@agent-anything/observability/execution-flow";
 
@@ -73,11 +74,11 @@ export class RunAuxiliaryWork {
           ...(base.auxiliaryUsage ? {auxiliaryUsage: {
             assertAvailable: () => {assertWritable(); cancellation.context.signal.throwIfAborted(); base.auxiliaryUsage!.assertAvailable();},
             record: value => {assertWritable(); return base.auxiliaryUsage!.record(value);}}} : {}),
-          checkpoints: {read: key => retainControllerCheckpoint(this.owner.read(namespace(key)) ?? null),
-            commit: (key, value) => this.write(record.id, [{key: namespace(key), value: retainControllerCheckpoint(value)}]),
+          checkpoints: {read: key => retainRunCheckpointValue(this.owner.read(namespace(key)) ?? null),
+            commit: (key, value) => this.write(record.id, [{key: namespace(key), value: retainRunCheckpointValue(value)}]),
             commitWithAuxiliaryUsage: (key, value, usage) => {
               const retained = snapshotControllerAuxiliaryUsage(usage);
-              return this.write(record.id, [{key: namespace(key), value: retainControllerCheckpoint(value)},
+              return this.write(record.id, [{key: namespace(key), value: retainRunCheckpointValue(value)},
                 {key: `${AUXILIARY_USAGE_KEY}${retained.attemptId}`, value: retained}]);
             }}};
         const active = {id: record.id, cancellation, settled: Promise.resolve()};
@@ -86,7 +87,7 @@ export class RunAuxiliaryWork {
           let status: RunPreparationRecord["status"] = "completed", failure: string | null = null;
           try {cancellation.context.signal.throwIfAborted(); await execute(context); cancellation.context.signal.throwIfAborted();}
           catch (error) {
-            if (error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError) this.failure = error;
+            if (error instanceof ActivityHostUnavailableError || error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError) this.failure = error;
             if (error instanceof TaskDecisionActivityError && error.operationSettlement === "unsettled") this.unconfirmed = true;
             status = cancellation.context.signal.aborted ? "cancelled" : "failed"; failure = error instanceof Error ? error.message : "auxiliary_work_failed";
           }
@@ -126,7 +127,7 @@ export class RunAuxiliaryWork {
 
   private key(id: string): string {return `${PREFIX}registration:${id}`;}
   private read(id: string): RunPreparationRecord | null {
-    return retainControllerCheckpoint(this.owner.read(this.key(id)) ?? null) as RunPreparationRecord | null;
+    return retainRunCheckpointValue(this.owner.read(this.key(id)) ?? null) as RunPreparationRecord | null;
   }
   private save(record: RunPreparationRecord): Promise<void> {return this.write(record.id, [{key: this.key(record.id), value: record}]);}
   private write(id: string, writes: readonly {key: string; value: unknown}[], guard?: () => void): Promise<void> {

@@ -1,14 +1,15 @@
 import type Database from "better-sqlite3";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {activityCount,activityToken,validateActivitySchedulingIntent,type ActivityResourcePool,type ActivityResourceClaim,
+import {activityCount,activityToken,validateActivityPath,validateActivitySchedulingIntent,type ActivityResourcePool,type ActivityResourceClaim,
   type ActivitySchedulingIntent,type ActivitySchedulingAcceptance,type ActivitySchedulingDispatch,type ActivitySchedulingCandidate,
-  type ActivityPathIntent,type ActivityStageRequest,type ActivitySchedulingReview} from "@agent-anything/agent-runtime/activity";
+  type ActivityPathIntent,type ActivityStageRequest,type ActivitySchedulingReview,type ActivityScheduledPathPage} from "@agent-anything/agent-runtime/activity";
 
 export const ACTIVITY_SCHEDULING_SCHEMA=`
 CREATE TABLE activity_resource_pools(id TEXT PRIMARY KEY,value TEXT NOT NULL,digest TEXT NOT NULL);
 CREATE TABLE activity_scheduled_work(work_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,scope_id TEXT NOT NULL,owner TEXT NOT NULL,
- revision INTEGER NOT NULL,acceptance_id TEXT NOT NULL,service TEXT NOT NULL,eligibility INTEGER NOT NULL,closed INTEGER NOT NULL,last_served INTEGER NOT NULL);
+ revision INTEGER NOT NULL,acceptance_id TEXT NOT NULL,service TEXT NOT NULL,eligibility INTEGER NOT NULL,closed INTEGER NOT NULL,last_served INTEGER NOT NULL,paths_sealed INTEGER NOT NULL,settlement_confirmed INTEGER NOT NULL);
 CREATE TABLE activity_schedule_acceptances(sequence INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,work_id TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL);
+CREATE INDEX activity_scheduled_open_scope ON activity_scheduled_work(scope_id,work_id) WHERE closed=0 OR settlement_confirmed=0;
 CREATE TABLE activity_schedule_rounds(id INTEGER PRIMARY KEY,scope_id TEXT NOT NULL);
 CREATE TABLE activity_schedule_tickets(sequence INTEGER PRIMARY KEY,round_id INTEGER NOT NULL,work_id TEXT NOT NULL,served INTEGER NOT NULL,
  UNIQUE(round_id,work_id));
@@ -16,13 +17,14 @@ CREATE INDEX activity_schedule_remaining ON activity_schedule_tickets(served,seq
 CREATE TABLE activity_schedule_scope_rounds(id INTEGER PRIMARY KEY);
 CREATE TABLE activity_schedule_scope_tickets(sequence INTEGER PRIMARY KEY,round_id INTEGER NOT NULL,scope_id TEXT NOT NULL,served INTEGER NOT NULL,
  UNIQUE(round_id,scope_id));
-CREATE TABLE activity_schedule_dispatches(attempt_id TEXT PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,work_id TEXT NOT NULL,
+CREATE TABLE activity_schedule_dispatches(attempt_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,work_id TEXT NOT NULL,
  value TEXT NOT NULL,digest TEXT NOT NULL,released INTEGER NOT NULL);
+CREATE INDEX activity_schedule_occupancy ON activity_schedule_dispatches(work_id,released);
 `;
-interface WorkRow {work_id:string;run_id:string;scope_id:string;owner:string;revision:number;acceptance_id:string;service:"guaranteed"|"spare";eligibility:number;closed:number;last_served:number;}
+interface WorkRow {work_id:string;run_id:string;scope_id:string;owner:string;revision:number;acceptance_id:string;service:"guaranteed"|"spare";eligibility:number;closed:number;last_served:number;paths_sealed:number;settlement_confirmed:number;}
 interface Ready extends ActivitySchedulingCandidate {readonly capabilities:readonly string[];readonly claims:readonly ActivityResourceClaim[];readonly work:WorkRow;}
 interface Ticket {sequence:number;round_id:number;work_id:string;}
-type SchedulingFact=(runId:string,workId:string,kind:"scheduling_accepted"|"scheduling_closed"|"scheduling_limited"|"scheduling_wait",details:Readonly<Record<string,unknown>>)=>void;
+type SchedulingFact=(runId:string,workId:string,kind:"scheduling_accepted"|"scheduling_paths_sealed"|"scheduling_closed"|"scheduling_limited"|"scheduling_wait",details:Readonly<Record<string,unknown>>)=>void;
 
 /** Shared dispatch acceptance. It never interprets a preparation's value or model output. */
 export class ActivitySchedulingDatabase {
@@ -44,13 +46,13 @@ export class ActivitySchedulingDatabase {
     if(old&&(old.run_id!==intent.runId||old.scope_id!==intent.scopeId||old.owner!==intent.owner))fail("work_identity_conflict");
     for(const claim of intent.resources){const pool=this.pool(claim.poolId);if(claim.units>pool.capacity)fail("resource_unavailable");}
     // Resources are an execution binding. A changed treatment cannot change that binding.
-    if(old){const prior=this.read(intent.workId)!.intent;same(prior.resources,intent.resources);same(prior.delegatedPathOwners??[],intent.delegatedPathOwners??[]);}
+    if(old){const prior=this.read(intent.workId)!.intent;same(prior.resources,intent.resources);same(prior.delegatedPathOwners??[],intent.delegatedPathOwners??[]);same(prior.allowedPathIds?[...prior.allowedPathIds].sort():null,intent.allowedPathIds?[...intent.allowedPathIds].sort():null);}
     const service=intent.reason==="optional"?"spare":"guaranteed";
     const sequence=(this.sql("SELECT COALESCE(MAX(sequence),0)+1 AS n FROM activity_schedule_acceptances").get() as {n:number}).n;
     const eligibility=old?.service==="guaranteed"&&service==="guaranteed"?old.eligibility:sequence;
-    const accepted:ActivitySchedulingAcceptance={intent,revision:expectedRevision+1,service,eligibilitySequence:eligibility,acceptedAt:new Date().toISOString(),closed:false};
+    const accepted:ActivitySchedulingAcceptance={intent,revision:expectedRevision+1,service,eligibilitySequence:eligibility,acceptedAt:new Date().toISOString(),closed:false,pathsSealed:old?.paths_sealed===1,settlementConfirmed:false};
     this.sql("INSERT INTO activity_schedule_acceptances VALUES (?,?,?,?,?)").run(sequence,intent.id,intent.workId,JSON.stringify(accepted),modelInputValueDigest(accepted));
-    this.sql(`INSERT INTO activity_scheduled_work VALUES (?,?,?,?,?,?,?,?,0,0)
+    this.sql(`INSERT INTO activity_scheduled_work VALUES (?,?,?,?,?,?,?,?,0,0,0,0)
       ON CONFLICT(work_id) DO UPDATE SET revision=excluded.revision,acceptance_id=excluded.acceptance_id,service=excluded.service,eligibility=excluded.eligibility`)
       .run(intent.workId,intent.runId,intent.scopeId,intent.owner,accepted.revision,intent.id,service,eligibility);
     if(service==="spare")this.sql("UPDATE activity_schedule_tickets SET served=1 WHERE work_id=? AND served=0").run(intent.workId);
@@ -61,19 +63,65 @@ export class ActivitySchedulingDatabase {
     activityToken(workId);const row=this.work(workId);if(!row)return null;
     const value=this.readValue<ActivitySchedulingAcceptance>("activity_schedule_acceptances",row.acceptance_id);
     if(!value||value.intent.workId!==row.work_id||value.intent.runId!==row.run_id||value.intent.scopeId!==row.scope_id||value.intent.owner!==row.owner||value.service!==row.service||value.eligibilitySequence!==row.eligibility)fail("corrupt");
-    return {...value,revision:row.revision,closed:row.closed===1};
+    if(![0,1].includes(row.paths_sealed)||![0,1].includes(row.settlement_confirmed)||typeof value.pathsSealed!=="boolean"||typeof value.settlementConfirmed!=="boolean"||
+      row.settlement_confirmed===1&&(row.closed!==1||row.paths_sealed!==1))fail("corrupt");
+    return {...value,revision:row.revision,closed:row.closed===1,pathsSealed:row.paths_sealed===1,settlementConfirmed:row.settlement_confirmed===1};
   }
-  close(workId:string,expectedRevision:number,basis:string):ActivitySchedulingAcceptance {
+  sealPaths(workId:string,expectedRevision:number,basis:string):ActivitySchedulingAcceptance {
     activityToken(basis);activityCount(expectedRevision,true);const old=this.read(workId);if(!old)fail("work_missing");
-    if(old.closed)return old;if(old.revision!==expectedRevision)fail("revision_conflict");
-    this.sql("UPDATE activity_scheduled_work SET closed=1,revision=revision+1 WHERE work_id=?").run(workId);
-    this.sql("UPDATE activity_schedule_tickets SET served=1 WHERE work_id=? AND served=0").run(workId);
-    this.fact(old.intent.runId,workId,"scheduling_closed",{basis,revision:expectedRevision+1});return this.read(workId)!;
+    if(old.pathsSealed)return old;
+    if(old.revision!==expectedRevision)fail("revision_conflict");
+    this.sql("UPDATE activity_scheduled_work SET paths_sealed=1,revision=revision+1 WHERE work_id=?").run(workId);
+    this.fact(old.intent.runId,workId,"scheduling_paths_sealed",{basis,revision:expectedRevision+1,acceptanceId:old.intent.id,closed:old.closed});
+    return this.read(workId)!;
   }
-  validatePath(intent:ActivityPathIntent):void {
+  paths(workId:string,expectedRevision:number,afterId:string|null,limit:number):ActivityScheduledPathPage {
+    activityCount(expectedRevision);activityCount(limit);if(limit>256)fail("page_limit");if(afterId!==null)activityToken(afterId);
+    const work=this.read(workId);if(!work||work.revision!==expectedRevision)fail("revision_conflict");
+    if(!work.pathsSealed)fail("paths_not_sealed");
+    const rows=this.sql(`SELECT id,run_id,intent AS value,digest FROM activity_paths
+      WHERE json_extract(intent,'$.scheduledWorkId')=? AND id>? ORDER BY id LIMIT ?`).all(workId,afterId??"",limit+1) as {id:string;run_id:string;value:string;digest:string}[];
+    const paths=rows.slice(0,limit).map(row=>{
+      const path=checked<ActivityPathIntent>(row);validateActivityPath(path);
+      if(path.id!==row.id||path.runId!==row.run_id||path.runId!==work.intent.runId||path.scheduledWorkId!==workId||
+        path.owner!==work.intent.owner&&!work.intent.delegatedPathOwners?.includes(path.owner)||
+        work.intent.allowedPathIds&&!work.intent.allowedPathIds.includes(path.id))fail("path_binding_invalid");
+      return path;
+    });
+    return {workId,revision:work.revision,paths,nextAfterId:rows.length>limit?paths.at(-1)!.id:null};
+  }
+  settlement(workId:string):import("@agent-anything/agent-runtime/activity").ActivityScheduledSettlement {
+    const work=this.read(workId);if(!work)fail("work_missing");if(!work.pathsSealed)fail("paths_not_sealed");
+    // One original blocker is sufficient for observation; final closure rechecks the whole sealed scope.
+    const stage=this.sql(`SELECT p.id AS pathId,h.request_id AS id FROM activity_paths p JOIN activity_handoffs h ON h.path_id=p.id
+      WHERE json_extract(p.intent,'$.scheduledWorkId')=? AND h.pending=1 LIMIT 1`).get(workId) as {pathId:string;id:string}|undefined;
+    if(stage)return {workId,revision:work.revision,remaining:{kind:"stage",...stage}};
+    const need=this.sql(`SELECT p.id AS pathId,n.id FROM activity_paths p JOIN activity_input_needs n ON n.path_id=p.id
+      WHERE json_extract(p.intent,'$.scheduledWorkId')=? AND p.cancelled=0 AND
+      NOT EXISTS (SELECT 1 FROM activity_stages s WHERE s.id=n.request_id OR s.id=n.unavailable_request_id) LIMIT 1`).get(workId) as {pathId:string;id:string}|undefined;
+    if(need)return {workId,revision:work.revision,remaining:{kind:"input_need",...need}};
+    const occupied=this.sql(`SELECT s.path_id AS pathId,d.attempt_id AS id FROM activity_schedule_dispatches d JOIN activity_stages s ON s.id=d.request_id
+      WHERE d.work_id=? AND d.released=0 LIMIT 1`).get(workId) as {pathId:string;id:string}|undefined;
+    return {workId,revision:work.revision,remaining:occupied?{kind:"occupancy",...occupied}:null};
+  }
+  assertSettled(workId:string):void {
+    if(this.settlement(workId).remaining)fail("responsibility_unsettled");
+  }
+  close(workId:string,expectedRevision:number,basis:string,requireSettled=false):ActivitySchedulingAcceptance {
+    activityToken(basis);activityCount(expectedRevision,true);const old=this.read(workId);if(!old)fail("work_missing");
+    if(typeof requireSettled!=="boolean")fail("settlement_condition_invalid");
+    if(requireSettled)this.assertSettled(workId);
+    if(old.closed&&(!requireSettled||old.settlementConfirmed))return old;if(old.revision!==expectedRevision)fail("revision_conflict");
+    this.sql("UPDATE activity_scheduled_work SET closed=1,settlement_confirmed=?,revision=revision+1 WHERE work_id=?").run(requireSettled?1:0,workId);
+    this.sql("UPDATE activity_schedule_tickets SET served=1 WHERE work_id=? AND served=0").run(workId);
+    this.fact(old.intent.runId,workId,"scheduling_closed",{basis,revision:expectedRevision+1,pathsSealed:old.pathsSealed,settlementChecked:requireSettled});return this.read(workId)!;
+  }
+  validatePath(intent:ActivityPathIntent,opening=false):void {
     if(!intent.scheduledWorkId)return;
     const work=this.read(intent.scheduledWorkId);
     if(!work||work.closed||work.intent.runId!==intent.runId||work.intent.owner!==intent.owner&&!work.intent.delegatedPathOwners?.includes(intent.owner))fail("path_binding_invalid");
+    if(work.intent.allowedPathIds&&!work.intent.allowedPathIds.includes(intent.id))fail("path_not_delegated");
+    if(opening&&work.pathsSealed)fail("paths_sealed");
   }
   recordLimitation(intent:ActivitySchedulingIntent,code:string,requestId:string|null=null):void {
     validateActivitySchedulingIntent(intent);
@@ -188,11 +236,17 @@ export class ActivitySchedulingDatabase {
     return [...selected.filter(fits),...optional];
   }
   private ready():Ready[] {
-    const rows=this.sql(`SELECT s.id,s.path_id,s.scheduling_metadata,s.scheduling_digest,p.intent,p.digest FROM activity_stages s
+    const rows=this.sql(`SELECT s.id,s.path_id,s.scheduling_metadata,s.scheduling_digest,s.authorization_restrictions,p.intent,p.digest FROM activity_stages s
       JOIN activity_paths p ON p.id=s.path_id WHERE s.status='admitted' AND s.dispatch_restriction IS NULL AND p.cancelled=0 AND json_extract(p.intent,'$.scheduledWorkId') IS NOT NULL ORDER BY s.rowid`).all() as
-      {id:string;path_id:string;scheduling_metadata:string;scheduling_digest:string;intent:string;digest:string}[];
+      {id:string;path_id:string;scheduling_metadata:string;scheduling_digest:string;authorization_restrictions:string|null;intent:string;digest:string}[];
     const ready:Ready[]=[];
     for(const row of rows) {
+      const stored=row.authorization_restrictions?JSON.parse(row.authorization_restrictions) as {value:import("@agent-anything/agent-runtime/activity").ActivityAuthorizationRestrictions;digest:string}:null;
+      if(stored&&modelInputValueDigest(stored.value)!==stored.digest)fail("corrupt");
+      const restrictions=stored?.value??{};
+      if(restrictions.admission||restrictions.execution)continue;
+      const retryRow=this.sql("SELECT value,digest FROM activity_attempt_retries WHERE request_id=? ORDER BY rowid DESC LIMIT 1").get(row.id) as {value:string;digest:string}|undefined;
+      if(retryRow&&Date.parse(checked<import("@agent-anything/agent-runtime/activity").ActivityAttemptRetryReceipt>(retryRow).notBefore)>Date.now())continue;
       const intent=checked<ActivityPathIntent>({value:row.intent,digest:row.digest});const work=this.work(intent.scheduledWorkId!);
       if(!work||work.closed||Date.parse(intent.deadlineAt)<=Date.now())continue;
       const accepted=this.read(work.work_id)!;

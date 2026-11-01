@@ -28,8 +28,8 @@ async function main(){
     await store.close();store=null;app.exit(0);return;
   }
   const registry=new ActivityPurposeRegistry(),signal=new AbortController().signal,now=()=>new Date().toISOString();
-  const work=bindHelarcRepresentationMethods({store,provider,registry,now,authorize:async path=>assert.equal(path.intent.permissionBasis,"isolated-method-permission")});
-  const execution=bindHelarcContextExecution({store,registry,now,purposeIds:["context.representation-method","context.input-preparation","parent-after-method"]});
+  const work=bindHelarcRepresentationMethods({store,provider,registry,now,authorize:async path=>{assert.equal(path.intent.permissionBasis,"isolated-method-permission");return {kind:"allowed"};}});
+  const execution=bindHelarcContextExecution({store,registry,now,purposeIds:["context.representation-method","context.input-materialization","context.input-preparation","parent-after-method"]});
   const processor=execution.processor;
   const recipient={runId:"parent",recipient:"context-representation",purpose:"context-method-verification"};
   const c=command=>store.materialCustody.command(command),a=command=>store.activityHandoffs.command(command);
@@ -53,8 +53,10 @@ async function main(){
       await c({kind:"append",id:`append-${i}`,intentId:`capture-${i}`,offset:0,bytesBase64:bytes.toString("base64")});await c({kind:"complete",intentId:`capture-${i}`});
       const hold={id:`source-hold-${i}`,instanceId,consumer:recipient,responsibility:"preparation",range,basis:"method-path",releaseCondition:"explicit method handoff"};
       const parent={runId:"parent",recipient:"parent-agent",purpose:"task"},delivery={...hold,id:`parent-hold-${i}`,consumer:parent,responsibility:"delivery",basis:`delivery-${i}`};
-      await accept({id:`publish-${i}`,scope:`child-${i}`,actor:`child-${i}`,parts:[{owner:"material_custody",kind:"publish",proposal:{intentId:`capture-${i}`,holds:[hold,delivery],grants:[{id:`grant-${i}`,instanceId,recipient,range,revision:0,allowed:true,basis:"delegated method"},{id:`parent-grant-${i}`,instanceId,recipient:parent,range,revision:0,allowed:true,basis:"child report"}]}}]});
-      await accept({id:`delivery-publish-${i}`,scope:"parent",actor:"parent-agent",parts:[{owner:"context_delivery",kind:"publish",proposal:{id:`delivery-${i}`,sourceRunId:`child-${i}`,sourceId:`report-${i}`,recipient:parent,material:range,instanceId,holdId:delivery.id,detailHoldId:null}}]});
+      await accept({id:`publish-${i}`,scope:`child-${i}`,actor:`child-${i}`,parts:[
+        {owner:"material_custody",kind:"publish",proposal:{intentId:`capture-${i}`,holds:[hold,delivery],grants:[{id:`grant-${i}`,instanceId,recipient,range,revision:0,allowed:true,basis:"delegated method"},{id:`parent-grant-${i}`,instanceId,recipient:parent,range,revision:0,allowed:true,basis:"child report"}]}},
+        {owner:"context_delivery",kind:"publish",proposal:{id:`delivery-${i}`,sourceRunId:`child-${i}`,sourceId:`report-${i}`,recipient:parent,material:range,instanceId,holdId:delivery.id,detailHoldId:null}},
+      ]});
       sources.push({alias:`s${i}`,role:"source",access:{id:`access-${i}`,holdId:hold.id,recipient,range},representation:null,order:i,label:`Child ${i} report`,originalRole:"child_result",indivisibleGroup:`child-result-${i}`});
     }
     const request={kind:"representation_method",method:"summarize",methodRevision:"1",recipient,objective:"Preserve the continuing image-processing agreement, its precise method and later scoped correction for subsequent work. Retain the unknown version claim and TARGET value. Do not execute the underlying task.",sources,
@@ -68,7 +70,8 @@ async function main(){
     await writeFile(join(directory,"request.json"),JSON.stringify(request));
     const intent={id:"method-path",runId:"parent",permissionBasis:"isolated-method-permission",resourceScope:"method-resource",maximumStages:process.env.ACTIVITY_LAYERED?256:128,maximumAttempts:process.env.ACTIVITY_LAYERED?256:128,maximumConcurrent:1,deadlineAt:"2030-01-01T00:00:00.000Z"};
     if(process.env.ACTIVITY_NORMAL_POLICY)await require("./normal-context-policy.cjs").acceptNormalPreparation({store,provider,registry,work,processor,signal,now,request,texts,intent});
-    else await work.submit(intent,request);
+    else await work.submit(intent,process.env.ACTIVITY_JOINT_INPUT?{...request,sources:[sources[0]],relationships:[],
+      requirements:[{...request.requirements[0],description:"Preserve the original method, alpha constraint, applicable range and TARGET."}],sourceBoundary:"first-report-v1",deliveryIds:["delivery-0"]}:request);
     // Leave one durable original page un-interpreted; later processes must not recreate the report.
     await processor.drain("parent",signal);await processor.drain("parent",signal);app.exit(73);return;
   }
@@ -103,18 +106,23 @@ async function main(){
   }
   const result=await work.result("method-path");assert.equal(result.kind,"ready",JSON.stringify(result));
   if(process.env.ACTIVITY_NORMAL_POLICY)await require("./normal-context-policy.cjs").verifyNormalReconsideration({store,work,signal});
-  if(!process.env.ACTIVITY_LIVE_MODEL&&!process.env.ACTIVITY_LAYERED&&!process.env.ACTIVITY_DISTRIBUTED){assert.equal(result.progress.modelCalls,2);assert.equal(result.progress.candidates.length,1);assert.equal(result.progress.assessments.length,1);}
+  if(!process.env.ACTIVITY_LIVE_MODEL&&!process.env.ACTIVITY_LAYERED&&!process.env.ACTIVITY_DISTRIBUTED){
+    assert.equal(result.progress.modelCalls,process.env.ACTIVITY_PROVIDER_INPUT_REJECTION?6:process.env.ACTIVITY_METHOD_RETRY?3:2);
+    assert.equal(result.progress.candidates.length,process.env.ACTIVITY_PROVIDER_INPUT_REJECTION?2:1);
+    assert.equal(result.progress.assessments.length,process.env.ACTIVITY_PROVIDER_INPUT_REJECTION?3:1);
+  }
   const candidate=result.progress.candidates.find(c=>result.progress.resultIds.includes(c.id));assert(candidate);const page=await c({kind:"read",access:candidate.access,offset:0,length:candidate.access.range.end});
   const revision=process.env.ACTIVITY_NORMAL_REVISION?await require("./normal-context-revision.cjs").verifyRevision({store,work,processor,signal}):null;
   if(process.env.ACTIVITY_SIMPLE)assert(page.text.includes("7542")&&page.text.includes("7431"),page.text);
-  else assert(page.text.includes("3")&&page.text.includes("5")&&page.text.toLowerCase().includes("alpha"),page.text);
+  else assert(page.text.includes("3")&&(process.env.ACTIVITY_JOINT_INPUT||page.text.includes("5"))&&page.text.toLowerCase().includes("alpha"),page.text);
   const sources=JSON.parse(await readFile(join(directory,"request.json"),"utf8")).sources;
   for(const source of sources)assert(await c({kind:"describe",holdId:source.access.holdId,recipient}));
   let adoption=null;
-  if(process.env.ACTIVITY_ADOPTION)adoption=await require("./representation-adoption.cjs").verifyAdoption({app,store,provider,registry,work,processor,signal,now,directory,phase,candidate,body:page.text,target,template,lineage});
+  if(process.env.ACTIVITY_JOINT_INPUT)adoption=await require("./representation-joint-input.cjs").verifyJointInput({app,store,provider,registry,work,processor,signal,now,directory,phase,candidate,target,template,lineage});
+  else if(process.env.ACTIVITY_ADOPTION)adoption=await require("./representation-adoption.cjs").verifyAdoption({app,store,provider,registry,work,processor,signal,now,directory,phase,candidate,body:page.text,target,template,lineage});
   const contracts=process.env.ACTIVITY_CONTRACTS?await require("./representation-contracts.cjs").verifyContracts({store,work,processor,signal,now,request:JSON.parse(await readFile(join(directory,"request.json"),"utf8")),initial:result.progress}):null;
   await work.releaseInputs("method-path");await work.releaseInputs("method-path");
-  if(process.env.ACTIVITY_NORMAL_POLICY&&process.env.ACTIVITY_ADOPTION)await require("./normal-context-policy.cjs").closeNormalPreparation({store,work,signal});
+  if(process.env.ACTIVITY_NORMAL_POLICY&&process.env.ACTIVITY_ADOPTION&&!adoption?.consumerCancelled)await require("./normal-context-policy.cjs").closeNormalPreparation({store,work,signal});
   const {HelarcInspection}=await load("inspection/HelarcInspection.js");const {InspectionQueryService}=await import("@agent-anything/inspection/query");
   inspection=await HelarcInspection.create(join(directory,"inspection-settings.json"),join(directory,"inspection"));
   await inspection.activityObserver.replay("parent",store.activityHandoffs);await inspection.contextFoundationObserver.replay("parent",store.contextFoundationFacts.bind(store));
@@ -133,6 +141,61 @@ async function main(){
     const decision=await store.contextPolicy.query({kind:"latest",scopeId:"normal-policy-scope"});
     const visible=await queries.query({...selection,kind:"get_subject",subject:inspection.recorder.ref("context-representation","contribution",decision.decision.id,"parent")});
     assert(visible.records.some(r=>r.contents.some(c=>c.name==="Context policy decision and evidence")),"The policy owner used by scheduling and reconsideration must resolve to a recorded decision");
+  }
+  if(adoption?.consumerCancelled) {
+    const rawStage=await a({kind:"read_stage",requestId:"parent-materialization:stage:1"});
+    const settlementView=await queries.query({...selection,kind:"get_subject",subject:inspection.recorder.ref("shared_acceptance","contribution",rawStage.settlement.id,"parent")});
+    assert(settlementView.records.some(r=>r.payload.executionKind==="activity_result_settlement"));
+    const originalView=await queries.query({...selection,kind:"get_subject",subject:inspection.recorder.ref("activity","contribution",adoption.originalResult,"parent")});
+    assert(originalView.records.length>0);
+    const subscription=await a({kind:"read_reconsideration",subscriptionId:"parent-materialization:consumer",limit:128});assert(subscription.state.closed);
+  }
+  if(adoption?.joint) {
+    const subject=inspection.recorder.ref("representation","contribution",adoption.judgment,"parent");
+    const flow=await queries.query({...selection,kind:"get_data_flow",subject});
+    const judgment=await store.representations.command({kind:"read_judgment",id:adoption.judgment});
+    for(const [i,id] of adoption.producers.entries()) {
+      assert(flow.graph.links.some(link=>link.kind==="observes"&&link.to.id===id),"Every original producer remains visible");
+      assert(flow.graph.links.some(link=>link.kind==="observes"&&link.to.id===judgment.dependencies[`inheritedJudgment:${i}`]),"Every original local judgment remains visible");
+    }
+    if(adoption.nativeResultText) {
+      const path=await a({kind:"read_path",pathId:"joint-materialization"});
+      const view=await queries.query({...selection,kind:"get_subject",subject:inspection.recorder.ref("activity","contribution",path.progress.stageId,"parent")});
+      const descriptor=view.records.flatMap(r=>r.contents).find(c=>c.name==="Declared material text positions (not adoption)");assert(descriptor);
+      const content=await queries.query({...selection,kind:"get_content",contentId:descriptor.id});
+      const declarations=JSON.parse(content.content.text).declarations;
+      assert.equal(declarations.length,2);assert.equal(new Set(declarations.map(d=>d.section)).size,1);
+      assert.deepEqual(declarations.map(d=>d.resultTextSlot.contentPath),[["reports",0],["reports",1]]);
+      assert(declarations.every(d=>d.bindings.length===1),"Each position must expose its own representation binding, not both siblings");
+      assert.notEqual(declarations[0].bindings[0].representation.id,declarations[1].bindings[0].representation.id);
+    }
+  }
+  if(adoption&&!adoption.consumerCancelled&&!adoption.joint) {
+    const consumerSubject=inspection.recorder.ref("activity-reconsideration","contribution","parent-materialization:consumer","parent");
+    const consumerExecution=await queries.query({...selection,kind:"get_execution",subject:consumerSubject});
+    assert(consumerExecution.graph.links.some(link=>link.kind==="binding"&&link.to.id==="parent-materialization"),"Consumer continuation resolves to its original professional path");
+    const consumerFlow=await queries.query({...selection,kind:"get_data_flow",subject:consumerSubject});
+    assert(consumerFlow.graph.links.some(link=>link.to.id==="combination-check"),"The consumer exposes its original checked outcome");
+    const materialized=await a({kind:"read_path",pathId:"parent-materialization"});
+    const materializedSubject=inspection.recorder.ref("activity","contribution",materialized.progress.stageId,"parent");
+    const materializedView=await queries.query({...selection,kind:"get_subject",subject:materializedSubject});
+    assert(materializedView.records.some(r=>r.contents.some(c=>c.name==="Declared material text positions (not adoption)")));
+    const materializedFlow=await queries.query({...selection,kind:"get_data_flow",subject:materializedSubject});
+    const admitted=inspection.recorder.ref("material_custody","contribution","parent-candidate-grant","parent");
+    const admittedFlow=await queries.query({...selection,kind:"get_data_flow",subject:admitted});
+    assert(admittedFlow.graph.links.some(link=>link.kind==="observes"&&link.to.id===candidate.access.holdId));
+    assert(admittedFlow.graph.links.some(link=>link.kind==="produces"&&link.to.id==="parent-candidate-preparation"));
+    assert(materializedFlow.graph.links.some(link=>link.kind==="produces"&&link.to.id==="parent-preparation:stage:1"));
+    const materialVersion=await queries.query({...selection,kind:"get_subject",subject:inspection.recorder.ref("material_custody","contribution",candidate.access.range.materialId,null,candidate.access.range.version)});
+    assert(materialVersion.records.some(r=>r.contents.some(c=>c.name==="Material version from the original read")),"Material links resolve to original read evidence");
+    for(const page of materialized.progress.pages)assert(materializedFlow.graph.links.some(link=>link.kind==="observes"&&link.to.id===page.rawResultId));
+    const snapshot=await a({kind:"read_reconsideration",subscriptionId:"parent-delivery-observation",limit:128});
+    const delivery=inspection.recorder.ref("context_delivery","contribution","delivery-0","parent");
+    const visible=await queries.query({...selection,kind:"get_subject",subject:delivery});
+    assert(visible.records.length>0,"Observed delivery resolves to its original Inspector object");
+    const flow=await queries.query({...selection,kind:"get_data_flow",subject:delivery});
+    for(const fact of snapshot.facts.filter(f=>f.ref.id==="delivery-0"))
+      assert(flow.graph.links.some(link=>link.kind==="produces"&&link.from.id==="delivery-0"&&link.to.id===fact.id),"Delivery transitions retain their common source identity");
   }
   await queries.close();queries=null;
   const timing={localMs:0,providerMs:0,preDispatchMs:0,interpretationMs:0,rawStages:0,unmeasuredRawStages:0};

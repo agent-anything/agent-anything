@@ -1,6 +1,11 @@
 export {ModelRequestAccess} from "./ModelRequestAccess.js";
+export {acceptedModelInputUsage} from "./AcceptedModelInputUsage.js";
+export {MODEL_ATTEMPT_RETRY} from "./ProviderAttemptRecovery.js";
+export {prepareModelInputRecovery,readCurrentModelInputNeed,readModelInputRejections,validateModelInputRecoveryStage} from "./ModelInputRecovery.js";
+export type {RejectedModelInput,ModelInputRecoveryProgress} from "./ModelInputRecovery.js";
 export {ModelTransportJournal} from "./ModelTransportJournal.js";
 export {createModelActivityBinding, assertModelActivityRequest} from "./ModelActivityBinding.js";
 export type {ModelActivityBinding} from "./ModelActivityBinding.js";
 export type {ModelResponseObservation, ModelResponseObserver, ModelResponseDeliveryOptions} from "./ModelResponseObservation.js";
+export {ModelResponseDelivery} from "./ModelResponseObservation.js";
 export type {ModelActivityJournalSupport} from "./ModelActivityJournal.js";

@@ -1,7 +1,7 @@
 import type { RunInputItem } from "@agent-anything/agent-core/input";
-import {withHelarcProviderAdmission, HELARC_PROVIDER_ADMISSION} from "../provider/HelarcProviderAdmission.js";
-import {createHelarcContextPreparation, HELARC_CONTEXT_PREPARATION_BINDING} from "../execution-storage/HelarcContextPreparation.js";
-import { createDefaultHelarcInstructionSettings, snapshotHelarcInstructionSettings, type HelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import { createDefaultHelarcInstructionSettings, snapshotHelarcInstructionSettings, type HelarcInstructionSettings,createDefaultHelarcContextSettings,type HelarcContextSettings } from "@agent-anything/helarc/configuration";
+import {bindHelarcContextSettings,validateHelarcContextRunBinding} from "../context/HelarcContextRunBinding.js";
+import {createHelarcRunActivityComposition,HELARC_RUN_ACTIVITY_COMPOSITION,type HelarcActivityHost} from "../context/HelarcRunActivityComposition.js";
 import { randomUUID } from "node:crypto";
 import { canonicalEncode } from "@agent-anything/canonical-action/subject";
 import { createRunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
@@ -87,7 +87,6 @@ import {
 import { createHelarcLocalSandboxGateway } from "@agent-anything/helarc-local-environment/sandbox";
 import type { Provider } from "@agent-anything/model-interaction";
 import type { HelarcProviderProfile } from "@agent-anything/helarc/configuration";
-import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
 import type { SessionAuthorizationStore } from "@agent-anything/permission";
 import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
@@ -132,13 +131,15 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
-  readonly executionStore?: HelarcExecutionStore;
+  readonly activityHost:HelarcActivityHost;
+  readonly executionStore: HelarcExecutionStore;
   readonly recoveryAdmission?: HelarcExecutionAdmission;
   readonly commandOutputDirectory: string;
   readonly responseDelivery?: "buffered" | "streaming";
   readonly retainCommandOutput?: (runId: string, executionId: string, paths: import("@agent-anything/helarc-local-environment/command").ProcessOutputPaths) => Promise<void>;
   readonly inspection?: import("../inspection/HelarcInspection.js").HelarcInspection;
   readonly instructionSettings?: HelarcInstructionSettings;
+  readonly contextSettings?:HelarcContextSettings;
   readonly sessionId: string;
   readonly productRunId: string;
   readonly task: AgentTask<HelarcTaskInput>;
@@ -149,7 +150,7 @@ export interface PrepareHelarcHostRunInput {
   readonly identitySelection: HostIdentitySelection;
   readonly provider: Provider;
   readonly providerProfile: HelarcProviderProfile;
-  readonly modelContinuationStore?: ModelContinuationStore;
+  readonly providerCredential?: import("../provider/HelarcRunProviderBinding.js").HelarcRunCredentialBinding;
   readonly contextManifestPersistence?: ContextManifestPersistencePort;
   readonly runTranscriptPort?: RunTranscriptPort;
   readonly permissionPreset: HelarcPermissionPreset;
@@ -187,6 +188,7 @@ export interface PreparedHelarcHostRun {
   readonly productRunId: string;
   readonly workspace: WorkspaceSelection;
   readonly identity: IdentityRef;
+  restoreActivityResponsibilities():void;
   start(): HelarcHostRunComposition;
   recover(intent?: "continue" | "cancel"): Promise<HelarcHostRunComposition>;
 }
@@ -223,13 +225,17 @@ class HelarcRecoveryBindingError extends Error {
 }
 
 async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<PreparedHelarcHostRun> {
-  if (input.recoveryAdmission && (!input.executionStore || input.recoveryAdmission.version !== 2 ||
+  if(!input.activityHost||!input.executionStore)throw new TypeError("Helarc execution requires the shared Activity Host and retained execution store.");
+  if(!input.provider.encodeInput||!input.provider.verifyEncodedInput)throw new TypeError("Helarc execution requires complete Provider input encoding and verification.");
+  if (input.recoveryAdmission && (!input.executionStore || input.recoveryAdmission.version !== 3 ||
       input.recoveryAdmission.productRunId !== input.productRunId || input.recoveryAdmission.sessionId !== input.sessionId))
     throw new HelarcRecoveryBindingError("admission");
   const recoveryEnvironment = input.recoveryAdmission
     ? input.executionStore!.restoreCommandEnvironment(input.recoveryAdmission.commandEnvironment) : undefined;
   const rootRunId = input.recoveryAdmission?.rootRunId ?? `run_${randomUUID()}`;
   const instructionSettings = snapshotHelarcInstructionSettings(input.instructionSettings ?? createDefaultHelarcInstructionSettings());
+  const contextBinding=input.recoveryAdmission?.contextBinding??bindHelarcContextSettings(input.contextSettings??createDefaultHelarcContextSettings(),input.providerProfile);
+  validateHelarcContextRunBinding(contextBinding);
   const runContext = await resolveHostRunContext({
     sessionId: input.sessionId,
     runId: input.productRunId,
@@ -315,10 +321,11 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     },
     now,
   });
+  const activities=createHelarcRunActivityComposition({rootRunId,store:input.executionStore,provider:input.provider,
+    context:contextBinding,host:input.activityHost,deliveryMode:input.responseDelivery??"buffered",now});
   const product = await createHelarcProductComposition({
-    activityJournal: input.executionStore?.activityJournal,
-    contextMaterials: input.executionStore?.contextMaterials,
-    contextPreparation: input.executionStore ? createHelarcContextPreparation(input.executionStore) : undefined,
+    contextMaterials: activities.contextMaterials,
+    taskExecution:activities.taskExecution,stopExecution:activities.stopExecution,reportHandoff:activities.reportHandoff,
     materialHandoff: input.executionStore ? createHelarcMaterialHandoff(input.executionStore) : undefined,
     executionEvidence: input.executionStore,
     executionEvidenceAccess: executionAccess,
@@ -330,12 +337,11 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     runId: input.productRunId,
     task: input.task,
     workspace: runWorkspace,
-    provider: withHelarcProviderAdmission(input.provider, input.inspection?.executionFlow),
+    provider: input.provider,
     providerProfile: input.providerProfile,
     executionFlow: input.inspection?.executionFlow,
     instructionTarget: "production",
     instructionSettings,
-    modelContinuationStore: input.modelContinuationStore,
     codeSource: createLocalCodeSourcePort(now),
     fileActions,
     commandActions,
@@ -363,8 +369,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       invocationId:s.origin?.invocationId ?? null,attemptId:s.origin?.attemptId ?? null});
   };
   const executionBindings = {
-      providerAdmission: HELARC_PROVIDER_ADMISSION,
-      contextPreparation: HELARC_CONTEXT_PREPARATION_BINDING,
+      activities:HELARC_RUN_ACTIVITY_COMPOSITION,
       platform,
       enforcement,
       commandEnvironment: commandActions.environment,
@@ -586,16 +591,18 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       changedVariableNames: Object.keys({...recoveryEnvironment!.environment, ...process.env})
         .filter(key => recoveryEnvironment!.environment[key] !== process.env[key]).sort()});
   } else if (input.executionStore) {
-    await input.executionStore.admitProductRun({version: 2, rootRunId, productRunId: input.productRunId,
+    await input.executionStore.admitProductRun({version: 3, rootRunId, productRunId: input.productRunId,
       sessionId: input.sessionId, createdAt: now(), task: input.task, inputItems: input.inputItems,
       workspace: runWorkspace, identity: runContext.identity, providerProfile: input.providerProfile,
       providerBinding: retainHelarcProviderBinding(input.provider),
-      instructionSettings, permissionPreset: input.permissionPreset,
+      providerCredential: input.providerCredential ?? {kind:"none"},
+      instructionSettings,contextBinding, permissionPreset: input.permissionPreset,
       enforcement, commandLimits: input.commandLimits ?? null, runLimits, runTreeLimits,
       responseDelivery: input.responseDelivery ?? "buffered", environmentFingerprint: configurationFingerprint,
       executionBindings, commandEnvironment: input.executionStore.retainCommandEnvironment(commandActions.recoveryEnvironment)});
   }
   if (input.executionStore) await input.inspection?.registerExecutionRecording(rootRunId, Boolean(input.recoveryAdmission), input.executionStore);
+  await activities.prepareActivation();
   let started = false;
   let releaseExecution: (() => void) | undefined;
 
@@ -615,6 +622,10 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     productRunId: input.productRunId,
     workspace: runWorkspace,
     identity: runContext.identity,
+    restoreActivityResponsibilities():void {
+      if(!input.recoveryAdmission)throw new Error("Original activity bindings are unavailable.");
+      activities.activate("settle");
+    },
     start(): HelarcHostRunComposition {
       if (started) {
         throw new Error("Prepared Helarc Host Run can be started only once.");
@@ -622,7 +633,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       started = true;
       if (input.recoveryAdmission) throw new Error("A retained execution must use recover, not start.");
       releaseExecution = input.executionStore?.acquireRun(rootRunId);
-      try { return wrap(manager.start(hostRunStartInput)); }
+      try { activities.activate();return wrap(manager.start(hostRunStartInput)); }
       catch (error) {releaseExecution?.(); throw error;}
     },
     async recover(intent: "continue" | "cancel" = "continue"): Promise<HelarcHostRunComposition> {
@@ -640,6 +651,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
         product.recordRunInput(runId, member.admission.input, member.head.state.startedAt);
         for (const item of member.head.state.items) product.recordTranscript(createRunTranscriptRecord(item));
       }
+      activities.activate(intent);
       const host = await manager.recover({sessionId: input.sessionId, runId: rootRunId, taskId: input.task.id,
         startedAt: saved.commit.checkpoint.input.startedAt, enforcement,
         ...(intent === "cancel" ? {cancellation: {origin: "user" as const, reasonCode: "user_requested" as const}} : {}),

@@ -136,7 +136,9 @@ export class ModelRequestAccess {
         events: callContext.retry.events,
         waitControl: callContext.retry.waitControl,
       }, async (attempt) => {
-        if (!dispatchGranted) throw new ActivityCheckpointError("provider_dispatch_already_accepted_without_recoverable_response");
+        // The outer exchange may have started before its first physical dispatch.
+        // When present, the transport journal alone grants or reconciles that exact Attempt.
+        if (!dispatchGranted && !this.transportJournal) throw new ActivityCheckpointError("provider_dispatch_already_accepted_without_recoverable_response");
         callContext.auxiliaryUsage?.assertAvailable();
         const providerResult=await transport(attempt);
         return providerAttemptResult(providerResult, callContext, attempt, this.input.retryClock);
@@ -230,7 +232,7 @@ function throwIfCancelled(context: AgentActivityExecutionContext): void {
 function invalidOutput(message: string, metadata: Readonly<Record<string, unknown>> = {}): TaskDecisionActivityError {
   return createControllerError("model", "model_output_invalid", message, false, metadata);
 }
-function createControllerError(owner: TaskDecisionActivityFailure["kind"], code: TaskDecisionActivityFailureCode, message: string, retryable: boolean, metadata: Readonly<Record<string, unknown>>, operationSettlement: "unsettled" | "settled_failure" = "unsettled", providerCategory?: string, deadline: DecisionActivityDeadline | null = null): TaskDecisionActivityError {
+function createControllerError(owner: "model" | "provider", code: TaskDecisionActivityFailureCode, message: string, retryable: boolean, metadata: Readonly<Record<string, unknown>>, operationSettlement: "unsettled" | "settled_failure" = "unsettled", providerCategory?: string, deadline: DecisionActivityDeadline | null = null): TaskDecisionActivityError {
   const frozenMetadata = Object.freeze({ ...metadata });
   return new TaskDecisionActivityError(owner === "model"
     ? Object.freeze({

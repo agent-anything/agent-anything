@@ -82,7 +82,7 @@ export interface DelegationExpectedResultRequirement {
 
 export interface DelegationResultExpectation {
   readonly requirements: readonly DelegationExpectedResultRequirement[];
-  readonly maxNarrativeCharacters: number;
+  readonly maxInlineNarrativeCodeUnits: number;
   readonly revision: string;
 }
 
@@ -536,18 +536,18 @@ export function snapshotDelegationContextMaterial(
 
 export function createDelegationResultExpectation(input: {
   readonly requirements: readonly DelegationExpectedResultRequirement[];
-  readonly maxNarrativeCharacters: number;
+  readonly maxInlineNarrativeCodeUnits: number;
 }): DelegationResultExpectation {
   strictRecord(input, "DelegationResultExpectationInput", [
     "requirements",
-    "maxNarrativeCharacters",
+    "maxInlineNarrativeCodeUnits",
   ]);
   const requirements = snapshotRequirements(input.requirements);
-  const maxNarrativeCharacters = positiveInteger(
-    input.maxNarrativeCharacters,
-    "maxNarrativeCharacters",
+  const maxInlineNarrativeCodeUnits = positiveInteger(
+    input.maxInlineNarrativeCodeUnits,
+    "maxInlineNarrativeCodeUnits",
   );
-  const material = deepFreeze({ requirements, maxNarrativeCharacters });
+  const material = deepFreeze({ requirements, maxInlineNarrativeCodeUnits });
   return deepFreeze({
     ...material,
     revision: createDelegationContractIdentity(
@@ -620,15 +620,15 @@ function snapshotExpectation(
 ): DelegationResultExpectation {
   strictRecord(input, "DelegationResultExpectation", [
     "requirements",
-    "maxNarrativeCharacters",
+    "maxInlineNarrativeCodeUnits",
     "revision",
   ]);
   const requirements = snapshotRequirements(input.requirements);
-  const maxNarrativeCharacters = positiveInteger(
-    input.maxNarrativeCharacters,
-    "maxNarrativeCharacters",
+  const maxInlineNarrativeCodeUnits = positiveInteger(
+    input.maxInlineNarrativeCodeUnits,
+    "maxInlineNarrativeCodeUnits",
   );
-  const material = deepFreeze({ requirements, maxNarrativeCharacters });
+  const material = deepFreeze({ requirements, maxInlineNarrativeCodeUnits });
   const revision = createDelegationContractIdentity(
     "agent-anything.delegation-result-expectation.v1",
     material,

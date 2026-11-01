@@ -4,12 +4,24 @@ import type {MethodJob,MethodSource,RepresentationMethodRequest} from "./Represe
 import type {AssessedRepresentation} from "./RepresentationMethodOutput.js";
 import type {ActivityHandoffPort,ActivityStageState} from "../../activity/ActivityHandoff.js";
 import type {RepresentationMethodProgress} from "./RepresentationMethod.js";
+import {methodSources} from "./RepresentationMethodRanges.js";
+
+export function methodInputSources(method:RepresentationMethodProgress,job:MethodJob):MethodSource[] {
+  return [...methodSources(method).filter(s=>s.role==="background"||job.sources.includes(s.alias)||job.candidates.includes(s.alias)).map(s=>({...s,role:job.candidates.includes(s.alias)?"candidate" as const:s.role})),
+    ...[...new Set([...job.sources,...job.candidates])].flatMap(id=>{
+      const candidate=method.candidates.find(c=>c.id===id||c.segments.some(s=>s.id===id));if(!candidate)return [];
+      const segment=candidate.segments.find(s=>s.id===id);
+      return [{alias:id,role:job.candidates.includes(id)?"candidate" as const:"source" as const,
+        access:{...candidate.access,range:segment?.range??candidate.access.range},representation:candidate.representation,
+        order:method.request.sources.length+method.candidates.indexOf(candidate),label:candidate.id,originalRole:"derived_representation",indivisibleGroup:candidate.id}];
+    })];
+}
 
 /** Original response provenance is retained separately from semantic compatibility conditions. */
 export function methodAssessmentConditions(request:RepresentationMethodRequest,job:MethodJob,sources:readonly MethodSource[]):string {
   return modelInputValueDigest({methodRevision:request.methodRevision,objective:request.objective,requirements:request.requirements,restorations:request.restorations??[],relationships:request.relationships,
     sourceBoundary:request.sourceBoundary,target:request.combination?.scope.target??request.targetRevision,purpose:request.combination?.scope.purpose??request.recipient.purpose,
-    combination:request.combinationDigest,scope:job.checkScope??"both",details:(request.dependencyAccesses??[]).map(a=>a.range),sources:sources.map(s=>({alias:s.alias,role:s.role,range:s.access.range,representation:s.representation,order:s.order,label:s.label,originalRole:s.originalRole}))});
+    combination:request.combinationDigest,...(request.combination?.inheritedChecks?{inheritedChecks:request.combination.inheritedChecks}:{}),scope:job.checkScope??"both",details:(request.dependencyAccesses??[]).map(a=>a.range),sources:sources.map(s=>({alias:s.alias,role:s.role,range:s.access.range,representation:s.representation,order:s.order,label:s.label,originalRole:s.originalRole}))});
 }
 export async function findMethodAssessmentReuse(catalog:RepresentationCatalogPort,activities:ActivityHandoffPort,request:RepresentationMethodRequest,job:MethodJob,sources:readonly MethodSource[],signal:AbortSignal):Promise<{judgmentId:string;output:AssessedRepresentation}|null> {
   if(!["check","relation","combination"].includes(job.kind))return null;
@@ -17,7 +29,7 @@ export async function findMethodAssessmentReuse(catalog:RepresentationCatalogPor
   for(const id of request.reuseJudgments??[]) {
     signal.throwIfAborted();const judgment=await catalog.command({kind:"read_judgment",id}) as RepresentationJudgment|null;
     if(!judgment||judgment.conclusion!=="supported"||judgment.dependencies.conditions!==conditions||judgment.methodRevision!=="bidirectional:1"||judgment.kind!==(job.kind==="combination"?"combination":"semantic"))continue;
-    const subjects=sources.filter(s=>job.candidates.includes(s.alias)).map(s=>s.representation);
+    const subjects=sources.filter(s=>(job.relationshipBasis?job.sources:job.candidates).includes(s.alias)).map(s=>s.representation);
     if(subjects.some(ref=>!ref)||modelInputValueDigest(request.combination?.subjects??subjects)!==modelInputValueDigest(judgment.subjects))continue;
     const requestId=judgment.dependencies.stage;if(!requestId)continue;
     const stage=await activities.command({kind:"read_stage",requestId}) as ActivityStageState|null;

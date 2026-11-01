@@ -22,6 +22,9 @@ it("distinguishes complete search coverage from an empty budget-limited page",()
   const partial={matches:[],nextCursor:"cursor",exhausted:false,scannedBytes:262144,scannedDescriptions:1,frontier:2,
     limitations:["partial_scan","no_match_is_not_absence"],stopReason:"execution_budget"};
   expect(valid(partial)).toBe(true);
+  expect(valid({...partial,frontier:{sources:[{id:"source-a",frontier:2},{id:"source-b",frontier:3}]}})).toBe(true);
+  expect(valid({...partial,frontier:{sources:[{id:"source-a",frontier:2},{id:"source-a",frontier:3}]}})).toBe(false);
+  expect(valid({...partial,frontier:{sources:[]}})).toBe(false);
   expect(valid({...partial,stopReason:undefined})).toBe(false);
   expect(valid({...partial,stopReason:"scope_exhausted"})).toBe(false);
   expect(valid({...partial,stopReason:"result_limit"})).toBe(false);

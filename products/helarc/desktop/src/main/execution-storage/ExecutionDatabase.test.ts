@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import {mkdir, readFile, writeFile} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join,resolve,dirname,basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -36,6 +36,27 @@ afterEach(async () => {
 });
 function directory(): string { const value = mkdtempSync(join(tmpdir(), "helarc-execution-")); directories.push(value); return value; }
 function open(path: string): ExecutionDatabase { const value = new ExecutionDatabase(path); databases.push(value); return value; }
+
+it.each([31,32,33,34,35])("refuses recovery format %i without migrating or deleting its retained content", version => {
+  const path = directory(), first = open(path);
+  const intent = {id:"retained-report",runId:"child",basis:"original-report",predecessor:null,deadlineAt:"2099-01-01T00:00:00Z",stages:["source"]};
+  first.contextPreparationCommand(first.generation,{kind:"open",intent});
+  first.contextPreparationCommand(first.generation,{kind:"write",id:intent.id,stage:"source",value:{text:"original report"}});
+  first.close();
+  const previous = new Database(join(path,"execution.sqlite"));
+  let content: unknown[];
+  try {
+    previous.prepare("UPDATE store SET version=? WHERE id=1").run(version);
+    content = previous.prepare("SELECT * FROM execution_content ORDER BY id").all();
+    expect(content.length).toBeGreaterThan(0);
+  } finally { previous.close(); }
+  expect(() => new ExecutionDatabase(path)).toThrow("execution_store_format_invalid");
+  const retained = new Database(join(path,"execution.sqlite"),{readonly:true});
+  try {
+    expect(retained.prepare("SELECT version FROM store WHERE id=1").get()).toEqual({version});
+    expect(retained.prepare("SELECT * FROM execution_content ORDER BY id").all()).toEqual(content);
+  } finally { retained.close(); }
+});
 
 it("retains independent preparation stages, rejects mutation and fences retired producers across reopening", () => {
   const path = directory(), first = open(path);
@@ -88,14 +109,20 @@ it("retains exact reference transfers and stable bounded public-execution pages 
 
 // Real Worker restarts and FULL durable commits are not five-second unit tests.
 describe("execution owner persistence", {timeout: 20_000}, () => {
-  it("measures growing retained conversations and preserves cold and reused checkpoints across Worker reopen", async () => {
-    const root = directory();
-    const events: import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent[] = [];
-    const diagnostics = {record() {}, performance(event: typeof events[number]) {events.push(event);}};
-    let store = await HelarcExecutionStore.open(root, compiledWorker, undefined, undefined, diagnostics); stores.push(store);
+  describe.sequential("measures growing retained conversations across Worker reopen",()=>{
+    let root="";
     let revision = 0;
-    const results = [], retained: RunTreeCommit[] = [];
-    for (const count of [100, 500, 1000]) {
+    const retained:RunTreeCommit[]=[];
+    beforeAll(()=>{root=mkdtempSync(join(tmpdir(),"helarc-execution-scaling-"));});
+    afterAll(()=>{
+      if(!root)return;
+      if(dirname(resolve(root))!==resolve(tmpdir())||!basename(root).startsWith("helarc-execution-scaling-"))throw new Error("Unsafe cleanup");
+      rmSync(root,{recursive:true,force:true});
+    });
+    it.each([100,500,1000])("retains cold, reused and earlier checkpoints at %i messages",async(count)=>{
+      const events: import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent[] = [];
+      const diagnostics = {record() {}, performance(event: typeof events[number]) {events.push(event);}};
+      let store=await HelarcExecutionStore.open(root,compiledWorker,undefined,undefined,diagnostics);stores.push(store);
       let started = performance.now();
       const seed = createModelConversationSeed("run-1", String(revision), Array.from({length: count}, (_, index) => retainInputPresentation({
         id: `message-${index}`, source: {owner: "runtime", kind: "run_item", id: `item-${index}`, revision: "1", runId: "run-1"},
@@ -126,12 +153,11 @@ describe("execution owner persistence", {timeout: 20_000}, () => {
         expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);
         writes.push({mode, writeMs: Math.round(writeMs), counters}); retained.push(commit);
       }
-      results.push({count, bytes: Buffer.byteLength(JSON.stringify(seed)), prepareMs: Math.round(prepareMs), replayMs: Math.round(replayMs), writes});
-    }
-    await store.close();
-    store = await HelarcExecutionStore.open(root, compiledWorker); stores.push(store);
-    for (const commit of retained) expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);
-    console.info("Retained conversation scaling", JSON.stringify(results));
+      await store.close();
+      store=await HelarcExecutionStore.open(root,compiledWorker);stores.push(store);
+      for(const commit of retained)expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);
+      console.info("Retained conversation scaling",JSON.stringify({count,bytes:Buffer.byteLength(JSON.stringify(seed)),prepareMs:Math.round(prepareMs),replayMs:Math.round(replayMs),writes,restored:retained.length}));
+    });
   });
 
   it.each([false, true])("observes real Worker costs without changing commits or recovery (observer throws=%s)", async throws => {

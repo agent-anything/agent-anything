@@ -2,6 +2,14 @@ import type { ExecutionFlowContext } from "@agent-anything/observability/executi
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/model-interaction";
 import type { TaskDecisionProposal, TaskDecisionInputSources } from "./TaskDecisionActivity.js";
 import type { ModelActivityBinding } from "../model-access/ModelActivityBinding.js";
+import type {ActivityPurposeBinding} from "../activity/ActivityPurpose.js";
+export interface TaskResponseInterpretationBinding {
+  readonly kind:"task_response_interpretation";
+  readonly runId:string;
+  readonly activityId:string;
+  readonly purpose:string;
+  readonly contract:ActivityPurposeBinding;
+}
 export type BoundTaskDecisionInput<TOutput = unknown> = {
   readonly source: TaskDecisionInputSources<TOutput>;
 } & ({
@@ -9,7 +17,7 @@ export type BoundTaskDecisionInput<TOutput = unknown> = {
   readonly bindingId: string;
 } | {
   readonly kind: "model_response";
-  readonly activity: ModelActivityBinding;
+  readonly activity: ModelActivityBinding | TaskResponseInterpretationBinding;
   readonly request: ProviderRequest;
   readonly response: ProviderResponse;
 });

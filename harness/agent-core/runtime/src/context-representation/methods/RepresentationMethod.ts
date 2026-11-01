@@ -6,12 +6,14 @@ import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {ActivityPurposeContract} from "../../activity/ActivityPurpose.js";
 import type {ContextUseScope} from "@agent-anything/context/selection";
 import {validatePreparedContextInput,type PreparedContextInput} from "../ContextInputPreparation.js";
+import {MODEL_ATTEMPT_RETRY} from "../../model-access/ProviderAttemptRecovery.js";
 
 export const REPRESENTATION_METHOD_PURPOSE:ActivityPurposeContract={
   ref:{id:"context.representation-method",revision:"1"},inputOwner:"context-representation",executionOwner:"representation-execution",
   interpretationOwner:"context-representation",acceptanceOwner:"context-representation",recoveryOwner:"context-representation",
   stageKinds:["read","ranges","exact","assemble","organize","measure","bind","model","release"],
   capabilities:["material-read","material-write","model-access","model-measurement"],continuationKinds:["stage_request"],
+  attemptRetry:MODEL_ATTEMPT_RETRY,
 };
 export type RepresentationMethodKind="preserve"|"excerpt"|"detail"|"omit"|"summarize"|"restore"|"search"|"check"|"check_combination";
 export interface MethodSource {
@@ -24,10 +26,24 @@ export interface MethodSource {
   readonly originalRole:string;
   /** Explicit native/contract unit, not a claim that all natural-language links are known. */
   readonly indivisibleGroup:string;
-  readonly division?:{readonly kind:"text_lines";readonly basis:string};
+  readonly division?:{readonly kind:"text_lines"|"text_utf8";readonly basis:string};
 }
 export interface MethodRequirement {readonly id:string;readonly revision:string;readonly basis:string;readonly description:string;}
 export interface MethodRelationship {readonly id:string;readonly sources:readonly string[];readonly basis:string;readonly description:string;readonly requiresCommonEvidence:boolean;}
+export interface InheritedMethodCheck {
+  readonly producerPathId:string;readonly requestDigest:string;readonly assessments:readonly MethodAssessment[];
+  readonly objective:string;readonly sourceRanges:readonly MaterialRange[];readonly requirements:readonly MethodRequirement[];
+  readonly requirementBindings:readonly {readonly originalId:string;readonly combinedId:string}[];
+  readonly relationships:readonly MethodRelationship[];
+  readonly candidates:readonly {readonly id:string;readonly representation:RepresentationRef;readonly qualifiedSource:string;
+    readonly losses:readonly RepresentationLoss[];readonly unknowns:readonly MethodUnknown[]}[];
+}
+export interface CombinationProducerEvidence {
+  readonly pathId:string;readonly requestDigest:string;readonly sourceBoundary:string;
+  readonly sources:readonly {readonly originalAlias:string;readonly combinedAlias:string}[];
+  readonly requirements:readonly {readonly originalId:string;readonly combinedId:string}[];
+  readonly candidates:readonly {readonly id:string;readonly representation:RepresentationRef}[];
+}
 export interface RepresentationMethodRequest {
   readonly kind:"representation_method";
   readonly method:RepresentationMethodKind;
@@ -42,7 +58,9 @@ export interface RepresentationMethodRequest {
   readonly sourceBoundary:string;
   readonly deliveryIds:readonly string[];
   readonly combinationDigest:string|null;
-  readonly combination?:{readonly prepared:PreparedContextInput;readonly scope:ContextUseScope;readonly subjects:readonly RepresentationRef[]};
+  readonly combination?:{readonly prepared:PreparedContextInput;readonly scope:ContextUseScope;readonly subjects:readonly RepresentationRef[];
+    readonly producers?:readonly CombinationProducerEvidence[];
+    readonly inheritedChecks?:readonly InheritedMethodCheck[]};
   readonly reuseJudgments?:readonly string[];
   readonly restorations?:readonly {readonly lossId:string;readonly sourceAlias:string;readonly range:MaterialRange;readonly description:string}[];
   readonly combine:"keep"|"merge";
@@ -87,6 +105,12 @@ export interface MethodAssessment {
   readonly rawResultId:string;
   readonly judgmentIds:readonly string[];
   readonly scope:"both"|"source"|"candidate";
+  readonly relationshipBasis?:MethodRelationshipBasis;
+}
+export interface MethodRelationshipBasis {
+  readonly relationship:MethodRelationship;
+  readonly supportingJudgments:readonly string[];
+  readonly coverage:readonly {readonly sourceAlias:string;readonly ranges:readonly MaterialRange[]}[];
 }
 export interface MethodJob {
   readonly id:string;
@@ -97,6 +121,7 @@ export interface MethodJob {
   readonly repair:number;
   readonly feedback:string|null;
   readonly checkScope?:"source"|"candidate";
+  readonly relationshipBasis?:MethodRelationshipBasis;
 }
 export interface MethodCheckGroup {readonly candidateId:string;readonly jobs:readonly string[];}
 export interface RepresentationMethodProgress {
@@ -104,7 +129,7 @@ export interface RepresentationMethodProgress {
   readonly request:RepresentationMethodRequest;
   readonly state:"working"|"ready"|"gap";
   readonly pages:readonly MethodPage[];
-  readonly rangeUnits:readonly {readonly originalAlias:string;readonly source:MethodSource}[];
+  readonly rangeUnits:readonly {readonly originalAlias:string;readonly parentAlias?:string;readonly source:MethodSource}[];
   readonly candidates:readonly MethodCandidate[];
   readonly assessments:readonly MethodAssessment[];
   readonly queue:readonly MethodJob[];
@@ -132,7 +157,7 @@ export function validateRepresentationMethodRequest(value:RepresentationMethodRe
     if(!/^[a-zA-Z0-9_-]{1,64}$/.test(source.alias)||!source.indivisibleGroup||!source.label||!source.originalRole||!Number.isSafeInteger(source.order)||source.order<0||
       modelInputValueDigest(source.access.recipient)!==modelInputValueDigest(value.recipient))throw new TypeError("representation_source_scope_invalid");
     const r=source.access.range;if(r.coordinate!=="bytes"||!r.materialId||!r.version||!Number.isSafeInteger(r.start)||!Number.isSafeInteger(r.end)||r.start<0||r.end<r.start)throw new TypeError("representation_source_range_invalid");
-    if(source.division&&(source.division.kind!=="text_lines"||!source.division.basis||source.role!=="source"||value.sources.some(s=>s.alias!==source.alias&&s.indivisibleGroup===source.indivisibleGroup)))throw new TypeError("representation_division_invalid");
+    if(source.division&&(!["text_lines","text_utf8"].includes(source.division.kind)||!source.division.basis||source.role!=="source"||value.sources.some(s=>s.alias!==source.alias&&s.indivisibleGroup===source.indivisibleGroup)))throw new TypeError("representation_division_invalid");
   }
   if(new Set(value.sources.map(s=>s.order)).size!==value.sources.length||new Set(value.requirements.map(r=>r.id)).size!==value.requirements.length)throw new TypeError("representation_identity_duplicate");
   for(const requirement of value.requirements)if(!requirement.id||!requirement.revision||!requirement.basis||!requirement.description)throw new TypeError("representation_requirement_invalid");
@@ -150,6 +175,30 @@ export function validateRepresentationMethodRequest(value:RepresentationMethodRe
     const {scope,prepared}=combination;
     if(modelInputValueDigest(prepared)!==value.combinationDigest||scope.owner!==value.recipient.recipient||scope.runId!==value.recipient.runId||prepared.demand.recipient!==scope.recipient||prepared.demand.purpose!==scope.purpose||prepared.demand.targetRevision!==scope.target)throw new TypeError("representation_combination_binding_invalid");
     if(combination.subjects.some(ref=>!value.sources.some(s=>s.representation&&modelInputValueDigest(s.representation)===modelInputValueDigest(ref))))throw new TypeError("representation_combination_subject_evidence_missing");
+    const checks=combination.inheritedChecks??[];
+    if(!Array.isArray(combination.inheritedChecks??[])||new Set(checks.map(c=>c.producerPathId)).size!==checks.length)
+      throw new TypeError("representation_inherited_check_binding_invalid");
+    const qualified=checks.flatMap(c=>c.candidates);
+    if(new Set(qualified.map(c=>c.qualifiedSource)).size!==qualified.length||
+      new Set(qualified.map(c=>modelInputValueDigest(c.representation))).size!==qualified.length||
+      new Set(checks.flatMap(c=>c.requirementBindings.map(b=>b.combinedId))).size!==checks.reduce((n,c)=>n+c.requirementBindings.length,0))
+      throw new TypeError("representation_inherited_check_binding_invalid");
+    for(const inherited of checks)if(!inherited.producerPathId||!inherited.requestDigest||!inherited.assessments.length||
+      new Set(inherited.assessments.map(a=>a.id)).size!==inherited.assessments.length||
+      inherited.assessments.some(a=>!a.supported||a.scope!=="both"||a.judgmentIds.length!==1)||inherited.requirementBindings.length!==inherited.requirements.length||
+      new Set(inherited.requirementBindings.map(b=>b.originalId)).size!==inherited.requirements.length||
+      inherited.requirements.some(requirement=>{const binding=inherited.requirementBindings.find(b=>b.originalId===requirement.id);
+        return !binding||!value.requirements.some(r=>modelInputValueDigest(r)===modelInputValueDigest({...requirement,id:binding.combinedId}));})||
+      !inherited.candidates.length||inherited.candidates.some(c=>!combination.subjects.some(ref=>modelInputValueDigest(ref)===modelInputValueDigest(c.representation)))||
+      inherited.candidates.some(c=>!value.sources.some(s=>s.alias===c.qualifiedSource&&s.role==="source"&&s.originalRole==="qualified_representation"&&
+        modelInputValueDigest(s.representation)===modelInputValueDigest(c.representation))))throw new TypeError("representation_inherited_check_binding_invalid");
+    const producers=combination.producers??[],equal=(a:unknown,b:unknown)=>modelInputValueDigest(a)===modelInputValueDigest(b);
+    if(new Set(producers.map(p=>p.pathId)).size!==producers.length||producers.some(p=>!p.pathId||!p.requestDigest||!p.sourceBoundary||
+      !p.candidates.length||p.candidates.some(c=>!combination.subjects.some(s=>equal(s,c.representation)))||
+      p.sources.some(s=>!s.originalAlias||!value.sources.some(v=>v.alias===s.combinedAlias))||
+      p.requirements.some(r=>!r.originalId||!value.requirements.some(v=>v.id===r.combinedId)))||
+      producers.length&&checks.some(c=>!producers.some(p=>p.pathId===c.producerPathId&&p.requestDigest===c.requestDigest&&equal(p.requirements,c.requirementBindings))))
+      throw new TypeError("representation_combination_producer_binding_invalid");
   }
   for(const key of ["readBytes","storedBytes","modelCalls","repairs","levels","pageBytes","ranges"] as const)if(!Number.isSafeInteger(value.bounds[key])||value.bounds[key]<0)throw new TypeError("representation_bound_invalid");
   if(value.bounds.pageBytes<1||value.bounds.pageBytes>65536||value.bounds.levels<1||value.bounds.levels>32||value.bounds.repairs>16||value.bounds.ranges<1||value.bounds.ranges>128)throw new TypeError("representation_bound_invalid");

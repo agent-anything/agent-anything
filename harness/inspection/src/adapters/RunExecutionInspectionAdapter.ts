@@ -169,6 +169,14 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
     } else if (value.kind === "descendant_result") {
       const raw = r.ref("runtime", "run", value.raw.runId, value.raw.runId);
       const result = ref("agent-runtime", "contribution", value.projected.ref.id, value.projected.ref.revision);
+      if(value.narrative) {
+        const source=value.narrative.source;
+        const narrative=r.ref("agent-runtime","contribution",source.recordId,source.runId,source.digest);
+        r.offer({id:`${source.recordId}:retained`,subject:narrative,occurredAt:value.occurredAt,
+          payload:{kind:"event",name:"descendant.report.retained",sequence:null,code:null},
+          links:[inspectionLink("produces",raw,narrative),inspectionLink("includes",result,narrative)],
+          contents:content("Retained Child report",value.narrative,"retained_report")});
+      }
       const relation = value.projected.correlation.relation;
       r.offer({subject: ref("runtime", "contribution", relation.ref.id), occurredAt: value.occurredAt,
         payload: {kind: "event", name: "descendant.relation", sequence: null, code: null},

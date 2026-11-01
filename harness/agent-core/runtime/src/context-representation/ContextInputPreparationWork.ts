@@ -12,7 +12,7 @@ import {CONTEXT_INPUT_PREPARATION_PURPOSE,ContextInputPreparationHandler,firstCo
 export class ContextInputPreparationWork {
   readonly purpose:ActivityPurposeBinding;
   constructor(private readonly port:ActivityHandoffPort,registry:ActivityPurposeRegistry<ActivityPurposeHandler>,
-    dependencies:{provider:Provider;materials:MaterialCustodyPort;authorize:ActivityPurposeHandler["authorize"];now:()=>string}) {
+    dependencies:{provider:Provider;usage?:import("@agent-anything/model-interaction/input").InputUsageEvidencePort;materials:MaterialCustodyPort;authorize:ActivityPurposeHandler["authorize"];now:()=>string}) {
     this.purpose=registry.register(CONTEXT_INPUT_PREPARATION_PURPOSE,new ContextInputPreparationHandler(dependencies));
   }
   async submit(intent:Omit<ActivityPathIntent,"purpose"|"owner">,request:ContextInputPreparationRequest):Promise<void> {

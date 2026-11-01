@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
+import {TaskResponseBindingError} from "@agent-anything/agent-runtime/decision";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {
   modelCallableDefinitionsContentDigest,
   snapshotModelCallableDefinitions,
   type ModelCallableDefinition,
   type ModelJsonSchema,
+  type ProviderRequest,
+  type ModelJsonValue,
 } from "@agent-anything/model-interaction";
 import type { PlanLimits } from "@agent-anything/agent-runtime/plan";
 import { toolRevisionKey, type ToolRevisionRef, type ToolBindingRef } from "@agent-anything/tools/identity";
@@ -111,9 +115,7 @@ export function createHelarcModelCallableCatalog(input: {
     bindings,
   });
   return Object.freeze({
-    revision: `sha256:${createHash("sha256")
-      .update(JSON.stringify(identity), "utf8")
-      .digest("hex")}`,
+    revision: modelInputValueDigest(identity),
     definitionsDigest,
     toolExposureProofId: input.toolExposure.id,
     toolExposureContentRevision: input.toolExposure.contentRevision,
@@ -130,6 +132,34 @@ export function findHelarcModelCallableBinding(
   callableName: string,
 ): HelarcModelCallableBinding | undefined {
   return catalog.bindings.find((binding) => binding.callableName === callableName);
+}
+
+/** Non-model metadata; definitions are retained once in the actual native interaction. */
+export function retainHelarcCallableBinding(catalog:HelarcModelCallableCatalog):ModelJsonValue {
+  const {definitions:_,...binding}=catalog;
+  return JSON.parse(JSON.stringify(binding)) as ModelJsonValue;
+}
+
+export function restoreHelarcCallableCatalog(request:ProviderRequest,exposure:ToolExposureProof):HelarcModelCallableCatalog {
+  const retained=request.metadata.modelCallableBinding as unknown as Omit<HelarcModelCallableCatalog,"definitions">;
+  if(!retained||typeof retained!=="object"||request.interaction.kind!=="native_tool_turn")throw new TaskResponseBindingError("helarc_callable_binding_missing");
+  const definitions=snapshotModelCallableDefinitions(request.interaction.callables);
+  const identity={toolExposureProofId:retained.toolExposureProofId,toolExposureContentRevision:retained.toolExposureContentRevision,
+    toolGuidanceId:retained.toolGuidanceId,toolGuidanceContentDigest:retained.toolGuidanceContentDigest,
+    controlGuidanceRevision:retained.controlGuidanceRevision,definitionsDigest:modelCallableDefinitionsContentDigest(definitions),bindings:retained.bindings};
+  const revision=modelInputValueDigest(identity);
+  if(!Array.isArray(retained.bindings)||retained.revision!==revision||retained.definitionsDigest!==identity.definitionsDigest||
+    request.composition.lineage.callableDefinitions?.id!==revision||request.composition.lineage.callableDefinitions?.revision!==identity.definitionsDigest||
+    retained.toolExposureProofId!==exposure.id||retained.toolExposureContentRevision!==exposure.contentRevision||
+    JSON.stringify(retained.bindings.map(b=>b.callableName))!==JSON.stringify(definitions.map(d=>d.name)))throw new TaskResponseBindingError("helarc_callable_binding_changed");
+  for(const binding of retained.bindings) {
+    if(binding.kind==="tool") {
+      const tool=exposure.catalog.tools.find(t=>t.name===binding.toolName&&toolRevisionKey(t.ref)===toolRevisionKey(binding.tool));
+      if(!tool||modelInputValueDigest(tool.binding)!==modelInputValueDigest(binding.binding)||portableToolCallableName(tool.name,tool.fingerprint)!==binding.callableName)
+        throw new TaskResponseBindingError("helarc_callable_exposure_mismatch");
+    } else if(binding.kind!=="control"||binding.control!==binding.callableName||!["update_plan","final_result"].includes(binding.control))throw new TaskResponseBindingError("helarc_callable_control_invalid");
+  }
+  return Object.freeze({...structuredClone(retained),definitions});
 }
 
 function toolDefinition(

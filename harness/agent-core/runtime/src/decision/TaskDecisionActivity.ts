@@ -233,11 +233,17 @@ export interface TaskDecisionFeedback {
   readonly message: string;
 }
 
-export type TaskDecisionProposal<TOutput = unknown> = {
+export interface TaskModelExchange {
+  readonly modelItems: readonly TaskDecisionModelItem[];
   /** Absence does not acknowledge pending input. Set only by the trusted Controller. */
   readonly inputDeliveryReceipt?: import("./DecisionInputDelivery.js").ControllerInputDeliveryReceipt | null;
   readonly openingReceipt?: import("./TaskConversation.js").ConversationOpeningReceipt | null;
-} & (
+  readonly resultPresentationReceipt?: import("./SelectedResultPresentation.js").SelectedResultPresentationReceipt | null;
+  /** The actual input was accepted; rejected response text and Calls are not modelItems. */
+  readonly responseRejection?: import("./TaskModelResponseRejection.js").TaskModelResponseRejection | null;
+}
+
+export type TaskDecisionProposal<TOutput = unknown> = TaskModelExchange & (
   | {
       readonly kind: "propose_completion";
       readonly candidates: readonly ProgressionCandidate[];
@@ -284,6 +290,11 @@ export interface TaskDecisionActivity<TOutput = unknown> {
     input: TaskDecisionInputSources<TOutput>,
     context: AgentActivityExecutionContext,
   ): Promise<TaskDecisionProposal<TOutput>>;
+  /** Close original work and receive known exchanges only; never dispatch replacement work. */
+  interrupt?(
+    input: TaskDecisionInputSources<TOutput>,
+    context: AgentActivityExecutionContext,
+  ): Promise<TaskDecisionProposal<TOutput> | null>;
 }
 
 export interface TaskDecisionResourceMetering {

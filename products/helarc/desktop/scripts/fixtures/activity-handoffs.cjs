@@ -16,7 +16,7 @@ async function main() {
   const purpose = registry.register({ref:{id:"fixture-method",revision:"1"},inputOwner:"fixture",executionOwner:"fixture-model",
     interpretationOwner:"fixture-method",acceptanceOwner:"fixture-method",recoveryOwner:"fixture-method",stageKinds:["generate","check"],
     capabilities:["fixture-model"],continuationKinds:["stage_request"]},{
-    authorize:async () => {},
+    authorize:async () => ({kind:"allowed"}),
     execute:async (_path,stage,attempt) => {
       let value;
       if (stage.request.stageKind === "generate") {

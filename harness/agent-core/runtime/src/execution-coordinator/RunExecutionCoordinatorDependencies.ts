@@ -196,6 +196,7 @@ export interface DelegationContinuationPreparationPort {
 
 export interface DelegationResultProjectionPort {
   project(input: {
+    readonly signal?:AbortSignal;
     readonly result: DelegationResult;
     readonly continuation: import("@agent-anything/agent-core/delegation").DescendantContinuationRef | null;
   }): DescendantOperationOutcome | Promise<DescendantOperationOutcome>;

@@ -3,6 +3,7 @@ import type {ContextPreparationPolicyInput,ContextPreparationDecision} from "./C
 export interface ContextPreparationInvestment {
   readonly workId:string;
   readonly pathId:string;
+  readonly schedulingScopeId:string;
   readonly previousPathId?:string;
 }
 export interface ContextPreparationDecisionProposal {
@@ -20,6 +21,8 @@ export interface ContextPreparationDecisionRecord {
 export type ContextPreparationDecisionQuery =
   | {readonly kind:"decision";readonly id:string}
   | {readonly kind:"latest";readonly scopeId:string}
+  /** Latest accepted decision carrying a prepared-input observation, not the current control head. */
+  | {readonly kind:"latest_observation";readonly scopeId:string}
   | {readonly kind:"exploration";readonly scopeId:string;readonly key:string};
 export interface ContextPreparationDecisionStore {
   query(query:ContextPreparationDecisionQuery):Promise<ContextPreparationDecisionRecord|null>;

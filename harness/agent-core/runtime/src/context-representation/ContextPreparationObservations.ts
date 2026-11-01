@@ -44,7 +44,7 @@ export function contextEmpiricalRange(observations:readonly ContextComparableObs
     if(!usable(item)){excluded.push({evidence:item.evidence,reason:"incomplete_or_unsuccessful_observation"});continue;}
     if(growth) {
       const previous=samples[i-1];
-      if(!previous||!usable(previous)){excluded.push({evidence:item.evidence,reason:"comparable_adjacent_input_missing"});continue;}
+      if(!previous||!usable(previous)||item.sequence!==previous.sequence+1){excluded.push({evidence:item.evidence,reason:"comparable_adjacent_input_missing"});continue;}
       values.push(item.value!-previous.value!);if(!evidence.includes(previous.evidence))evidence.push(previous.evidence);
     } else values.push(item.value!);
     evidence.push(item.evidence);

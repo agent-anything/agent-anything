@@ -233,6 +233,7 @@ function createHandlers(
     "provider.select": vi.fn(() => snapshot()),
     "provider.delete": vi.fn(() => snapshot()),
     "instructions.save": vi.fn(({ settings }) => ({ settings, defaults: createDefaultHelarcInstructionSettings() })),
+    "context.save":vi.fn(({settings})=>({revision:"test",settings})),
     "inspection.save": vi.fn(({ settings }) => ({ settings, health: { available: true, queued: 0, dropped: 0, rejected: 0, code: null } })),
     "storage.cleanup": vi.fn(() => ({ recordings: [] })),
     "run.start": vi.fn(() => ({

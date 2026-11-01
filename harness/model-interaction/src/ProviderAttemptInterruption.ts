@@ -97,7 +97,7 @@ export function providerResultFromInterruption(
     };
   }
 
-  if (cause.interruption.kind === "run_cancellation") {
+  if (cause.interruption.kind === "run_cancellation" || cause.interruption.kind === "activity_cancellation") {
     return {
       kind: "cancelled",
       cancellation: Object.freeze({ ...cause.interruption.cancellation }),

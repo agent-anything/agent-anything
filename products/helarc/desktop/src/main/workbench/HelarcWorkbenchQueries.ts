@@ -3,6 +3,7 @@ import {
   type HelarcRunProjection,
 } from "@agent-anything/helarc/run";
 import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
+import type { ActivityWorkView } from "@agent-anything/agent-runtime/activity";
 import type { HelarcHostActiveRun } from "../run/HelarcHostRunComposition.js";
 import type {
   CommandOutputPage,
@@ -16,6 +17,7 @@ import type {
 import type { CommandOutputRegistry } from "./CommandOutputRegistry.js";
 import { HelarcCollaborationQueries } from "./HelarcCollaborationQueries.js";
 import { HelarcConversationQueries } from "./HelarcConversationQueries.js";
+import { HelarcExecutionActivityQueries } from "./HelarcExecutionActivityQueries.js";
 import { fitsPage, textPage, validOffset } from "./WorkbenchReadLimits.js";
 import { isWorkbenchOperation, workbenchOperationDetail } from "./WorkbenchOperationPresentation.js";
 import { workbenchInteractionText } from "./WorkbenchInteractionPresentation.js";
@@ -28,14 +30,18 @@ export interface WorkbenchQuerySources {
     productRunId: string,
   ): { projection: HelarcRunProjection; handle: HelarcHostActiveRun } | null;
   readonly outputs: CommandOutputRegistry;
+  readonly activities?: (rootRunId: string) => Promise<ActivityWorkView>;
 }
 export class HelarcWorkbenchQueries {
   readonly collaboration: HelarcCollaborationQueries;
   readonly conversation: HelarcConversationQueries;
+  readonly executionActivities: HelarcExecutionActivityQueries;
   constructor(private readonly sources: WorkbenchQuerySources) {
     this.collaboration = new HelarcCollaborationQueries(sources, scope => this.resolve(scope));
     this.conversation = new HelarcConversationQueries(sources);
+    this.executionActivities = new HelarcExecutionActivityQueries(sources, scope => this.resolve(scope));
   }
+  readExecutionActivities = (query: Parameters<HelarcExecutionActivityQueries["read"]>[0]) => this.executionActivities.read(query);
   readConversation = (query: Parameters<HelarcConversationQueries["readConversation"]>[0]) => this.conversation.readConversation(query);
   readConversationTurn = (query: Parameters<HelarcConversationQueries["readConversationTurn"]>[0]) => this.conversation.readConversationTurn(query);
   readCurrentWork = (query: Parameters<HelarcCollaborationQueries["readCurrentWork"]>[0]) => this.collaboration.readCurrentWork(query);

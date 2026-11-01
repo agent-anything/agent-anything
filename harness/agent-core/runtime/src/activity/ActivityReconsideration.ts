@@ -19,9 +19,12 @@ export interface ActivityReconsiderationSubscription {
   readonly runId:string;
   readonly owner:string;
   readonly sources:readonly string[];
+  readonly binding?:{readonly kind:"input_need"|"activity_path";readonly id:string};
 }
 export interface ActivityReconsiderationState {
   readonly subscription:ActivityReconsiderationSubscription;
+  /** Current observation set; the original subscription and entrusted binding remain immutable. */
+  readonly observedSources:readonly string[];
   readonly revision:number;
   readonly consumedThrough:number;
   readonly closed:boolean;
@@ -40,12 +43,16 @@ export interface ActivityReconsiderationReceipt {
   readonly factIds:readonly string[];
   readonly decision:ActivityPublishedFact["ref"];
   readonly close:boolean;
+  /** Replace the observation set after consuming this finite boundary, in the same acceptance. */
+  readonly observeSources?:readonly string[];
 }
 export type ActivityReconsiderationCommand =
   | {readonly kind:"register_fact_source";readonly source:ActivityFactSource}
   | {readonly kind:"publish_fact";readonly fact:ActivityPublishedFact}
+  | {readonly kind:"read_fact";readonly id:string}
   | {readonly kind:"subscribe_reconsideration";readonly subscription:ActivityReconsiderationSubscription}
   | {readonly kind:"read_reconsideration";readonly subscriptionId:string;readonly limit:number}
+  | {readonly kind:"read_reconsideration_state";readonly subscriptionId:string}
   | {readonly kind:"pending_reconsiderations";readonly runId:string;readonly afterId:string|null;readonly limit:number}
   | {readonly kind:"accept_reconsideration";readonly receipt:ActivityReconsiderationReceipt;
       readonly participants?:readonly import("./SharedAcceptance.js").SharedAcceptancePart[]};

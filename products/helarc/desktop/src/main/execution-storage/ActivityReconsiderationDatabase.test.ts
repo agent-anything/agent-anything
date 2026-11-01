@@ -21,6 +21,68 @@ function open(directory=mkdtempSync(join(tmpdir(),"helarc-reconsideration-"))) {
   return {directory,db,send,publish,subscribe,snapshot,receipt};
 }
 describe("durable reconsideration boundaries",()=>{
+  it("reads a published fact by exact identity after reopening without a subscription",()=>{
+    const f=open();expect(f.send({kind:"read_fact",id:"missing"})).toBeNull();const fact=f.publish("original");f.db.close();
+    const recovered=open(f.directory);expect(recovered.send({kind:"read_fact",id:"original"})).toEqual(fact);
+    expect(recovered.send({kind:"pending_reconsiderations",runId:"child",afterId:null,limit:16})).toEqual([]);
+  });
+  function extraSource(f:ReturnType<typeof open>,id:string,runId="child") {
+    f.send({kind:"register_fact_source",source:{id,runId,owner:"method"}});
+    return (factId:string)=>f.send({kind:"publish_fact",fact:{id:factId,sourceId:id,ref:{owner:"method",kind:"result",id:factId,revision:"1"}}});
+  }
+  it("delivers older newly observed facts in bounded pages without replaying accepted sources",()=>{
+    const f=open(),method=extraSource(f,"method");f.subscribe();method("m1");method("m2");method("m3");f.publish("f1");
+    const first={...f.receipt(f.snapshot()),observeSources:["source","method"]};
+    f.send({kind:"accept_reconsideration",receipt:first});f.send({kind:"accept_reconsideration",receipt:first});
+    expect(f.snapshot().state.subscription.sources).toEqual(["source"]);
+    expect(f.snapshot().state.observedSources).toEqual(["method","source"]);
+    const page=f.snapshot(1);expect(page.facts.map(f=>f.id)).toEqual(["m1"]);expect(page.more).toBe(true);
+    expect(page.through).toBeLessThan(page.state.consumedThrough);
+    f.send({kind:"accept_reconsideration",receipt:f.receipt(page)});
+    f.db.close();const recovered=open(f.directory);recovered.subscribe();
+    expect(recovered.send({kind:"pending_reconsiderations",runId:"child",afterId:null,limit:16})).toHaveLength(1);
+    expect(recovered.send({kind:"pending_scopes",afterRunId:null,limit:16})).toEqual([{runId:"child"}]);
+    expect(recovered.snapshot().facts.map(f=>f.id)).toEqual(["m2","m3"]);
+    recovered.send({kind:"accept_reconsideration",receipt:recovered.receipt(recovered.snapshot())});
+    expect(recovered.snapshot().facts).toEqual([]);
+    expect(recovered.send({kind:"pending_scopes",afterRunId:null,limit:16})).toEqual([]);
+  });
+  it("retains source-specific consumption when attention is removed and later restored",()=>{
+    const f=open(),method=extraSource(f,"method");f.subscribe();f.publish("f1");method("m1");
+    f.send({kind:"accept_reconsideration",receipt:{...f.receipt(f.snapshot()),observeSources:["source","method"]}});
+    f.send({kind:"accept_reconsideration",receipt:{...f.receipt(f.snapshot()),observeSources:["source"]}});
+    method("m2");f.publish("f2");
+    expect(f.snapshot().facts.map(f=>f.id)).toEqual(["f2"]);
+    f.send({kind:"accept_reconsideration",receipt:{...f.receipt(f.snapshot()),observeSources:["source","method"]}});
+    expect(f.snapshot().facts.map(f=>f.id)).toEqual(["m2"]);
+  });
+  it("rolls back source changes and consumption with a rejected professional participant",()=>{
+    const f=open();extraSource(f,"method")("m1");f.subscribe();f.publish("f1");
+    const receipt={...f.receipt(f.snapshot()),observeSources:["source","method"]};
+    expect(()=>f.send({kind:"accept_reconsideration",receipt,participants:[{owner:"activity",kind:"scheduling_acceptance",proposal:{kind:"schedule_work",expectedRevision:0,intent:{id:"schedule",workId:"work",runId:"child",scopeId:"child",owner:"crm",decisionId:receipt.decision.id,
+      policyRevision:"1",reason:"opportunity",delayImpact:"test",timing:{kind:"unknown"},resources:[{poolId:"missing",units:1,capability:"model"}]}}}]})).toThrow("pool_missing");
+    expect(f.snapshot()).toMatchObject({state:{revision:0,observedSources:["source"]},facts:[{id:"f1"}]});
+  });
+  it("rejects foreign and missing observation sources without consuming the original boundary",()=>{
+    const f=open();extraSource(f,"parent-source","parent")("p1");f.subscribe();f.publish("f1");
+    for(const id of ["parent-source","missing"]) {
+      expect(()=>f.send({kind:"accept_reconsideration",receipt:{...f.receipt(f.snapshot()),id:`bad:${id}`,observeSources:["source",id]}})).toThrow("source_scope_invalid");
+      expect(f.snapshot()).toMatchObject({state:{revision:0,observedSources:["source"]},facts:[{id:"f1"}]});
+    }
+  });
+  it("checks an owner-issued acceptance identity against its original content",async()=>{
+    const f=open();f.subscribe();f.publish("f1");
+    const processor=new ActivityReconsiderationProcessor({command:async c=>f.send(c)},
+      {accept:async p=>f.db.acceptShared(f.db.generation,p).acceptanceValue,query:async()=>{throw new Error("Must not bypass original digest verification");}},
+      ()=>({prepare:async()=>({acceptanceId:"owner-selected-input",decision:{owner:"crm",kind:"selection",id:"selected",revision:"1"},participants:[],close:false})}));
+    const signal=new AbortController().signal;
+    expect((await processor.scan("child",signal)).accepted).toEqual(["watch"]);
+    expect(f.db.querySharedAcceptance(f.db.generation,"owner-selected-input")).toMatchObject({outcome:"accepted"});
+    f.publish("f2");
+    const changed=await processor.scan("child",signal);
+    expect(changed.accepted).toEqual([]);expect(changed.failures).toHaveLength(1);
+    expect(f.snapshot()).toMatchObject({state:{revision:1},facts:[{id:"f2"}]});
+  });
   it("routes independent subscriptions of the same owner without consuming an unbound recipient",async()=>{
     const f=open();f.subscribe();f.publish("f1");
     f.send({kind:"subscribe_reconsideration",subscription:{id:"other-watch",runId:"child",owner:"crm",sources:["source"]}});
@@ -106,7 +168,7 @@ describe("durable reconsideration boundaries",()=>{
     const schedule={kind:"schedule_work",expectedRevision:0,intent:{id:"schedule",workId:"work",runId:"child",scopeId:"child",owner:"crm",delegatedPathOwners:["method"],decisionId:receipt.decision.id,
       policyRevision:"1",reason:"opportunity",delayImpact:"next input",timing:{kind:"unknown"},resources:[{poolId:"pool",units:1,capability:"model"}]}};
     const path={id:"path",runId:"child",owner:"method",purpose,scheduledWorkId:"work",permissionBasis:"test",resourceScope:"work",maximumStages:1,maximumAttempts:1,maximumConcurrent:1,deadlineAt:"2030-01-01T00:00:00Z"};
-    const command={kind:"accept_reconsideration" as const,receipt,participants:[{owner:"activity",kind:"scheduling_acceptance",proposal:schedule},
+    const command={kind:"accept_reconsideration" as const,receipt:{...receipt,observeSources:["source","activity-source:progress:path","activity-source:control:path"]},participants:[{owner:"activity",kind:"scheduling_acceptance",proposal:schedule},
       {owner:"activity",kind:"path_opening",proposal:path},
       {owner:"activity",kind:"stage_submission",proposal:{id:"first",pathId:"path",stageKind:"model",input:"frozen source",capabilities:[valid?"model":"undelegated"],dependencies:[]}}]};
     if(!valid){expect(()=>f.send(command)).toThrow("not_delegated");expect(f.snapshot().facts).toHaveLength(1);expect(f.send({kind:"read_path",pathId:"path"})).toBeNull();expect(f.send({kind:"read_schedule",workId:"work"})).toBeNull();return;}
@@ -114,5 +176,7 @@ describe("durable reconsideration boundaries",()=>{
     expect(recovered.snapshot().facts).toEqual([]);
     expect(recovered.send({kind:"read_path",pathId:"path"})).toMatchObject({intent:{scheduledWorkId:"work",owner:"method"}});
     expect(recovered.send({kind:"pending",runId:"child",after:0,limit:10})).toMatchObject([{requestId:"first",kind:"admission"}]);
+    recovered.send({kind:"cancel",pathId:"path",expectedControlRevision:0});
+    expect(recovered.snapshot().facts).toMatchObject([{ref:{kind:"cancelled",id:"path"}}]);
   });
 });

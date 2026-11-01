@@ -1,4 +1,7 @@
 import Database from "better-sqlite3";
+import {contextDeliveryFactSource,contextDeliveryFact,inputSupplyFactSource} from "@agent-anything/agent-runtime/context-representation";
+import {validHelarcRunCredentialBinding} from "../provider/HelarcRunCredentialBinding.js";
+import {validateHelarcContextRunBinding} from "../context/HelarcContextRunBinding.js";
 import {ActivityHandoffDatabase, ACTIVITY_HANDOFF_SCHEMA} from "./ActivityHandoffDatabase.js";
 import {SharedAcceptanceDatabase, SHARED_ACCEPTANCE_SCHEMA} from "./SharedAcceptanceDatabase.js";
 import {ContextFoundationRecords,CONTEXT_FOUNDATION_FACT_SCHEMA} from "./ContextFoundationRecords.js";
@@ -6,6 +9,8 @@ import {MaterialCustodyDatabase,MATERIAL_CUSTODY_SCHEMA} from "./MaterialCustody
 import {RepresentationDatabase,REPRESENTATION_SCHEMA} from "./RepresentationDatabase.js";
 import {ContextSelectionDatabase,CONTEXT_SELECTION_SCHEMA} from "./ContextSelectionDatabase.js";
 import {ContextPreparationDecisionDatabase,CONTEXT_PREPARATION_DECISION_SCHEMA} from "./ContextPreparationDecisionDatabase.js";
+import {ModelInputUsageDatabase,MODEL_INPUT_USAGE_SCHEMA} from "./ModelInputUsageDatabase.js";
+import {InputSupplyResponsibilityDatabase,INPUT_SUPPLY_RESPONSIBILITY_SCHEMA} from "./InputSupplyResponsibilityDatabase.js";
 import {assertExecutionRecording, type ExecutionRecording, type ExecutionRecordingRegistration} from "./ExecutionRecording.js";
 import {ContextPreparationDatabase, CONTEXT_PREPARATION_SCHEMA, type ContextPreparationCommand} from "./ContextPreparationDatabase.js";
 import {unpackExecutionContent, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentScope, ExecutionContentStatistics, snapshotEncodedExecutionContent, EXECUTION_CONTENT_LIMITS,
@@ -13,6 +18,8 @@ import {unpackExecutionContent, ExecutionContentCache, ExecutionContentEncoder, 
 import { FileMaterialDatabase, FILE_MATERIAL_SCHEMA } from "./FileMaterialDatabase.js";
 import {ContextMaterialDatabase, CONTEXT_MATERIAL_SCHEMA, type ContextMaterialCommand, type ContextMaterialValue} from "./ContextMaterialDatabase.js";
 import {projectContextMaterials} from "./ContextMaterialProjection.js";
+import {RunMaterialTransfers} from "./RunMaterialTransfers.js";
+import {runActivityLifetime} from "./RunActivityLifetime.js";
 import {projectProcessOutputMaterial} from "./ProcessOutputMaterialProjection.js";
 import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 import {snapshotExecutionReferenceTransfer, type ExecutionReferenceTransfer, type ExecutionReferencePage} from "@agent-anything/operation-catalog/evidence";
@@ -37,7 +44,7 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 24;
+const FORMAT = 41;
 const SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -93,6 +100,8 @@ ${MATERIAL_CUSTODY_SCHEMA}
 ${REPRESENTATION_SCHEMA}
 ${CONTEXT_SELECTION_SCHEMA}
 ${CONTEXT_PREPARATION_DECISION_SCHEMA}
+${MODEL_INPUT_USAGE_SCHEMA}
+${INPUT_SUPPLY_RESPONSIBILITY_SCHEMA}
 `;
 interface ProcessRow { execution_id: string; run_id: string; revision: number; digest: string; value: string; }
 interface StoredActionRow {
@@ -112,9 +121,12 @@ export class ExecutionDatabase {
   private readonly sharedAcceptance: SharedAcceptanceDatabase;
   private readonly contextFoundationRecords:ContextFoundationRecords;
   private readonly materialCustody:MaterialCustodyDatabase;
+  private readonly materialTransfers:RunMaterialTransfers;
   private readonly representations:RepresentationDatabase;
   private readonly contextSelections:ContextSelectionDatabase;
   private readonly contextPolicy:ContextPreparationDecisionDatabase;
+  private readonly inputUsage:ModelInputUsageDatabase;
+  private readonly inputSupplies:InputSupplyResponsibilityDatabase;
   private closed = false;
   private readonly statements = new Map<string, Database.Statement>();
   private readonly contentStatistics: ExecutionContentStatistics;
@@ -165,13 +177,45 @@ export class ExecutionDatabase {
       this.contextSelections=new ContextSelectionDatabase(data,this.contextFoundationRecords,this.materialCustody,this.representations,
         value=>this.retainContent(value),root=>this.hydrateContent(root),(...args)=>this.activityHandoffs.confirmInputResult(...args),
         (...args)=>this.activityHandoffs.confirmInputAttempt(...args),path=>this.activityHandoffs.pathSettled(path),
-        (runId,input)=>this.confirmPreparedInput(runId,input));
+        (runId,input)=>this.confirmPreparedInput(runId,input),
+        id=>this.activityHandoffs.command({kind:"read_path",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState|null,{
+          register:recipient=>{this.activityHandoffs.command({kind:"register_fact_source",source:contextDeliveryFactSource(recipient)});},
+          publish:(recipient,id,transition,basis)=>{
+            this.activityHandoffs.command({kind:"register_fact_source",source:contextDeliveryFactSource(recipient)});
+            this.activityHandoffs.command({kind:"publish_fact",fact:contextDeliveryFact(recipient,id,transition,basis)});
+          },
+        },{
+          readFact:id=>this.activityHandoffs.command({kind:"read_fact",id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPublishedFact|null,
+          subscription:id=>this.activityHandoffs.command({kind:"read_reconsideration_state",subscriptionId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityReconsiderationState|null,
+          stage:id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null,
+        });
       this.contextPolicy=new ContextPreparationDecisionDatabase(this.contextFoundationRecords,value=>this.retainContent(value),root=>this.hydrateContent(root),
         id=>this.contextSelections.registeredScope(id),id=>this.activityHandoffs.command({kind:"read_path",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState|null,
         id=>this.activityHandoffs.pathSettled(id),
         id=>this.activityHandoffs.command({kind:"resource_allowance",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityResourceAllowance,
-        (runId,input)=>this.confirmPreparedInput(runId,input),id=>this.sharedAcceptance.query(id));
-      this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants(),this.contextPolicy.participant()]);
+        (runId,input)=>this.confirmPreparedInput(runId,input),id=>this.sharedAcceptance.query(id),
+        id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null);
+      this.inputSupplies=new InputSupplyResponsibilityDatabase(this.contextFoundationRecords,{
+        settled:id=>this.activityHandoffs.pathSettled(id),
+        closure:id=>this.activityHandoffs.reconsiderationClosure(id),
+        scheduling:workId=>this.activityHandoffs.command({kind:"read_schedule",workId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivitySchedulingAcceptance|null,
+        subscription:id=>(this.activityHandoffs.command({kind:"read_reconsideration",subscriptionId:id,limit:1}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityReconsiderationSnapshot|null)?.state??null,
+        need:id=>this.activityHandoffs.command({kind:"read_input_need",id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityInputNeed|null,
+        path:id=>this.activityHandoffs.command({kind:"read_path",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState|null,
+        stage:id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null,
+      },(binding,revision,kind)=>{
+        const source=inputSupplyFactSource(binding);
+        this.activityHandoffs.command({kind:"register_fact_source",source});
+        this.activityHandoffs.command({kind:"publish_fact",fact:{id:`${source.id}:${kind}:${revision}`,sourceId:source.id,
+          ref:{owner:binding.owner,kind:`input_supply_${kind}`,id:binding.needId,revision:String(revision)}}});
+      });
+      this.inputUsage=new ModelInputUsageDatabase(this.contextFoundationRecords,
+        id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null,
+        id=>this.activityHandoffs.command({kind:"read_path",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState|null);
+      this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants(),this.contextPolicy.participant(),this.inputSupplies.participant(),this.inputUsage.participant()]);
+      this.materialTransfers=new RunMaterialTransfers(this.contextMaterials,this.materialCustody,this.sharedAcceptance,runId=>{
+        const head=this.readLatestOwner("run",runId);return head?.kind==="run"?head.value:null;
+      });
       data.pragma("trusted_schema = OFF");
       data.pragma("journal_mode = WAL");
       data.pragma("synchronous = FULL");
@@ -265,6 +309,7 @@ export class ExecutionDatabase {
 
   contextMaterialCommand(generation: number, command: ContextMaterialCommand): ContextMaterialValue {
     this.assertOwner(generation);
+    if(command.kind==="search_scope")return {legacy:this.contextMaterials.searchFrontier(command.runId),custody:this.materialCustody.searchFrontier()};
     return this.timed(`context_material.${command.kind}`, () => this.contextMaterials.command(command));
   }
   takeContextMaterialObservations() {return this.contextMaterials.takeObservations();}
@@ -277,21 +322,22 @@ export class ExecutionDatabase {
   activityHandoffCommand(generation: number, command: import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand) {
     this.assertOwner(generation);
     if (command.kind === "claim_processing" && command.claim.executor.generation !== generation ||
-        command.kind === "accept" && command.executor.generation !== generation) throw new ExecutionStoreError("activity_processing_owner_stale");
+        (command.kind === "accept" || command.kind === "settle") && command.executor.generation !== generation) throw new ExecutionStoreError("activity_processing_owner_stale");
     return this.timed(`activity_handoff.${command.kind}`, () => {
       if(command.kind==="accept_reconsideration") {
         const snapshot=this.activityHandoffs.command({kind:"read_reconsideration",subscriptionId:command.receipt.subscriptionId,limit:1}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityReconsiderationSnapshot;
         const receipt=this.sharedAcceptance.accept({id:command.receipt.id,scope:snapshot.state.subscription.runId,actor:snapshot.state.subscription.owner,
-          parts:[{owner:"activity",kind:"reconsideration_acceptance",proposal:command.receipt},...(command.participants??[])]});
+          parts:[...(command.participants??[]),{owner:"activity",kind:"reconsideration_acceptance",proposal:command.receipt}]});
         if(receipt.outcome==="rejected")throw new ExecutionStoreError(receipt.rejection!.code);
         return {activityValue:this.activityHandoffs.command({kind:"read_reconsideration",subscriptionId:command.receipt.subscriptionId,limit:1}).activityValue};
       }
-      if (command.kind === "accept") {
+      if (command.kind === "accept" || command.kind === "settle" || command.kind === "stop_professional_path") {
         const stage = this.activityHandoffs.command({kind:"read_stage",requestId:command.receipt.requestId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState | null;
         const path = stage ? this.activityHandoffs.command({kind:"read_path",pathId:stage.request.pathId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState : null;
         if (!path) throw new ExecutionStoreError("activity_stage_missing");
         const receipt = this.sharedAcceptance.accept({id:command.receipt.id,scope:path.intent.runId,actor:command.receipt.owner,
-          parts:[{owner:"activity",kind:"professional_acceptance",proposal:command},...(command.participants??[])]});
+          parts:[{owner:"activity",kind:command.kind==="stop_professional_path"?"professional_stop":command.kind==="settle"?"result_settlement":"professional_acceptance",proposal:command},
+            ...("participants" in command?command.participants??[]:[])]});
         if (receipt.outcome === "rejected") throw new ExecutionStoreError(receipt.rejection!.code);
         return this.activityHandoffs.command({kind:"read_stage",requestId:command.receipt.requestId});
       }
@@ -316,6 +362,12 @@ export class ExecutionDatabase {
   }
   contextPolicyQuery(generation:number,query:import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecisionQuery) {
     this.assertOwner(generation);return this.timed(`context_policy.${query.kind}`,()=>({contextPolicyValue:this.contextPolicy.query(query)}));
+  }
+  modelInputUsage(generation:number,query:import("@agent-anything/model-interaction/input").InputUsageQuery) {
+    this.assertOwner(generation);return this.timed("model_input_usage.latest",()=>({inputUsageValue:this.inputUsage.latest(query)}));
+  }
+  inputSupplyQuery(generation:number,query:import("@agent-anything/agent-runtime/context-representation").InputSupplyResponsibilityQuery) {
+    this.assertOwner(generation);return this.timed(`input_supply.${query.kind}`,()=>({inputSupplyValue:this.inputSupplies.query(query)}));
   }
   contextPolicyInvestments(generation:number,input:{scopeId:string;afterWorkId:string|null;limit:number}) {
     this.assertOwner(generation);return this.timed("context_policy.investments",()=>({contextPolicyInvestments:this.contextPolicy.investments(input)}));
@@ -452,7 +504,8 @@ export class ExecutionDatabase {
 
   admitProductRun(generation: number, admission: HelarcExecutionAdmission): void {
     this.assertOwner(generation);
-    if (admission.version !== 2 || !Number.isFinite(Date.parse(admission.createdAt)) || !admission.commandEnvironment) throw new ExecutionStoreError("execution_admission_invalid");
+    if (admission.version !== 3 || !Number.isFinite(Date.parse(admission.createdAt)) || !admission.commandEnvironment || !validHelarcRunCredentialBinding(admission.providerCredential,admission.providerProfile.id)) throw new ExecutionStoreError("execution_admission_invalid");
+    validateHelarcContextRunBinding(admission.contextBinding);
     validateProtectedEnvironment(admission.commandEnvironment.environment);
     token(admission.rootRunId); token(admission.productRunId); token(admission.sessionId);
     this.data.transaction(() => {
@@ -474,7 +527,8 @@ export class ExecutionDatabase {
     const row = this.data.prepare("SELECT digest,value FROM product_admissions WHERE root_run_id=?").get(rootRunId) as {digest: string; value: string} | undefined;
     if (!row) return null;
     const admission = JSON.parse(row.value) as HelarcExecutionAdmission;
-    if (encode(admission).digest !== row.digest || admission.rootRunId !== rootRunId || admission.version !== 2) {
+    validateHelarcContextRunBinding(admission.contextBinding);
+    if (encode(admission).digest !== row.digest || admission.rootRunId !== rootRunId || admission.version !== 3 || !validHelarcRunCredentialBinding(admission.providerCredential,admission.providerProfile.id)) {
       throw new ExecutionStoreError("execution_admission_corrupt");
     }
     validateProtectedEnvironment(admission.commandEnvironment.environment);
@@ -891,24 +945,21 @@ export class ExecutionDatabase {
       this.statement("INSERT INTO execution_commits VALUES(?,?,?,?,?,?,?)").run(id, value.kind, ownerId,
         state.revision, generation, encoded.digest, encoded.text);
       if (value.kind === "run") {
+        const lifetime=runActivityLifetime(ownerId);
+        this.activityHandoffs.command({kind:"register_fact_source",source:lifetime.source});
+        if(["completed","failed","cancelled"].includes(value.value.state.status))this.activityHandoffs.command({kind:"publish_fact",fact:{
+          id:lifetime.closedFactId,sourceId:lifetime.source.id,ref:{owner:"runtime",kind:"run_commit",id,revision:String(state.revision)}}});
         const before = previous?.kind === "run" ? previous.value.state.items.length : 0;
         for (const material of projectContextMaterials(value.value, before)) this.contextMaterials.publish(material, ownerId);
         const request = value.value.admission?.delegationRequest;
         if (request) {
           const taskInput = request.task.input as {material_refs?: unknown} | null;
           const refs = snapshotContextMaterialRefs(taskInput?.material_refs ?? []);
-          if (refs.length) this.contextMaterials.accept({id: `${request.ref.id}:materials`, sourceRunId: request.origin.parent.run.id,
+          if (refs.length) this.materialTransfers.accept({id: `${request.ref.id}:materials`, sourceRunId: request.origin.parent.run.id,
             recipientRunId: ownerId, references: refs, basis: {kind: "assignment", id: request.ref.id}});
           if (request.continuation) {
-            const source = request.continuation.sourceChild.id;
-            let after: string | null = null, page = 0;
-            for (;;) {
-              const references = this.contextMaterials.inheritedReferences(source, after);
-              if (!references.length) break;
-              this.contextMaterials.accept({id: `${request.ref.id}:continuation-materials:${page++}`, sourceRunId: source, recipientRunId: ownerId,
-                references, basis: {kind: "continuation", id: request.ref.id}});
-              after = references.at(-1)!.id;
-            }
+            this.materialTransfers.inherit({id:`${request.ref.id}:continuation-materials`,sourceRunId:request.continuation.sourceChild.id,
+              recipientRunId:ownerId,basis:{kind:"continuation",id:request.ref.id}});
           }
         }
         if (value.value.state.status === "completed" && !(previous?.kind === "run" && previous.value.state.status === "completed")) {
@@ -916,7 +967,7 @@ export class ExecutionDatabase {
           const refs = snapshotContextMaterialRefs(output?.materialRefs ?? []);
           const initial = this.readOwnerCommit(`${ownerId}:commit:0`);
           const delegation = initial?.kind === "run" ? initial.value.admission?.delegationRequest : null;
-          if (refs.length && delegation) this.contextMaterials.accept({id: `${ownerId}:result-materials`, sourceRunId: ownerId,
+          if (refs.length && delegation) this.materialTransfers.accept({id: `${ownerId}:result-materials`, sourceRunId: ownerId,
             recipientRunId: delegation.origin.parent.run.id, references: refs, basis: {kind: "result", id: value.value.state.settlementCause.ref.id}});
         }
       }
@@ -1210,8 +1261,16 @@ export class ExecutionDatabase {
 
   private validateSchema(): void {
     const objects = this.data.prepare("SELECT name,type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all() as { name: string; type: string }[];
-    if (objects.length !== 82 || !["context_policy_investment_history","activity_resource_allowances","activity_resource_reservations","context_policy_decisions","context_policy_heads","context_policy_investments","activity_fact_sources","activity_published_facts","activity_reconsiderations","activity_reconsideration_receipts","activity_resource_pools","activity_scheduled_work","activity_schedule_acceptances","activity_schedule_rounds","activity_schedule_tickets","activity_schedule_scope_rounds","activity_schedule_scope_tickets","activity_schedule_dispatches","material_custodies","material_custody_chunks","material_versions","material_holds","material_grants","context_foundation_facts","context_representations","context_judgments","context_reuse_checks","context_use_scopes","context_selection_versions","context_input_bindings","context_recipient_deliveries","context_input_sends","activity_facts", "shared_acceptances", "activity_paths", "activity_stages", "activity_attempts", "activity_raw_results", "activity_processing_receipts", "activity_handoffs", "execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
+if (objects.length !== 109 || !["model_input_usage","activity_attempt_retries","context_input_supply_exit_coverage","context_input_supply_exits","context_input_supply_dispositions","context_input_supply_schedules","activity_stop_receipts","context_input_supplies","context_input_supply_responsibilities","activity_reconsideration_sources","activity_input_needs","activity_settlement_receipts","context_policy_investment_history","activity_resource_allowances","activity_resource_reservations","context_policy_decisions","context_policy_heads","context_policy_observation_heads","context_policy_investments","activity_fact_sources","activity_published_facts","activity_reconsiderations","activity_reconsideration_receipts","activity_resource_pools","activity_scheduled_work","activity_schedule_acceptances","activity_schedule_rounds","activity_schedule_tickets","activity_schedule_scope_rounds","activity_schedule_scope_tickets","activity_schedule_dispatches","material_custodies","material_custody_chunks","material_versions","material_holds","material_grants","context_foundation_facts","context_representations","context_judgments","context_reuse_checks","context_use_scopes","context_selection_versions","context_input_bindings","context_recipient_deliveries","context_input_sends","activity_facts", "shared_acceptances", "activity_paths", "activity_stages", "activity_attempts", "activity_raw_results", "activity_processing_receipts", "activity_handoffs", "execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
+        !["activity_attempt_request","activity_retry_request","material_holds_reference"].every(name=>objects.some(row=>row.name===name&&row.type==="index")) ||
+        !objects.some(row => row.name === "activity_reconsideration_receipt_revision" && row.type === "index") ||
+        !objects.some(row => row.name === "activity_input_need_path" && row.type === "index") ||
+        !["model_input_usage_scope","activity_scheduled_open_scope","activity_paths_scheduled_work","activity_handoff_path_pending","activity_schedule_occupancy"].every(name => objects.some(row => row.name === name && row.type === "index")) ||
+        !objects.some(row => row.name === "context_input_supply_owned_path" && row.type === "index") ||
+        !objects.some(row => row.name === "context_input_supply_users" && row.type === "index") ||
+        !objects.some(row => row.name === "activity_facts_path" && row.type === "index") ||
         !objects.some(row => row.name === "activity_resource_scope" && row.type === "index") ||
+        !objects.some(row => row.name === "context_recipient_delivery_lookup" && row.type === "index") ||
         !objects.some(row => row.name === "activity_publication_source" && row.type === "index") ||
         !objects.some(row => row.name === "activity_schedule_remaining" && row.type === "index") ||
         !objects.some(row => row.name === "execution_content" && row.type === "table") ||

@@ -21,13 +21,15 @@ interface SearchProgress {input:ContextMaterialSearch; page:ContextMaterialSearc
 export interface ContextMaterialTransfer {readonly id: string; readonly sourceRunId: string; readonly recipientRunId: string;
   readonly references: readonly ContextMaterialRef[]; readonly basis: {readonly kind: "assignment" | "result" | "continuation" | "working_view" | "frozen_request" | "prepared_read"; readonly id: string};}
 export type ContextMaterialCommand =
+  | {kind:"search_scope";runId:string}
   | {kind: "read"; runId: string; input: ContextMaterialRead; invocationId: string}
   | {kind: "search"; runId: string; input: ContextMaterialSearch; invocationId: string; finish?: boolean}
   | {kind: "prepare"; transfer: ContextMaterialTransfer}
   | {kind: "accept"; transfer: ContextMaterialTransfer}
   | {kind: "release"; consumerId: string}
   | {kind: "validate"; runId: string; references: readonly ContextMaterialRef[]};
-export type ContextMaterialValue = ContextMaterialPage | ContextMaterialSearchPage | {kind:"search_progress"} | null;
+export interface MaterialSearchScopes {readonly legacy:number;readonly custody:number;}
+export type ContextMaterialValue = ContextMaterialPage | ContextMaterialSearchPage | MaterialSearchScopes | {kind:"search_progress"} | null;
 
 /** Derived views and durable source holds share the authoritative execution transaction. */
 export class ContextMaterialDatabase {
@@ -150,7 +152,10 @@ export class ContextMaterialDatabase {
     if (row && (contextMaterialDigest(row.value) !== row.digest || !["prepared", "accepted", "released"].includes(row.state))) fail("context_consumer_corrupt");
     return row;
   }
-  command(command: ContextMaterialCommand): ContextMaterialValue {
+  searchFrontier(runId:string):number {
+    return (this.sql("SELECT COALESCE(MAX(sequence),0) AS frontier FROM context_material_members WHERE run_id=?").get(runId) as {frontier:number}).frontier;
+  }
+  command(command: Exclude<ContextMaterialCommand,{kind:"search_scope"}>): ContextMaterialValue {
     if (command.kind === "prepare" || command.kind === "accept") {
       this.db.transaction(() => command.kind === "prepare" ? this.prepare(command.transfer) : this.accept(command.transfer))(); return null;
     }
@@ -195,13 +200,15 @@ export class ContextMaterialDatabase {
     if (references) this.validate(runId,references);
     const current=(this.sql("SELECT COALESCE(MAX(sequence),0) AS frontier FROM context_material_members WHERE run_id=?").get(runId) as {frontier:number}).frontier;
     const scope=contextMaterialDigest(JSON.stringify(references ?? null));
-    let cursor={runId,query,where,scope,frontier:current,sequence:0,offset:0};
+    const bounds=searchBounds(input,current);
+    let cursor={runId,query,where,scope,frontier:bounds.frontier,sequence:0,offset:0};
     if (input.cursor!==undefined) {
       try {
         if (typeof input.cursor!=="string" || input.cursor.length>4096) throw new Error();
         const value=JSON.parse(Buffer.from(input.cursor,"base64url").toString("utf8"));
         if (value.runId!==runId || value.query!==query || value.where!==where || value.scope!==scope || !integer(value.frontier,0,current) ||
           !integer(value.sequence,0,value.frontier) || !integer(value.offset,0,32*1024*1024)) throw new Error();
+        if(input.bounds&&value.frontier!==bounds.frontier)throw new Error();
         cursor=value;
       } catch {fail("context_cursor_invalid","Reuse the cursor with its original query and scope, or start a new search.");}
     }
@@ -226,12 +233,15 @@ export class ContextMaterialDatabase {
       state=JSON.parse(row.value);
     } else fail("context_search_preparation_missing");
     const limit=command.input.limit ?? 8;
-    if (row && !command.finish && !state.page.exhausted && state.page.matches.length<limit && state.page.scannedBytes<LIMITS.searchBytes) {
-      const page=this.search(command.runId,{...state.input,cursor:state.page.nextCursor!,limit:limit-state.page.matches.length});
+    if(typeof state.page.frontier!=="number")throw new TypeError("context_material_search_state_invalid");
+    const bounds=searchBounds(command.input,state.page.frontier);
+    if (row && !command.finish && !state.page.exhausted && state.page.matches.length<limit && state.page.scannedBytes<bounds.bytes && state.page.scannedDescriptions<bounds.descriptions) {
+      const page=this.search(command.runId,{...state.input,cursor:state.page.nextCursor!,limit:limit-state.page.matches.length,
+        bounds:{frontier:bounds.frontier,bytes:bounds.bytes-state.page.scannedBytes,descriptions:bounds.descriptions-state.page.scannedDescriptions}});
       state={...state,page:{...page,matches:[...state.page.matches,...page.matches],scannedBytes:state.page.scannedBytes+page.scannedBytes,
         scannedDescriptions:state.page.scannedDescriptions+page.scannedDescriptions}};
     }
-    const done=state.page.exhausted || state.page.matches.length>=limit || command.finish || state.page.scannedBytes>=LIMITS.searchBytes;
+    const done=state.page.exhausted || state.page.matches.length>=limit || command.finish || state.page.scannedBytes>=bounds.bytes || state.page.scannedDescriptions>=bounds.descriptions;
     if (done) return {...state.page,stopReason:state.page.exhausted ? "scope_exhausted" : state.page.matches.length>=limit ? "result_limit" : "execution_budget"};
     const value=JSON.stringify(state);
     this.sql("INSERT INTO context_material_searches VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET digest=excluded.digest,value=excluded.value")
@@ -270,22 +280,24 @@ export class ContextMaterialDatabase {
     const scope=contextMaterialDigest(JSON.stringify(references ?? null));
     if (references) this.validate(runId,references);
     const current = (this.sql("SELECT COALESCE(MAX(sequence),0) AS frontier FROM context_material_members WHERE run_id=?").get(runId) as {frontier: number}).frontier;
-    let frontier = current, sequence = 0, offset = 0;
+    const bounds=searchBounds(input,current),scanBytes=Math.min(LIMITS.scanBytes,bounds.bytes);
+    let frontier = bounds.frontier, sequence = 0, offset = 0;
     if (input.cursor !== undefined) {
       try {
         if (typeof input.cursor !== "string" || input.cursor.length > 4096) throw new Error();
         const cursor = JSON.parse(Buffer.from(input.cursor, "base64url").toString("utf8"));
         if (cursor.runId !== runId || cursor.query !== query || cursor.where !== where || cursor.scope!==scope || !integer(cursor.frontier, 0, current) ||
             !integer(cursor.sequence, 0, cursor.frontier) || !integer(cursor.offset, 0, 32 * 1024 * 1024)) throw new Error();
+        if(input.bounds&&cursor.frontier!==bounds.frontier)throw new Error();
         ({frontier, sequence, offset} = cursor);
       } catch {fail("context_cursor_invalid", "Reuse the cursor with its original query and scope, or start a new search.");}
     }
-    const rows = this.searchMembers(runId,references,frontier,sequence || 1,LIMITS.descriptions+1);
+    const rows = this.searchMembers(runId,references,frontier,sequence || 1,bounds.descriptions+1);
     const matches: ContextMaterialSearchPage["matches"][number][] = [];
     const needle = Buffer.from(query, "utf8");
     let scannedBytes = 0, scannedDescriptions = 0, exhausted = true;
     for (const row of rows) {
-      if (scannedDescriptions >= LIMITS.descriptions || scannedBytes >= LIMITS.scanBytes || matches.length >= limit) {exhausted = false; sequence = row.sequence; offset = 0; break;}
+      if (scannedDescriptions >= bounds.descriptions || scannedBytes >= scanBytes || matches.length >= limit) {exhausted = false; sequence = row.sequence; offset = 0; break;}
       const material = this.access(runId, row);
       scannedDescriptions++;
       const start = row.sequence === sequence ? offset : 0;
@@ -296,7 +308,7 @@ export class ContextMaterialDatabase {
         if (!query || material.description.label.includes(query)) matches.push({description: material.description, excerpt: material.description.label, byteStart: 0, byteEnd: 0});
         offset = 0; sequence = row.sequence + 1; continue;
       }
-      const primaryEnd = Math.min(total, start + LIMITS.scanBytes - scannedBytes);
+      const primaryEnd = Math.min(total, start + scanBytes - scannedBytes);
       const bytes = this.range(material, start, Math.min(total, primaryEnd + needle.length - 1));
       let from = 0;
       while (matches.length < limit) {
@@ -351,4 +363,9 @@ export class ContextMaterialDatabase {
 import {createHash} from "node:crypto";
 function digest(bytes: Buffer) {return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;}
 function integer(value: unknown, minimum: number, maximum: number): value is number {return Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum;}
+function searchBounds(input:ContextMaterialSearch,current:number) {
+  const bounds=input.bounds??{frontier:current,bytes:LIMITS.searchBytes,descriptions:LIMITS.descriptions};
+  if(!integer(bounds.frontier,0,current)||!integer(bounds.bytes,1,LIMITS.searchBytes)||!integer(bounds.descriptions,1,LIMITS.descriptions))fail("context_search_bounds_invalid");
+  return bounds;
+}
 function fail(code: string, message = code): never {throw new ContextMaterialError(code, message);}

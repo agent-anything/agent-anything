@@ -34,7 +34,7 @@ import type { ModelInputRecoveryPort } from "../context-representation/ModelInpu
 import type { TaskDecisionActivity, AgentActivityExecutionContext, TaskDecisionProposal, TaskDecisionInputSources } from "../decision/TaskDecisionActivity.js";
 import { StructuredOutputError, snapshotStructuredOutputFailure, type ProviderRequestBuildContext, type StructuredOutputFailure, type StructuredOutputFailureCategory, } from "../decision/StructuredOutput.js";
 export type BuildProviderRequest<TOutput = unknown> = (input: TaskDecisionInputSources<TOutput>, context: ProviderRequestBuildContext) => ProviderRequest | Promise<ProviderRequest>;
-export type ParseProviderResponse<TOutput = unknown> = (response: ProviderResponse, input: TaskDecisionInputSources<TOutput>, executionFlow?: ExecutionFlowContext) => TaskDecisionProposal<TOutput> | Promise<TaskDecisionProposal<TOutput>>;
+export type ParseProviderResponse<TOutput = unknown> = import("../decision/ModelResponseTaskDecisionMaker.js").InterpretTaskResponse<TOutput>;
 export interface ModelTaskDecisionCoordinatorOptions<TOutput = unknown> {
   readonly activityJournal?: import("../model-access/ModelActivityJournal.js").ModelActivityJournalSupport;
   readonly provider: Provider;
@@ -635,7 +635,7 @@ function throwIfCancelled(context: AgentActivityExecutionContext): void {
 function invalidOutput(message: string, metadata: Readonly<Record<string, unknown>> = {}): TaskDecisionActivityError {
   return createControllerError("model", "model_output_invalid", message, false, metadata);
 }
-function createControllerError(owner: TaskDecisionActivityFailure["kind"], code: TaskDecisionActivityFailureCode, message: string, retryable: boolean, metadata: Readonly<Record<string, unknown>>, operationSettlement: "unsettled" | "settled_failure" = "unsettled", providerCategory?: string, deadline: DecisionActivityDeadline | null = null): TaskDecisionActivityError {
+function createControllerError(owner: "model" | "provider", code: TaskDecisionActivityFailureCode, message: string, retryable: boolean, metadata: Readonly<Record<string, unknown>>, operationSettlement: "unsettled" | "settled_failure" = "unsettled", providerCategory?: string, deadline: DecisionActivityDeadline | null = null): TaskDecisionActivityError {
   const frozenMetadata = Object.freeze({ ...metadata });
   return new TaskDecisionActivityError(owner === "model"
     ? Object.freeze({

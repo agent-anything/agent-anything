@@ -10,6 +10,7 @@ import {createHelarcProviderProfile} from "@agent-anything/helarc/configuration"
 import type {Provider} from "@agent-anything/model-interaction";
 import {prepareHelarcHostRun} from "../HelarcHostRunComposition.js";
 import {ExecutionFixtureScope} from "./ExecutionFixtureScope.js";
+import {bindFixtureProviderEncoding} from "./EncodedFixtureProvider.js";
 import {closeExecutionScope} from "./ManagedExecutionTest.js";
 import {openExecutionStoreFixture} from "../../execution-storage/fixtures/ExecutionEnvironmentFixture.js";
 
@@ -28,6 +29,7 @@ let body: Promise<void>;
 async function executeFixture(): Promise<void> {
   const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
   const store = await scope.open(() => openExecutionStoreFixture(join(directory, "execution"), worker));
+  const activityHost = scope.activityHost(store);
   const context = createFakeProviderContext("timeout-fixture", "fixture-model");
   let calls = 0;
   const provider: Provider = {
@@ -43,8 +45,11 @@ async function executeFixture(): Promise<void> {
       await writeFile(join(directory, "provider-entered.json"), JSON.stringify({calls}));
       ready();
       if (!interruption.signal.aborted) await new Promise<void>(resolve => interruption.signal.addEventListener("abort", () => resolve(), {once: true}));
-      if (interruption.interruption?.kind !== "run_cancellation") throw new Error("Expected fixture cancellation");
-      return {kind: "cancelled", cancellation: interruption.interruption.cancellation};
+      expect(interruption.interruption).toBeNull();
+      expect(interruption.signal.aborted).toBe(true);
+      // The Activity attempt observes transport abort, not the Run's cancellation authority.
+      return {kind: "failed", failure: {category: "transport", code: "fixture_request_aborted",
+        message: "The fixture Provider stopped its aborted attempt.", metadata: {}}};
     },
   };
   const task = createHelarcTask({taskId: "timeout-task", prompt: "Wait for fixture cancellation.", createdAt: "2026-10-19T00:00:00.000Z"});
@@ -52,7 +57,7 @@ async function executeFixture(): Promise<void> {
     model: "fixture-model", timeoutMs: 30000, credentialStatus: "empty_allowed", isActive: true});
   if (!task.ok || !profile.ok) throw new Error("Invalid timeout fixture input");
   const prepared = await scope.prepare(() => prepareHelarcHostRun({
-    provider, executionStore: store,
+    provider: bindFixtureProviderEncoding(provider), executionStore: store, activityHost,
     task: task.task,
     sessionId: "timeout-session", productRunId: "timeout-product-run", inputItems: [], permissionPreset: "full_access",
     providerProfile: profile.profile,
@@ -60,7 +65,7 @@ async function executeFixture(): Promise<void> {
     workspaceResolver: createStaticHostWorkspaceResolver({primary: {id: "workspace", name: "workspace", rootRef: workspaceRoot, trustState: "trusted", source: "test", policyRefs: [], metadata: {}}, additional: []}),
     workspaceSelection: {kind: "references", primaryRef: "workspace", additionalRefs: []},
     identityResolver: createStaticHostIdentityResolver({id: "fixture-user", kind: "anonymous", displayName: "Fixture", metadata: {}}), identitySelection: {kind: "anonymous"},
-  }));
+  }), store);
   await writeFile(join(directory, "started.json"), JSON.stringify({rootRunId: prepared.rootRunId, generation: store.generation, processId: process.pid}));
   const timer = setInterval(() => appendFileSync(heartbeat, "x"), 20);
   try {

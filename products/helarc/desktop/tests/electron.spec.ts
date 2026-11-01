@@ -20,7 +20,8 @@ test(`real ${providerKind} final control reaches Electron before settlement and 
       JSON.stringify({
         model: "test-model",
         message: { role: "assistant", content: "I have prepared the response.", tool_calls: [{function: {
-          name: "final_result", arguments: {response: "Streaming before completion. The recorded result is ready."},
+          name: "final_result", arguments: {response: "Streaming before completion. The recorded result is ready.",
+            plan:[{step:"Prepare result",status:"completed"}]},
         }}] },
         done: false,
       }) + "\n",
@@ -76,7 +77,7 @@ test(`real ${providerKind} final control reaches Electron before settlement and 
         message: {
           role: "assistant",
           content: "",
-          tool_calls: [{function: {name:"update_plan",arguments:{plan:[{step:"Prepare result",status:"completed"}]}}}],
+          tool_calls: [],
         },
         done: true,
         done_reason: "stop",
@@ -86,8 +87,7 @@ test(`real ${providerKind} final control reaches Electron before settlement and 
     );
     else response!.end(
       `data: ${JSON.stringify({id:"response",choices:[{index:0,delta:{tool_calls:[
-        {index:0,function:{arguments:' The recorded result is ready."}'}},
-        {index:1,id:"plan-call",type:"function",function:{name:"update_plan",arguments:JSON.stringify({plan:[{step:"Prepare result",status:"completed"}]})}},
+        {index:0,function:{arguments:' The recorded result is ready.","plan":[{"step":"Prepare result","status":"completed"}]}'}},
       ]},finish_reason:"tool_calls"}]})}\n\ndata: [DONE]\n\n`,
     );
     await expect

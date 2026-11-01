@@ -1,7 +1,7 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {ContextSelectionProposal,ContextUseScope} from "@agent-anything/context/selection";
 import type {RepresentationJudgment} from "@agent-anything/context/representation";
-import type {MaterialHold} from "@agent-anything/context/custody";
+import type {MaterialHold,MaterialAccessAdmission} from "@agent-anything/context/custody";
 import type {SharedAcceptanceProposal} from "../activity/SharedAcceptance.js";
 import {validatePreparedContextInput,type PreparedContextInput} from "./ContextInputPreparation.js";
 
@@ -20,7 +20,9 @@ export function contextInputAcceptance(input:{
   readonly stageRequestId:string;
   readonly stageKind:string;
   readonly capabilities:readonly string[];
+  readonly dependencies?:import("../activity/ActivityHandoff.js").ActivityStageRequest["dependencies"];
   readonly inputHolds:readonly MaterialHold[];
+  readonly materialAdmissions?:readonly MaterialAccessAdmission[];
   readonly releaseHolds:readonly string[];
 }):SharedAcceptanceProposal {
   const {scope,prepared,judgment}=input;
@@ -36,11 +38,19 @@ export function contextInputAcceptance(input:{
     expectedControlRevision:input.expectedControlRevision,selection:input.selection,releaseHolds:input.releaseHolds,
     input:{id:input.inputId,activityId:input.activityId,stageRequestId:input.stageRequestId,scopeId:scope.id,selectionId,
       exactInput:prepared,target:scope.target,deliveries:prepared.deliveries,holds:input.inputHolds,combinationJudgmentId:judgment.id}};
+  const holds=[...(input.selection?.holds??[]),...input.inputHolds];
+  for(const admission of input.materialAdmissions??[]) {
+    const recipient={runId:scope.runId,recipient:scope.recipient,purpose:scope.purpose};
+    if(admission.grant.basis!==scope.authorityBasis||modelInputValueDigest(admission.grant.recipient)!==modelInputValueDigest(recipient)||
+      !holds.some(hold=>modelInputValueDigest(hold)===modelInputValueDigest(admission.hold)))
+      throw new TypeError("input_acceptance_material_admission_mismatch");
+  }
   return {id:input.id,scope:scope.runId,actor:scope.owner,parts:[
-    {owner:"material_custody",kind:"holds",proposal:{acquire:[...(input.selection?.holds??[]),...input.inputHolds],release:input.releaseHolds,basis:input.id}},
+    ...(input.materialAdmissions??[]).map(proposal=>({owner:"material_custody",kind:"admit_access",proposal})),
+    {owner:"material_custody",kind:"holds",proposal:{acquire:holds,release:input.releaseHolds,basis:input.id}},
     {owner:"context_selection",kind:"selection_input",proposal},
     {owner:"context_delivery",kind:"select",proposal:{inputId:input.inputId,scopeId:scope.id,deliveryIds:prepared.deliveries.map(d=>d.id)}},
     {owner:"activity",kind:"stage_submission",proposal:{id:input.stageRequestId,pathId:input.activityId,stageKind:input.stageKind,
-      input:prepared,capabilities:input.capabilities,dependencies:[]}},
+      input:prepared,capabilities:input.capabilities,dependencies:input.dependencies??[]}},
   ]};
 }

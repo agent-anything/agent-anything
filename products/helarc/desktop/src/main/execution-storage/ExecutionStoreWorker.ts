@@ -45,6 +45,8 @@ try {
         case "representation": send({kind:"result",id:request.id,value:database.representationCommand(request.generation,request.command.command)});break;
         case "context_selection": send({kind:"result",id:request.id,value:database.selectionCommand(request.generation,request.command.command)});break;
         case "context_policy": send({kind:"result",id:request.id,value:database.contextPolicyQuery(request.generation,request.command.query)});break;
+        case "model_input_usage": send({kind:"result",id:request.id,value:database.modelInputUsage(request.generation,request.command.query)});break;
+        case "input_supply": send({kind:"result",id:request.id,value:database.inputSupplyQuery(request.generation,request.command.query)});break;
         case "context_policy_investments": send({kind:"result",id:request.id,value:database.contextPolicyInvestments(request.generation,request.command.input)});break;
         case "context_foundation_facts": send({kind:"result",id:request.id,value:database.contextFoundationFacts(request.command.runId,request.command.after,request.command.limit)});break;
         case "query_acceptance": send({kind:"result",id:request.id,value:{acceptanceValue:database.querySharedAcceptance(request.generation,request.command.id)}}); break;

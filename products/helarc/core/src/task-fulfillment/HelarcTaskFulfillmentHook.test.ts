@@ -11,19 +11,80 @@ import type {
   ProviderTransportLimit,
 } from "@agent-anything/model-interaction";
 import { createUnknownModelInputMeasurement } from "@agent-anything/model-interaction";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HELARC_TASK_KIND } from "../task/index.js";
 import { createDefaultHelarcInstructionSettings } from "../instructions/HelarcInstructionSettings.js";
-import { HelarcTaskFulfillmentHook } from "./HelarcTaskFulfillmentHook.js";
+import { HelarcTaskFulfillmentHook as ProductStopHook, createHelarcStopModelSource, interpretHelarcStopModelResult,type HelarcStopExecution } from "./HelarcTaskFulfillmentHook.js";
+import { createHelarcStopInputSources } from "../prompt/HelarcStopInputSources.js";
+import { originalInputAccountScopes, originalInputDataTextScopes } from "@agent-anything/agent-runtime/context-representation";
 import { snapshotHelarcTaskFulfillmentAssessment } from "./HelarcTaskFulfillment.js";
 
 const NOW = "2026-08-28T00:00:00.000Z";
+
+/** Isolated interpretation tests supply execution explicitly; production has no direct-send branch. */
+class HelarcTaskFulfillmentHook extends ProductStopHook {
+  constructor(provider:Provider,sections:ConstructorParameters<typeof ProductStopHook>[1],now:()=>string,execution?:HelarcStopExecution){
+    super(provider,sections,execution??{recover:async()=>null,execute:async(source,interruption)=>{
+      if(source.request.modelContext.assessment?.disposition==="proven_overflow")throw new TypeError("Task Fulfillment model input exceeds the admitted context capacity.");
+      return interpretHelarcStopModelResult(source,await provider.send(source.request,interruption),now());
+    }});
+  }
+}
 
 function enabledStopInstructions() {
   return createDefaultHelarcInstructionSettings().stop.map(section => ({...section, enabled: true}));
 }
 
 describe("HelarcTaskFulfillmentHook", () => {
+  it("requires Host execution for enabled instructions but not for an empty hook",()=>{
+    const provider=new StructuredProvider(null);
+    expect(()=>new ProductStopHook(provider,enabledStopInstructions())).toThrow("helarc_stop_execution_required");
+    expect(()=>new ProductStopHook(provider,[])).not.toThrow();
+  });
+  it("recovers the original accepted assessment without rebuilding an input or duplicating Product projection", async () => {
+    const provider = new StructuredProvider({status: "fulfilled", disposition: "allow", rationale: "Original evidence supports stopping.", missingOutcomes: [], unsupportedClaims: []});
+    const event = createEvent(), source = createHelarcStopModelSource(provider, event, "Assess the supplied evidence.");
+    const assessment = interpretHelarcStopModelResult(source, await provider.send(source.request, context()), NOW);
+    provider.requests.length = 0;
+    const execution = {execute: vi.fn(async () => assessment), recover: vi.fn(async () => assessment)};
+    const hook = new HelarcTaskFulfillmentHook(provider, enabledStopInstructions(), () => NOW, execution);
+    await hook.handle(event, context());
+    await hook.recover!(event, context());
+    expect(hook.getAssessments()).toEqual([assessment]);
+    const recoveryProvider = {...provider, send: provider.send.bind(provider), modelContext: {...provider.modelContext,
+      measure: () => {throw new Error("Recovery must not remeasure a new input");}}};
+    await new HelarcTaskFulfillmentHook(recoveryProvider, enabledStopInstructions(), () => NOW, execution).recover!(event, context());
+    expect(execution.execute).toHaveBeenCalledTimes(1);
+    expect(execution.recover).toHaveBeenCalledTimes(2);
+    expect(provider.requests).toEqual([]);
+  });
+
+  it("keeps Stop instructions and completion basis exact while declaring historical evidence separately", () => {
+    const provider = new StructuredProvider(null), original = createEvent();
+    const event = {...original, interaction: {...original.interaction, messages: [{role: "assistant" as const, content: [{kind: "text" as const, text: "The command failed; the requested program did not run."}]}]}};
+    const source = createHelarcStopModelSource(provider, event, "Check execution evidence, not claims alone.");
+    const sources = createHelarcStopInputSources(source);
+    const input = {sources, maximum: 8,
+      backgroundGroupIds: sources.groups.filter(group => group.duties.includes("behavior") || group.duties.includes("objective")).map(group => group.id)};
+    expect(originalInputAccountScopes(input).scopes).toHaveLength(0);
+    const options = originalInputDataTextScopes(input);
+    expect(options.scopes).toHaveLength(1);
+    const selected = options.scopes[0]!.groups.filter(group => group.role === "source");
+    expect(selected).toHaveLength(1);
+    const group = sources.groups.find(group => group.id === selected[0]!.id)!;
+    expect(group.occurrences[0]!.section.kind).toBe("stop_interaction_evidence");
+    expect(options.scopes[0]!.groups.filter(group => group.role === "background")).toHaveLength(2);
+    expect(JSON.stringify(source.request.messages)).toContain("The command failed");
+    expect(JSON.stringify(source.request.messages)).toContain("completionBasis");
+  });
+
+  it("does not create or recover durable Stop work when instructions are disabled", async () => {
+    const provider = new StructuredProvider(null), execution = {execute: vi.fn(), recover: vi.fn()};
+    const hook = new HelarcTaskFulfillmentHook(provider, [], () => NOW, execution);
+    await hook.handle(createEvent(), context());await hook.recover!(createEvent(), context());
+    expect(execution.execute).not.toHaveBeenCalled();expect(execution.recover).not.toHaveBeenCalled();
+    expect(provider.requests).toHaveLength(0);
+  });
   it.each(["incomplete", "uncertain"] as const)("allows an honest %s outcome without forcing another turn", async (status) => {
     const provider = new StructuredProvider({
       status, disposition: "allow", rationale: "The limitation is disclosed; no useful action remains.",

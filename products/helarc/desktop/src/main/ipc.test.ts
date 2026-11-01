@@ -1,6 +1,7 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDefaultHelarcInstructionSettings } from "@agent-anything/helarc/configuration";
+import { createDefaultHelarcInstructionSettings,contextSettingsSnapshot } from "@agent-anything/helarc/configuration";
+import type {FileHelarcContextSettingsStore} from "./context/FileHelarcContextSettingsStore.js";
 import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
 import type { FileHelarcProjectStore } from "./project/FileHelarcProjectStore.js";
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
@@ -25,7 +26,7 @@ const electron = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   dialog: { showOpenDialog: electron.showOpenDialog },
-  ipcMain: { handle: electron.handle },
+  ipcMain: { handle: electron.handle,removeHandler:(channel:string)=>electron.handlers.delete(channel) },
 }));
 
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
@@ -178,6 +179,40 @@ describe("Helarc IPC", () => {
     expect(configureInstructions).toHaveBeenCalledOnce();
   });
 
+  it("projects context settings reads and saved receipts without changing revisions or exposing Core extensions",async()=>{
+    const initial=contextSettingsSnapshot({autoRepresentation:true,observations:[]});
+    const saved=contextSettingsSnapshot({autoRepresentation:false,observations:[]});
+    const internal={...saved,privateState:PRIVATE_RESULT,settings:{...saved.settings,privateState:PRIVATE_RESULT}};
+    const gate=deferred<void>(),save=vi.fn(async()=>{await gate.promise;return saved;});
+    const configureContextSettings=vi.fn(()=>internal);
+    registerHelarcIpc({window:windowDouble(),controller:controllerDouble(mainSnapshot(),{
+      getContextSettings:()=>({...initial,privateState:PRIVATE_RESULT}),configureContextSettings,
+    }),contextSettingsStore:{save} as unknown as FileHelarcContextSettingsStore});
+    const view=requiredHandler(HELARC_IPC_CHANNELS.getContextSettings)({});
+    expect(view).toEqual(initial);expect(view).not.toBe(initial);
+    const command={version:1,commandId:"context-save",kind:"context.save",payload:{settings:saved.settings,expectedRevision:initial.revision}};
+    const handler=requiredHandler(HELARC_IPC_CHANNELS.saveContextSettings),first=handler({},command),replay=handler({},command);
+    await Promise.resolve();expect(configureContextSettings).not.toHaveBeenCalled();
+    gate.resolve();const receipt=await first;
+    expect(receipt).toMatchObject({status:"handled",result:saved});expect(await replay).toBe(receipt);
+    expect(JSON.stringify(receipt)).not.toContain(PRIVATE_RESULT);
+    expect(save).toHaveBeenCalledOnce();expect(save).toHaveBeenCalledWith(saved.settings,initial.revision);
+    expect(configureContextSettings).toHaveBeenCalledOnce();expect(configureContextSettings).toHaveBeenCalledWith(saved.settings);
+  });
+
+  it("keeps Core context validation at ingress and does not activate settings after a stale save",async()=>{
+    const configureContextSettings=vi.fn(),save=vi.fn(async()=>{throw new Error("context_settings_revision_changed");});
+    registerHelarcIpc({window:windowDouble(),controller:controllerDouble(mainSnapshot(),{configureContextSettings}),
+      contextSettingsStore:{save} as unknown as FileHelarcContextSettingsStore});
+    const handler=requiredHandler(HELARC_IPC_CHANNELS.saveContextSettings);
+    const command={version:1,commandId:"invalid-context",kind:"context.save",payload:{settings:{autoRepresentation:false,observations:[]},expectedRevision:"stale"}};
+    expect(await handler({},{...command,payload:{...command.payload,settings:{...command.payload.settings,apiKey:PRIVATE_RESULT}}}))
+      .toMatchObject({status:"rejected",code:"helarc_product_command_invalid"});
+    expect(save).not.toHaveBeenCalled();
+    expect(await handler({},{...command,commandId:"stale-context"})).toMatchObject({status:"rejected",code:"helarc_product_command_failed"});
+    expect(configureContextSettings).not.toHaveBeenCalled();
+  });
+
   it("does not activate instruction settings after failed storage", async () => {
     const configureInstructions = vi.fn();
     registerHelarcIpc({ window: windowDouble(), controller: controllerDouble(mainSnapshot(), { configureInstructions }),
@@ -317,6 +352,9 @@ describe("Helarc IPC", () => {
     expect(window.webContents.send).toHaveBeenCalledOnce();
     for (const listener of closedListeners) listener();
     expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(electron.handlers.size).toBe(0);
+    registerHelarcIpc({window:windowDouble(),controller});
+    expect(requiredHandler(HELARC_IPC_CHANNELS.getSnapshot)({})).toEqual(snapshot);
     expect(controller.dispatchHostCommand).not.toHaveBeenCalled();
     expect(controller.queryRunStatus).toHaveBeenCalledTimes(2);
     expect(controller.queryRunStatus).toHaveBeenNthCalledWith(1, statusQuery);
@@ -638,6 +676,7 @@ function mainSnapshot(
   status: HelarcMainSnapshot["status"] = "idle",
 ): HelarcMainSnapshot {
   return {
+    activityRevision: 0,
     execution: "idle",
     status,
     workspace: null,

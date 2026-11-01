@@ -163,9 +163,11 @@ export async function executeTaskDecisionActivity<TOutput>(input: {
   readonly auxiliaryUsage?: import("../decision/TaskDecisionActivity.js").AgentActivityExecutionContext["auxiliaryUsage"];
   readonly auxiliaryWork?: import("../decision/TaskDecisionActivity.js").AgentActivityExecutionContext["auxiliaryWork"];
   readonly recovering?: boolean;
-}): Promise<TaskDecisionProposal<TOutput>> {
+  readonly interrupting?: boolean;
+}): Promise<TaskDecisionProposal<TOutput> | null> {
   const controller = input.dependencies.taskDecisions;
-  const invoke = input.recovering ? controller.recover : controller.next;
+  const invoke = input.interrupting ? controller.interrupt : input.recovering ? controller.recover : controller.next;
+  if (input.interrupting && !invoke) return null;
   if (!invoke) throw new TypeError("Controller does not support interrupted invocation recovery.");
   const context = Object.freeze({
       checkpoints: input.checkpoints,
@@ -182,14 +184,14 @@ export async function executeTaskDecisionActivity<TOutput>(input: {
         events: input.retryEvents,
       }),
     });
-  let decision: TaskDecisionProposal<TOutput>;
+  let decision: TaskDecisionProposal<TOutput> | null;
   try {
-    decision = await invoke.call(controller, input.prepared.input, context) as TaskDecisionProposal<TOutput>;
+    decision = await invoke.call(controller, input.prepared.input, context) as TaskDecisionProposal<TOutput> | null;
   } catch (error) {
     await input.dependencies.extensions?.onDecisionFailure?.(input.prepared.input, error, context);
     throw error;
   }
-  await input.dependencies.extensions?.afterDecision?.(input.prepared.input, decision, context);
+  if (decision) await input.dependencies.extensions?.afterDecision?.(input.prepared.input, decision, context);
   return decision;
 }
 

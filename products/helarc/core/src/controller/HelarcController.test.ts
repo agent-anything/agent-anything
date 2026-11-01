@@ -1,6 +1,9 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createAgentInstructions } from "@agent-anything/agent-core/agent";
 import { validHelarcFinalReply } from "./HelarcFinalReply.js";
+import {retainTaskDecisionSource,restoreTaskDecisionSource,TaskResponseBindingError,TaskModelResponsePath,TASK_MODEL_RESPONSE_PURPOSE,snapshotTaskModelExchange} from "@agent-anything/agent-runtime/decision";
+import type {ActivityPathState,ActivityStageState} from "@agent-anything/agent-runtime/activity";
+import {modelInputValueDigest,createEncodedModelInput,organizeOriginalInput} from "@agent-anything/model-interaction/input";
 import {createExactModelWorkingView, type ModelInputSection} from "@agent-anything/model-interaction/input";
 import { TaskDecisionActivityError, createConversationOpeningReceipt, snapshotConversationOpeningReceipt, createModelConversationSeed, freezeConversationOpening, retainInputPresentation, validateTaskDecisionProposal, type AgentActivityExecutionContext, type TaskDecisionInputSources } from "@agent-anything/agent-runtime/decision";
 import { ModelTaskDecisionCoordinator } from "@agent-anything/agent-runtime/execution-coordinator";
@@ -27,6 +30,9 @@ import { createToolContractIdentity } from "@agent-anything/tools/identity";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
 import { buildHelarcPromptAssembly } from "../prompt/index.js";
+import {createHelarcTaskInputSources} from "../prompt/HelarcTaskInputSources.js";
+import {planOriginalInputPublications,ContextInputPreparationHandler,firstContextInputPreparationStage,type PreparedContextInput} from "@agent-anything/agent-runtime/context-representation";
+import {SOURCE_MATERIAL_PUBLICATION_PURPOSE} from "@agent-anything/agent-runtime/context-representation";
 import { renderHelarcContextProjectionFragment } from "../prompt/HelarcPromptAssembly.js";
 import { createDefaultHelarcInstructionSettings } from "../instructions/index.js";
 import { createHelarcAgent } from "../agent/HelarcAgent.js";
@@ -41,6 +47,7 @@ import {
 import type { ResolvedHelarcToolGuidance } from "../tools/guidance/index.js";
 import { createHelarcProviderProfile } from "../configuration/index.js";
 import { helarcConversationOpening } from "../prompt/HelarcConversationOpening.js";
+import {createHelarcTaskModelBinding} from "../composition/HelarcTaskModelBinding.js";
 
 const TEST_MODEL_CONTEXT = createTestProviderModelContext(
   "fake-provider",
@@ -68,11 +75,10 @@ function parseHelarcProviderResponse(
   response: ProviderResponse,
   input: TaskDecisionInputSources<HelarcAgentOutput>,
 ) {
-  const protocol = createTestControllerProtocol(input);
   return parseProviderResponse(
     response,
     input,
-    protocol,
+    buildHelarcProviderRequest(input,requestBuildContext()),
   );
 }
 
@@ -93,6 +99,142 @@ function createHelarcModelCallableCatalog(input: {
 }
 
 describe("Helarc native Tool controller", () => {
+  it("restores Product interpretation from the original source and request without rebuilding the catalog",async()=>{
+    const source=createControllerInput(),protocol=createTestControllerProtocol(source),record=retainTaskDecisionSource(source);
+    let bound=0;
+    const binding=createHelarcTaskModelBinding({agents:[source.agent],protocol,delivery:{mode:"buffered"},
+      requestBound:(runId,requestId,catalog)=>{bound++;expect(runId).toBe(source.runId);expect(requestId).toBeTruthy();expect(catalog.bindings.length).toBeGreaterThan(0);}});
+    const request=binding.buildRequest(source,requestBuildContext());
+    const restored=createHelarcTaskModelBinding({agents:[source.agent],delivery:{mode:"buffered"},
+      protocol:{...protocol,createCallableCatalog:()=>{throw new Error("Recovery cannot rebuild the original catalog");}},
+      requestBound:(runId,requestId,catalog)=>{bound++;expect(runId).toBe(source.runId);
+        expect(requestId).toBe("prepared-request");expect(catalog.bindings.some(item=>item.kind==="control"&&item.control==="final_result")).toBe(true);}});
+    const originalSource=restoreTaskDecisionSource(record,restored.resolveAgent(record.source.agent));
+    expect(await restored.interpret(nativeFinalResponseFromRequest(request,"Original response"),originalSource,request)).toMatchObject({
+      kind:"propose_completion",output:{summary:"Original response"}});
+    expect(bound).toBe(1);
+    restored.observeRequest!(record,{...request,requestId:"prepared-request"});
+    expect(bound).toBe(2);
+  });
+
+  it("rejects ambiguous original Agent definitions at Product binding",()=>{
+    const source=createControllerInput();
+    expect(()=>createHelarcTaskModelBinding({agents:[source.agent,{...source.agent,name:"Different meaning"}],
+      protocol:createTestControllerProtocol(source),delivery:{mode:"buffered"}})).toThrow("helarc_task_agent_binding_duplicate");
+  });
+
+  it("reuses original source capture identity after a new request or restart without changing original time",async()=>{
+    const source=createControllerInput(),record=retainTaskDecisionSource(source),request=buildHelarcProviderRequest(source,requestBuildContext());
+    const sources=createHelarcTaskInputSources(record,request);
+    const input={sources,recipient:{runId:source.runId,recipient:"task",purpose:request.purpose},target:"original-target",
+      observedAt:"2026-10-30T00:00:00Z",maximumSourceBytes:1024*1024,activities:{command:async()=>null},signal:new AbortController().signal};
+    const plans=await planOriginalInputPublications(input);
+    expect(plans.every(plan=>plan.state==="new")).toBe(true);
+    const recovered=await planOriginalInputPublications({...input,observedAt:"2026-10-31T00:00:00Z",
+      sources:{...sources,originalSourceId:"later-request"},
+      activities:{command:async command=>{
+        if(command.kind==="read_path")return {intent:{id:command.pathId,runId:source.runId,owner:"material-source",purpose:{digest:modelInputValueDigest(SOURCE_MATERIAL_PUBLICATION_PURPOSE)}},cancelled:false,progress:null} as ActivityPathState;
+        if(command.kind==="read_stage")return {request:{stageKind:"capture",input:JSON.parse(JSON.stringify(plans.find(plan=>`${plan.pathId}:capture`===command.requestId)!.request))}} as ActivityStageState;
+        throw new Error("Unexpected execution");
+      }}});
+    expect(recovered.map(plan=>plan.request)).toEqual(plans.map(plan=>plan.request));
+    expect(recovered.every(plan=>plan.state==="pending")).toBe(true);
+    await expect(planOriginalInputPublications({...input,maximumSourceBytes:1})).rejects.toThrow("capture_limit");
+    await expect(planOriginalInputPublications({...input,recipient:{...input.recipient,runId:"child"}})).rejects.toThrow("binding_invalid");
+  });
+  it("supplies exact task source occurrences without allocating or rewriting their content",()=>{
+    const source=createControllerInput(),record=retainTaskDecisionSource(source),request=buildHelarcProviderRequest(source,requestBuildContext());
+    const manifest=createHelarcTaskInputSources(record,request);
+    expect(manifest.runId).toBe(source.runId);
+    expect(manifest.request).toEqual(snapshotProviderRequest(request));
+    expect(manifest.groups.flatMap(group=>group.occurrences).sort((a,b)=>a.position-b.position).map(value=>value.section))
+      .toEqual(request.composition.sections);
+    expect(manifest.groups.some(group=>group.duties.includes("objective"))).toBe(true);
+    expect(manifest.groups.every(group=>group.occurrences.length>0&&group.sources.length>0)).toBe(true);
+    expect(createHelarcTaskInputSources(JSON.parse(JSON.stringify(record)),JSON.parse(JSON.stringify(request))).id).toBe(manifest.id);
+    expect(()=>createHelarcTaskInputSources(record,{...request,metadata:{...request.metadata,runId:"other"}})).toThrow("helarc_task_input_source_mismatch");
+  });
+  it("interprets a durable task response under its original purpose and separates binding gaps from bad model output",async()=>{
+    const input=createControllerInput(),record=retainTaskDecisionSource(input),originalRequest=buildHelarcProviderRequest(input,requestBuildContext());
+    const provider=Object.assign(new FakeProvider(request=>nativeFinalResponseFromRequest(request,"Done.")),{
+      encodeInput:(request:ProviderRequest,mode:"buffered"|"streaming")=>createEncodedModelInput({request,target:TEST_MODEL_CONTEXT.target,
+        adapterRevision:"test:1",endpoint:"test",mode,body:JSON.stringify({instructions:request.instructions,messages:request.messages,interaction:request.interaction})})});
+    const sources=createHelarcTaskInputSources(record,originalRequest),target=modelInputValueDigest(TEST_MODEL_CONTEXT.target);
+    const demand=organizeOriginalInput({composition:originalRequest.composition,demand:{id:"task-demand",runId:input.runId,recipient:input.agent.id,
+      purpose:originalRequest.purpose,targetRevision:target,historyBoundary:sources.boundary,deliveryIds:[],dependencies:{},maximumCombinations:1,maximumExternalMeasurements:0,maximumReadBytes:0},
+      groups:sources.groups.map(group=>({id:group.id,owner:group.owner,revision:group.revision,sectionIds:group.occurrences.map(value=>value.section.id),duties:group.duties,deliveryIds:[]}))});
+    const preparation=firstContextInputPreparationStage("task-prepare",{kind:"context_input_preparation",demand,template:originalRequest,
+      limits:[],reservations:[],policy:{id:"fixture",revision:"1",purpose:originalRequest.purpose,basis:"Bounded actual bytes; tokenization remains unknown",
+        allowEstimatedFit:true,allowUnknown:true},allowExternalMeasurement:false,deliveryMode:"buffered",localMeasurements:[],sharedCapacity:null,materialAccesses:[]});
+    const preparing=new ContextInputPreparationHandler({provider,materials:{command:async()=>{throw new Error("No material access expected");}},authorize:async()=>{},now:()=>"2026-10-30T00:00:00Z"});
+    const raw=await preparing.execute({} as ActivityPathState,{request:preparation} as ActivityStageState,{id:"prepare-attempt"} as never,new AbortController().signal);
+    expect(raw.value).toMatchObject({kind:"prepared"});
+    const prepared=(raw.value as {prepared:PreparedContextInput}).prepared,request=prepared.request;
+    const binding={acceptanceId:"input-accepted",scope:{id:"task-scope",runId:input.runId,recipient:input.agent.id,purpose:request.purpose,target},
+      selection:{id:"task-selection",representations:[],judgmentIds:["combination"],holds:[]},input:{id:"task-path:model:input",activityId:"task-path",stageRequestId:"task-path:model",
+        scopeId:"task-scope",selectionId:"task-selection",exactInput:prepared,target,combinationJudgmentId:"combination",deliveries:[],holds:[]},deliveries:[]};
+    const sourceStage={request:{id:"task-path:source",pathId:"task-path",stageKind:"source",input:{kind:"task_model_source",record,request:originalRequest,protocol:{kind:"native_tool_turn"}}},status:"accepted"} as ActivityStageState;
+    const path={intent:{id:"task-path",runId:input.runId,purpose:{contract:TASK_MODEL_RESPONSE_PURPOSE,digest:modelInputValueDigest(TASK_MODEL_RESPONSE_PURPOSE)}}} as ActivityPathState;
+    const stage={request:{id:"task-path:model",pathId:"task-path",stageKind:"model",input:prepared},
+      result:{id:"raw:1",completeness:"complete",outcome:"returned",value:{kind:"succeeded",response:nativeFinalResponseFromRequest(request,"Done.")}}} as ActivityStageState;
+    let originalAgent=input.agent,parses=0,interpretationFails=false;
+    const handler=new TaskModelResponsePath({provider:{} as Provider,activities:{command:async()=>JSON.parse(JSON.stringify(sourceStage))},
+      selections:{command:async()=>structuredClone(binding) as never},authorize:async()=>{},resolveAgent:()=>originalAgent,
+      interpret:(response,source,actual)=>{parses++;
+        if(interpretationFails)throw new TaskDecisionActivityError({kind:"model",failure:{code:"model_output_invalid",message:"No usable decision",retryable:false,metadata:{}}});
+        return parseProviderResponse(response,source,actual);},now:()=>"2026-10-30T00:00:00Z"});
+    const signal=new AbortController().signal,result=await handler.interpret(path,stage,signal,{id:"accept"});
+    expect(result.progress).toMatchObject({state:"interpreted",proposal:{kind:"propose_completion"}});
+    expect(result.participants).toMatchObject([{owner:"context_delivery",kind:"accept",proposal:{inputId:"task-path:model:input",responseId:"raw:1"}}]);
+    originalAgent={...originalAgent,revision:"changed"};
+    await expect(handler.interpret(path,stage,signal,{id:"other"})).rejects.toBeInstanceOf(TaskResponseBindingError);
+    expect(parses).toBe(1);
+    const partial=nativeFinalResponseFromRequest(request,"Unfinished reply");
+    if(partial.kind!=="native_tool_turn")throw new Error("Expected native response");
+    const incomplete={...stage,result:{...stage.result!,value:{kind:"succeeded",response:{...partial,turn:{...partial.turn,finish:{kind:"output_limit"}}}}}};
+    expect((await handler.interpret(path,incomplete,signal,{id:"truncated"})).progress).toMatchObject({state:"response_incomplete",proposal:null,
+      exchange:{modelItems:[],openingReceipt:{requestId:request.requestId},responseRejection:{reason:"output_limit",rawResultId:"raw:1",responseAcceptanceId:"truncated"}}});
+    const malformed={...stage,result:{...stage.result!,value:{kind:"succeeded",response:{...partial,turn:{...partial.turn,assistant:{role:"assistant",content:[{kind:"text",text:42}]}}}}}};
+    expect((await handler.interpret(path,malformed,signal,{id:"malformed"})).progress).toMatchObject({state:"response_not_usable",proposal:null,
+      failure:{kind:"model",failure:{code:"model_output_invalid"}},exchange:{modelItems:[],responseRejection:{reason:"invalid_turn"}}});
+    expect(parses).toBe(1);
+    await expect(handler.settle(path,stage,signal,{id:"settled"})).rejects.toBeInstanceOf(TaskResponseBindingError);
+    originalAgent=input.agent;
+    expect(await handler.settle(path,stage,signal,{id:"settled"})).toMatchObject({
+      disposition:{decisionAccepted:false,response:{state:"interpreted",exchange:{modelItems:expect.any(Array)}}},
+      participants:[{kind:"accept",proposal:{responseId:"raw:1"}}]});
+    interpretationFails=true;
+    const failed=await handler.interpret(path,stage,signal,{id:"failed"});
+    expect(failed.progress).toMatchObject({state:"response_not_usable",proposal:null,
+      exchange:{modelItems:expect.arrayContaining([expect.objectContaining({kind:"model_tool_call"})]),openingReceipt:{requestId:request.requestId}}});
+    const exchange=(failed.progress as import("@agent-anything/agent-runtime/decision").TaskModelResponseProgress).exchange!;
+    await expect(Promise.resolve().then(()=>snapshotTaskModelExchange({...exchange,
+      openingReceipt:createConversationOpeningReceipt(input.runId,{...request,requestId:"different-request"})},input)))
+      .rejects.toMatchObject({failure:{code:"controller_exchange_request_mismatch"}});
+    const call=exchange.modelItems.find(item=>item.kind==="model_tool_call")!;
+    expect(()=>snapshotTaskModelExchange({...exchange,modelItems:[...exchange.modelItems,{...call,id:"duplicated-call"}]},input)).toThrow();
+  });
+  it("retains original task decision data without executable Agent validation and rebinds only the same definition",()=>{
+    const input=createControllerInput(),record=retainTaskDecisionSource(input);
+    expect(record.source.agent).not.toHaveProperty("output");
+    const restored=restoreTaskDecisionSource(JSON.parse(JSON.stringify(record)),input.agent);
+    expect(restored.task).toEqual(input.task);expect(restored.toolExposure).toEqual(input.toolExposure);
+    expect(restored.agent.output).toBe(input.agent.output);
+    expect(()=>restoreTaskDecisionSource(record,{...input.agent,revision:"different"})).toThrow(TaskResponseBindingError);
+    expect(()=>restoreTaskDecisionSource({...record,source:{...record.source,iteration:999}},input.agent)).toThrow("task_decision_source_binding_invalid");
+  });
+  it("interprets only the original request catalog and rejects changed binding or exposure",()=>{
+    const input=createControllerInput(),request=buildHelarcProviderRequest(input,requestBuildContext());
+    const retained=snapshotProviderRequest(JSON.parse(JSON.stringify(request)) as ProviderRequest);
+    const response=nativeResponse(input,[{kind:"call",name:"final_result",input:{response:"Original reply"}}]);
+    expect(parseProviderResponse(response,input,retained)).toMatchObject({kind:"propose_completion",output:{summary:"Original reply"}});
+    const changed=JSON.parse(JSON.stringify(retained));
+    changed.metadata.modelCallableBinding.bindings[0].callableName="other_name";
+    expect(()=>parseProviderResponse(response,input,changed)).toThrow("helarc_callable_binding_changed");
+    expect(()=>parseProviderResponse(response,{...input,toolExposure:{...input.toolExposure,id:"another-exposure"}},retained))
+      .toThrow("helarc_callable_binding_changed");
+    expect(retained.messages.some(message=>JSON.stringify(message).includes("modelCallableBinding"))).toBe(false);
+  });
   it("publishes the actual bound background under the presentation source identity", () => {
     const input = createControllerInput();
     const protocol = createTestControllerProtocol(input);
@@ -1033,7 +1175,7 @@ describe("Helarc native Tool controller", () => {
     const controller = new ModelTaskDecisionCoordinator<HelarcAgentOutput>({
       provider,
       buildRequest: (input, context) => buildProviderRequest(input, context, protocol),
-      parseResponse: (response, input) => parseProviderResponse(response, input, protocol),
+      parseResponse: (response, input, request) => parseProviderResponse(response, input, request),
       responseProtocol: { kind: "native_tool_turn" },
       retryExecutor: createSystemRetryExecutor(), retryClock: systemRetryClock,
     });

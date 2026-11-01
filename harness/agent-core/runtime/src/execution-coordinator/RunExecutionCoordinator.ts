@@ -278,6 +278,7 @@ export class RunExecutionCoordinator {
       if (!action || !delegationRequest || !node.dispatch || !node.relationKind) {
         throw new RunRecoveryError(lineage.parent.id, "descendant_route_incomplete", child.handle.runId);
       }
+      if (descendantDeliveryClosed(parentHead, child.handle.runId, lineage.relation.id, action.ref.id)) continue;
       const resourceSettlement = child.handle.wait().then(() => {
         const value = writer.tree.getResourceSettlement(child.handle.runId);
         if (!value) throw new RunRecoveryError(child.handle.runId, "descendant_resources_unsettled", child.handle.runId);
@@ -1099,6 +1100,23 @@ function runTraceObservers(
 
 function createDefaultIdentity(input: CreateRunIdentityInput): string {
   return `${input.runId}:${input.kind}:${input.sequence}`;
+}
+
+/** A retained terminal result can still owe delivery or cleanup; neither is reopened once complete. */
+function descendantDeliveryClosed(parent: RunCommit, childRunId: string, relationId: string, actionId: string): boolean {
+  const transfer = parent.control.descendantTransfers.find(value => value.childRunId === childRunId &&
+    value.relationId === relationId && value.action.ref.id === actionId);
+  if (!transfer || parent.state.pending.some(value => value.kind === "descendant_run" &&
+      (value.relationId === relationId || value.childRunId === childRunId))) return false;
+  return parent.state.items.some(({payload}) => {
+    if (payload.kind !== "observation" || payload.observation.runAction.id !== actionId) return false;
+    const outcome = payload.observation.payload;
+    if ((outcome.kind !== "descendant_run" && outcome.kind !== "descendant_result_transfer") ||
+        outcome.childRunId !== childRunId) return false;
+    return transfer.status === "settled" ? transfer.result !== null &&
+      outcome.result?.ref.id === transfer.result.ref.id && outcome.result.ref.revision === transfer.result.ref.revision :
+      outcome.result === null && outcome.failure?.code === transfer.code;
+  });
 }
 
 function createDefaultRunIdentity(): string {

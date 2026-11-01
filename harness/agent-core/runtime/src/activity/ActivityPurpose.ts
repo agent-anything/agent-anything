@@ -11,10 +11,18 @@ export interface ActivityPurposeContract {
   readonly stageKinds: readonly string[];
   readonly capabilities: readonly string[];
   readonly continuationKinds: readonly string[];
+  readonly attemptRetry?: {
+    readonly ref:ActivityPurposeRef;
+    readonly stageKinds:readonly string[];
+    readonly maximumAttempts:number;
+  };
 }
 export interface ActivityPurposeBinding {
   readonly contract: ActivityPurposeContract;
   readonly digest: string;
+}
+export interface ActivityPurposeResolver<THandler> {
+  resolve(binding: ActivityPurposeBinding, scope: {readonly runId:string;readonly pathId:string}): THandler | Promise<THandler>;
 }
 
 /** Only trusted host registration supplies handlers; persisted bindings contain no closures. */
@@ -48,6 +56,11 @@ export function validateActivityPurpose(value: ActivityPurposeContract): void {
     list.forEach(activityToken);
   }
   if (!value.stageKinds.length) throw new TypeError("activity_purpose_invalid");
+  if(value.attemptRetry) {
+    const rule=value.attemptRetry;activityToken(rule.ref?.id);activityToken(rule.ref?.revision);activityCount(rule.maximumAttempts);
+    if(!Array.isArray(rule.stageKinds)||!rule.stageKinds.length||new Set(rule.stageKinds).size!==rule.stageKinds.length||
+      rule.stageKinds.some(s=>!value.stageKinds.includes(s)))throw new TypeError("activity_retry_policy_invalid");
+  }
 }
 
 export function activityToken(value: unknown): asserts value is string {

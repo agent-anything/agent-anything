@@ -1,6 +1,7 @@
 import {createCipheriv, createDecipheriv, createHash, randomBytes} from "node:crypto";
 import {HelarcExecutionStore} from "../HelarcExecutionStore.js";
 import type {ExecutionEnvironmentCipher} from "../ExecutionEnvironmentProtection.js";
+import {createExecutionCommitIdentityProbe} from "./ExecutionCommitIdentityProbe.js";
 
 /** Deterministic test key; production uses Electron safeStorage, never this cipher. */
 export function environmentFixtureCipher(): ExecutionEnvironmentCipher {
@@ -36,6 +37,11 @@ export async function openExecutionStoreFixture(...args: Parameters<typeof Helar
     },
   }:args[4];
   const store=await HelarcExecutionStore.open(args[0],args[1],args[2],args[3],observer,args[5]??environmentFixtureCipher(),args[6],args[7],args[8]);
+  if(process.env.HELARC_TEST_SNAPSHOT_IDENTITIES==="1"){
+    const probe=createExecutionCommitIdentityProbe(),commit=store.commitRunTree.bind(store),close=store.close.bind(store);let printed=false;
+    store.commitRunTree=value=>{probe.observe(value);return commit(value);};
+    store.close=async()=>{try{await close();}finally{if(!printed){printed=true;console.info("Execution snapshot identity summary",JSON.stringify(probe.summary()));}}};
+  }
   if(observer!==args[4]){
     const close=store.close.bind(store);let printed=false;
     store.close=async()=>{try{await close();}finally{if(!printed){printed=true;console.info("Execution fixture timing summary",JSON.stringify(Object.fromEntries(timings)));}}};

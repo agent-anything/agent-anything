@@ -32,6 +32,7 @@ import {
   snapshotDelegationLimits,
   snapshotDelegationRequest,
 } from "./DelegationRequest.js";
+import {createDelegationNarrativeSource,snapshotDelegationNarrativeSource,verifyDelegationNarrativeSource,type DelegationNarrativeSource} from "./DelegationNarrativeSource.js";
 
 export type DelegationEffectStatus = "none" | "known" | "partial" | "unknown";
 
@@ -127,11 +128,12 @@ export interface DelegationFailureDiagnostic {
 
 export interface DelegationNarrative {
   readonly trust: "attributed_model_output";
-  readonly text: string;
+  readonly text: string | null;
+  readonly source: DelegationNarrativeSource;
 }
 
 export interface DelegationResult {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly ref: DelegationResultRef;
   readonly request: DelegationRequest["ref"];
   readonly correlation: DelegationRunCorrelation;
@@ -190,7 +192,9 @@ export function createDelegationResult(input: {
     validateChildResult(input.childResult, correlation);
     const narrative = snapshotNarrative(
       input.narrative,
-      request.expectedResult.maxNarrativeCharacters,
+      request.expectedResult.maxInlineNarrativeCodeUnits,
+      input.childResult,
+      `${resultId}:narrative`,
     );
     const effects = snapshotEffects(input.effects);
     const usage = snapshotUsage(input.usage);
@@ -225,7 +229,7 @@ export function createDelegationResult(input: {
     if (Date.parse(createdAt) < Date.parse(input.childResult.completedAt)) {
       fail("delegation_result_time_invalid", "Delegation result cannot precede child settlement.");
     }
-    const material = deepFreeze({
+    const material = {
       request: request.ref,
       correlation,
       terminal,
@@ -239,17 +243,18 @@ export function createDelegationResult(input: {
       expectationCoverage: Object.freeze(expectationCoverage),
       uncertainty,
       createdAt,
-    });
-    const byteLength = new TextEncoder().encode(JSON.stringify(material)).byteLength;
-    if (byteLength > request.limits.maxResultBytes) {
+    };
+    if(Buffer.byteLength(JSON.stringify(material),"utf8")>request.limits.maxResultBytes&&material.narrative?.text!==null&&material.narrative)
+      material.narrative=Object.freeze({...material.narrative,text:null});
+    if (Buffer.byteLength(JSON.stringify(material),"utf8") > request.limits.maxResultBytes) {
       fail("delegation_result_too_large", "Delegation result exceeds the accepted result limit.");
     }
     const revision = createDelegationContractIdentity(
-      "agent-anything.delegation-result.v1",
+      "agent-anything.delegation-result.v2",
       material,
     );
     return deepFreeze({
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       ref: snapshotDelegationResultRef({ id: resultId, revision }),
       ...material,
     });
@@ -283,7 +288,7 @@ export function snapshotDelegationResult(
       "uncertainty",
       "createdAt",
     ]);
-    if (input.schemaVersion !== 1) {
+    if (input.schemaVersion !== 2) {
       throw new TypeError("Delegation result must use schema version 1.");
     }
     const ref = snapshotDelegationResultRef(input.ref);
@@ -300,6 +305,9 @@ export function snapshotDelegationResult(
     const narrative = input.narrative === null
       ? null
       : snapshotNarrativeValue(input.narrative, limits.maxResultBytes);
+    if(narrative&&(narrative.source.recordId!==`${ref.id}:narrative`||narrative.source.runId!==correlation.child.run.id||
+      narrative.source.cause.id!==terminal.cause.id||narrative.source.cause.revision!==terminal.cause.revision))
+      throw new TypeError("delegation_narrative_source_mismatch");
     const evidence = snapshotReferenceTransfer(input.evidence, "evidence");
     const artifacts = snapshotReferenceTransfer(input.artifacts, "artifacts");
     const effects = snapshotEffects(input.effects);
@@ -334,13 +342,13 @@ export function snapshotDelegationResult(
       throw new TypeError("Delegation result exceeds its accepted result limit.");
     }
     const revision = createDelegationContractIdentity(
-      "agent-anything.delegation-result.v1",
+      "agent-anything.delegation-result.v2",
       material,
     );
     if (ref.revision !== revision) {
       throw new TypeError("Delegation result revision does not match its immutable content.");
     }
-    return deepFreeze({ schemaVersion: 1 as const, ref, ...material });
+    return deepFreeze({ schemaVersion: 2 as const, ref, ...material });
   } catch (error) {
     if (error instanceof DelegationResultValidationError) throw error;
     throw new DelegationResultValidationError(
@@ -368,26 +376,28 @@ function validateChildResult(
 function snapshotNarrative(
   input: string | null,
   maximumLength: number,
+  result:RunResult,
+  recordId:string,
 ): DelegationNarrative | null {
   if (input === null) return null;
-  if (typeof input !== "string" || input.length > maximumLength) {
-    fail("delegation_result_narrative_invalid", "Delegation narrative exceeds its accepted bound.");
-  }
-  return Object.freeze({ trust: "attributed_model_output" as const, text: input });
+  const source=createDelegationNarrativeSource(recordId,result.runId,result.cause.ref,input);
+  return Object.freeze({trust:"attributed_model_output",text:input.length<=maximumLength?input:null,source});
 }
 
 function snapshotNarrativeValue(
   input: DelegationNarrative,
   maximumLength: number,
 ): DelegationNarrative {
-  strictRecord(input, "DelegationNarrative", ["trust", "text"]);
+  strictRecord(input, "DelegationNarrative", ["trust", "text", "source"]);
   if (input.trust !== "attributed_model_output") {
     throw new TypeError("Delegation narrative trust class is unsupported.");
   }
-  if (typeof input.text !== "string" || input.text.length > maximumLength) {
+  if (input.text!==null && (typeof input.text !== "string" || input.text.length > maximumLength)) {
     throw new TypeError("Delegation narrative exceeds its accepted bound.");
   }
-  return Object.freeze({ trust: "attributed_model_output", text: input.text });
+  const source=snapshotDelegationNarrativeSource(input.source);
+  if(input.text!==null)verifyDelegationNarrativeSource(source,source.runId,source.cause,input.text);
+  return Object.freeze({ trust: "attributed_model_output", text: input.text,source });
 }
 
 function snapshotEffects(input: DelegationEffectSummary): DelegationEffectSummary {

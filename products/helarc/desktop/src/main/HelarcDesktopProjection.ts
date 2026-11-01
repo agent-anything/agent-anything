@@ -13,6 +13,7 @@ import { HELARC_CLARIFICATION_PROTOCOL } from "@agent-anything/helarc/interactio
 export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSnapshot {
   return {
     execution: snapshot.execution,
+    activityRevision: snapshot.activityRevision,
     projects: snapshot.projects.map((project) => ({
       id: project.id, revision: project.revision, name: project.name,
       primaryProfileId: project.primaryProfileId, additionalProfileIds: [...project.additionalProfileIds],

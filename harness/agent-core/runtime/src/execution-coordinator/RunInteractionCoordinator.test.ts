@@ -17,6 +17,27 @@ import { RunCommitError } from "./RunCommitPort.js";
 const NOW = "2026-08-14T00:00:00.000Z";
 
 describe("RunInteractionCoordinator adverse conformance", () => {
+  it("shares owned request history without freezing caller data or hiding lifecycle changes", async()=>{
+    const fixture=createFixture(),subject={question:"Continue?",details:Array.from({length:1000},(_,id)=>({id,text:"original"}))};
+    const opened=await fixture.coordinator.open(openInput({subject}));
+    if(opened.status!=="opened")throw new Error("Expected opened request");
+    const before=fixture.coordinator.checkpoint();
+    subject.details[0]!.text="changed";
+    expect(Object.isFrozen(subject)).toBe(false);
+    const unchanged=fixture.coordinator.checkpoint();
+    expect(unchanged.records[0]!.request).toBe(before.records[0]!.request);
+    expect((before.records[0]!.request.subject as typeof subject).details[0]!.text).toBe("original");
+    expect((await fixture.coordinator.submit(submission({request:opened.pending.request,submissionId:"owned-answer"}))).status).toBe("accepted_for_resolution");
+    await opened.completion;
+    const after=fixture.coordinator.checkpoint();
+    expect(after.records[0]!.request).toBe(before.records[0]!.request);
+    expect(before.records[0]!.settlement).toBeNull();
+    expect(after.records[0]!.settlement).toMatchObject({status:"resolved"});
+    expect(fixture.coordinator.checkpoint().records[0]!.settlement).toBe(after.records[0]!.settlement);
+    const restored=RunInteractionCoordinator.restore(fixture.dependencies,after);
+    expect(restored.checkpoint()).toEqual(after);
+    await fixture.coordinator.close();await restored.close();
+  });
   it.each(["submission", "application", "outcome"] as const)("restores the exact %s position without replaying an unknown application", async crash => {
     let saved!: RunInteractionCheckpoint;
     let coordinator!: RunInteractionCoordinator;

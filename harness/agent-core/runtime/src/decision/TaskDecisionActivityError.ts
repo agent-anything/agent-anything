@@ -1,9 +1,13 @@
 import type { ProviderFailure } from "@agent-anything/model-interaction";
 import type { ModelFailure } from "./ModelFailure.js";
+import type {TaskModelExchange} from "./TaskDecisionActivity.js";
+import type {RuntimeFailure} from "../run/RunFailure.js";
 
 export type TaskDecisionActivityFailureCode =
+  | "context_input_unavailable"
   | "model_request_failed"
   | "model_output_invalid"
+  | "model_output_incomplete"
   | "model_output_limit_exhausted"
   | "model_protocol_recovery_exhausted"
   | "model_structured_output_retry_exhausted"
@@ -18,6 +22,7 @@ export type TaskDecisionActivityFailureCode =
   | "provider_cancellation_unconfirmed";
 
 export type TaskDecisionActivityFailure =
+  | { readonly kind:"input_preparation";readonly failure:RuntimeFailure & {readonly code:"context_input_unavailable"} }
   | { readonly kind: "model"; readonly failure: ModelFailure & { readonly code: TaskDecisionActivityFailureCode } }
   | { readonly kind: "provider"; readonly failure: ProviderFailure & { readonly code: TaskDecisionActivityFailureCode } };
 
@@ -29,12 +34,15 @@ export type DecisionActivityDeadline = Readonly<{
 }>;
 
 export class TaskDecisionActivityError extends Error {
+  readonly exchange: TaskModelExchange | null;
   constructor(
     readonly failure: TaskDecisionActivityFailure,
     readonly operationSettlement: "unsettled" | "settled_failure" = "unsettled",
     readonly deadline: DecisionActivityDeadline | null = null,
+    options?: ErrorOptions & {readonly exchange?: TaskModelExchange},
   ) {
-    super(failure.failure.message);
+    super(failure.failure.message, options);
     this.name = "TaskDecisionActivityError";
+    this.exchange = options?.exchange ?? null;
   }
 }

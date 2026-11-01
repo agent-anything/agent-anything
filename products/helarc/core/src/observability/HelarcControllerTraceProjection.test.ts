@@ -10,7 +10,7 @@ import { createControllerTurnTraceOperationId } from "@agent-anything/observabil
 import type { AgentActivityExecutionContext, TaskDecisionProposal, TaskDecisionInputSources } from "@agent-anything/agent-runtime/decision";
 import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
 import { createAgentInstructions } from "@agent-anything/agent-core/agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   HelarcTracingController,
   projectHelarcControllerTraceForEvent,
@@ -18,6 +18,15 @@ import {
 } from "./HelarcControllerTraceProjection.js";
 
 describe("Helarc controller trace projection", () => {
+  it("preserves interruption settlement without invoking ordinary recovery or generating a response", async () => {
+    const proposal: TaskDecisionProposal<string> = {kind:"propose_completion",candidates:[],completionSource:{kind:"controller"},output:"Original",modelItems:[]};
+    const next=vi.fn(async()=>proposal),recover=vi.fn(async()=>proposal),interrupt=vi.fn(async()=>proposal);
+    const traces=new Map<string,HelarcControllerTraceProjection>();
+    const controller=new HelarcTracingController({next,recover,interrupt,resourceMetering:{modelInputTokens:"unavailable",modelOutputTokens:"unavailable",costUnits:"unavailable"}},traces);
+    expect(await controller.interrupt(createControllerInput(),controllerCallContext())).toBe(proposal);
+    expect(interrupt).toHaveBeenCalledTimes(1);expect(next).not.toHaveBeenCalled();expect(recover).not.toHaveBeenCalled();
+    expect(traces.size).toBe(1);
+  });
   it("records allowlisted controller trace metadata by Run and operation", async () => {
     const traceByOperationId = new Map<string, HelarcControllerTraceProjection>();
     const controller = new HelarcTracingController(new FakeController({ candidates: [], completionSource: {kind: "controller" as const},

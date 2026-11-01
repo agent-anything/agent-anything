@@ -10,20 +10,24 @@ import type {MaterialAccessDescription,MaterialHold} from "@agent-anything/conte
 import type {SharedAcceptancePart} from "../../activity/SharedAcceptance.js";
 import type {ContextUseControl} from "@agent-anything/context/selection";
 import {quoteRepresentationMethod} from "./RepresentationMethodQuotation.js";
+import {RepresentationProductionLifecycle} from "./RepresentationProductionLifecycle.js";
 
 /** Explicit delegated entry; it does not decide when the product should compact. */
 export class RepresentationMethodWork {
   readonly purpose:ActivityPurposeBinding;
+  readonly lifecycle:RepresentationProductionLifecycle|null;
   constructor(private readonly ports:RepresentationMethodDependencies,registry:ActivityPurposeRegistry<ActivityPurposeHandler>) {
     this.purpose=registry.register(REPRESENTATION_METHOD_PURPOSE,new RepresentationMethodPath(ports));
+    this.lifecycle=ports.productionLifetime?new RepresentationProductionLifecycle(ports.activities,ports.productionLifetime):null;
   }
   async submit(intent:Omit<ActivityPathIntent,"purpose"|"owner">,request:RepresentationMethodRequest):Promise<void> {
     const parts=this.prepareSubmission(intent,request);
     await this.ports.activities.command({kind:"open_path",intent:parts[0].proposal as ActivityPathIntent});
     await this.ports.activities.command({kind:"submit",request:parts[1].proposal as import("../../activity/ActivityHandoff.js").ActivityStageRequest});
+    if(parts[2])await this.ports.activities.command({kind:"subscribe_reconsideration",subscription:parts[2].proposal as import("../../activity/ActivityReconsideration.js").ActivityReconsiderationSubscription});
   }
   /** The original decision, scheduling acceptance and initial handoff may be accepted together. */
-  prepareSubmission(intent:Omit<ActivityPathIntent,"purpose"|"owner">,request:RepresentationMethodRequest):readonly [SharedAcceptancePart,SharedAcceptancePart] {
+  prepareSubmission(intent:Omit<ActivityPathIntent,"purpose"|"owner">,request:RepresentationMethodRequest):readonly [SharedAcceptancePart,SharedAcceptancePart,...SharedAcceptancePart[]] {
     const method=startRepresentationMethod(request);
     if(intent.runId!==request.recipient.runId)throw new TypeError("representation_method_run_mismatch");
     const quote=quoteRepresentationMethod(request);
@@ -31,8 +35,10 @@ export class RepresentationMethodWork {
     const source=request.sources[0]!;
     const resourceLimits={readBytes:request.bounds.readBytes,storedBytes:request.bounds.storedBytes,modelCalls:request.bounds.modelCalls,measurementCalls:request.capacity.maximumMeasurements};
     if(intent.resourceLimits&&modelInputValueDigest(intent.resourceLimits)!==modelInputValueDigest(resourceLimits))throw new TypeError("representation_resource_binding_invalid");
-    return [{owner:"activity",kind:"path_opening",proposal:{...intent,resourceLimits,owner:this.purpose.contract.acceptanceOwner,purpose:this.purpose}},
-      {owner:"activity",kind:"stage_submission",proposal:{id:`${intent.id}:stage:1`,pathId:intent.id,stageKind:request.method==="preserve"?"exact":"read",input:{method,quotation:quote,source:source.alias,offset:source.access.range.start},capabilities:["material-read"],dependencies:[]}}];
+    const path={...intent,resourceLimits,owner:this.purpose.contract.acceptanceOwner,purpose:this.purpose};
+    return [{owner:"activity",kind:"path_opening",proposal:path},
+      {owner:"activity",kind:"stage_submission",proposal:{id:`${intent.id}:stage:1`,pathId:intent.id,stageKind:request.method==="preserve"?"exact":"read",input:{method,quotation:quote,source:source.alias,offset:source.access.range.start},capabilities:["material-read"],dependencies:[]}},
+      ...(this.lifecycle&&intent.scheduledWorkId?[this.lifecycle.subscription(path)]:[])];
   }
   async result(pathId:string):Promise<{kind:"pending"}|{kind:"cancelled"}|{kind:"ready"|"gap";progress:RepresentationMethodProgress}> {
     const path=await this.path(pathId);
@@ -117,6 +123,24 @@ export class RepresentationMethodWork {
     return {owner:"material_custody",kind:"holds",proposal:{acquire,release:[...new Set(releases)],basis}};
   }
   /** Releases only this method's auxiliary input responsibilities, never Parent delivery or adopted output holds. */
+  async prepareInputRelease(pathId:string):Promise<readonly SharedAcceptancePart[]> {
+    const path=await this.path(pathId),progress=(path.progress as {method?:RepresentationMethodProgress})?.method;
+    await this.requireSettled(path);
+    if(!path.cancelled&&(!progress||progress.state==="working"))throw new TypeError("representation_responsibility_unsettled");
+    const inputs=progress?.acceptedInputs??[],basis=`${pathId}:release-inputs`;
+    const withdrawals:import("@agent-anything/context/selection").ContextInputRetirement["withdrawals"][number][]=[];
+    for(const input of inputs) {
+      const current=await this.ports.selections.command({kind:"current",scopeId:input.scopeId}) as {id:string}|null;
+      if(current?.id===input.selectionId) {
+        const control=await this.ports.selections.command({kind:"current_control",scopeId:input.scopeId}) as ContextUseControl;
+        withdrawals.push({scopeId:input.scopeId,expectedSelectionId:input.selectionId,expectedControlRevision:control.revision});
+      }
+    }
+    return [{owner:"activity",kind:"path_condition",proposal:{pathId,expected:{controlRevision:path.controlRevision,progressRevision:path.progressRevision,cancelled:path.cancelled},requireSettled:true}},
+      {owner:"context_selection",kind:"input_retirement",proposal:{inputIds:inputs.map(input=>input.inputId),withdrawals,basis}},
+      {owner:"material_custody",kind:"holds",proposal:{acquire:[],release:[...new Set(inputs.flatMap(input=>input.holds))],basis}}];
+  }
+  /** Legacy direct callers; common lifecycle handoffs use prepareInputRelease instead. */
   async releaseInputs(pathId:string):Promise<void> {
     const path=await this.path(pathId),progress=(path.progress as {method?:RepresentationMethodProgress})?.method;
     if(!progress)throw new TypeError("representation_progress_unavailable");

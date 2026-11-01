@@ -1,6 +1,7 @@
 import {assessModelContext, snapshotProviderRequest, type Provider, type ProviderRequest, type ModelInputMeasurement} from "@agent-anything/model-interaction";
 import {snapshotModelInputMeasurement} from "@agent-anything/model-interaction/context";
-import {assessInputCapacity, assertEncodedModelInputIntegrity, composeInputChoice, inputChoiceGaps, modelInputValueDigest, nextInputCombination, recordInputCombination,
+import {inputAccountingFootprint,measureFromAcceptedUsage,type InputAccountingFootprint,type InputMeasurementDerivation,type InputUsageEvidencePort} from "@agent-anything/model-interaction/input";
+import {RemoteInputMeasurementNotDispatchedError,assessInputCapacity, assertEncodedModelInputIntegrity, composeInputChoice, inputChoiceGaps, modelInputValueDigest, nextInputCombination, recordInputCombination,
   startInputCombinationSearch, chargeInputCombination, type InputOrganizationDemand, type InputCombinationProgress, type InputCapacityLimit,
   type InputCapacityPolicy, type InputMeasurementEvidence, type CapacityReservation, type EncodedModelInput, type InputCapacityAssessment,
   modelInputSectionLocations, allocateInputCapacity, type RemoteInputMeasurementRequest, type LocalInputMeasurement, type SharedInputCapacity, type ModelInputSectionLocation, type InputChoice} from "@agent-anything/model-interaction/input";
@@ -34,6 +35,8 @@ export interface PreparedContextInput {
   readonly request:ProviderRequest;
   readonly encoded:EncodedModelInput;
   readonly measurement:readonly InputMeasurementEvidence[];
+  readonly accounting?:InputAccountingFootprint|null;
+  readonly measurementDerivation?:InputMeasurementDerivation;
   readonly limits:readonly InputCapacityLimit[];
   readonly capacity:InputCapacityAssessment;
   readonly progress:InputCombinationProgress;
@@ -63,6 +66,7 @@ type PreparationResult =
   | {readonly kind:"prepared";readonly prepared:PreparedContextInput;readonly elapsedMs:number}
   | {readonly kind:"continue";readonly input:PreparationStageInput;readonly stageKind:"organize"|"measure";readonly elapsedMs:number}
   | {readonly kind:"remote_returned";readonly raw:unknown;readonly elapsedMs:number}
+  | {readonly kind:"remote_not_dispatched";readonly code:string;readonly dependency:string;readonly elapsedMs:number}
   | {readonly kind:"gap";readonly reason:string;readonly gap:ContextInputPreparationGap;readonly progress:InputCombinationProgress;readonly elapsedMs:number};
 type WithoutTiming<T> = T extends unknown ? Omit<T,"elapsedMs"> : never;
 
@@ -70,14 +74,20 @@ type WithoutTiming<T> = T extends unknown ? Omit<T,"elapsedMs"> : never;
 export class ContextInputPreparationHandler implements ActivityPurposeHandler {
   constructor(private readonly dependencies:{
     provider:Provider;
+    usage?:InputUsageEvidencePort;
     materials:MaterialCustodyPort;
-    authorize:(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal)=>Promise<void>;
+    authorize:ActivityPurposeHandler["authorize"];
     now:()=>string;
     purpose?:ActivityPurposeContract;
   }) {}
 
-  async authorize(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal):Promise<void> {
+  async authorize(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,action:Parameters<ActivityPurposeHandler["authorize"]>[3]):ReturnType<ActivityPurposeHandler["authorize"]> {
     const input=readInput(stage);
+    if(action==="settlement") {
+      if(modelInputValueDigest(path.intent.purpose.contract)!==modelInputValueDigest(this.dependencies.purpose??CONTEXT_INPUT_PREPARATION_PURPOSE)||
+        input.request.demand.runId!==path.intent.runId)throw new TypeError("input_preparation_binding_invalid");
+      return this.dependencies.authorize(path,stage,signal,action);
+    }
     if(modelInputValueDigest(path.intent.purpose.contract)!==modelInputValueDigest(this.dependencies.purpose??CONTEXT_INPUT_PREPARATION_PURPOSE) || input.request.demand.runId!==path.intent.runId ||
         input.request.demand.purpose!==input.request.template.purpose || !this.dependencies.provider.encodeInput) throw new TypeError("input_preparation_binding_invalid");
     if(input.request.template.composition.providerId!==this.dependencies.provider.descriptor.id ||
@@ -95,17 +105,28 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
         pending.remote.targetRevision!==input.request.demand.targetRevision)throw new TypeError("input_remote_measurement_binding_invalid");
       this.dependencies.provider.verifyEncodedInput?.(pending.request,pending.encoded);
     }
-    await this.dependencies.authorize(path,stage,signal);
+    return this.dependencies.authorize(path,stage,signal,action);
+  }
+
+  async settle(_path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal) {
+    signal.throwIfAborted();
+    return {disposition:{kind:"retained_input_preparation_result",resultId:stage.result!.id,adopted:false}};
   }
 
   async execute(_path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
     signal.throwIfAborted();
     const started=performance.now(),input=readInput(stage);
-    const value=stage.request.stageKind==="measure"?
-      {kind:"remote_returned" as const,raw:await this.dependencies.provider.inputMeasurement!.send(input.pending!.remote,signal)}:
-      await this.process(stage,input,signal);
+    let value:WithoutTiming<PreparationResult>;
+    try {
+      value=stage.request.stageKind==="measure"?
+        {kind:"remote_returned",raw:await this.dependencies.provider.inputMeasurement!.send(input.pending!.remote,signal)}:
+        await this.process(stage,input,signal);
+    } catch(error) {
+      if(!(error instanceof RemoteInputMeasurementNotDispatchedError)||stage.request.stageKind!=="measure")throw error;
+      value={kind:"remote_not_dispatched",code:error.code,dependency:error.dependency};
+    }
     return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:{...value,elapsedMs:performance.now()-started},
-      usage:{externalMeasurements:stage.request.stageKind==="measure"?1:0},recordedAt:this.dependencies.now()};
+      usage:{externalMeasurements:stage.request.stageKind==="measure"&&value.kind!=="remote_not_dispatched"?1:0},recordedAt:this.dependencies.now()};
   }
 
   async reconcile(_path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal):Promise<ActivityRawResult|null> {
@@ -115,9 +136,16 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
   }
 
   async interpret(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal) {
+    const interpreted=await this.interpretResult(path,stage,signal);
+    return {...interpreted,progress:{...interpreted.progress,stageRequestId:stage.request.id}};
+  }
+
+  private async interpretResult(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal) {
     signal.throwIfAborted();
     if(stage.result?.outcome!=="returned" || stage.result.completeness!=="complete")throw new TypeError("input_preparation_result_incomplete");
     let value=stage.result.value as PreparationResult;
+    if(value.kind==="remote_not_dispatched")return {progress:{kind:"input_preparation",state:"gap",reason:"remote_measurement_dependency_unavailable",
+      rawResultId:stage.result.id,progress:readInput(stage).progress,failure:{code:value.code,dependency:value.dependency,transportDispatched:false}},next:[]};
     if(value.kind==="remote_returned") {
       const input=readInput(stage),pending=input.pending!;
       let measurement:ModelInputMeasurement;
@@ -127,7 +155,7 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
         return {progress:{kind:"input_preparation",state:"gap",reason:"remote_measurement_result_invalid",rawResultId:stage.result.id,progress:input.progress,
           failure:{name:error instanceof Error?error.name:"Unknown",message:error instanceof Error?error.message:String(error)}},next:[]};
       }
-      value={...this.finishCandidate(stage,input,pending.request,pending.encoded,pending.choice,pending.candidateId,measurement),elapsedMs:value.elapsedMs};
+      value={...await this.finishCandidate(stage,input,pending.request,pending.encoded,pending.choice,pending.candidateId,measurement),elapsedMs:value.elapsedMs};
     }
     if(value.kind==="continue"&&(path.resourceUse.admittedStages>=path.intent.maximumStages||path.resourceUse.dispatchedAttempts>=path.intent.maximumAttempts||Date.parse(this.dependencies.now())>=Date.parse(path.intent.deadlineAt)))return {progress:{kind:"input_preparation",state:"gap",reason:"input_preparation_execution_budget_exhausted",rawResultId:stage.result.id,progress:value.input.progress,resources:path.resourceUse},next:[]};
     if(value.kind==="continue")return {progress:{kind:"input_preparation",state:"progressing",input:value.input,rawResultId:stage.result.id},
@@ -166,11 +194,16 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
     return this.finishCandidate(stage,{...input,progress},request,encoded,step.choice,step.id,measurement);
   }
 
-  private finishCandidate(stage:ActivityStageState,input:PreparationStageInput,request:ProviderRequest,encoded:EncodedModelInput,choice:InputChoice,candidateId:string,measurement:ModelInputMeasurement):WithoutTiming<PreparationResult> {
+  private async finishCandidate(stage:ActivityStageState,input:PreparationStageInput,request:ProviderRequest,encoded:EncodedModelInput,choice:InputChoice,candidateId:string,measurement:ModelInputMeasurement):Promise<WithoutTiming<PreparationResult>> {
     const provider=this.dependencies.provider,{demand,policy}=input.request,{limits,reservations}=targetCapacity(provider,input.request);
     let progress=input.progress;
     measurement=snapshotModelInputMeasurement(measurement,request.composition.id);
-    const evidence=measurementEvidence(encoded,demand,measurement,provider);
+    const accounting=inputAccountingFootprint(provider.modelContext.accounting,request.composition);
+    const observation=measurement.status==="unknown"&&accounting?.inputUsage==="complete"&&this.dependencies.usage?
+      await this.dependencies.usage.latest({runId:demand.runId,purpose:demand.purpose,targetRevision:demand.targetRevision,basisKey:accounting.basisKey,schemaDigest:accounting.schemaDigest}):null;
+    const measured=measureFromAcceptedUsage({measurement,footprint:accounting,runId:demand.runId,purpose:demand.purpose,targetRevision:demand.targetRevision,observation});
+    measurement=measured.measurement;
+    const evidence=measurementEvidence(encoded,demand,measurement,provider,measured.derivation);
     const allocation=allocateInputCapacity(demand,choice,input.request.localMeasurements,input.request.sharedCapacity);
     const localLimits=allocation.shares.filter(s=>s.ceiling!==null).map(s=>({id:`local:${s.contributionId}`,targetRevision:demand.targetRevision,
       dimension:s.dimension,maximum:s.ceiling!,source:`contribution:${s.contributionId}`}));
@@ -192,7 +225,7 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
     // Capacity annotations do not change model payload or its semantic request digest.
     const locations=modelInputSectionLocations(request.composition.sections);
     const deliveries=inputDeliveryLocations(demand,choice,locations);
-    const prepared:PreparedContextInput={kind:"prepared_context_input",preparationStageId:stage.request.id,demand,choice,request,encoded,measurement:evidence,limits,capacity,progress,locations,deliveries,
+    const prepared:PreparedContextInput={kind:"prepared_context_input",preparationStageId:stage.request.id,demand,choice,request,encoded,measurement:evidence,accounting,measurementDerivation:measured.derivation,limits,capacity,progress,locations,deliveries,
       allocation,localMeasurements:input.request.localMeasurements,sharedCapacity:input.request.sharedCapacity};
     validatePreparedContextInput(prepared);
     return {kind:"prepared",prepared};
@@ -238,13 +271,13 @@ function readInput(stage:ActivityStageState):PreparationStageInput {
   if(input?.request?.kind!=="context_input_preparation" || !input.progress)throw new TypeError("input_preparation_stage_invalid");
   return input;
 }
-function measurementEvidence(encoded:EncodedModelInput,demand:InputOrganizationDemand,value:ModelInputMeasurement,provider:Provider):readonly InputMeasurementEvidence[] {
+function measurementEvidence(encoded:EncodedModelInput,demand:InputOrganizationDemand,value:ModelInputMeasurement,provider:Provider,derivation:InputMeasurementDerivation):readonly InputMeasurementEvidence[] {
   const dimension=provider.modelContext.capacity.supported && provider.modelContext.capacity.semantics==="input_and_output"?"shared_tokens":"input_tokens";
   const quantity=value.status==="unknown"?{kind:"unknown" as const,reason:value.reason}:value.estimator.accuracy==="exact"?{kind:"exact" as const,value:value.amount}:
     value.estimator.accuracy==="upper_bound"?{kind:"bounds" as const,lower:0,upper:value.amount}:{kind:"estimate" as const,value:value.amount,limitations:[value.uncertainty.kind]};
   return [{id:`${encoded.id}:bytes`,encodedInputId:encoded.id,targetRevision:demand.targetRevision,methodRevision:"utf8:1",dimension:"request_bytes",coverage:"complete",quantity:{kind:"exact",value:encoded.bytes},basis:"complete adapter encoded bytes",uncovered:[]},
     {id:`${encoded.id}:tokens`,encodedInputId:encoded.id,targetRevision:demand.targetRevision,methodRevision:value.status==="unknown"?"unavailable":value.estimator.revision,
-      dimension,coverage:value.status==="unknown"?"partial":"complete",quantity,basis:"provider-owned measurement",uncovered:value.status==="unknown"?["target tokenization"]:[]}];
+      dimension,coverage:value.status==="unknown"?"partial":"complete",quantity,basis:derivation.kind==="accepted_usage"?`accepted usage estimate: ${derivation.observation!.id}`:"provider-owned measurement",uncovered:value.status==="unknown"?["target tokenization"]:[]}];
 }
 
 function targetCapacity(provider:Provider,request:ContextInputPreparationRequest) {

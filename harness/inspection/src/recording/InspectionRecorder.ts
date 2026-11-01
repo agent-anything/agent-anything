@@ -99,8 +99,30 @@ export class InspectionRecorder {
   offer(input: InspectionRecordInput): boolean {
     if (this.closed || this.failure || !this.policy.enabled) return false;
     const started = performance.now();
+    const prepared = this.prepareOffer(input);
+    return prepared !== null && this.enqueue(prepared, started);
+  }
+
+  /** Durable replay can wait for ingress capacity; live observation must not wait. */
+  async offerWhenReady(input: InspectionRecordInput, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<boolean> {
+    const timeoutMs = options.timeoutMs ?? 10000;
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new TypeError("inspection_replay_budget_invalid");
+    const deadline = performance.now() + timeoutMs;
+    let prepared: InspectionOffer | null = null;
+    while (true) {
+      if (options.signal?.aborted) throw new InspectionRecorderError("inspection_replay_cancelled");
+      if (this.closed || this.failure || !this.policy.enabled) throw new InspectionRecorderError(this.failure ?? "inspection_replay_unavailable");
+      if (!prepared || prepared.record.policyRevision !== this.policy.revision) prepared = this.prepareOffer(input);
+      if (!prepared) return false;
+      if (contentBytes(prepared) > 32 * 1024 * 1024 || !this.capacityReason(prepared)) return this.enqueue(prepared);
+      if (performance.now() >= deadline) throw new InspectionRecorderError("inspection_replay_capacity_timeout");
+      this.dispatch();
+      await new Promise<void>(resolve => setTimeout(resolve, 5));
+    }
+  }
+
+  private prepareOffer(input: InspectionRecordInput): InspectionOffer | null {
     let subject: InspectionSubjectRef | null = null;
-    let sequence: number | null = null;
     try {
       assertDataObject(input);
       const { contents = [], ...structure } = input;
@@ -136,24 +158,35 @@ export class InspectionRecorder {
         const contentId = createHash("sha256").update(`${id}:content:${index}`).digest("hex");
         return { text, descriptor: { ...(content.unavailableReason ? { unavailableReason: content.unavailableReason.slice(0, 128) } : {}), id: contentId, name: content.name.slice(0, 256), class: content.class, stage: content.stage.slice(0, 128), mediaType: content.mediaType, availability: !enabled ? "not_captured" : text === null ? "unavailable" : "present", retainedBytes: text === null ? 0 : Buffer.byteLength(text), originalBytes, digest: text === null ? null : createHash("sha256").update(text).digest("hex"), redacted, truncated } };
       });
-      const record: InspectionRecord = { id, subject: copy.subject, payload: copy.payload, occurredAt: copy.occurredAt, capturedAt: new Date().toISOString(), ownerSequence: copy.ownerSequence ?? null, captureSequence: ++this.captureSequence, commitSequence: 0, policyRevision: this.policy.revision, contents: contentWrites.map((content) => content.descriptor), links: (copy.links ?? []).map((link, index) => ({ ...link, id: createHash("sha256").update(`${id}:link:${index}`).digest("hex"), establishedBy: id })) };
+      const record: InspectionRecord = { id, subject: copy.subject, payload: copy.payload, occurredAt: copy.occurredAt, capturedAt: new Date().toISOString(), ownerSequence: copy.ownerSequence ?? null, captureSequence: this.captureSequence + 1, commitSequence: 0, policyRevision: this.policy.revision, contents: contentWrites.map((content) => content.descriptor), links: (copy.links ?? []).map((link, index) => ({ ...link, id: createHash("sha256").update(`${id}:link:${index}`).digest("hex"), establishedBy: id })) };
       const structuralBytes = Buffer.byteLength(JSON.stringify(record));
-      sequence = record.captureSequence;
       if (structuralBytes > 64 * 1024) throw new Error("inspection_record_oversized");
-      const retained = contentWrites.reduce((sum, content) => sum + content.descriptor.retainedBytes, 0);
-      const reason = this.queue.length + this.flight.length >= 4096 ? "record_capacity" : this.queueBytes + structuralBytes > 16 * 1024 * 1024 ? "structure_capacity" : this.pendingContentBytes + retained > 32 * 1024 * 1024 ? "content_capacity" : null;
-      if (reason) { this.accounting.rejected(reason, sequence, subject); this.scheduleHealth(); return false; }
-      this.queue.push({ record, contents: contentWrites, bytes: structuralBytes });
-      this.queueBytes += structuralBytes; this.pendingContentBytes += retained;
-      this.queuedAt.set(record.captureSequence, performance.now());
-      this.accounting.accepted(this.queue.length + this.flight.length, this.queueBytes, this.pendingContentBytes, performance.now() - started);
-      if (this.queue.length >= 100) this.dispatch();
-      else if (!this.flushTimer) this.flushTimer = setTimeout(() => { this.flushTimer = null; this.dispatch(); }, 50);
-      return true;
+      return {record, contents: contentWrites, bytes: structuralBytes};
     } catch (error) {
-      this.accounting.rejected(error instanceof Error && error.message === "inspection_record_oversized" ? "record_oversized" : "invalid_input", sequence, subject);
-      this.scheduleHealth(); return false;
+      this.accounting.rejected(error instanceof Error && error.message === "inspection_record_oversized" ? "record_oversized" : "invalid_input", null, subject);
+      this.scheduleHealth(); return null;
     }
+  }
+
+  private capacityReason(offer: InspectionOffer): "record_capacity" | "structure_capacity" | "content_capacity" | null {
+    return this.queue.length + this.flight.length >= 4096 ? "record_capacity" :
+      this.queueBytes + offer.bytes > 16 * 1024 * 1024 ? "structure_capacity" :
+      this.pendingContentBytes + contentBytes(offer) > 32 * 1024 * 1024 ? "content_capacity" : null;
+  }
+
+  private enqueue(offer: InspectionOffer, started = performance.now()): boolean {
+    const record = {...offer.record, captureSequence: ++this.captureSequence};
+    offer = {...offer, record, bytes: Buffer.byteLength(JSON.stringify(record), "utf8")};
+    if (offer.bytes > 65536) {this.accounting.rejected("record_oversized",record.captureSequence,record.subject);this.scheduleHealth();return false;}
+    const reason = this.capacityReason(offer);
+    if (reason) {this.accounting.rejected(reason, record.captureSequence, record.subject); this.scheduleHealth(); return false;}
+    this.queue.push({...offer, record});
+    this.queueBytes += offer.bytes; this.pendingContentBytes += contentBytes(offer);
+    this.queuedAt.set(record.captureSequence, performance.now());
+    this.accounting.accepted(this.queue.length + this.flight.length, this.queueBytes, this.pendingContentBytes, performance.now() - started);
+    if (this.queue.length >= 100) this.dispatch();
+    else if (!this.flushTimer) this.flushTimer = setTimeout(() => {this.flushTimer = null; this.dispatch();}, 50);
+    return true;
   }
 
   private dispatch(): void {

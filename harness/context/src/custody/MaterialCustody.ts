@@ -72,6 +72,12 @@ export interface MaterialAccess {
   readonly recipient: MaterialRecipient;
   readonly range: MaterialRange;
 }
+/** A trusted Host supplies the new grant; possessing source access alone is not delegation authority. */
+export interface MaterialAccessAdmission {
+  readonly source:MaterialAccess;
+  readonly grant:MaterialGrant;
+  readonly hold:MaterialHold;
+}
 export interface MaterialReadPage {
   readonly version: MaterialVersion;
   readonly instanceId: string;
@@ -129,6 +135,8 @@ export type MaterialCustodyCommand =
   | {readonly kind:"state";readonly intentId:string}
   | {readonly kind:"abandon";readonly intentId:string;readonly owner:string;readonly basis:string;readonly cleanupId:string}
   | {readonly kind:"describe";readonly holdId:string;readonly recipient:MaterialRecipient}
+  | {readonly kind:"resolve_reference";readonly reference:import("../material/ContextMaterial.js").ContextMaterialRef;readonly recipient:MaterialRecipient}
+  | {readonly kind:"list_references";readonly recipient:MaterialRecipient;readonly after:string|null;readonly limit:number}
   | {readonly kind:"hold";readonly hold:MaterialHold}
   | {readonly kind:"release";readonly holdId:string;readonly basis:string}
   | {readonly kind:"grant";readonly grant:MaterialGrant;readonly expectedRevision:number|null}
@@ -138,7 +146,11 @@ export type MaterialCustodyCommand =
   | {readonly kind:"discover";readonly recipient:MaterialRecipient;readonly after:number;readonly frontier:number|null;readonly limit:number;readonly filter?:MaterialDiscoveryFilter}
   | {readonly kind:"seal";readonly instanceId:string;readonly cleanupId:string}
   | {readonly kind:"delete";readonly instanceId:string;readonly cleanupId:string;readonly maximumChunks:number};
-export type MaterialCustodyValue = MaterialCustodyState | MaterialReadPage | MaterialSearchPage | MaterialStructuredRead | MaterialAccessDescription | MaterialDiscoveryPage | null;
+export interface MaterialReferencePage {
+  readonly references:readonly import("../material/ContextMaterial.js").ContextMaterialRef[];
+  readonly nextAfter:string|null;
+}
+export type MaterialCustodyValue = MaterialCustodyState | MaterialReadPage | MaterialSearchPage | MaterialStructuredRead | MaterialAccessDescription | MaterialDiscoveryPage | MaterialReferencePage | null;
 export interface MaterialCustodyPort {command(command:MaterialCustodyCommand):Promise<MaterialCustodyValue>;}
 export class MaterialCustodyError extends Error {
   constructor(readonly code:string) {super(code);this.name="MaterialCustodyError";}

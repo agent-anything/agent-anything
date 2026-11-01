@@ -102,7 +102,7 @@ import type {
   TaskDecisionProposal,
   TaskDecisionInputSources,
 } from "../decision/index.js";
-import { TaskDecisionActivityError, createControllerModelItems } from "../decision/index.js";
+import { TaskDecisionActivityError, createControllerModelItems, projectModelInteraction } from "../decision/index.js";
 import type {
   ModelCallRef,
   ModelJsonValue,
@@ -523,6 +523,24 @@ describe("Runner semantic integration", () => {
     expect(finalize).toHaveBeenCalledTimes(position === "pending" ? 0 : 1);
     expect(reconcile).toHaveBeenCalledTimes(position === "pending" ? 1 : 0);
   });
+  it("retains the Run when its Activity Host closes and recovers the original response once",async()=>{
+    const {ActivityHostUnavailableError}=await import("../activity/ActivityHostUnavailableError.js");
+    const operations=createOperationFixture([]),store=createTreeCommitFixture();
+    let initialCalls=0,recoveryCalls=0;
+    const activity:TaskDecisionActivity<TestOutput>={resourceMetering:new ScriptedController([]).resourceMetering,
+      async next(_input,context){initialCalls++;await context.checkpoints!.commit("response",{summary:"Retained"});throw new ActivityHostUnavailableError("closing");},
+      async recover(input,context){recoveryCalls++;expect(context.checkpoints!.read("response")).toEqual({summary:"Retained"});
+        return {...complete("Retained"),...(input.inputDelivery?{inputDeliveryReceipt:createControllerInputDeliveryReceipt(input.inputDelivery,input.toolExposure.controllerRequestId)}:{})};}};
+    const runner=createRunner(activity,operations,{runTreeCommits:store.port}),agent=createAgent(),config=createRunConfig(operations);
+    const first=runner.start(agent,createRunInput(),config);
+    await expect(first.wait()).rejects.toBeInstanceOf(ActivityHostUnavailableError);
+    expect(first.getSnapshot().result).toBeNull();
+    expect(["failed","completed","cancelled"]).not.toContain(first.getSnapshot().status);
+    const recovered=await runner.recover(first.runId,{async resolve(){return {agent,config};}});
+    const result=await recovered.wait();
+    expect(result.status,JSON.stringify(result.cause)).toBe("completed");
+    expect(initialCalls).toBe(1);expect(recoveryCalls).toBe(1);
+  });
   it("restores an interrupted Controller against its exact prepared input and consumes its receipt once", async () => {
     const operations = createOperationFixture([]);
     const store = createTreeCommitFixture();
@@ -625,7 +643,7 @@ describe("Runner semantic integration", () => {
     expect(result.items.filter(item => item.payload.kind === "run_action")).toHaveLength(2);
   });
 
-  it.each(["admission", "child_terminal", "projection", "transfer", "observation"] as const)(
+  it.each(["admission", "child_terminal", "projection", "transfer", "observation", "parent_response"] as const)(
     "restores the original Child route after interruption at %s", async position => {
     const child = createAgent("child", "1", "Child");
     const agent = createAgent();
@@ -655,6 +673,7 @@ describe("Runner semantic integration", () => {
         expect(deliveredResults(input).filter(value => value.kind === "descendant_run")).toHaveLength(1);
         return complete("Parent answer", "parent-end");
       },
+      async recover(input, execution) {return this.next(input, execution);},
     };
     const store = createTreeCommitFixture();
     const commit = store.port.commitRunTree;
@@ -664,8 +683,10 @@ describe("Runner semantic integration", () => {
       const hit = position === "admission" ? value.runs.some(run => run.admission?.lineage.kind === "descendant")
         : position === "child_terminal" ? value.runs.some(run => run.state.run.id !== "run_001" && run.state.status === "completed")
         : position === "transfer" ? value.runs.some(run => run.control.descendantTransfers.length > 0)
-        : position === "observation" && value.runs.some(run => run.state.run.id === "run_001" && run.state.items.some(item =>
-          item.payload.kind === "observation" && item.payload.observation.payload.kind === "descendant_run"));
+        : position === "observation" ? value.runs.some(run => run.state.run.id === "run_001" && run.state.items.some(item =>
+          item.payload.kind === "observation" && item.payload.observation.payload.kind === "descendant_run"))
+        : position === "parent_response" && value.runs.some(run => run.state.run.id === "run_001" &&
+          run.control.controllerInvocation?.status === "pending" && run.control.controllerInvocation.turn.sequence === 2);
       if (hit && !lost) {lost = true; throw new Error("lost Child-route acknowledgement");}
       return receipt;
     };
@@ -692,6 +713,7 @@ describe("Runner semantic integration", () => {
     expect(root.control.descendantTransfers).toHaveLength(1);
     expect(root.control.descendantContinuations).toHaveLength(1);
     expect(root.state.items.filter(item => item.payload.kind === "observation" && item.payload.observation.kind === "descendant_run")).toHaveLength(1);
+    expect(root.state.items.some(item => item.payload.kind === "controller_turn" && item.payload.status === "interrupted")).toBe(false);
   });
 
   it.each(["decision", "action", "observation", "state_result", "acceptance"] as const)(
@@ -1111,6 +1133,32 @@ describe("Runner semantic integration", () => {
       .run(createAgent(), createRunInput(), createRunConfig(operations));
     expect(result.cause).toMatchObject({kind: "failure", failure: {kind: "provider", failure: {code}}});
     expect(controller.calls).toHaveLength(1);
+  });
+
+  it.each([false,true])("retains an input-preparation failure without fabricated exchange or repeated decision (lost acknowledgement=%s)",async lostAcknowledgement=>{
+    const operations=createOperationFixture([]),store=createTreeCommitFixture(),commit=store.port.commitRunTree.bind(store.port);
+    let lost=false;
+    store.port.commitRunTree=async value=>{
+      const receipt=await commit(value);
+      if(lostAcknowledgement&&!lost&&value.runs.some(run=>run.state.items.some(item=>item.payload.kind==="controller_turn"&&item.payload.status==="failed"))) {
+        lost=true;throw new Error("lost input failure acknowledgement");
+      }
+      return receipt;
+    };
+    const failure={kind:"input_preparation" as const,failure:{code:"context_input_unavailable" as const,message:"Original recipient input unavailable",retryable:false,
+      metadata:{needId:"original-need",acceptanceId:"original-limitation",reason:"combination_unsupported"}}};
+    const controller=new ScriptedController([()=>{throw new TaskDecisionActivityError(failure,"settled_failure");}]);
+    const agent=createAgent(),config=createRunConfig(operations),dependencies={runTreeCommits:store.port};
+    const handle=createRunner(controller,operations,dependencies).start(agent,createRunInput(),config);
+    let result;
+    if(lostAcknowledgement) {
+      await expect(handle.wait()).rejects.toMatchObject({name:"RunCommitError"});
+      result=await (await createRunner(controller,operations,dependencies).recover(handle.runId,{async resolve(){return {agent,config};}})).wait();
+    }else result=await handle.wait();
+    expect(result).toMatchObject({status:"failed",cause:{kind:"failure",failure}});
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter(item=>["input_delivery","model_call_settlement","run_action"].includes(item.payload.kind))).toHaveLength(0);
+    expect(projectModelInteraction({runId:handle.runId,runRevision:999,items:result.items}).messages).toHaveLength(0);
   });
 
   it("completes one Run through the single Controller loop", async () => {
@@ -4385,6 +4433,97 @@ describe("Runner semantic integration", () => {
     expect(controller.calls).toHaveLength(2);
   });
 
+  it.each([false, true])("retains a stale response and its invalidated Calls together (lost acknowledgement=%s)", async loseAcknowledgement => {
+    const operations = createOperationFixture([]);
+    const store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree.bind(store.port);
+    let lost = false;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      if (loseAcknowledgement && !lost && value.runs.some(run => run.state.items.some(item =>
+        item.payload.kind === "controller_turn" && item.payload.status === "interrupted" && item.payload.modelItems.length > 0))) {
+        lost = true;
+        throw new Error("lost response acceptance acknowledgement");
+      }
+      return receipt;
+    };
+    const response = deferred<TaskDecisionProposal<TestOutput>>();
+    const controller = new ScriptedController([
+      () => response.promise,
+      input => {
+        expect(input.plan).toBeNull();
+        expect(input.inputDelivery?.entries.some(entry => entry.source.id === "original-fact")).toBe(false);
+        expect(input.interaction.messages.map(message => message.role)).toEqual(["assistant", "tool"]);
+        expect(JSON.stringify(input.interaction.messages)).toContain("controller_decision_basis_stale");
+        expect(input.interaction.unsettledCalls).toEqual([]);
+        return complete("Fresh result", "fresh");
+      },
+    ]);
+    const fact = {runId: "run_001", sequence: 1, occurredAt: NOW,
+      source: {owner: "test", kind: "result", id: "original-fact", revision: "1"}, data: {status: "done"}};
+    const dependencies = {runTreeCommits: store.port,
+      inputNotifications: {read: (_run: string, cursor: number) => cursor < 1 ? [fact] : []}};
+    const agent = createAgent(), config = createRunConfig(operations);
+    const runner = createRunner(controller, operations, dependencies);
+    const first = runner.start(agent, createRunInput(), config);
+    await waitUntil(() => controller.calls.length === 1);
+    await first.steer({commandId: "replace-basis", expectedRunRevision: first.getSnapshot().runRevision,
+      instruction: "Use the corrected objective.", attribution: {origin: "user", actorId: "user-1"}, submittedAt: NOW});
+    const input = controller.calls[0]!;
+    response.resolve({...completionWithPlan([{step: "Do not apply this Plan", status: "completed"}], "Stale ending", "stale"),
+      inputDeliveryReceipt: createControllerInputDeliveryReceipt(input.inputDelivery!, input.toolExposure.controllerRequestId)});
+    let result;
+    if (loseAcknowledgement) {
+      await expect(first.wait()).rejects.toMatchObject({name: "RunCommitError"});
+      const resumed = await createRunner(controller, operations, dependencies).recover(first.runId, {async resolve() {return {agent, config};}});
+      result = await resumed.wait();
+    } else result = await first.wait();
+    expect(result).toMatchObject({status: "completed", finalOutput: {summary: "Fresh result"}});
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.flatMap(item => item.payload.kind === "input_delivery" ? item.payload.batch.entries : [])
+      .filter(entry => entry.source.id === "original-fact")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "controller_turn" && item.payload.status === "interrupted")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "run_action")).toHaveLength(0);
+  });
+
+  it.each([false, true])("accepts a failed decision's real exchange without executing its Calls (lost acknowledgement=%s)", async loseAcknowledgement => {
+    const operations = createOperationFixture([]), store = createTreeCommitFixture();
+    const commit = store.port.commitRunTree.bind(store.port); let lost = false;
+    store.port.commitRunTree = async value => {
+      const receipt = await commit(value);
+      if (loseAcknowledgement && !lost && value.runs.some(run => run.state.items.some(item =>
+        item.payload.kind === "controller_turn" && item.payload.status === "failed" && item.payload.modelItems.length > 0))) {
+        lost = true; throw new Error("lost failed exchange acknowledgement");
+      }
+      return receipt;
+    };
+    const fact = {runId: "run_001", sequence: 1, occurredAt: NOW,
+      source: {owner: "test", kind: "result", id: "original-fact", revision: "1"}, data: {status: "done"}};
+    const controller = new ScriptedController([input => {
+      const proposal = completionWithPlan([{step: "Must not apply", status: "completed"}], "Original reply", "failed-exchange");
+      throw new TaskDecisionActivityError({kind: "model", failure: {code: "model_output_invalid", message: "No usable decision", retryable: false, metadata: {}}},
+        "settled_failure", null, {exchange: {modelItems: proposal.modelItems,
+          inputDeliveryReceipt: createControllerInputDeliveryReceipt(input.inputDelivery!, input.toolExposure.controllerRequestId)}});
+    }]);
+    const dependencies = {runTreeCommits: store.port, inputNotifications: {read: (_run: string, cursor: number) => cursor < 1 ? [fact] : []}};
+    const agent = createAgent(), config = createRunConfig(operations), handle = createRunner(controller, operations, dependencies).start(agent, createRunInput(), config);
+    let result;
+    if (loseAcknowledgement) {
+      await expect(handle.wait()).rejects.toMatchObject({name: "RunCommitError"});
+      const recovered = await createRunner(controller, operations, dependencies).recover(handle.runId, {async resolve() {return {agent, config};}});
+      result = await recovered.wait();
+    } else result = await handle.wait();
+    expect(result.status).toBe("failed"); expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "input_delivery")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "model_call_settlement")).toHaveLength(1);
+    expect(result.items.filter(item => item.payload.kind === "run_action")).toHaveLength(0);
+    const history = projectModelInteraction({runId: handle.runId, runRevision: 999, items: result.items});
+    expect(history.unsettledCalls).toHaveLength(0);
+    expect(history.messages.map(message => message.role)).toEqual(["assistant", "tool"]);
+    expect(JSON.stringify(history.messages)).toContain("Original reply");
+  });
+
   it("applies accepted steering at a safe point and discards the stale Controller decision", async () => {
     const operations = createOperationFixture([]);
     const staleDecision = deferred<TaskDecisionProposal<TestOutput>>();
@@ -5356,7 +5495,7 @@ function createTestDelegation(
                 required: true,
                 maxItems: 1,
               })]),
-              maxNarrativeCharacters: 4_096,
+              maxInlineNarrativeCodeUnits: 4_096,
             }),
             contextPlan: createDelegationContextPlan({
               entries: Object.freeze([

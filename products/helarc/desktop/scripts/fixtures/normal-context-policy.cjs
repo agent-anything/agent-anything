@@ -18,7 +18,7 @@ exports.acceptNormalPreparation=async function({store,provider,registry,work,pro
     deliveryIds:request.deliveryIds,dependencies:{reports:digest(request.sources)},maximumCombinations:32,maximumExternalMeasurements:0,maximumReadBytes:1000000},composition,
     groups:[{id:"objective",owner:"parent-agent",revision:"1",sectionIds:["objective"],duties:["objective"],deliveryIds:[]},
       ...texts.map((_,i)=>({id:`report-${i}`,owner:`child-${i}`,revision:"1",sectionIds:[`report-${i}`],duties:["evidence"],deliveryIds:[`delivery-${i}`]}))]});
-  const preparation=new ContextInputPreparationWork(store.activityHandoffs,registry,{provider,materials:store.materialCustody,authorize:async()=>{},now});
+  const preparation=new ContextInputPreparationWork(store.activityHandoffs,registry,{provider,materials:store.materialCustody,authorize:async()=>({kind:"allowed"}),now});
   await preparation.submit({...intent,id:"normal-input-preparation",resourceScope:"normal-task-input"},{kind:"context_input_preparation",demand,template,limits:[],reservations:[],policy:{...request.capacity.policy,purpose:"task"},
     allowExternalMeasurement:false,deliveryMode:"buffered",localMeasurements:[],sharedCapacity:null,materialAccesses:[]});
   for(let i=0;i<16&&(await preparation.result("normal-input-preparation")).kind==="pending";i++)await processor.drain("parent",signal);
@@ -38,7 +38,7 @@ exports.acceptNormalPreparation=async function({store,provider,registry,work,pro
   await a({kind:"subscribe_reconsideration",subscription:{id:"normal-policy-watch",runId:"parent",owner:"context-representation",sources:["normal-input-facts"]}});
   const boundary=await a({kind:"read_reconsideration",subscriptionId:"normal-policy-watch",limit:16});
   const proposal=contextPreparationAcceptance({id:"normal-policy-accept",input,expectedDecisionId:null,expectedControlRevision:0,reconsideration:boundary,methods:work,
-    execution:{path:intent,workId:"original-normal-preparation",timing:{kind:"unknown"},resources:["model-access","model-measurement"].map(capability=>({poolId:pool.id,capability,units:1}))}});
+    execution:{path:intent,workId:"original-normal-preparation",schedulingScopeId:scope.runId,timing:{kind:"unknown"},resources:["model-access","model-measurement"].map(capability=>({poolId:pool.id,capability,units:1}))}});
   assert.equal(proposal.decision.foreground.kind,"continue");assert.equal(proposal.decision.investment.kind,"propose");assert.equal(proposal.decision.investment.reason,"opportunity");
   // A failed participant must leave neither consumed B nor a scheduled/partially opened method.
   const rejected=await store.sharedAcceptance.accept({...proposal.acceptance,id:"invalid-normal-policy-accept",parts:proposal.acceptance.parts.map(p=>p.owner==="context_preparation_policy"?{...p,proposal:{...p.proposal,expectedControlRevision:99}}:p)});
@@ -62,7 +62,7 @@ async function verifyAdmissionLimitation({store,work,signal,input,intent,pool}) 
   await a({kind:"subscribe_reconsideration",subscription:{id:"limited-policy-watch",runId:"parent",owner:"context-representation",sources:["limited-input-facts"]}});
   let proposals=0;
   const handler=contextPreparationReconsideration({decisions:store.contextPolicy,activities:store.activityHandoffs,methods:work,resolve:async()=>({policy:{...input,scope},expectedControlRevision:0,
-    execution:()=>{proposals++;return {path:{...intent,id:"unadmitted-method"},workId:"unadmitted-work",timing:{kind:"unknown"},resources:[{poolId:pool.id,capability:"model-access",units:2}]};}})});
+    execution:()=>{proposals++;return {path:{...intent,id:"unadmitted-method"},workId:"unadmitted-work",schedulingScopeId:scope.runId,timing:{kind:"unknown"},resources:[{poolId:pool.id,capability:"model-access",units:2}]};}})});
   const processor=new ActivityReconsiderationProcessor(store.activityHandoffs,store.sharedAcceptance,
     (owner,subscription)=>owner==="context-representation"&&subscription.id==="limited-policy-watch"?handler:null);
   const result=await processor.scan("parent",signal);
@@ -81,7 +81,14 @@ exports.verifyNormalReconsideration=async function({store,work,signal}) {
   const status=await work.describe(original.investment.pathId);
   assert.equal(status.state,"ready");assert(status.confirmed.candidates.length);assert(status.used.modelCalls>=2);
   const a=command=>store.activityHandoffs.command(command);
-  await a({kind:"publish_fact",fact:{id:"normal-method-ready",sourceId:"normal-input-facts",ref:{owner:"context-representation",kind:"method_result",id:original.investment.pathId,revision:String(status.revision)}}});
+  const waiting=await a({kind:"read_reconsideration",subscriptionId:"normal-policy-watch",limit:256});
+  const previous=await store.contextPolicy.query({kind:"latest",scopeId:"normal-policy-scope"});
+  if(previous.decision.investment.reason!=="retained_result_requires_recipient_input_organization") {
+    assert(waiting.facts.some(f=>f.ref.id===original.investment.pathId),"The actual producer must publish its own retained progress; no synthetic completion notification");
+  } else {
+    assert(previous.input.inFlight.some(value=>value.pathId===original.investment.pathId&&value.producerState==="ready"),"Recovery must retain the already accepted producer result");
+    assert.equal(waiting.facts.length,0,"Accepted completion is not published again after restart");
+  }
   let consultations=0;
   const handler=contextPreparationReconsideration({decisions:store.contextPolicy,activities:store.activityHandoffs,methods:work,resolve:async()=>{
     consultations++;return {policy:original.input,expectedControlRevision:0,execution:()=>{throw new Error("Ready work must not be generated again");}};

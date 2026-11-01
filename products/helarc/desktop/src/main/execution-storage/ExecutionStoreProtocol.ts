@@ -54,11 +54,13 @@ export type FileMaterialStoreCommand =
 export type FileMaterialStoreValue = FileMaterialRecord | readonly FileMaterialRecord[] | FileMaterialReservation | FileMaterialRead | null;
 
 export type ExecutionStoreCommand =
+  | {readonly kind:"model_input_usage";readonly query:import("@agent-anything/model-interaction/input").InputUsageQuery}
   | {readonly kind:"accept_shared";readonly proposal:import("@agent-anything/agent-runtime/activity").SharedAcceptanceProposal}
   | {readonly kind:"material_custody";readonly command:import("@agent-anything/context/custody").MaterialCustodyCommand}
   | {readonly kind:"representation";readonly command:import("@agent-anything/context/representation").RepresentationCommand}
   | {readonly kind:"context_selection";readonly command:import("@agent-anything/context/selection").ContextSelectionCommand}
   | {readonly kind:"context_policy";readonly query:import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecisionQuery}
+  | {readonly kind:"input_supply";readonly query:import("@agent-anything/agent-runtime/context-representation").InputSupplyResponsibilityQuery}
   | {readonly kind:"context_policy_investments";readonly input:{readonly scopeId:string;readonly afterWorkId:string|null;readonly limit:number}}
   | {readonly kind:"context_foundation_facts";readonly runId:string;readonly after:number;readonly limit:number}
   | {readonly kind: "query_acceptance"; readonly id: string}
@@ -116,6 +118,8 @@ export type ExecutionStoreValue =
   {representationValue:import("@agent-anything/context/representation").RepresentationValue} |
   {selectionValue:import("@agent-anything/context/selection").ContextSelectionValue} |
   {contextPolicyValue:import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecisionRecord|null} |
+  {inputUsageValue:import("@agent-anything/model-interaction/input").AcceptedInputUsage|null} |
+  {inputSupplyValue:import("@agent-anything/agent-runtime/context-representation").InputSupplyResponsibilityValue} |
   {contextPolicyInvestments:readonly import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecisionRecord[]} |
   {contextFacts:readonly import("./ContextFoundationRecords.js").ContextFoundationFact[]} |
   {acceptanceValue: import("@agent-anything/agent-runtime/activity").SharedAcceptanceReceipt | null} | {activityValue: import("@agent-anything/agent-runtime/activity").ActivityHandoffValue} | import("./ExecutionRecording.js").ExecutionRecordingRegistration | {preparationValue: unknown} | ContextMaterialValue | readonly ExecutionReferenceTransfer[] | ExecutionReferencePage | FileMaterialFinalizationPage | FileMaterialStoreValue | ExecutionEvidenceRecord | CompensationAssociation | ExecutionRecordReceipt | ActionRecoveryRecords | ExecutionOwnerCommit | RunCommitReceipt | RunTreeCommit | RunTreeCommitReceipt | RunTreeRecoveryRecords | AgentHookInvocationCheckpoint | readonly AgentHookInvocationCheckpoint[] | readonly ProcessCheckpoint[] | ShellSessionCommit | HelarcExecutionAdmission | readonly HelarcExecutionDiscovery[] | readonly ExecutionRetentionPin[] | null;

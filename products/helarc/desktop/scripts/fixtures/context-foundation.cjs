@@ -34,7 +34,7 @@ async function main(){
   const exactInput=process.env.ACTIVITY_LIVE_MODEL?{model:process.env.ACTIVITY_LIVE_MODEL,think:false,stream:false,messages:[{role:"user",content:"Child reported TARGET: 7391. Reply with the single word READY."}]}:{childResult:"TARGET: 7391"};
   const registry=new ActivityPurposeRegistry();
   const purpose=registry.register({ref:{id:"parent-task",revision:"1"},inputOwner:"parent-agent",executionOwner:"model-access",interpretationOwner:"parent-agent",acceptanceOwner:"parent-agent",recoveryOwner:"parent-agent",stageKinds:["model"],capabilities:["model-access"],continuationKinds:[]},{
-    authorize:async(_path,stage)=>{const binding=await s({kind:"binding",inputId:"input:1",checkCurrentControl:true});assert.deepEqual(stage.request.input,binding.input.exactInput);},
+    authorize:async(_path,stage)=>{const binding=await s({kind:"binding",inputId:"input:1",checkCurrentControl:true});assert.deepEqual(stage.request.input,binding.input.exactInput);return {kind:"allowed"};},
     execute:async(_path,stage,attempt,signal)=>{
       assert.equal(phase,"accept-and-expand","Saved Provider response must not be sent again");
       await s({kind:"sent",inputId:"input:1",attemptId:attempt.id});

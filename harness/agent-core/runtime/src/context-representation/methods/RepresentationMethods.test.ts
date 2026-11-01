@@ -1,13 +1,22 @@
-import {describe,expect,it} from "vitest";
+import {describe,expect,it,vi} from "vitest";
 import type {ProviderCallResult} from "@agent-anything/model-interaction";
 import type {RepresentationCatalogPort,RepresentationJudgment} from "@agent-anything/context/representation";
 import type {ActivityHandoffPort} from "../../activity/ActivityHandoff.js";
-import {startRepresentationMethod,validateRepresentationMethodRequest,type RepresentationMethodRequest,type MethodJob,type MethodCandidate} from "./RepresentationMethod.js";
+import {startRepresentationMethod,validateRepresentationMethodRequest,type RepresentationMethodRequest,type MethodJob,type MethodCandidate,type MethodAssessment} from "./RepresentationMethod.js";
 import {parseRepresentationMethodOutput,representationMethodOutputFormat,representationAssessmentSupported,type AssessedRepresentation} from "./RepresentationMethodOutput.js";
 import {splitMethodJob,distributedMethodChecks,methodCoverageGaps,remainingMethodRelations,methodJobKey,nextMethodFinalJobs} from "./RepresentationMethodPlanning.js";
-import {methodAssessmentConditions,findMethodAssessmentReuse} from "./RepresentationMethodReuse.js";
-import {methodLineUnits} from "./RepresentationMethodRanges.js";
+import {methodAssessmentConditions,findMethodAssessmentReuse,methodInputSources} from "./RepresentationMethodReuse.js";
+import {qualifiedMethodSources} from "./QualifiedMethodSources.js";
+import {methodCombinationEvidence} from "./MethodCombinationEvidence.js";
+import type {MaterialCustodyPort} from "@agent-anything/context/custody";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import {methodTextUnits} from "./RepresentationMethodRanges.js";
+import {methodPreservationSupport,methodSupportCovers,qualifiedMethodRelation} from "./MethodPreservationSupport.js";
 import {quoteRepresentationMethod} from "./RepresentationMethodQuotation.js";
+import {RepresentationMethodPath,type RepresentationMethodDependencies} from "./RepresentationMethodPath.js";
+import {REPRESENTATION_METHOD_PURPOSE} from "./RepresentationMethod.js";
+import type {ActivityPurposeHandler} from "../../activity/ActivityHandoffProcessor.js";
+import type {ActivityPathState,ActivityStageState} from "../../activity/ActivityHandoff.js";
 
 const recipient={runId:"run",recipient:"context-representation",purpose:"aux"};
 function request():RepresentationMethodRequest {
@@ -26,6 +35,150 @@ function candidate():MethodCandidate {
   return {id:"c",representation:{id:"c",revision:"1"},access:{id:"ca",holdId:"ch",recipient,range},sources:job.sources,losses:[],relationships:[],unknowns:[],generatedBy:job.id,level:0,
     segments:r.sources.map((s,i)=>({id:`c_s${i}`,sources:[s.alias],range:{...range,start:i*20,end:(i+1)*20}}))};
 }
+
+describe("scoped text refinement and preservation support",()=>{
+  it("refines explicit UTF-8 bodies without breaking code points or claiming semantic independence",()=>{
+    const text="a\u4e2d\ud83d\ude00b\u4e2d\ud83d\ude00c",bytes=Buffer.from(text),r=request(),s=r.sources[0]!;
+    const source={...s,division:{kind:"text_utf8" as const,basis:"declared body"},access:{...s.access,range:{...s.access.range,start:10,end:10+bytes.length}}};
+    const units=methodTextUnits(source,text,5),parts=units.map(u=>bytes.subarray(u.source.access.range.start-10,u.source.access.range.end-10));
+    expect(units.length).toBeGreaterThan(1);expect(Buffer.concat(parts)).toEqual(bytes);
+    expect(parts.every(b=>Buffer.from(b.toString("utf8")).equals(b))).toBe(true);
+    expect(units.every(u=>u.originalAlias===source.alias&&!u.source.division)).toBe(true);
+    expect(methodTextUnits({...source,division:undefined},text,5)).toEqual([]);
+  });
+  function graph(){
+    const r={...request(),relationships:[{id:"relation",sources:["a","b"],description:"Preserve their relationship",basis:"declared",requiresCommonEvidence:true}]},
+      a={...candidate(),id:"left",sources:["a"]},b={...candidate(),id:"right",sources:["b"]},c={...candidate(),id:"merged",sources:["left","right"]};
+    const candidates=[a,b,c],assessments=candidates.map((c):MethodAssessment=>({id:`check-${c.id}`,jobId:`job-${c.id}`,candidateIds:[c.id],sourceAliases:c.sources,
+      findings:[],requirements:[{id:"r",conclusion:"supported",basis:"actual check"}],supported:true,rawResultId:`raw-${c.id}`,judgmentIds:[`check-${c.id}`],scope:"both"}));
+    return {method:{...startRepresentationMethod(r),candidates,assessments},c};
+  }
+  it("retains every local judgment through a merge before qualifying a relationship check",()=>{
+    const {method,c}=graph(),support=methodPreservationSupport(method,[c]);
+    expect(support?.assessments.map(a=>a.id)).toEqual(["check-merged","check-left","check-right"]);
+    expect(methodSupportCovers(method,support!,["a","b"])).toBe(true);
+    const qualified=qualifiedMethodRelation(method,{...job,kind:"relation",candidates:[c.id],feedback:"Preserve their relationship"});
+    expect(qualified?.sources).toEqual([c.id]);expect(qualified?.candidates).toEqual([]);
+    expect(qualified?.relationshipBasis?.supportingJudgments).toEqual(support!.assessments.map(a=>a.id));
+  });
+  it.each(["missing","partial","unsupported","cycle"])("does not infer full support from %s evidence",kind=>{
+    const {method,c}=graph();
+    if(kind==="missing")method.assessments=method.assessments.filter(a=>a.id!=="check-left");
+    if(kind==="partial")method.assessments[0]={...method.assessments[0]!,scope:"source"};
+    if(kind==="unsupported")method.assessments[0]={...method.assessments[0]!,supported:false};
+    if(kind==="cycle") {method.candidates[0]={...method.candidates[0]!,sources:[c.id]};method.assessments[0]={...method.assessments[0]!,sourceAliases:[c.id]};}
+    expect(methodPreservationSupport(method,[c])).toBeNull();
+  });
+  it("rejects gaps and changed material versions even with locally supported candidates",()=>{
+    const {method,c}=graph(),support=methodPreservationSupport(method,[c])!;
+    expect(methodSupportCovers(method,{...support,coverage:support.coverage.map(s=>s.sourceAlias==="a"?{...s,ranges:[{...s.ranges[0]!,end:50},{...s.ranges[0]!,start:51}]}:s)},["a","b"])).toBe(false);
+    expect(methodSupportCovers(method,{...support,coverage:support.coverage.map(s=>({...s,ranges:s.ranges.map(r=>({...r,version:"other"}))}))},["a","b"])).toBe(false);
+  });
+});
+
+describe("representation method authorization",()=>{
+  it.each(["allowed","temporary","denied"] as const)("preserves %s in exact, preparation, measurement and settlement branches",async kind=>{
+    const result=kind==="allowed"?{kind}:kind==="temporary"?{kind,code:"pending",message:"Await authority"}:
+      {kind,code:"denied",message:"Authority revoked",decision:{owner:"host",id:"denial",revision:"1"}};
+    const authorize=vi.fn<ActivityPurposeHandler["authorize"]>(async()=>result),r=request(),method=startRepresentationMethod(r);
+    const materials={command:vi.fn(async(c:{holdId:string})=>({hold:{range:r.sources.find(s=>s.access.holdId===c.holdId)!.access.range}}))};
+    const ports={authorize,materials,provider:{descriptor:{id:"provider"},modelContext:{target:{model:"model"}},encodeInput:vi.fn(),inputMeasurement:{revision:"count:1"}}} as unknown as RepresentationMethodDependencies;
+    const handler=new RepresentationMethodPath(ports),signal=new AbortController().signal;
+    const path={intent:{runId:"run",purpose:{digest:modelInputValueDigest(REPRESENTATION_METHOD_PURPOSE),contract:REPRESENTATION_METHOD_PURPOSE}}} as ActivityPathState;
+    const input={method,request:{kind:"context_input_preparation",demand:{runId:"run",purpose:"aux",targetRevision:"target"},
+      template:{purpose:"aux",composition:{providerId:"provider",model:"model"}},materialAccesses:[]},progress:{},
+      pending:{encoded:{id:"encoded"},remote:{methodRevision:"count:1",encodedInputId:"encoded",targetRevision:"target"}}};
+    for(const stageKind of ["read","exact","organize","measure"])for(const action of ["admission","execution","reconciliation","interpretation","settlement"] as const) {
+      const stage={request:{stageKind,input}} as ActivityStageState;
+      expect(await handler.authorize(path,stage,signal,action)).toBe(result);
+      expect(authorize).toHaveBeenLastCalledWith(path,stage,signal,action);
+    }
+    expect(authorize).toHaveBeenCalledTimes(20);expect(ports.provider.encodeInput).not.toHaveBeenCalled();
+    materials.command.mockClear();
+    expect(await handler.authorize(path,{request:{stageKind:"model",input}} as ActivityStageState,signal,"settlement")).toBe(result);
+    expect(materials.command).not.toHaveBeenCalled();
+  });
+});
+
+describe("qualified source evidence for a new recipient combination",()=>{
+  function fixture(discovered=false,tag="") {
+    const r=request(),c={...candidate(),id:`c${tag}`,representation:{id:`c${tag}`,revision:"1"},relationships:discovered?[{id:"discovered",basis:"model",sources:job.sources,description:"Reported relation",requiresCommonEvidence:true}]:[]},checkJob={...job,id:"check",kind:"check" as const,candidates:[c.id]};
+    const local:MethodAssessment={id:`judgment${tag}`,jobId:checkJob.id,candidateIds:[c.id],sourceAliases:job.sources,
+      findings:[],requirements:[{id:"r",conclusion:"supported",basis:"original evidence"}],supported:true,rawResultId:`raw${tag}`,judgmentIds:[`judgment${tag}`],scope:"both"};
+    const method={...startRepresentationMethod(r),state:"ready" as const,candidates:[c],assessments:[local],resultIds:[c.id]};
+    const prior={...structuredClone(method),state:"working" as const,current:checkJob,assessments:[]};
+    const judgment={id:`judgment${tag}`,kind:"semantic",conclusion:"supported",methodRevision:"bidirectional:1",subjects:[c.representation],
+      dependencies:{stage:`stage${tag}`,rawResult:`raw${tag}`,acceptance:"accepted",conditions:methodAssessmentConditions(r,checkJob,methodInputSources(prior,checkJob))}};
+    const stage={request:{pathId:`producer${tag}`,input:{method:prior}},status:"accepted",result:{id:`raw${tag}`},
+      receipt:{id:"accepted",progress:{method:structuredClone(method)}}};
+    const read=()=>qualifiedMethodSources({producerPathId:`producer${tag}`,method,candidates:method.candidates,
+      representations:{command:async()=>judgment} as unknown as RepresentationCatalogPort,
+      activities:{command:async()=>stage} as unknown as ActivityHandoffPort,signal:new AbortController().signal});
+    return {method,judgment,stage,read};
+  }
+  it.each([true,false])("combines attributable local evidence without equating same-named requirements (second qualified: %s)",async secondQualified=>{
+    const first=fixture(true),second=fixture(true,"2"),fixtures=[first,second];
+    if(!secondQualified)second.method.assessments=[];
+    const combined=await methodCombinationEvidence({producers:fixtures.map(f=>({pathId:f.stage.request.pathId,method:f.method,candidates:f.method.candidates})),qualified:true,
+      representations:{command:async(c:{kind:string;id:string})=>c.kind==="read"?{holds:[]}:fixtures.find(f=>f.judgment.id===c.id)!.judgment} as unknown as RepresentationCatalogPort,
+      activities:{command:async(c:{requestId:string})=>fixtures.find(f=>f.judgment.dependencies.stage===c.requestId)!.stage} as unknown as ActivityHandoffPort,
+      materials:{} as MaterialCustodyPort,signal:new AbortController().signal});
+    expect(combined.inheritedChecks).toHaveLength(secondQualified?2:1);
+    expect(combined.requirements.map(r=>r.id)).toEqual(["producer_0:r","producer_1:r"]);
+    expect(combined.inheritedChecks[0]!.requirementBindings).toEqual([{originalId:"r",combinedId:"producer_0:r"}]);
+    expect(combined.sources.every(s=>/^[a-zA-Z0-9_-]{1,64}$/.test(s.alias))).toBe(true);
+    expect(combined.sources.map(s=>s.order)).toEqual(combined.sources.map((_,i)=>i));
+    expect(combined.producerEvidence.map(p=>p.pathId)).toEqual(["producer","producer2"]);
+    expect(combined.relationships.map(r=>r.id)).toEqual(["producer_0:discovered","producer_1:discovered"]);
+    for(const relation of combined.relationships)expect(relation.sources.every(a=>combined.sources.some(s=>s.alias===a))).toBe(true);
+    expect(combined.sources.filter(s=>s.role==="source")).toHaveLength(secondQualified?2:3);
+    expect(combined.producerEvidence[1]!.requestDigest).toBe(modelInputValueDigest(second.method.request));
+  });
+  it("carries restoration obligations into a later raw-evidence combination instead of silently dropping them",async()=>{
+    const f=fixture(),r=f.method.request,restoration={lossId:"precision",sourceAlias:"a",range:r.sources[0]!.access.range,description:"Exact flag"};
+    f.method.request={...r,method:"restore",restorations:[restoration]};
+    const combined=await methodCombinationEvidence({producers:[{pathId:"producer",method:f.method,candidates:f.method.candidates}],qualified:false,
+      representations:{command:async()=>({holds:[]})} as unknown as RepresentationCatalogPort,activities:{} as ActivityHandoffPort,
+      materials:{} as MaterialCustodyPort,signal:new AbortController().signal});
+    expect(combined.requirements.map(r=>r.id)).toEqual(["r","restore:precision"]);
+    expect(combined.producerEvidence[0]!.requirements[1]).toEqual({originalId:"restore:precision",combinedId:"restore:precision"});
+  });
+  it("inherits an accepted exact local judgment while keeping its scope distinct from the new check",async()=>{
+    const f=fixture(),result=await f.read();
+    expect(result?.sources.map(s=>[s.alias,s.originalRole])).toEqual([["qualified_0","qualified_representation"]]);
+    expect(result?.inheritedChecks).toMatchObject({producerPathId:"producer",assessments:[{rawResultId:"raw",judgmentIds:["judgment"]}],
+      sourceRanges:f.method.request.sources.map(s=>s.access.range),candidates:[{qualifiedSource:"qualified_0"}]});
+    expect(result?.sources.some(s=>s.access.range.materialId==="a")).toBe(false);
+  });
+  it("carries discovered relationships with the qualified evidence instead of only copying declared constraints",async()=>{
+    const f=fixture(true),result=await f.read();
+    expect(result?.relationships).toEqual([{...f.method.candidates[0]!.relationships[0],sources:["qualified_0"]}]);
+    expect(result?.inheritedChecks?.relationships).toEqual(f.method.candidates[0]!.relationships);
+  });
+  it.each([true,false])("follows the actual model dispatch's original preparation binding (valid: %s)",async valid=>{
+    const f=fixture(),prior=f.stage.request.input.method;
+    const dispatch={...f.stage,request:{pathId:"producer",stageKind:"model",input:{kind:"prepared_context_input",preparationStageId:"prepared",
+      demand:{dependencies:{scope:valid?modelInputValueDigest({request:prior.request,job:prior.current}):"changed"}}}}};
+    const prepared={status:"accepted",request:{pathId:"producer",input:{method:prior}}};
+    const result=await qualifiedMethodSources({producerPathId:"producer",method:f.method,candidates:f.method.candidates,
+      representations:{command:async()=>f.judgment} as unknown as RepresentationCatalogPort,
+      activities:{command:async(c:{requestId:string})=>c.requestId==="prepared"?prepared:dispatch} as unknown as ActivityHandoffPort,signal:new AbortController().signal});
+    expect(!!result).toBe(valid);
+  });
+  it.each(["range","requirement","producer","acceptance","raw","conditions","scope","subject","unknown"])("does not inherit changed or incomplete %s evidence",async kind=>{
+    const f=fixture();
+    if(kind==="range")Object.assign(f.method.candidates[0]!.access.range,{version:"2"});
+    if(kind==="requirement")Object.assign(f.method.request,{objective:"Changed purpose"});
+    if(kind==="producer")f.stage.request.pathId="sibling";
+    if(kind==="acceptance")f.stage.receipt.id="other";
+    if(kind==="raw")f.stage.result.id="other";
+    if(kind==="conditions")f.judgment.dependencies.conditions="other";
+    if(kind==="scope")Object.assign(f.method.assessments[0]!,{scope:"source"});
+    if(kind==="subject")f.judgment.subjects=[{id:"different",revision:"1"}];
+    if(kind==="unknown")f.judgment.conclusion="unknown";
+    expect(await f.read()).toBeNull();
+  });
+});
 describe("representation method contracts and bounded professional planning",()=>{
   it("quotes the complete method duties without treating execution ceilings as predicted costs",()=>{
     const r={...request(),combine:"merge" as const,relationships:[{id:"relation",basis:"contract",sources:["a","b"],description:"joint correction",requiresCommonEvidence:true}]};
@@ -59,12 +212,12 @@ describe("representation method contracts and bounded professional planning",()=
   it("partitions only permitted complete lines at exact UTF-8 byte offsets",()=>{
     const text="\u7532\n\u4e59\nabcdefghijklmnop\n\u4e19\n",bytes=Buffer.from(text);
     const source={...request().sources[0]!,division:{kind:"text_lines" as const,basis:"text contract"},access:{...request().sources[0]!.access,range:{...request().sources[0]!.access.range,start:10,end:10+bytes.length}}};
-    const units=methodLineUnits(source,text,4);
+    const units=methodTextUnits(source,text,4);
     expect(units.map(u=>[u.source.access.range.start,u.source.access.range.end])).toEqual([[10,14],[14,18],[18,35],[35,39]]);
     expect(units.map(u=>bytes.subarray(u.source.access.range.start-10,u.source.access.range.end-10).toString()).join("")).toBe(text);
-    expect(methodLineUnits({...source,division:undefined},text,4)).toEqual([]);
-    expect(methodLineUnits({...source,access:{...source.access,range:{...source.access.range,end:26}}},"abcdefghijklmnop",4)).toEqual([]);
-    expect(()=>methodLineUnits(source,text+"x",4)).toThrow("bytes_mismatch");
+    expect(methodTextUnits({...source,division:undefined},text,4)).toEqual([]);
+    expect(methodTextUnits({...source,access:{...source.access,range:{...source.access.range,end:26}}},"abcdefghijklmnop",4)).toEqual([]);
+    expect(()=>methodTextUnits(source,text+"x",4)).toThrow("bytes_mismatch");
     const p=startRepresentationMethod(request()),unitCandidate={...candidate(),sources:[units[0]!.source.alias]};
     expect(methodCoverageGaps({...p,rangeUnits:units,candidates:[unitCandidate],resultIds:[unitCandidate.id]})).toContain("source_not_represented:a");
   });

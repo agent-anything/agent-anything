@@ -130,7 +130,7 @@ export class OpenAICompatibleProvider implements Provider {
     });
     const modelContext: ProviderModelContext = Object.freeze({
       accounting: nativeInputAccounting({
-        basis: {endpoint: `${this.config.baseUrl}/chat/completions`, model: this.config.model,
+        basis: {endpoint: this.endpointUrl(), model: this.config.model,
           service: this.config.service ?? "generic", adapter: inputPreservation.adapterRevision,
           thinking: this.config.thinking?.type ?? null, effort: this.config.reasoningEffort ?? null,
           declaration: official ? DEEPSEEK_ACCOUNTING_REVISION : null, preservation: inputPreservation.revision},

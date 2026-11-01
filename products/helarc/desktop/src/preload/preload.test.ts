@@ -45,6 +45,8 @@ describe("Helarc preload bridge", () => {
     expect(invoke).toHaveBeenLastCalledWith("helarc:read-conversation",{threadId:"thread",scope,position:{kind:"window",first:"one",last:"two",cursor:"cursor"}});
     await api.readConversationTurn({...scope,turnId:"turn",cursor:null});
     expect(invoke).toHaveBeenLastCalledWith("helarc:read-conversation-turn",{...scope,turnId:"turn",cursor:null});
+    await api.readExecutionActivities({...scope,includeDescendants:true,raw:"must-not-cross"} as Parameters<HelarcDesktopApi["readExecutionActivities"]>[0]);
+    expect(invoke).toHaveBeenLastCalledWith("helarc:read-execution-activities",{...scope,includeDescendants:true});
   });
   it("forwards owned operation sections through the read-only detail route", async () => {
     const source = await readFile(new URL("./preload.cjs", import.meta.url), "utf8");

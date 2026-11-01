@@ -1,19 +1,21 @@
 import type Database from "better-sqlite3";
 import {createHash} from "node:crypto";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {MaterialCustodyError,custodyToken,custodyCount,containsMaterialRange,sameMaterialVersion,
-  type MaterialAccess,type MaterialCustodyCommand,type MaterialCustodyIntent,type MaterialCustodyState,type MaterialCustodyValue,
+import {MaterialCustodyError,custodyToken,custodyCount,containsMaterialRange,sameMaterialVersion,materialViewReferenceId,materialViewReference,
+  type MaterialAccess,type MaterialAccessDescription,type MaterialCustodyCommand,type MaterialCustodyIntent,type MaterialCustodyState,type MaterialCustodyValue,
   type MaterialGrant,type MaterialHold,type MaterialRange,type MaterialRecipient,type MaterialSearchRequest,type MaterialSearchPage,type MaterialVersion} from "@agent-anything/context/custody";
 import type {ContextAcceptancePart} from "@agent-anything/context/selection";
 import {SharedAcceptanceRejection,type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
 import {ContextFoundationRecords,checkedJson,requireSame} from "./ContextFoundationRecords.js";
+import {snapshotContextMaterialRef} from "@agent-anything/context/material";
 
 export const MATERIAL_CUSTODY_SCHEMA=`
 CREATE TABLE material_custodies(sequence INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,instance_id TEXT NOT NULL UNIQUE,run_id TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL,cleanup_id TEXT,manifest TEXT,manifest_digest TEXT);
 CREATE TABLE material_custody_chunks(instance_id TEXT NOT NULL,offset INTEGER NOT NULL,id TEXT NOT NULL UNIQUE,bytes BLOB NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(instance_id,offset));
 CREATE TABLE material_versions(material_id TEXT NOT NULL,version TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(material_id,version));
-CREATE TABLE material_holds(id TEXT PRIMARY KEY,instance_id TEXT NOT NULL,run_id TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL,released TEXT);
+CREATE TABLE material_holds(id TEXT PRIMARY KEY,instance_id TEXT NOT NULL,run_id TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL,released TEXT,reference_id TEXT NOT NULL,recipient_key TEXT NOT NULL);
 CREATE INDEX material_holds_live ON material_holds(instance_id,released);
+CREATE INDEX material_holds_reference ON material_holds(reference_id,recipient_key,released);
 CREATE TABLE material_grants(id TEXT PRIMARY KEY,instance_id TEXT NOT NULL,recipient_key TEXT NOT NULL,revision INTEGER NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL);
 CREATE INDEX material_grants_recipient ON material_grants(recipient_key,instance_id);
 `;
@@ -40,6 +42,26 @@ export class MaterialCustodyDatabase {
         this.requireProtected(hold.instanceId,hold.range,command.recipient,hold.id);
         return {hold,version:this.instance(hold.instanceId)!.version!};
       }
+      case "resolve_reference": {
+        const reference=snapshotContextMaterialRef(command.reference);
+        const found=this.resolveReference(reference.id,command.recipient);
+        if(!found)fail("material_unavailable");
+        const {hold,version}=found;
+        if(modelInputValueDigest(materialViewReference(hold.range,version))!==modelInputValueDigest(reference))fail("material_reference_changed");
+        return {hold,version};
+      }
+      case "list_references": {
+        custodyCount(command.limit,64);if(!command.limit)fail("material_page_invalid");
+        if(command.after!==null)custodyToken(command.after);
+        const rows=this.records.sql("SELECT DISTINCT reference_id FROM material_holds WHERE recipient_key=? AND released IS NULL AND reference_id>? ORDER BY reference_id LIMIT ?")
+          .all(recipientKey(command.recipient),command.after??"",command.limit) as {reference_id:string}[];
+        const references=[];
+        for(const row of rows) {
+            const found=this.resolveReference(row.reference_id,command.recipient);
+            if(found)references.push(materialViewReference(found.hold.range,found.version));
+        }
+        return {references,nextAfter:rows.length<command.limit?null:rows.at(-1)!.reference_id};
+      }
       case "hold": this.db.transaction(()=>this.acquire(command.hold))();return this.instance(command.hold.instanceId);
       case "release": this.db.transaction(()=>this.release(command.holdId,command.basis))();return null;
       case "grant": this.db.transaction(()=>this.grant(command.grant,command.expectedRevision))();return null;
@@ -52,13 +74,14 @@ export class MaterialCustodyDatabase {
     }
   }
   participant():SharedAcceptanceParticipant {
-    return {owner:"material_custody",kinds:["publish","holds"],prepare:(part,acceptance)=>{
+    return {owner:"material_custody",kinds:["publish","holds","admit_access"],prepare:(part,acceptance)=>{
       const value=part as MaterialPart;
       if (value.kind==="publish") {
         const state=this.requireIntent(value.proposal.intentId);
         if (state.intent.version.origin.runId!==acceptance.scope || state.intent.owner!==acceptance.actor) reject("material_publish_owner_invalid");
         if (!["complete","published"].includes(state.state)) reject("material_not_complete");
       }
+      if(value.kind==="admit_access"&&value.proposal.grant.recipient.runId!==acceptance.scope)reject("material_access_admission_scope_invalid");
       return structuredClone(value);
     },apply:value=>{
       try {
@@ -81,6 +104,14 @@ export class MaterialCustodyDatabase {
             this.acquire(hold);
           }
           this.fact(state,"published",{holds:part.proposal.holds.map(h=>h.id)});
+        } else if(part.kind==="admit_access") {
+          const {source,grant,hold}=part.proposal,state=this.access(source);
+          if(grant.instanceId!==state.intent.instanceId||hold.instanceId!==grant.instanceId||grant.revision!==0||!grant.allowed||
+            recipientKey(grant.recipient)!==recipientKey(hold.consumer)||!containsMaterialRange(source.range,grant.range)||
+            !containsMaterialRange(grant.range,hold.range))
+            fail("material_access_admission_invalid");
+          this.grant(grant,null);this.acquire(hold);
+          this.records.fact(grant.recipient.runId,"material_custody",grant.id,"access_admitted",{source,grant,hold,reference:materialViewReference(hold.range,state.version!)});
         } else {
           for(const hold of part.proposal.acquire) this.acquire(hold);
           for(const id of part.proposal.release) this.release(id,part.proposal.basis);
@@ -96,6 +127,18 @@ export class MaterialCustodyDatabase {
       this.records.sql("SELECT value,digest FROM material_holds WHERE instance_id=? AND released IS NULL").all(instanceId)) as {value:string;digest:string}[];
     if(!rows.some(row=>{const hold=checkedJson<MaterialHold>(row);return recipientKey(hold.consumer)===recipientKey(recipient)&&containsMaterialRange(hold.range,range);})) fail("material_hold_missing");
     this.authorized(instanceId,range,recipient);
+  }
+  private resolveReference(id:string,recipient:MaterialRecipient):MaterialAccessDescription|null {
+    const rows=this.records.sql("SELECT value,digest FROM material_holds WHERE reference_id=? AND recipient_key=? AND released IS NULL ORDER BY id")
+      .iterate(id,recipientKey(recipient)) as Iterable<{value:string;digest:string}>;
+    for(const row of rows) {
+      const hold=checkedJson<MaterialHold>(row);
+      if(materialViewReferenceId(hold.range)!==id||recipientKey(hold.consumer)!==recipientKey(recipient))fail("material_reference_changed");
+      try{this.requireProtected(hold.instanceId,hold.range,recipient,hold.id);}
+      catch(error){if(error instanceof MaterialCustodyError&&error.code==="material_unavailable")continue;throw error;}
+      return {hold,version:this.instance(hold.instanceId)!.version!};
+    }
+    return null;
   }
   hold(id:string):MaterialHold|null {
     const row=this.records.sql("SELECT value,digest FROM material_holds WHERE id=? AND released IS NULL").get(id) as {value:string;digest:string}|undefined;
@@ -181,7 +224,7 @@ export class MaterialCustodyDatabase {
     if(old){requireSame(checkedJson(old),hold);if(old.released)fail("material_hold_retired");return;}
     const state=this.instance(hold.instanceId);if(!state || state.state!=="published")fail("material_unavailable");
     this.range(state.version!,hold.range);this.authorized(hold.instanceId,hold.range,hold.consumer);
-    this.records.sql("INSERT INTO material_holds VALUES (?,?,?,?,?,NULL)").run(hold.id,hold.instanceId,hold.consumer.runId,JSON.stringify(hold),modelInputValueDigest(hold));
+    this.records.sql("INSERT INTO material_holds VALUES (?,?,?,?,?,NULL,?,?)").run(hold.id,hold.instanceId,hold.consumer.runId,JSON.stringify(hold),modelInputValueDigest(hold),materialViewReferenceId(hold.range),recipientKey(hold.consumer));
     this.records.fact(hold.consumer.runId,"material_custody",hold.id,"hold_acquired",{instanceId:hold.instanceId,responsibility:hold.responsibility,range:hold.range,basis:hold.basis});
   }
   private release(id:string,basis:string):void {
@@ -295,13 +338,16 @@ export class MaterialCustodyDatabase {
     this.records.fact(command.access.recipient.runId,"material_custody",command.access.id,"structure_read",{instanceId:state.intent.instanceId,path:command.path,sourceRange:command.access.range});
     return {version,instanceId:state.intent.instanceId,path:command.path,value,sourceRange:command.access.range,coordinate:"json_path",complete:true};
   }
+  searchFrontier():number {
+    return (this.records.sql("SELECT COALESCE(MAX(sequence),0) AS n FROM material_custodies").get() as {n:number}).n;
+  }
   private discover(command:Extract<MaterialCustodyCommand,{kind:"discover"}>):MaterialCustodyValue {
     custodyCount(command.after);custodyCount(command.limit,64);if(!command.limit)fail("material_page_invalid");
     const filter=command.filter??{};
     for(const value of Object.values(filter))if(typeof value!=="string"||value.length>2048)fail("material_discovery_filter_invalid");
     for(const value of [filter.occurredFrom,filter.occurredBefore])if(value!==undefined&&!Number.isFinite(Date.parse(value)))fail("material_discovery_filter_invalid");
-    const frontier=command.frontier??(this.records.sql("SELECT COALESCE(MAX(sequence),0) AS n FROM material_custodies").get() as {n:number}).n;
-    custodyCount(frontier);
+    const current=this.searchFrontier(),frontier=command.frontier??current;
+    custodyCount(frontier,current);
     const rows=this.records.sql("SELECT DISTINCT c.* FROM material_custodies c JOIN material_grants g ON g.instance_id=c.instance_id WHERE c.state='published' AND g.recipient_key=? AND c.sequence>? AND c.sequence<=? ORDER BY c.sequence LIMIT 128")
       .iterate(recipientKey(command.recipient),command.after,frontier) as Iterable<CustodyRow&{sequence:number}>;
     const values:{sequence:number;instanceId:string;version:MaterialVersion;hold:MaterialHold}[]=[];let scanned=command.after,examined=0;
@@ -359,7 +405,7 @@ export class MaterialCustodyDatabase {
     })();
   }
   private fact(state:MaterialCustodyState,kind:string,details:Readonly<Record<string,unknown>>):void {
-    this.records.fact(state.intent.version.origin.runId,"material_custody",state.intent.instanceId,kind,{version:state.intent.version.ref,...details});
+    this.records.fact(state.intent.version.origin.runId,"material_custody",state.intent.instanceId,kind,{version:state.intent.version.ref,origin:state.intent.version.origin,...details});
   }
 }
 function recipientKey(recipient:MaterialRecipient):string{return JSON.stringify([recipient.runId,recipient.recipient,recipient.purpose]);}

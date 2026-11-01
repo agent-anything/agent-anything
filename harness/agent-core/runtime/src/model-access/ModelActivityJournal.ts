@@ -12,12 +12,7 @@ export interface ModelActivityJournalSupport {
 export class ModelActivityJournal {
   private readonly support: ModelActivityJournalSupport;
   constructor(support: ModelActivityJournalSupport, private readonly now: () => string) {
-    this.support = {...support,port:{command:async command => {
-      try {return await support.port.command(command);} catch (cause) {
-        if(schedulingWait(cause))throw cause;
-        throw new ActivityCheckpointError(`activity-handoff:${command.kind}`,{cause});
-      }
-    }}};
+    this.support = {...support,port:withActivityCheckpointErrors(support.port)};
   }
 
   async bind(request: ProviderRequest, activity: ModelActivityBinding, deadlineAt: string): Promise<ActivityStageState> {
@@ -75,6 +70,15 @@ export class ModelActivityJournal {
   private identity(request: ProviderRequest, activity: ModelActivityBinding): string {
     return `model-work:${modelInputValueDigest({activity:activity.id,requestId:request.requestId,continuation:request.continuation})}`;
   }
+}
+export function withActivityCheckpointErrors(port:ActivityHandoffPort):ActivityHandoffPort {
+  return {command:async command=>{
+    try {return await port.command(command);}
+    catch(cause) {
+      if(cause instanceof ActivityCheckpointError||schedulingWait(cause))throw cause;
+      throw new ActivityCheckpointError(`activity-handoff:${command.kind}`,{cause});
+    }
+  }};
 }
 function schedulingWait(error:unknown):boolean {
   return !!error&&typeof error==="object"&&"code" in error&&["activity_schedule_not_ready","activity_schedule_turn_waiting","activity_slot_waiting"].includes(String(error.code));

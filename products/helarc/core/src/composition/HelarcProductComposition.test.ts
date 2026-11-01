@@ -36,7 +36,11 @@ import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   type RuntimeEvent,
 } from "@agent-anything/observability/events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {ModelTaskDecisionCoordinator} from "@agent-anything/agent-runtime/execution-coordinator";
+import {createSystemRetryExecutor,systemRetryClock} from "@agent-anything/agent-runtime/retry";
+import type { TaskDecisionActivity } from "@agent-anything/agent-runtime/decision";
+import type { HelarcTaskModelBinding } from "./HelarcTaskModelBinding.js";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProviderProfile } from "../configuration/index.js";
 import {
@@ -55,12 +59,20 @@ import {
 import type { HelarcAgentOutput } from "../controller/index.js";
 
 async function createHelarcProductComposition(
-  input: Omit<CreateHelarcProductCompositionInput, "providerProfile"> & {
+  input: Omit<CreateHelarcProductCompositionInput, "providerProfile"|"taskExecution"> & {
     readonly providerProfile?: CreateHelarcProductCompositionInput["providerProfile"];
+    readonly taskExecution?:CreateHelarcProductCompositionInput["taskExecution"];
   },
 ) {
   const profile = input.providerProfile ?? createTestProviderProfile(input.provider);
-  return createProductComposition({ ...input, providerProfile: profile });
+  // Isolated Product semantics fixture, not a production scheduling composition.
+  const taskExecution=input.taskExecution??(binding=>{
+    const coordinator=new ModelTaskDecisionCoordinator<HelarcAgentOutput>({provider:input.provider,
+      buildRequest:binding.buildRequest,parseResponse:binding.interpret,responseProtocol:binding.protocol,
+      retryExecutor:createSystemRetryExecutor(systemRetryClock),retryClock:systemRetryClock,delivery:binding.delivery});
+    return {taskDecisions:coordinator,preparations:coordinator.preparations};
+  });
+  return createProductComposition({ ...input, providerProfile: profile,taskExecution });
 }
 
 function createTestProviderProfile(
@@ -80,6 +92,47 @@ function createTestProviderProfile(
 }
 
 describe("HelarcProductComposition", () => {
+  it("binds Host task execution to Product rules without constructing a second preparation lifecycle", async () => {
+    let bound: HelarcTaskModelBinding | undefined;
+    const preparations = {resume: vi.fn(async () => {})};
+    const taskDecisions: TaskDecisionActivity<HelarcAgentOutput> = {
+      resourceMetering: {modelInputTokens: "unavailable", modelOutputTokens: "unavailable", costUnits: "unavailable"},
+      next: vi.fn(async () => {throw new Error("Not dispatched during composition");}),
+    };
+    const factory = vi.fn((binding: HelarcTaskModelBinding) => {
+      bound = binding;
+      return {taskDecisions, preparations};
+    });
+    const composition = await createHelarcProductComposition({runId: "shared", ...createTask("D:/workspace"),
+      provider: new UnusedProvider(), ...createLocalContributions(), taskExecution: factory, responseDelivery: "streaming", now: fixedNow});
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(composition.preparations).toBe(preparations);
+    expect(composition.taskDecisions.resourceMetering).toBe(taskDecisions.resourceMetering);
+    expect(bound!.protocol).toEqual({kind: "native_tool_turn"});
+    expect(bound!.delivery.mode).toBe("streaming");
+    expect(bound!.resolveAgent(composition.agent)).toBe(composition.agent);
+    expect(bound!.resolveAgent(composition.delegatedAgent)).toBe(composition.delegatedAgent);
+    expect(() => bound!.resolveAgent({...composition.agent, revision: "changed"})).toThrow("helarc_task_original_agent_unavailable");
+    expect(taskDecisions.next).not.toHaveBeenCalled();
+    expect(preparations.resume).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to the old task coordinator when Host binding fails", async () => {
+    const failure = new Error("Original execution binding unavailable");
+    const factory = vi.fn(async () => {throw failure;});
+    await expect(createHelarcProductComposition({runId: "unbound", ...createTask("D:/workspace"),
+      provider: new UnusedProvider(), ...createLocalContributions(), taskExecution: factory, now: fixedNow})).rejects.toBe(failure);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires an explicit Host task execution composition", async () => {
+    const provider=new UnusedProvider();
+    await expect(createProductComposition({runId: "unbound", ...createTask("D:/workspace"),
+      provider,providerProfile:createTestProviderProfile(provider),...createLocalContributions(),
+      taskExecution:undefined as unknown as CreateHelarcProductCompositionInput["taskExecution"],now:fixedNow,
+    })).rejects.toThrow("helarc_task_execution_required");
+  });
+
   it("uses compatible models without evaluation results or a qualification policy", async () => {
     const composition = await createHelarcProductComposition({ runId: "unassessed-model", ...createTask("D:/workspace"),
       provider: new UnusedProvider(), ...createLocalContributions(), now: fixedNow });
@@ -108,6 +161,7 @@ describe("HelarcProductComposition", () => {
 
     await expect(createProductComposition({
       runId: "unsupported-run",
+      taskExecution:()=>{throw new Error("Unsupported Provider must be rejected before binding execution");},
       ...createTask("D:/workspace"),
       provider,
       providerProfile: createTestProviderProfile(provider),

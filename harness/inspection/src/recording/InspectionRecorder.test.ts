@@ -28,6 +28,18 @@ async function setup(rich = false) {
   return { directory, recorder, query, subject, selection: { sourceId: subject.sourceId, datasetId: subject.datasetId } };
 }
 describe("Inspection recording", () => {
+  it("backpressures durable replay past ingress capacity without changing live capture limits",async()=>{
+    const {recorder,subject}=await setup();
+    for(let index=0;index<5000;index++)expect(await recorder.offerWhenReady({
+      subject,occurredAt:null,payload:{kind:"event",name:"replayed",sequence:index,code:null}})).toBe(true);
+    const deadline=Date.now()+20000;let result;
+    do{result=await recorder.flush();if(result.native==="settled"&&result.projection==="settled")break;
+      expect(Date.now()).toBeLessThan(deadline);}while(true);
+    expect(result.barrier.accepted).toBe(5000);expect(recorder.health().dropped).toBe(0);expect(recorder.health().rejected).toBe(0);
+    const cancellation=new AbortController();cancellation.abort();
+    await expect(recorder.offerWhenReady({subject,occurredAt:null,payload:{kind:"event",name:"cancelled",sequence:null,code:null}},
+      {signal:cancellation.signal})).rejects.toThrow("inspection_replay_cancelled");
+  },30000);
   it("links input planning to exact requests and prior accepted usage without promoting cache counters to capacity", async () => {
     const {recorder, query, selection} = await setup(true);
     recorder.setPolicy({...DEFAULT_INSPECTION_CAPTURE_POLICY, revision: "provider-content", agent: true, provider: true});

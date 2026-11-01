@@ -44,7 +44,7 @@ describe("shared physical execution",()=>{
   it("does not let one denied stage block independent work in the same Run",async()=>{
     const f=open(),registry=new ActivityPurposeRegistry<ActivityPurposeHandler>(),started:string[]=[];
     const purpose=registry.register({ref:{id:"authorization-test",revision:"1"},inputOwner:"method",executionOwner:"test",interpretationOwner:"method",acceptanceOwner:"method",recoveryOwner:"method",stageKinds:["work"],capabilities:[],continuationKinds:[]},{
-      authorize:async path=>{if(path.intent.id==="denied")throw new Error("current authority withdrawn");},reconcile:async()=>null,
+      authorize:async path=>{if(path.intent.id==="denied")throw new Error("current authority withdrawn");return {kind:"allowed"};},reconcile:async()=>null,
       execute:async(path,_stage,attempt)=>{started.push(path.intent.id);return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:"done",usage:null,recordedAt:now()};},
       interpret:async()=>({progress:{done:true},next:[]})
     });
@@ -55,7 +55,7 @@ describe("shared physical execution",()=>{
     const processor=new ActivityHandoffProcessor(f.port,registry,f.executor,now),signal=new AbortController().signal;
     const first=await processor.scan("root",signal);expect(first.failures).toHaveLength(1);
     await processor.scan("root",signal);await processor.settled();expect(started).toEqual(["allowed"]);
-    expect(f.send({kind:"read_stage",requestId:"denied:stage"})).toMatchObject({dispatchRestriction:{code:"authorization_not_established"},attempt:null});
+    expect(f.send({kind:"read_stage",requestId:"denied:stage"})).toMatchObject({authorizationRestrictions:{admission:{kind:"temporary",code:"authorization_not_established"}},attempt:null});
   });
   it("releases physical occupancy before transport retry backoff, and restores the original result",async()=>{
     const first=open(),root=exchange("root"),child=exchange("child"),send=vi.fn(async()=>result),signal=new AbortController().signal;
@@ -111,7 +111,7 @@ describe("shared physical execution",()=>{
     const f=open(),registry=new ActivityPurposeRegistry<ActivityPurposeHandler>(),started:string[]=[],slow=deferred<void>();
     const signals=new Map<string,AbortSignal>();
     const purpose=registry.register({ref:{id:"method",revision:"1"},inputOwner:"method",executionOwner:"test",interpretationOwner:"method",acceptanceOwner:"method",recoveryOwner:"method",stageKinds:["work"],capabilities:[],continuationKinds:[]},{
-      authorize:async()=>{},reconcile:async()=>{throw new Error("in-flight work must not be reconciled by its own processor");},
+      authorize:async()=>({kind:"allowed"}),reconcile:async()=>{throw new Error("in-flight work must not be reconciled by its own processor");},
       execute:async(path,stage,attempt,signal)=>{signals.set(path.intent.runId,signal);started.push(path.intent.runId);if(path.intent.runId==="root")await slow.promise;return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:stage.request.input,usage:null,recordedAt:now()};},
       interpret:async()=>({progress:{done:true},next:[]})
     });

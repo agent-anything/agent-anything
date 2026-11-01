@@ -6,6 +6,21 @@ import { HelarcProviderSelection } from "./HelarcProviderSelection.js";
 import { createHelarcProvider } from "./createHelarcProvider.js";
 import { restoreHelarcProvider } from "./restoreHelarcProvider.js";
 import { retainHelarcProviderBinding } from "../execution-storage/HelarcExecutionAdmission.js";
+import {createNativeToolTurnInteraction,type ProviderRequest,type Provider} from "@agent-anything/model-interaction";
+import {composeModelInput} from "@agent-anything/model-interaction/input";
+import {bindHelarcRunProvider} from "./HelarcRunProviderBinding.js";
+
+function taskRequest(provider:Provider):ProviderRequest {
+  const source=(id:string)=>({owner:"fixture",kind:"record",id,revision:"1"});
+  const lineage=Object.fromEntries(["instructionBinding","agent","instructions","instructionRelease","instructionResolver","instructionContent","activeContext","contextProjection","projectionManifest","toolSelection","toolExposureContent","toolExposureBasis","toolExposureProof","toolGuidance","controllerControlGuidance","callableDefinitions","protocol","policy"].map(k=>[k,source(k)]));
+  Object.assign(lineage,{instructionModel:{providerId:provider.descriptor.id,model:provider.modelContext.target.model},instructionBlocks:[],modelQualification:null,interactionHistory:null});
+  const interaction=createNativeToolTurnInteraction([{name:"final_result",description:"End this execution",inputSchema:{type:"object",properties:{},additionalProperties:false}}]);
+  const composition=composeModelInput({id:"request",providerId:provider.descriptor.id,model:provider.modelContext.target.model,interaction,
+    lineage:lineage as unknown as ProviderRequest["composition"]["lineage"],composedAt:"2026-10-29T00:00:00.000Z",
+    sections:[{id:"task",kind:"task",source:source("task"),role:"user",necessity:"mandatory",content:{kind:"text",text:"Inspect the original input."}}]});
+  return {requestId:composition.id,purpose:"task",correlation:{controllerRequestId:"request",branchId:"main"},instructions:composition.instructions,messages:composition.messages,interaction,composition,
+    modelContext:{requestedOutput:provider.modelContext.requestedOutput,headroom:{unit:"tokens",amount:0,policy:{id:"fixture",revision:"1"}},assessment:null},continuation:null,metadata:{}};
+}
 
 function fixture() {
   const p = createHelarcProviderProfile({ id: "local", revision: "1", providerKind: "ollama", displayName: "Local",
@@ -24,6 +39,34 @@ function fixture() {
 }
 
 describe("Provider selection admission", () => {
+  it("restores local contracts without credentials and reports a missing original credential before transport",async()=>{
+    const {selection}=fixture(),resolved=(await selection.resolve())!;
+    const original=createHelarcProvider(resolved.config);
+    const ref={storage:"windows" as const,ownership:"external" as const,id:"original-account",encoding:"utf16le" as const};
+    const credentials={resolveApiKey:vi.fn(async()=>({ok:true as const,apiKey:null,credentialStatus:"missing" as const}))};
+    const saved={providerProfile:resolved.profile,providerBinding:retainHelarcProviderBinding(original),providerCredential:{kind:"saved" as const,ref}};
+    const restored=bindHelarcRunProvider(JSON.parse(JSON.stringify(saved)),credentials);
+    expect(credentials.resolveApiKey).not.toHaveBeenCalled();
+    const request=taskRequest(restored),encoded=restored.encodeInput!(request,"buffered");
+    restored.verifyEncodedInput!(request,encoded);
+    expect(credentials.resolveApiKey).not.toHaveBeenCalled();
+    const result=await restored.send(request,{signal:new AbortController().signal,interruption:null},{mode:"buffered",invocationId:"attempt",encodedInput:encoded});
+    expect(result).toMatchObject({kind:"failed",failure:{code:"provider_credential_missing",metadata:{transportDispatched:false}}});
+    expect(credentials.resolveApiKey).toHaveBeenCalledTimes(1);
+    expect(credentials.resolveApiKey).toHaveBeenCalledWith(ref);
+    expect(JSON.stringify(saved)).not.toContain("apiKey");
+  });
+  it("preserves full-input encoding and verification through selection and original-binding recovery",async()=>{
+    const {selection}=fixture(),resolved=(await selection.resolve())!;
+    const wrapped=createHelarcProvider(resolved.config);
+    const request=taskRequest(wrapped),encoded=wrapped.encodeInput!(request,"streaming");
+    expect(JSON.parse(encoded.body)).toMatchObject({model:"model",stream:true,messages:[{role:"user",content:"Inspect the original input."}]});
+    expect(JSON.parse(encoded.body).tools[0].function.name).toBe("final_result");
+    const recovered=restoreHelarcProvider({providerProfile:resolved.profile,providerBinding:retainHelarcProviderBinding(wrapped)},"");
+    expect(recovered.encodeInput!(request,"streaming")).toEqual(encoded);
+    expect(()=>recovered.verifyEncodedInput!(request,encoded)).not.toThrow();
+    expect(()=>recovered.verifyEncodedInput!(request,{...encoded,body:"{}"})).toThrow("encoded_model_input_binding_changed");
+  });
   it("retains requested, advertised and loaded context as distinct recoverable facts", async () => {
     const {selection, fetch, stored} = fixture();
     stored.config.ollamaRuntime = {contextWindowTokens: 163840};

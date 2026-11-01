@@ -92,6 +92,13 @@ export class FileHelarcProviderProfileStore {
       return selectionFor(profile.credentialRef);
     });
   }
+  async credentialReference(id:string,revision:string):Promise<ProviderCredentialRef|null> {
+    return this.atomicFile.transact(async file=>{
+      const profile=(await this.readDocument(file)).profiles.find(p=>p.id===id&&p.revision===revision);
+      if(!profile)throw new Error("Provider profile changed before execution admission.");
+      return structuredClone(profile.credentialRef);
+    });
+  }
   async selectActiveProfile(id: string, credentials: ProviderCredentialStore): Promise<ResolveHelarcStoredProviderProfileResult> {
     return this.atomicFile.transact(async file => {
       const doc = await this.readDocument(file);

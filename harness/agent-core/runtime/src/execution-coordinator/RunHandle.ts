@@ -2,6 +2,7 @@ import type { RunLifecycleStatus } from "@agent-anything/agent-core/run";
 import { RunCommitError } from "./RunCommitPort.js";
 import { OperationCommitError } from "@agent-anything/operation-catalog/result";
 import { ActivityCheckpointError } from "../activity/ActivityCheckpoint.js";
+import {ActivityHostUnavailableError} from "../activity/ActivityHostUnavailableError.js";
 import { RetryCheckpointError } from "../retry/RetryCheckpoint.js";
 import { RunRecoveryError } from "./RunRecovery.js";
 import { ActionRecoveryError } from "@agent-anything/action-execution/enforcement";
@@ -174,7 +175,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         .then(
           (result) => this.settle(result),
           error => {
-            if (error instanceof OperationCommitError || error instanceof RunCommitError || error instanceof RunRecoveryError || error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError || error instanceof ActionRecordCommitError || error instanceof ActionRecoveryError || error instanceof CompositeCommitError || error instanceof CompositeRecoveryError) this.rejectCompletion(error);
+            if (error instanceof ActivityHostUnavailableError || error instanceof OperationCommitError || error instanceof RunCommitError || error instanceof RunRecoveryError || error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError || error instanceof ActionRecordCommitError || error instanceof ActionRecoveryError || error instanceof CompositeCommitError || error instanceof CompositeRecoveryError) this.rejectCompletion(error);
             else this.settle(this.emergencyResult);
           },
         );

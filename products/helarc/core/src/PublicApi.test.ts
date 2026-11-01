@@ -15,9 +15,10 @@ describe("Helarc public API", () => {
   it("exposes focused Product configuration, work-context, run and composition values", () => {
     expect(Object.keys(agentApi).sort()).toEqual(["createHelarcAgent", "createHelarcDelegatedWorkerAgent"]);
     expect(Object.keys(configurationApi).sort()).toEqual([
-      "createDefaultHelarcInstructionSettings", "createHelarcProviderProfile", "createHelarcWorkspaceProfile",
+      "contextSettingsSnapshot", "createDefaultHelarcContextSettings", "createDefaultHelarcInstructionSettings", "createHelarcProviderProfile", "createHelarcWorkspaceProfile",
+      "matchHelarcContextObservations",
       "resolveHelarcPermissionPreset", "selectHelarcProviderProfile", "selectHelarcWorkspaceProfile",
-      "snapshotHelarcInstructionSettings", "snapshotHelarcProject", "snapshotHelarcProviderModelSettings",
+      "snapshotHelarcContextSettings", "snapshotHelarcInstructionSettings", "snapshotHelarcProject", "snapshotHelarcProviderModelSettings",
     ]);
     expect(Object.keys(workContextApi).sort()).toEqual([
       "applyHelarcRunProjectionCommit", "applyHelarcRunStartCommit", "applyHelarcRunTerminalCommit",
@@ -31,7 +32,7 @@ describe("Helarc public API", () => {
     ]);
     expect(Object.keys(compositionApi).sort()).toEqual([
       "HelarcProviderCompatibilityError", "assertHelarcProviderCompatibility", "createHelarcActionComposition",
-      "createHelarcProductComposition", "mapRuntimeEventToHelarcActivity", "projectHelarcProductResult",
+      "createHelarcProductComposition", "createHelarcTaskModelBinding", "mapRuntimeEventToHelarcActivity", "projectHelarcProductResult",
     ]);
     for (const name of ["buildHelarcProviderRequest", "parseHelarcProviderResponse", "createHelarcModelCallableCatalog"]) expect(controllerApi).toHaveProperty(name);
     expect(controllerApi).not.toHaveProperty("parseHelarcModelDecision");

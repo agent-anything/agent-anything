@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import {isActivityDispatchWaitCode} from "@agent-anything/agent-runtime/activity";
 import {CustodyMaterialAccess,type MaterialRecipient} from "@agent-anything/context/custody";
 import {randomUUID} from "node:crypto";
 import {CONTEXT_MATERIAL_LIMITS, ContextMaterialError, type ContextMaterialAccessPort, type ContextMaterialPage, type ContextMaterialSearchPage} from "@agent-anything/context/material";
@@ -34,6 +35,8 @@ interface PendingRequest {
   readonly bytes: number;
   readonly command: ExecutionStoreCommand | null;
   readonly sourceKind: ExecutionStoreCommand["kind"];
+  /** Preserve the original operation even when content transfer replaces the inline command. */
+  readonly activityDispatch: boolean;
   readonly context: ExecutionDiagnosticContext;
   readonly content: ExecutionContentRoot | null;
   readonly upload: readonly ExecutionContentBlock[];
@@ -175,7 +178,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       if (reply.kind === "rejected") {
         request.endRequest("failed");
         const error = new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)});
-        this.recordFailure("storage_worker_rejected", error, request.command ?? undefined, request);
+        const dispatchWait=request.activityDispatch&&(request.wireKind==="activity_handoff"||request.wireKind==="invoke_content")&&isActivityDispatchWaitCode(reply.code);
+        if(!dispatchWait)this.recordFailure("storage_worker_rejected", error, request.command ?? undefined, request);
         request.reject(error);
       }
       else {
@@ -234,6 +238,11 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     return this.record({kind: "prepared_action", value});
   }
 
+  async materialSearchScopes(runId:string):Promise<import("./ContextMaterialDatabase.js").MaterialSearchScopes> {
+    const value=await this.contextMaterialRequest({kind:"search_scope",runId});
+    if(!value||!("legacy" in value)||!("custody" in value))throw new ExecutionStoreError("material_search_scope_invalid");
+    return value;
+  }
   readonly contextMaterials: ContextMaterialAccessPort = {
     read: async (runId, input, signal, invocationId) => {
       signal.throwIfAborted();
@@ -266,7 +275,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       const result = await this.request({kind: "activity_handoff", command});
       if (!result || typeof result !== "object" || !("activityValue" in result)) throw new ExecutionStoreError("activity_handoff_reply_invalid");
       const state=result.activityValue;
-      if(this.activityObserver?.observeStage && ["submit","save_raw","accept"].includes(command.kind) && state && "request" in state) {
+      if(this.activityObserver?.observeStage && ["submit","save_raw","accept","settle","stop_professional_path","record_authorization_restriction"].includes(command.kind) && state && "request" in state) {
         try {
           const pathReply=await this.request({kind:"activity_handoff",command:{kind:"read_path",pathId:state.request.pathId}});
           if(pathReply && "activityValue" in pathReply && pathReply.activityValue && "intent" in pathReply.activityValue)
@@ -301,12 +310,20 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     const result=await this.request({kind:"context_selection",command});
     if(!result || !("selectionValue" in result))throw new ExecutionStoreError("selection_reply_invalid");return result.selectionValue;
   }};
+  readonly inputUsage:import("@agent-anything/model-interaction/input").InputUsageEvidencePort={latest:async query=>{
+    const result=await this.request({kind:"model_input_usage",query});
+    if(!result||!("inputUsageValue" in result))throw new ExecutionStoreError("input_usage_reply_invalid");return result.inputUsageValue;
+  }};
   readonly contextPolicy:import("@agent-anything/agent-runtime/context-representation").ContextPreparationDecisionStore={query:async query=>{
     const result=await this.request({kind:"context_policy",query});
     if(!result||!("contextPolicyValue" in result))throw new ExecutionStoreError("context_policy_reply_invalid");return result.contextPolicyValue;
   },investments:async input=>{
     const result=await this.request({kind:"context_policy_investments",input});
     if(!result||!("contextPolicyInvestments" in result))throw new ExecutionStoreError("context_policy_reply_invalid");return result.contextPolicyInvestments;
+  }};
+  readonly inputSupplies:import("@agent-anything/agent-runtime/context-representation").InputSupplyResponsibilityStore={query:async query=>{
+    const result=await this.request({kind:"input_supply",query});
+    if(!result||!("inputSupplyValue" in result))throw new ExecutionStoreError("input_supply_reply_invalid");return result.inputSupplyValue;
   }};
   async contextFoundationFacts(runId:string,after:number,limit:number):Promise<readonly import("./ContextFoundationRecords.js").ContextFoundationFact[]> {
     const result=await this.request({kind:"context_foundation_facts",runId,after,limit});
@@ -576,7 +593,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     return new Promise((resolve, reject) => {
       this.bytes += bytes;
       this.queue.push({ id, bytes, command: wireCommand,
-        sourceKind: command.kind, context,
+        sourceKind: command.kind, activityDispatch:command.kind==="activity_handoff"&&command.command.kind==="dispatch", context,
         content: large ? {format: 1, root: packed.root} : null, upload: large ? packed.blocks : [],
         uploadOffset: 0, uploaded: [], responseRoot: null, responseBlocks: new Map(), responsePending: new Set(), requestedBlocks: [], responseBytes: 0, wireKind: null,
         dispatchedAt: null, endRequest, endQueue: beginExecutionTiming(this.diagnostics, "storage.host.queue", {...context, pendingRequests: this.queue.length, pendingBytes: this.bytes}),

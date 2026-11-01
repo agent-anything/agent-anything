@@ -14,10 +14,14 @@ import {createRepresentationMethodInput,type MethodEvidence} from "./Representat
 import {parseRepresentationMethodOutput,representationAssessmentSupported,discoveredRelationships,RepresentationMethodResultError,type GeneratedRepresentation,type AssessedRepresentation} from "./RepresentationMethodOutput.js";
 import {checkMethodAccess,stageMethodMaterial,originalMethodRepresentation} from "./RepresentationMethodResources.js";
 import {initialMethodJobs,splitMethodJob,distributedMethodChecks,methodCandidateChecked,methodJobKey,nextMethodFinalJobs,methodCoverageGaps} from "./RepresentationMethodPlanning.js";
-import {findMethodAssessmentReuse,methodAssessmentConditions} from "./RepresentationMethodReuse.js";
-import {methodLineUnits,methodSources} from "./RepresentationMethodRanges.js";
+import {findMethodAssessmentReuse,methodAssessmentConditions,methodInputSources} from "./RepresentationMethodReuse.js";
+import {methodTextUnits,methodSources,refinableMethodSource} from "./RepresentationMethodRanges.js";
+import {qualifiedMethodRelation} from "./MethodPreservationSupport.js";
+import {validateMethodAssessmentEvidence} from "./QualifiedMethodSources.js";
 
 export interface RepresentationMethodDependencies {
+  readonly productionLifetime?:import("./RepresentationProductionLifecycle.js").RepresentationProductionLifetime;
+  readonly usage?:import("@agent-anything/model-interaction/input").InputUsageEvidencePort;
   readonly provider:Provider;
   readonly materials:MaterialCustodyPort;
   readonly representations:RepresentationCatalogPort;
@@ -26,7 +30,7 @@ export interface RepresentationMethodDependencies {
   readonly authorize:ActivityPurposeHandler["authorize"];
   readonly now:()=>string;
 }
-interface MethodLocalInput {readonly method:RepresentationMethodProgress;readonly source?:string;readonly offset?:number;readonly cursor?:string;readonly preparationStageId?:string;readonly variableRequest?:Parameters<typeof firstContextInputPreparationStage>[1];}
+interface MethodLocalInput {readonly method:RepresentationMethodProgress;readonly source?:string;readonly offset?:number;readonly cursor?:string;readonly preparationStageId?:string;readonly refineSource?:string;readonly variableRequest?:Parameters<typeof firstContextInputPreparationStage>[1];}
 type Input=MethodLocalInput&Partial<ContextInputPreparationStageInput>;
 type ReadValue={kind:"read";source:string;page:MaterialReadPage}|{kind:"search";source:string;page:MaterialSearchPage};
 type BindValue={kind:"bind";prepared:PreparedContextInput;scope:ContextUseScope;judgment:RepresentationJudgment;selectionHolds:readonly MaterialHold[];inputHolds:readonly MaterialHold[];refs:readonly RepresentationRecord["ref"][]};
@@ -38,13 +42,19 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
   private readonly preparation:ContextInputPreparationHandler;
   private readonly execution:PreparedInputExecution;
   constructor(private readonly ports:RepresentationMethodDependencies) {
-    this.preparation=new ContextInputPreparationHandler({provider:ports.provider,materials:ports.materials,authorize:ports.authorize,now:ports.now,purpose:REPRESENTATION_METHOD_PURPOSE});
+    this.preparation=new ContextInputPreparationHandler({provider:ports.provider,usage:ports.usage,materials:ports.materials,authorize:ports.authorize,now:ports.now,purpose:REPRESENTATION_METHOD_PURPOSE});
     this.execution=new PreparedInputExecution({provider:ports.provider,selections:ports.selections,inputId:stage=>`${stage.request.id}:input`,authorize:ports.authorize,now:ports.now,
       interpret:(path,stage,signal,acceptance)=>this.interpretModel(path,stage,signal,acceptance.id)});
   }
-  async authorize(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal):Promise<void> {
+  async authorize(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,action:Parameters<ActivityPurposeHandler["authorize"]>[3]):ReturnType<ActivityPurposeHandler["authorize"]> {
     const method=this.state(path,stage);validateRepresentationMethodRequest(method.request);
     if(path.intent.purpose.digest!==modelInputValueDigest(REPRESENTATION_METHOD_PURPOSE)||path.intent.runId!==method.request.recipient.runId)throw new TypeError("representation_path_binding_invalid");
+    if(action==="settlement")return this.ports.authorize(path,stage,signal,action);
+    if(method.current?.relationshipBasis)for(const id of method.current.relationshipBasis.supportingJudgments) {
+      const assessment=method.assessments.find(a=>a.judgmentIds.includes(id));
+      if(!assessment||!await validateMethodAssessmentEvidence({...this.ports,producerPathId:path.intent.id,method,signal},assessment))
+        throw new TypeError("representation_relationship_support_unconfirmed");
+    }
     if(method.request.combination) {
       const prepared=method.request.combination.prepared;
       const original=await this.ports.activities.command({kind:"read_stage",requestId:prepared.preparationStageId}) as ActivityStageState|null;
@@ -58,9 +68,13 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     for(const candidate of method.candidates) {
       signal.throwIfAborted();await checkMethodAccess(this.ports.materials,this.candidateSource(candidate,method));
     }
-    if(stage.request.stageKind==="model")await this.execution.authorize(path,stage,signal);
-    else if(["organize","measure"].includes(stage.request.stageKind))await this.preparation.authorize(path,stage,signal);
-    else await this.ports.authorize(path,stage,signal);
+    if(stage.request.stageKind==="model")return this.execution.authorize(path,stage,signal,action);
+    if(["organize","measure"].includes(stage.request.stageKind))return this.preparation.authorize(path,stage,signal,action);
+    return this.ports.authorize(path,stage,signal,action);
+  }
+  async settle(_path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal) {
+    signal.throwIfAborted();
+    return {disposition:{kind:"retained_method_result",resultId:stage.result!.id,adopted:false}};
   }
   async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
     const started=performance.now();
@@ -72,7 +86,7 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
   }
   private async executeStage(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
     if(stage.request.stageKind==="model") {
-      await this.reserve(path,stage,"model",{modelCalls:1});
+      await this.reserve(path,stage,`model:${attempt.id}`,{modelCalls:1});
       return this.execution.execute(path,stage,attempt,signal);
     }
     if(["organize","measure"].includes(stage.request.stageKind)) {
@@ -114,12 +128,16 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
       if(method.request.method!=="preserve")await this.reserve(path,stage,"exact-read",{readBytes:method.request.sources.filter(s=>s.role==="source").reduce((n,s)=>n+s.access.range.end-s.access.range.start,0)});
       value={kind:"exact",evidence:method.request.method==="preserve"?[]:await this.originalEvidence(method,method.request.sources.filter(s=>s.role==="source").map(s=>s.alias),signal)};
     } else if(stage.request.stageKind==="ranges") {
-      const size=method.request.sources.filter(s=>s.division).reduce((sum,s)=>sum+s.access.range.end-s.access.range.start,0);
+      const refinement=input.refineSource?refinableMethodSource(method):null;
+      if(input.refineSource&&refinement?.alias!==input.refineSource)throw new TypeError("representation_refinement_source_changed");
+      const sources=refinement?[refinement]:method.request.sources.filter(s=>s.division);
+      const size=sources.reduce((sum,s)=>sum+s.access.range.end-s.access.range.start,0);
       if(size>method.request.bounds.readBytes-method.readBytes)return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:{kind:"gap",code:"representation_read_budget_exhausted"},usage:{localMs:performance.now()-started},recordedAt:this.ports.now()};
       await this.reserve(path,stage,"range-read",{readBytes:size});
-      const evidence=await this.originalEvidence(method,method.request.sources.filter(s=>s.division).map(s=>s.alias),signal);
-      const units=evidence.flatMap(e=>methodLineUnits(method.request.sources.find(s=>s.alias===e.alias)!,e.text,method.request.bounds.pageBytes));
-      value=units.length>method.request.bounds.ranges?{kind:"gap",code:"representation_range_budget_exhausted"}:{kind:"ranges",units,readBytes:size};
+      const evidence=await this.originalEvidence(method,sources.map(s=>s.alias),signal);
+      const units=evidence.flatMap(e=>methodTextUnits(sources.find(s=>s.alias===e.alias)!,e.text,refinement?Math.floor(size/2):method.request.bounds.pageBytes));
+      value=units.length+(refinement?method.rangeUnits.length:0)>method.request.bounds.ranges?{kind:"gap",code:"representation_range_budget_exhausted"}:
+        refinement&&!units.length?{kind:"gap",code:"representation_range_cannot_refine"}:{kind:"ranges",units,readBytes:size};
     } else throw new TypeError("representation_stage_unsupported");
     return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value,usage:{localMs:performance.now()-started},recordedAt:this.ports.now()};
   }
@@ -151,11 +169,7 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
       const result=await this.preparation.interpret(path,stage,signal),progress=result.progress as {state:string;prepared?:PreparedContextInput;reason?:string};
       if(progress.state==="gap") {
         if(variableRequest)return this.gap(method,stage,"representation_fixed_background_unavailable",result.progress);
-        const split=splitMethodJob(method,method.current!);
-        if(split)return this.schedule(path,stage,{...method,current:null,queue:[...split,...method.queue]});
-        const checks=distributedMethodChecks(method,method.current!);
-        if(checks)return this.schedule(path,stage,{...method,current:null,queue:[...checks,...method.queue],checkGroups:[...method.checkGroups,{candidateId:method.current!.candidates[0]!,jobs:checks.map(j=>j.id)}]});
-        return this.gap(method,stage,"representation_input_unavailable",result.progress);
+        return this.reconsiderInputGap(path,stage,method,result.progress);
       }
       if(progress.state==="prepared") {
         if(variableRequest) {
@@ -172,6 +186,15 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     if(value.kind==="read"||value.kind==="search")return this.afterRead(path,stage,method,value as ReadValue);
     if(value.kind==="ranges") {
       const ranges=value as {kind:string;units:RepresentationMethodProgress["rangeUnits"];readBytes:number};
+      const alias=(stage.request.input as Input).refineSource;
+      if(alias){
+        const originalAlias=method.rangeUnits.find(u=>u.source.alias===alias)?.originalAlias??alias;
+        const units=ranges.units.map(u=>({...u,originalAlias,parentAlias:alias}));
+        const next={...method,rangeUnits:[...method.rangeUnits,...units],readBytes:method.readBytes+ranges.readBytes};
+        const job=method.current!;
+        return this.schedule(path,stage,{...next,current:null,queue:[...units.map((u,i)=>({...job,id:`${job.id}:range:${i}`,
+          sources:[u.source.alias],level:job.level+1,repair:0,feedback:null})),...method.queue]});
+      }
       const next={...method,rangeUnits:ranges.units,readBytes:method.readBytes+ranges.readBytes};
       return this.schedule(path,stage,{...next,queue:initialMethodJobs(path.intent.id,next)});
     }
@@ -279,8 +302,11 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     return {kind:"bind",prepared,scope,judgment,selectionHolds:holds("selection"),inputHolds:holds("input"),refs};
   }
   private async interpretModel(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,acceptanceId:string):Promise<Outcome> {
-    const method=this.state(path,stage),job=method.current!;
+    const original=this.state(path,stage),method={...original,modelCalls:original.modelCalls+Math.max(0,(stage.attemptCount??1)-1)},job=method.current!;
     if(!stage.result||stage.result.outcome!=="returned"||stage.result.completeness!=="complete")return this.gap(method,stage,"representation_model_result_incomplete",stage.result);
+    const result=stage.result.value as ProviderCallResult;
+    if(result?.kind==="failed"&&result.failure.code==="provider_context_window_exceeded")
+      return this.reconsiderInputGap(path,stage,method,{kind:"provider_input_rejection",rawResultId:stage.result.id,failure:result.failure});
     let output:GeneratedRepresentation|AssessedRepresentation;
     try {output=parseRepresentationMethodOutput(stage.result.value as ProviderCallResult,this.expandedRequest(method,job),job);}
     catch(error) {
@@ -293,6 +319,18 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     }
     if(output.kind==="candidate")return this.afterCandidate(path,stage,method,output,signal,acceptanceId);
     return this.afterAssessment(path,stage,method,output,acceptanceId);
+  }
+  private reconsiderInputGap(path:ActivityPathState,stage:ActivityStageState,method:RepresentationMethodProgress,evidence:unknown):Outcome {
+    const split=splitMethodJob(method,method.current!);
+    if(split)return this.schedule(path,stage,{...method,current:null,queue:[...split,...method.queue]});
+    const refine=refinableMethodSource(method);
+    if(refine)return {progress:{method},next:[this.nextStage(path,stage,"ranges",{method,refineSource:refine.alias})]};
+    const qualified=qualifiedMethodRelation(method,method.current!);
+    if(qualified)return this.schedule(path,stage,{...method,current:null,queue:[qualified,...method.queue]});
+    const checks=distributedMethodChecks(method,method.current!);
+    if(checks)return this.schedule(path,stage,{...method,current:null,queue:[...checks,...method.queue],
+      checkGroups:[...method.checkGroups,{candidateId:method.current!.candidates[0]!,jobs:checks.map(j=>j.id)}]});
+    return this.gap(method,stage,"representation_input_unavailable",evidence);
   }
   private async afterCandidate(path:ActivityPathState,stage:ActivityStageState,method:RepresentationMethodProgress,output:GeneratedRepresentation,signal:AbortSignal,acceptanceId:string):Promise<Outcome> {
     const job=method.current!;
@@ -339,18 +377,32 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
   private async reserve(path:ActivityPathState,stage:ActivityStageState,label:string,amounts:Readonly<Record<string,number>>):Promise<void> {
     await this.ports.activities.command({kind:"reserve_resources",reservation:{id:`${stage.request.id}:allowance:${label}`,pathId:path.intent.id,requestId:stage.request.id,amounts},expectedControlRevision:path.controlRevision});
   }
+  prepareRetry(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal) {
+    if(stage.request.stageKind!=="model")return Promise.resolve(null);
+    const method=this.state(path,stage);
+    if(method.modelCalls+Math.max(0,(stage.attemptCount??1)-1)>=method.request.bounds.modelCalls)return Promise.resolve(null);
+    return this.execution.prepareRetry(path,stage,signal);
+  }
   private resourceExhausted(error:unknown):error is Error&{code:"activity_resource_limit_exceeded"} {return error instanceof Error&&"code" in error&&error.code==="activity_resource_limit_exceeded";}
   private async afterAssessment(path:ActivityPathState,stage:ActivityStageState,method:RepresentationMethodProgress,output:AssessedRepresentation,acceptanceId:string):Promise<Outcome> {
     const job=method.current!,supported=representationAssessmentSupported(output,job.checkScope??"both"),subjects:RepresentationRecord["ref"][]=[];
-    for(const source of this.inputSources(method,job).filter(s=>job.candidates.includes(s.alias)))subjects.push((await originalMethodRepresentation(method.request,source,this.ports.representations)).ref);
+    for(const source of this.inputSources(method,job).filter(s=>(job.relationshipBasis?job.sources:job.candidates).includes(s.alias)))subjects.push((await originalMethodRepresentation(method.request,source,this.ports.representations)).ref);
     const ranges=this.inputSources(method,job).map(s=>s.access.range);
     const combination=job.kind==="combination"?method.request.combination:null;
     const judgment:RepresentationJudgment={id:`${job.id}:judgment`,owner:method.request.recipient.recipient,kind:job.kind==="combination"?"combination":"semantic",subjects:combination?.subjects??subjects,
       inputs:ranges,purpose:combination?.scope.purpose??method.request.recipient.purpose,target:combination?.scope.target??method.request.targetRevision,methodRevision:"bidirectional:1",dependencies:{method:method.request.methodRevision,job:methodJobKey(job),conditions:methodAssessmentConditions(method.request,job,this.inputSources(method,job)),
         ...((stage.result!.value as {kind?:string}).kind==="reused_assessment"?{reusedJudgment:(stage.result!.value as {judgmentId:string}).judgmentId}:{}),
-        stage:stage.request.id,rawResult:stage.result!.id,acceptance:acceptanceId,...(method.request.combinationDigest?{inputDigest:method.request.combinationDigest}:{})},coverage:ranges,conclusion:supported?"supported":output.findings.some(f=>f.conclusion==="unsupported")||output.requirements.some(r=>r.conclusion==="unsupported")?"unsupported":"unknown",
-      limitations:[...(job.checkScope?[`Only ${job.checkScope}-directed coverage; not whole-candidate or combination approval`]:[]),...output.findings.flatMap(f=>f.unknowns.map(u=>`${u.kind}: ${u.description}`))],basis:"Independent scoped findings in the referenced professional acceptance; not a proof of unexamined semantics"};
-    const assessment:MethodAssessment={id:judgment.id,jobId:job.id,candidateIds:job.candidates,sourceAliases:job.sources,findings:output.findings,requirements:output.requirements,supported,rawResultId:stage.result!.id,judgmentIds:[judgment.id],scope:job.checkScope??"both"};
+        stage:stage.request.id,rawResult:stage.result!.id,acceptance:acceptanceId,...(method.request.combinationDigest?{inputDigest:method.request.combinationDigest}:{}),
+        ...Object.fromEntries((combination?.producers??[]).flatMap((producer,i)=>[[`combinationProducer:${i}`,producer.pathId],[`combinationProducerScope:${i}`,modelInputValueDigest(producer)]])),
+        ...Object.fromEntries((combination?.inheritedChecks??[]).flatMap((check,i)=>[
+          ...check.assessments.map((a,j)=>[`inheritedJudgment:${i}${j?`:${j}`:""}`,a.judgmentIds[0]!]),[`inheritedProducer:${i}`,check.producerPathId],[`inheritedCheckScope:${i}`,modelInputValueDigest(check)]])),
+        ...Object.fromEntries((job.relationshipBasis?.supportingJudgments??[]).map((id,i)=>[`relationshipSupport:${i}`,id]))},coverage:ranges,conclusion:supported?"supported":output.findings.some(f=>f.conclusion==="unsupported")||output.requirements.some(r=>r.conclusion==="unsupported")?"unsupported":"unknown",
+      limitations:[...(job.checkScope?[`Only ${job.checkScope}-directed coverage; not whole-candidate or combination approval`]:[]),
+        ...(combination?.inheritedChecks?.length?["Preservation of each qualified evidence item inherits only its referenced local judgment; this is not a new reading of those originals. Other evidence retains its declared role."]:[]),
+        ...(job.relationshipBasis?["Relationship assessment of explicitly derived evidence; original preservation relies on the referenced accepted support graph, not self-comparison."]:[]),
+        ...output.findings.flatMap(f=>f.unknowns.map(u=>`${u.kind}: ${u.description}`))],basis:"Independent scoped findings in the referenced professional acceptance; not a proof of unexamined semantics"};
+    const assessment:MethodAssessment={id:judgment.id,jobId:job.id,candidateIds:job.candidates,sourceAliases:job.sources,findings:output.findings,requirements:output.requirements,supported,rawResultId:stage.result!.id,judgmentIds:[judgment.id],scope:job.checkScope??"both",
+      ...(job.relationshipBasis?{relationshipBasis:job.relationshipBasis}:{})};
     let next:RepresentationMethodProgress={...method,assessments:[...method.assessments,assessment],current:null};
     const parts:SharedAcceptancePart[]=[{owner:"representation",kind:"judge",proposal:judgment}];
     if(!supported) {
@@ -439,8 +491,7 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     return {alias:candidate.id,role:"source",access:candidate.access,representation:candidate.representation,order:method.request.sources.length+method.candidates.indexOf(candidate),label:candidate.id,originalRole:"derived_representation",indivisibleGroup:candidate.id};
   }
   private inputSources(method:RepresentationMethodProgress,job:MethodJob):MethodSource[] {
-    return [...methodSources(method).filter(s=>s.role==="background"||job.sources.includes(s.alias)||job.candidates.includes(s.alias)).map(s=>({...s,role:job.candidates.includes(s.alias)?"candidate" as const:s.role})),
-      ...[...new Set([...job.sources,...job.candidates])].flatMap(id=>{const c=method.candidates.find(c=>c.id===id||c.segments.some(s=>s.id===id));if(!c)return [];const segment=c.segments.find(s=>s.id===id);return [{...this.candidateSource(c,method),alias:id,access:{...c.access,range:segment?.range??c.access.range},role:job.candidates.includes(id)?"candidate" as const:"source" as const}];})];
+    return methodInputSources(method,job);
   }
   private expandedRequest(method:RepresentationMethodProgress,job:MethodJob) {
     return {...method.request,sources:this.inputSources(method,job)};

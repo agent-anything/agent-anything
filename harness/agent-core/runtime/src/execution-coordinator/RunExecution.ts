@@ -131,6 +131,7 @@ import {
 import {
   TaskDecisionActivityError,
   validateTaskDecisionProposal,
+  snapshotTaskModelExchange,
   snapshotTaskDecisionFeedback,
   projectModelInteraction,
   createModelConversationSeed,
@@ -275,9 +276,10 @@ import { completeRunnerTrace, createRunnerTraceAssembler } from "./RunnerTracing
 import { RunStateWriter } from "./RunStateWriter.js";
 import { RunCommitError, type RunCommit, type RunControlCheckpoint } from "./RunCommitPort.js";
 import { ActivityCheckpointError, type ActivityCheckpointPort } from "../activity/ActivityCheckpoint.js";
+import {ActivityHostUnavailableError} from "../activity/ActivityHostUnavailableError.js";
 import { RetryCheckpointError } from "../retry/RetryCheckpoint.js";
 import { RunTreeCommitWriter } from "./RunTreeCommitWriter.js";
-import {retainControllerCheckpoint, snapshotRunCommit} from "./RunCommitSnapshot.js";
+import {retainRunCheckpointValue, snapshotRunCommit} from "./RunCommitSnapshot.js";
 import { retainRunConfiguration } from "./RunConfigurationCheckpoint.js";
 import { projectRunTreeTerminal, RunTreeExecution } from "./RunTreeExecution.js";
 import { retainControllerOperation, retainDecisionCallProgress, restoreControllerOperation, validateDecisionCheckpoint } from "./RunDecisionCheckpoint.js";
@@ -295,7 +297,7 @@ import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 
 function assertExecutionCommitConfirmed(error: unknown): void {
   if (error instanceof OperationCommitError) throw error;
-  if (error instanceof RunCommitError || error instanceof RunRecoveryError || error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError || error instanceof ActionRecordCommitError || error instanceof ActionRecoveryError || error instanceof CompositeCommitError || error instanceof CompositeRecoveryError) throw error;
+  if (error instanceof ActivityHostUnavailableError || error instanceof RunCommitError || error instanceof RunRecoveryError || error instanceof ActivityCheckpointError || error instanceof RetryCheckpointError || error instanceof ActionRecordCommitError || error instanceof ActionRecoveryError || error instanceof CompositeCommitError || error instanceof CompositeRecoveryError) throw error;
 }
 
 function retryBookkeepingOwner(state: RunState<unknown>, previous: RunState<unknown> | null): string | null {
@@ -775,7 +777,7 @@ export class RunExecution<TOutput> {
       }
       this.acceptedDecision = control.decision;
       this.controllerInvocation = control.controllerInvocation;
-      for (const [key, value] of control.controllerCheckpoints) this.controllerCheckpoints.set(key, retainControllerCheckpoint(value));
+      for (const [key, value] of control.controllerCheckpoints) this.controllerCheckpoints.set(key, retainRunCheckpointValue(value));
       this.completionNotification = control.completionNotification;
       this.pendingCompletionCall = control.pendingCompletion === null ? null : {...control.pendingCompletion};
       this.retainedRetryEvents.push(...control.retryEvents);
@@ -1286,6 +1288,15 @@ export class RunExecution<TOutput> {
       }
       await this.deliverToolResults();
       if (this.finalizationCheckpoint) return await this.settle(this.finalizationCheckpoint.candidate as TerminalCandidate<TOutput>);
+      if (this.controllerInvocation?.status === "failed") {
+        const retained = this.controllerInvocation.failureOutcome;
+        const item = this.writer.getSnapshot().items.find(value => value.payload.kind === "controller_turn" &&
+          value.payload.turn.id === this.controllerInvocation!.turn.id && value.payload.status === "failed");
+        if (!retained || retained.status !== "failed" || item?.payload.kind !== "controller_turn" ||
+            !sameRunCommitValue(item.payload.failure, retained.failure))
+          throw new RunRecoveryError(this.runId, "controller_failure_outcome_unavailable", this.controllerInvocation.turn.id);
+        return await this.settle(retained);
+      }
       if (!this.initialized) {
       const initialContext = this.delegationRequest === null
         ? this.writer.getSnapshot().context
@@ -2406,10 +2417,8 @@ export class RunExecution<TOutput> {
     const retryScope = this.createRetryScope(turn.id, basisRevision, flow.callContext);
     this.emit("controller.started", { turnId: turn.id, iteration });
     try {
-      if (resuming && (this.decisionBasis.revision(turn.id, state.revision) !== basisRevision ||
-          this.steeringQueue.length > 0 || this.interactionSettlements.length > 0)) {
-        throw new RetryInvocationInvalidatedError();
-      }
+      const interrupting = resuming !== null && (this.decisionBasis.revision(turn.id, state.revision) !== basisRevision ||
+          this.steeringQueue.length > 0 || this.interactionSettlements.length > 0);
       const candidate = await this.interruptionCoordinator.execute(
         "controller",
         () => executeTaskDecisionActivity({
@@ -2423,10 +2432,15 @@ export class RunExecution<TOutput> {
           runCheckpoints: this.controllerCheckpointPort(turn.id, "run"),
           auxiliaryUsage: this.controllerAuxiliaryUsagePort(turn.id),
           recovering: resuming !== null,
+          interrupting,
           auxiliaryWork: this.controllerAuxiliaryWorkPort(turn.id),
         }),
         state.deadlineAt,
       );
+      if (candidate === null) {
+        if (interrupting) throw new RetryInvocationInvalidatedError();
+        throw new TypeError("Task decision activity returned no proposal.");
+      }
       const validityStep = flow.advance("validity");
       // Exposure is request provenance. Live availability is checked on each
       // selected binding before materialization, not on unrelated catalog paths.
@@ -2436,27 +2450,42 @@ export class RunExecution<TOutput> {
         this.config.cancellation.context.request !== null;
       validityStep.check("freshness", stale ? "not_satisfied" : "passed", {capturedRevision: state.revision, currentRevision: this.writer.getSnapshot().revision, relevantRevision: this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision)});
       if (stale) {
-        this.controllerInvocation = {...this.controllerInvocation!, status: "interrupted"};
-        (await this.writer.commit({
+        const received = validateTaskDecisionProposal(candidate, prepared.input);
+        const settlement = this.config.cancellation.context.request ? "cancelled" : "invalidated";
+        const code = settlement === "cancelled" ? "run_cancelled_before_model_calls" : "controller_decision_basis_stale";
+        // Inapplicable decisions do not erase real exchanges. Settle every unexecuted Call atomically.
+        const outcomes = received.modelItems.flatMap(item => item.kind === "model_tool_call" ? [
+          this.localModelCallResult(item.call, settlement, {status: settlement, code},
+            [{owner: "agent-runtime", kind: "controller_turn", id: turn.id, revision: String(turn.sequence)}]),
+        ] : []);
+        (await this.writer.commitItems([
+          ...(inputDelivery && received.inputDeliveryReceipt ? [{kind: "input_delivery" as const,
+            batch: inputDelivery, receipt: received.inputDeliveryReceipt, turn}] : []), {
           kind: "controller_turn",
           turn,
           status: "interrupted",
           decisionKind: null,
           instructionBinding: prepared.input.instructionBinding.ref,
           toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
-          modelItems: Object.freeze([]),
+          modelItems: received.modelItems,
+          ...(received.openingReceipt ? {openingReceipt: received.openingReceipt} : {}),
+          ...(received.resultPresentationReceipt ? {resultPresentationReceipt: received.resultPresentationReceipt} : {}),
+          ...(received.responseRejection ? {responseRejection: received.responseRejection} : {}),
           failure: null,
-        }, (current) => Object.freeze({
+        }, ...outcomes], (current) => {
+          this.controllerInvocation = {...this.controllerInvocation!, status: "interrupted"};
+          if (inputDelivery && received.inputDeliveryReceipt) this.inputNotifications.accepted(inputDelivery, received.inputDeliveryReceipt);
+          return Object.freeze({
           counters: Object.freeze({
             ...current.counters,
             controllerTurns: iteration,
           }),
-        })));
+        }); }));
         this.emit("controller.finished", {
           turnId: turn.id,
           iteration,
           status: "interrupted",
-          code: "controller_decision_basis_stale",
+          code,
           decisionKind: null,
         });
         return null;
@@ -2484,13 +2513,15 @@ export class RunExecution<TOutput> {
         toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
         modelItems: decision.modelItems,
         ...(decision.openingReceipt ? {openingReceipt: decision.openingReceipt} : {}),
+        ...(decision.resultPresentationReceipt ? {resultPresentationReceipt: decision.resultPresentationReceipt} : {}),
+        ...(decision.responseRejection ? {responseRejection: decision.responseRejection} : {}),
         failure: null,
       }], (current) => {
         if (inputDelivery && decision.inputDeliveryReceipt) {
           this.inputNotifications.accepted(inputDelivery, decision.inputDeliveryReceipt);
         }
         this.acceptedDecision = {status: "active", turn, basisRevision, value: decision,
-          prepared: retainControllerOperation(prepared), calls: []};
+          prepared: this.controllerInvocation!.prepared, calls: []};
         this.controllerInvocation = {...this.controllerInvocation!, status: "returned"};
         if (decision.kind === "propose_completion" && decision.completionSource.kind === "model_call") {
           const key = modelCallRefKey(decision.completionSource.modelCallRef);
@@ -2527,31 +2558,48 @@ export class RunExecution<TOutput> {
         this.emit("controller.finished", {turnId: turn.id, iteration, status: "interrupted", code: "retry_invocation_invalidated", decisionKind: null});
         return null;
       }
-      if (this.config.cancellation.context.request !== null) throw error;
+      const exchange = error instanceof TaskDecisionActivityError && error.exchange ? snapshotTaskModelExchange(error.exchange, prepared.input) : null;
+      if (this.config.cancellation.context.request !== null && !exchange) throw error;
       const terminal = this.failureFromError(error);
-      this.controllerInvocation = {...this.controllerInvocation!, status: "failed"};
-      (await this.writer.commit({
+      const interrupted = exchange !== null && (this.config.cancellation.context.request !== null ||
+        this.decisionBasis.revision(turn.id, this.writer.getSnapshot().revision) !== basisRevision ||
+        this.interactionSettlements.length > 0 || this.steeringQueue.length > 0);
+      const status = interrupted ? "interrupted" : "failed";
+      const settlement = this.config.cancellation.context.request !== null ? "cancelled" : "invalidated";
+      const outcomes = exchange?.modelItems.flatMap(item => item.kind === "model_tool_call" ? [
+        this.localModelCallResult(item.call, settlement, {status: settlement, code: terminal.failure.failure.code},
+          [{owner: "agent-runtime", kind: "controller_turn", id: turn.id, revision: String(turn.sequence)}]),
+      ] : []) ?? [];
+      (await this.writer.commitItems([
+        ...(inputDelivery && exchange?.inputDeliveryReceipt ? [{kind: "input_delivery" as const,
+          batch: inputDelivery, receipt: exchange.inputDeliveryReceipt, turn}] : []), {
         kind: "controller_turn",
         turn,
-        status: "failed",
+        status,
         decisionKind: null,
         instructionBinding: prepared.input.instructionBinding.ref,
         toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
-        modelItems: Object.freeze([]),
+        modelItems: exchange?.modelItems ?? Object.freeze([]),
+        ...(exchange?.openingReceipt ? {openingReceipt: exchange.openingReceipt} : {}),
+        ...(exchange?.resultPresentationReceipt ? {resultPresentationReceipt: exchange.resultPresentationReceipt} : {}),
+        ...(exchange?.responseRejection ? {responseRejection: exchange.responseRejection} : {}),
         failure: terminal.failure,
-      }, (current) => Object.freeze({
-        counters: Object.freeze({
+      }, ...outcomes], (current) => {
+        this.controllerInvocation = {...this.controllerInvocation!, status, ...(!interrupted ? {failureOutcome: terminal} : {})};
+        if (inputDelivery && exchange?.inputDeliveryReceipt) this.inputNotifications.accepted(inputDelivery, exchange.inputDeliveryReceipt);
+        return Object.freeze({counters: Object.freeze({
           ...current.counters,
           controllerTurns: iteration,
-        }),
-      })));
+        })});
+      }));
       this.emit("controller.finished", {
         turnId: turn.id,
         iteration,
-        status: "failed",
+        status,
         code: terminal.failure.failure.code,
         decisionKind: null,
       });
+      if (interrupted) return null;
       throw error;
     } finally {
       retryScope.dispose();
@@ -2609,7 +2657,7 @@ export class RunExecution<TOutput> {
       read: value => this.controllerCheckpoints.get(key(value)) ?? null,
       assertAdmission: () => this.controllerAuxiliaryUsagePort(null).assertAvailable(),
       commit: async (id, writes, guard) => {
-        const retained = writes.map(value => ({key: key(value.key), value: retainControllerCheckpoint(value.value)}));
+        const retained = writes.map(value => ({key: key(value.key), value: retainRunCheckpointValue(value.value)}));
         let rejected: unknown = null;
         await this.writer.transaction(() => {
           try {guard?.();} catch (error) {rejected = error; return {value: undefined};}
@@ -2675,7 +2723,7 @@ export class RunExecution<TOutput> {
     return {
       read: key => structuredClone(this.controllerCheckpoints.get(identity(key)) ?? null),
       commit: async (key, value) => {
-        const snapshot = retainControllerCheckpoint(value);
+        const snapshot = retainRunCheckpointValue(value);
         try {
           await this.writer.commitState(() => {
             this.controllerCheckpoints.set(identity(key), snapshot);
@@ -2684,7 +2732,7 @@ export class RunExecution<TOutput> {
         } catch (cause) { throw new ActivityCheckpointError(key, {cause}); }
       },
       commitWithAuxiliaryUsage: async (key, value, usage) => {
-        const retained = retainControllerCheckpoint(value), record = snapshotControllerAuxiliaryUsage(usage);
+        const retained = retainRunCheckpointValue(value), record = snapshotControllerAuxiliaryUsage(usage);
         const usageKey = JSON.stringify([this.runId, "run", `${AUXILIARY_USAGE_KEY}${record.attemptId}`]);
         await this.writer.transaction(() => {
           const previous = this.controllerCheckpoints.get(usageKey);
@@ -2695,7 +2743,7 @@ export class RunExecution<TOutput> {
         });
       },
       compareAndCommit: async (expected, writes) => {
-        const checks = retainControllerCheckpoint(expected), values = retainControllerCheckpoint(writes);
+        const checks = retainRunCheckpointValue(expected), values = retainRunCheckpointValue(writes);
         const accepted = await this.writer.transaction(() => {
           if (this.config.cancellation.context.signal.aborted || this.steeringQueue.length || this.interactionSettlements.length ||
               this.decisionBasis.revision(invocationId, this.writer.getSnapshot().revision) !== basis ||
@@ -4205,6 +4253,7 @@ export class RunExecution<TOutput> {
         Object.freeze({
           result: descendant.result,
           continuation: descendant.continuation,
+          signal:this.config.cancellation.context.signal,
         }),
       );
     } catch (error) {
@@ -4240,6 +4289,12 @@ export class RunExecution<TOutput> {
     call: ToolCall,
   ): Promise<void> {
     if (call.binding.kind !== "descendant_message") return;
+    const restored = this.restoredDescendantOutcomes.get(action.ref.id);
+    if (restored) {
+      // The original accepted call owns this delivery; it is not a new use of the target.
+      await this.commitDescendantExecutionOutcome(action,call,await restored,call.createdAt);
+      return;
+    }
     const targetAgent = call.binding.agent;
     const startedAt = this.now();
     let request: ReturnType<typeof snapshotDescendantMessageRequest>;
@@ -4411,6 +4466,7 @@ export class RunExecution<TOutput> {
         Object.freeze({
           result: descendant.result,
           continuation: descendant.continuation,
+          signal:this.config.cancellation.context.signal,
         }),
       );
     } catch (error) {
@@ -5032,6 +5088,7 @@ export class RunExecution<TOutput> {
     try {
     let resourceSettlement: RunTreeResourceSettlement;
     let delegationResult: DelegationResult;
+    let retainedNarrative:import("../delegation/index.js").RetainedDelegationNarrative|null=null;
     const retained = this.descendantTransfers.get(managed.childRunId);
     if (retained?.status === "failed") {
       await this.failManagedDescendant(managed, retained.code!);
@@ -5064,7 +5121,8 @@ export class RunExecution<TOutput> {
         resourceSettlement,
         createdAt: this.now(),
       });
-      publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "descendant_result", runId: this.runId, occurredAt: delegationResult.createdAt, parentRunActionId: managed.action.ref.id, raw: result, projected: delegationResult });
+      retainedNarrative=retained?.narrative??(delegationResult.narrative&&narrative!==null?
+        Object.freeze({source:delegationResult.narrative.source,text:narrative}):null);
       flow.current?.check("result_projection","passed",{resultId:delegationResult.ref.id});
       flow.current?.output({owner:"agent-runtime",kind:"contribution",id:delegationResult.ref.id,revision:delegationResult.ref.revision});
     } catch {
@@ -5087,11 +5145,13 @@ export class RunExecution<TOutput> {
     );
     if (!retained) {
       this.descendantTransfers.set(managed.childRunId, {childRunId: managed.childRunId,
-        relationId: managed.relationId, action: managed.action, result: delegationResult, status: "settled", code: null});
+        relationId: managed.relationId, action: managed.action, result: delegationResult,narrative:retainedNarrative, status: "settled", code: null});
       if (this.treeCommits) await this.writer.commitState(() => ({}));
       else this.runTree.settleDescendantTransfer(managed.childRunId, "settled");
     }
     managed.transferState = "settled";
+    publishRunExecutionObservation(this.dependencies.executionObserver, { kind: "descendant_result", runId: this.runId, occurredAt: delegationResult.createdAt,
+      parentRunActionId: managed.action.ref.id, raw: result, projected: delegationResult,narrative:retainedNarrative });
     this.emitDescendantSettled(managed, delegationResult, dispatch);
     const outcome: DescendantExecutionOutcome = Object.freeze({
       status: "settled" as const,
@@ -5127,7 +5187,7 @@ export class RunExecution<TOutput> {
     );
     if (childNode?.resultTransfer === "pending") {
       this.descendantTransfers.set(managed.childRunId, {childRunId: managed.childRunId,
-        relationId: managed.relationId, action: managed.action, result: null, status: "failed", code});
+        relationId: managed.relationId, action: managed.action, result: null,narrative:null, status: "failed", code});
       if (this.treeCommits) await this.writer.commitState(() => ({}));
       else this.runTree.settleDescendantTransfer(managed.childRunId, "failed");
     }
@@ -5471,7 +5531,7 @@ export class RunExecution<TOutput> {
         item.payload.observation.payload.childRunId === managed.childRunId)) return;
     let projected: import("./RunExecutionCoordinatorDependencies.js").DescendantOperationOutcome;
     try {
-      projected = await managed.composition.resultProjection.project({ result, continuation });
+      projected = await managed.composition.resultProjection.project({ result, continuation,signal:this.config.cancellation.context.signal });
     } catch (error) {
       assertExecutionCommitConfirmed(error);
       projected = Object.freeze({
@@ -8276,7 +8336,10 @@ function descendantDeliveryFacts(payload: Extract<RunObservation["payload"],
   return {kind: payload.kind, status: payload.status, childRunId: payload.childRunId,
     ...(result === null ? {} : {childTerminalStatus: result.terminal.status, childTerminalCode: result.terminal.code,
       resultRef: snapshotModelJsonValue(result.ref, "resultRef"), effects: {status: result.effects.status,
-        attempted: result.effects.attempted, settled: result.effects.settled, uncertain: result.effects.uncertain}}),
+        attempted: result.effects.attempted, settled: result.effects.settled, uncertain: result.effects.uncertain},
+      limits: snapshotModelJsonValue(result.limits,"delegation limits"),
+      limitDisposition: snapshotModelJsonValue(result.limitDisposition,"delegation limit disposition"),
+      uncertainty: snapshotModelJsonValue(result.uncertainty,"delegation uncertainty")}),
     failureCode: payload.failure?.code ?? null};
 }
 

@@ -10,10 +10,10 @@ export const HELARC_PROTOCOL_RECOVERY_EXECUTION_FLOW = createExecutionFlowDefini
   entryStepIds: ["assess"], exitStepIds: ["return"],
 });
 export const HELARC_REQUEST_EXECUTION_FLOW = createExecutionFlowDefinition({
-  owner:"helarc",id:"model-input-composition",revision:"1",label:"Helarc Model Input",
-  description:"Current optional instructions, complete callable definitions, conversation, and Context assembled for this exact model request.",
-  steps:[{id:"compose",label:"Compose Helarc model input",kind:"entry",checks:["instruction_binding","settled_interaction"]},{id:"request",label:"Return Provider request",kind:"exit",checks:[]}],
-  transitions:[{id:"compose:request",from:"compose",to:"request",label:"Composed request"}],entryStepIds:["compose"],exitStepIds:["request"],
+  owner:"helarc",id:"model-input-composition",revision:"2",label:"Helarc Task Input Sources",
+  description:"Product instructions, callable definitions and interaction sources supplied to independent input preparation; not proof of an accepted or sent request.",
+  steps:[{id:"compose",label:"Compose Product input sources",kind:"entry",checks:["instruction_binding","settled_interaction"]},{id:"request",label:"Return task request source",kind:"exit",checks:[]}],
+  transitions:[{id:"compose:request",from:"compose",to:"request",label:"Source contribution"}],entryStepIds:["compose"],exitStepIds:["request"],
 });
 export const HELARC_RESPONSE_EXECUTION_FLOW = createExecutionFlowDefinition({
   owner:"helarc",id:"model-response-interpretation",revision:"2",label:"Helarc Response Interpretation",

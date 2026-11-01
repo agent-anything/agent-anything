@@ -2,6 +2,8 @@ export { modelInputSectionLocations, snapshotModelInputSourceRef } from "./Model
 export {applyModelInputOwnerForms, modelInputOccurrenceDigest} from "./ModelInputForms.js";
 export type {ModelInputOwnerForm} from "./ModelInputForms.js";
 export {modelInputValueDigest} from "./ModelWorkingView.js";
+export {inputAccountingFootprint,createAcceptedInputUsage,validateAcceptedInputUsage,measureFromAcceptedUsage} from "./AcceptedInputUsage.js";
+export type {InputAccountingFootprint,AcceptedInputUsage,InputUsageQuery,InputUsageEvidencePort,InputMeasurementDerivation} from "./AcceptedInputUsage.js";
 export { createExactModelWorkingView, createOwnerModelWorkingView, selectModelWorkingView, snapshotModelInputPreservation } from "./ModelWorkingView.js";
 export type { ModelWorkingView, ModelWorkingViewEntry, ModelNativeExchangeGroup, ModelInputPreservation } from "./ModelWorkingView.js";
 export type { ModelInputSectionLocation } from "./ModelInput.js";
@@ -45,3 +47,4 @@ export * from "./InputCombinationSearch.js";
 export * from "./InputContributionOrganization.js";
 export * from "./InputCapacityAllocation.js";
 export * from "./RemoteInputMeasurement.js";
+export * from "./ModelResultTextSlot.js";

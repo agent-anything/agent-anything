@@ -12,7 +12,7 @@ import type {RetainedCommandEnvironment} from "./ExecutionEnvironmentProtection.
 
 /** Original Product composition, with command environment sealed by the Host. Never executable services. */
 export interface HelarcExecutionAdmission {
-  readonly version: 2;
+  readonly version: 3;
   readonly rootRunId: string;
   readonly productRunId: string;
   readonly sessionId: string;
@@ -23,7 +23,9 @@ export interface HelarcExecutionAdmission {
   readonly identity: IdentityRef;
   readonly providerProfile: HelarcProviderProfile;
   readonly providerBinding: HelarcProviderRecoveryBinding;
+  readonly providerCredential: import("../provider/HelarcRunCredentialBinding.js").HelarcRunCredentialBinding;
   readonly instructionSettings: HelarcInstructionSettings;
+  readonly contextBinding:import("../context/HelarcContextRunBinding.js").HelarcContextRunBinding;
   readonly permissionPreset: HelarcPermissionPreset;
   readonly enforcement: SandboxEnforcement;
   readonly commandLimits: Partial<CodeAgentCommandLimits> | null;

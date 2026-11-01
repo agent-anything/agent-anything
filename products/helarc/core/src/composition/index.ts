@@ -3,6 +3,8 @@ export type {
   HelarcProductComposition,
 } from "./HelarcProductComposition.js";
 export { createHelarcProductComposition } from "./HelarcProductComposition.js";
+export { createHelarcTaskModelBinding } from "./HelarcTaskModelBinding.js";
+export type { HelarcTaskModelBinding, HelarcTaskExecutionComposition, HelarcTaskExecutionFactory } from "./HelarcTaskModelBinding.js";
 export * from "./HelarcProviderCompatibility.js";
 export type {
   CreateHelarcActionCompositionInput,

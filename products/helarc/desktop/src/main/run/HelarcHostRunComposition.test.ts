@@ -20,9 +20,13 @@ import {
   type ModelJsonValue,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import {readTaskModelResponseHandoff, type TaskModelResponseHandoff, type TaskModelSource} from "@agent-anything/agent-runtime/decision";
+import type {ActivityDispatchReceipt, ActivityHandoffCycle, ActivityHandoffFact, ActivityRawResult, ActivityStageState, SharedAcceptanceProposal} from "@agent-anything/agent-runtime/activity";
+import type {PreparedContextInput} from "@agent-anything/agent-runtime/context-representation";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import { createFakeProviderContext } from "@agent-anything/test-support";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
-import { access, mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile, rm, readdir, rmdir } from "node:fs/promises";
 import { join, relative, resolve, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
@@ -39,6 +43,7 @@ import { CommandOutputRegistry } from "../workbench/CommandOutputRegistry.js";
 import { HelarcExecutionStore } from "../execution-storage/HelarcExecutionStore.js";
 import {openExecutionStoreFixture as openUnmanagedExecutionStoreFixture} from "../execution-storage/fixtures/ExecutionEnvironmentFixture.js";
 import {ExecutionFixtureScope} from "./fixtures/ExecutionFixtureScope.js";
+import {bindFixtureProviderEncoding} from "./fixtures/EncodedFixtureProvider.js";
 import {withExecutionScope} from "./fixtures/ManagedExecutionTest.js";
 import { pathToFileURL } from "node:url";
 import {
@@ -59,8 +64,11 @@ type RunHelarcTestInput = Omit<
   | "identitySelection"
   | "providerProfile"
   | "commandOutputDirectory"
+  | "executionStore"
+  | "activityHost"
 > & {
   readonly commandOutputDirectory?: string;
+  readonly executionStore?: HelarcExecutionStore;
   readonly workspace: WorkspaceSelection;
   readonly workspaceResolver?: HostWorkspaceResolver;
   readonly workspaceSelection?: HostWorkspaceSelection;
@@ -86,9 +94,43 @@ function openExecutionStoreFixture(...args: Parameters<typeof openUnmanagedExecu
 }
 
 const commandOutputDirectory = mkdtempSync(join(tmpdir(), "helarc-host-output-"));
-afterAll(() => rm(commandOutputDirectory, { recursive: true, force: true }));
+const executionDirectory = mkdtempSync(join(tmpdir(), "helarc-host-execution-"));
+const executionWorker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+afterAll(async () => {
+  const target = resolve(commandOutputDirectory);
+  if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-host-output-")) {
+    throw new Error("Unexpected Host fixture directory");
+  }
+  await rm(target, { recursive: true, force: true });
+  // Never delete a store directory left by an unconfirmed Host shutdown.
+  await rmdir(executionDirectory);
+});
+
+function openIsolatedExecutionStoreFixture(): Promise<HelarcExecutionStore> {
+  const scope = ExecutionFixtureScope.current();
+  if (!scope) throw new Error("execution_fixture_scope_required");
+  return scope.open(async () => {
+    const directory = await mkdtemp(join(executionDirectory, "store-"));
+    const store = await openUnmanagedExecutionStoreFixture(directory, executionWorker);
+    const close = store.close.bind(store);
+    store.close = async () => {
+      await close();
+      const target = resolve(directory);
+      if (dirname(target) !== resolve(executionDirectory) || !basename(target).startsWith("store-")) {
+        throw new Error("Unexpected execution fixture directory");
+      }
+      await rm(target, {recursive: true, force: true});
+    };
+    return store;
+  });
+}
 
 async function prepareTestHostRun(input: RunHelarcTestInput) {
+  bindFixtureProviderEncoding(input.provider);
+  const scope = ExecutionFixtureScope.current();
+  if (!scope) throw new Error("execution_fixture_scope_required");
+  const executionStore = input.executionStore ?? await openIsolatedExecutionStoreFixture();
+  const activityHost = scope.activityHost(executionStore);
   const productRunId = input.productRunId ?? input.sessionId ?? input.task.id;
   const permissionPreset = input.permissionPreset ?? "ask_for_approval";
   const {
@@ -104,6 +146,8 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
   } = input;
   const create = () => prepareHelarcHostRun({
     ...hostInput,
+    executionStore,
+    activityHost,
     commandOutputDirectory: input.commandOutputDirectory ?? commandOutputDirectory,
     workspaceResolver: workspaceResolver ??
       createStaticHostWorkspaceResolver(workspace),
@@ -125,7 +169,7 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     permissionPreset,
     providerProfile: providerProfile ?? createTestProviderProfile(input.provider),
   });
-  return ExecutionFixtureScope.current()?.prepare(create) ?? create();
+  return scope.prepare(create, executionStore);
 }
 
 function createTestProviderProfile(
@@ -153,7 +197,9 @@ function executeReadOnlyTestHostRun(
   return executeTestHostRun({ ...input, enableShell: false });
 }
 
-describe("Helarc Host Run composition", () => {
+// These integrations now execute durable shared activities, not the former in-memory coordinator.
+// A measured exchange takes 2-4 seconds; multi-turn workflows retain their own bounded cleanup.
+describe("Helarc Host Run composition", {timeout:30_000}, () => {
   it("reconstructs admission before the first command without adopting the new Host environment", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-admission-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
@@ -448,6 +494,155 @@ describe("Helarc Host Run composition", () => {
       await rm(target, {recursive: true, force: true});
     }
   }), 90_000);
+  it.each(["prepared", "dispatched", "returned"] as const)("recovers original physical transport facts after interruption at %s", withExecutionScope(async boundary => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-transport-recovery-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
+    let store = await openExecutionStoreFixture(join(directory, "execution"), worker);
+    try {
+      const scope = ExecutionFixtureScope.current()!;
+      const checkpointKey = "task-model-response-submission.v1";
+      type Submission = {version: 1; handoff: TaskModelResponseHandoff; proposal: SharedAcceptanceProposal; digest: string};
+      let submission: Submission | null = null;
+      let modelStage: ActivityStageState | null = null;
+      let raw: ActivityRawResult | null = null;
+      let interrupted = false, frozen = false;
+      const outage = new Error(`Lost Host at task response ${boundary}`);
+      const failures: string[] = [];
+      const checkCycle = (cycle: ActivityHandoffCycle) => {
+        const errors = [...cycle.failures, ...cycle.runs.flatMap(run => run.result.failures),
+          ...cycle.reconsiderations.flatMap(run => run.result.failures)];
+        for (const issue of errors) failures.push(String(issue.error));
+        if (errors.length) throw new AggregateError(errors.map(issue => issue.error), "Unexpected fixture activity failure");
+      };
+      scope.activityHost(store, {report: async cycle => {if (interrupted) throw outage; checkCycle(cycle);}});
+      const provider = new ScriptedProvider([{kind: "completion", summary: "Original response."}]);
+      const prepared = await prepareTestHostRun({...createTask(workspaceRoot), provider, executionStore: store});
+      const commit = store.commitRunTree.bind(store), command = store.activityHandoffs.command.bind(store.activityHandoffs);
+      store.commitRunTree = async value => {
+        const receipt = await commit(value);
+        for (const run of value.runs.filter(run => run.state.run.id === prepared.rootRunId)) {
+          const entry = run.control.controllerCheckpoints.find(([key]) => {
+            const [, owner, name] = JSON.parse(key);
+            return owner === "decision" && name === checkpointKey;
+          });
+          if (!entry) continue;
+          const original = structuredClone(entry[1]) as Submission;
+          expect(original).toMatchObject({version: 1, handoff: {kind: "task_model_response_handoff", runId: prepared.rootRunId}});
+          expect(original.digest).toBe(modelInputValueDigest(original.proposal));
+          if (submission) expect(original).toEqual(submission);
+          else submission = original;
+          if (boundary === "prepared" && !interrupted) {
+            interrupted = true; throw outage;
+          }
+        }
+        return receipt;
+      };
+      store.activityHandoffs.command = async value => {
+        // A lost Host must not interpret a raw response after the recorded boundary.
+        if (frozen && (value.kind === "claim_processing" && value.claim.requestId === modelStage?.request.id ||
+            value.kind === "accept" && value.receipt.requestId === modelStage?.request.id)) throw outage;
+        const dispatchStage = value.kind === "dispatch" ?
+          await command({kind: "read_stage", requestId: value.attempt.requestId}) as ActivityStageState | null : null;
+        const physical = dispatchStage?.request.pathId === submission?.handoff.pathId && dispatchStage?.request.stageKind === "model";
+        const returned = value.kind === "save_raw" && value.result.attemptId === modelStage?.attempt?.id;
+        if (boundary === "returned" && returned) frozen = true;
+        const result = await command(value);
+        if (physical && value.kind === "dispatch") {
+          const dispatched = result as ActivityDispatchReceipt;
+          expect(dispatched.granted).toBe(true);
+          modelStage = structuredClone(dispatched.stage);
+          expect(modelStage.attempt).toEqual(value.attempt);
+          if (boundary === "dispatched") {interrupted = true; frozen = true; throw outage;}
+        }
+        if (boundary === "returned" && returned && value.kind === "save_raw") {
+          raw = structuredClone(value.result);
+          interrupted = true; throw outage;
+        }
+        return result;
+      };
+      const first = prepared.start();
+      await expect(first.result).rejects.toBeDefined();
+      await expect(first.result).rejects.toMatchObject(boundary === "prepared" ?
+        {key: checkpointKey} : {name: "ActivityHostUnavailableError", reason: "failed"});
+      expect(interrupted, JSON.stringify(failures)).toBe(true);expect(provider.requests).toHaveLength(boundary === "returned" ? 1 : 0);
+      const retained = submission as Submission | null;
+      if (!retained) throw new Error("Original task response checkpoint missing");
+      const originalStage = modelStage as ActivityStageState | null;
+      const originalRaw = raw as ActivityRawResult | null;
+      const source = retained.proposal.parts.find(part => part.kind === "stage_submission")!.proposal as {input: TaskModelSource};
+      expect((await store.readRunTree(prepared.rootRunId))!.members[0]!.head.state.items.filter(item => item.payload.kind === "controller_turn")).toHaveLength(0);
+      if (boundary === "prepared") {
+        expect(await store.sharedAcceptance.query(retained.proposal.id)).toBeNull();
+        expect(await command({kind: "read_path", pathId: retained.handoff.pathId})).toBeNull();
+      } else {
+        if (!originalStage) throw new Error("Original model dispatch missing");
+        expect(await readTaskModelResponseHandoff(store.activityHandoffs, retained.handoff)).toMatchObject({
+          kind: "pending", control: {cancelled: false}, stage: {status: boundary === "returned" ? "raw_result" : "dispatched",
+            request: originalStage.request, attempt: originalStage.attempt, result: originalRaw, receipt: null},
+        });
+      }
+      const saved = (await store.readProductRun(prepared.rootRunId))!;
+      await store.close();store = await openExecutionStoreFixture(join(directory, "execution"), worker);
+      const restoredCheckpoint = (await store.readRunTree(prepared.rootRunId))!.members[0]!.head.control.controllerCheckpoints
+        .find(([key]) => JSON.parse(key)[2] === checkpointKey)![1];
+      expect(restoredCheckpoint).toEqual(retained);
+      let reconciled!: () => void;
+      const unknownResult = new Promise<void>(resolve => {reconciled = resolve;});
+      scope.activityHost(store, {report: async cycle => {
+        checkCycle(cycle);
+        if (originalStage && cycle.runs.some(run => run.runId === prepared.rootRunId && run.result.pending.some(item =>
+          item.requestId === originalStage.request.id && item.reason === "external_result_unknown"))) reconciled();
+      }});
+      const next = new ScriptedProvider([{kind: "completion", summary: "Resumed original request."}]);
+      const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: next, executionStore: store,
+        providerProfile: saved.providerProfile, instructionSettings: saved.instructionSettings, recoveryAdmission: saved});
+      const execution = await recovered.recover("continue");
+      if (boundary === "dispatched") {
+        let finished = false;
+        void execution.result.then(() => {finished = true;}, () => {finished = true;});
+        await unknownResult;
+        expect(finished).toBe(false);
+        expect(await readTaskModelResponseHandoff(store.activityHandoffs, retained.handoff)).toMatchObject({kind: "pending",
+          control: {cancelled: false}, stage: {status: "dispatched", request: originalStage!.request,
+            attempt: originalStage!.attempt, result: null, receipt: null}});
+        expect(next.requests).toHaveLength(0);
+        expect((await store.readRunTree(prepared.rootRunId))!.members[0]!.head.state.items.filter(item => item.payload.kind === "controller_turn")).toHaveLength(0);
+        await execution.activeRun.cancel({origin: "host", reasonCode: "host_requested", reason: "Finish the unresolved transport fixture without inventing a response."});
+        expect((await execution.result).runResult.status).toBe("cancelled");
+        expect(await store.activityHandoffs.command({kind: "read_stage", requestId: originalStage!.request.id})).toMatchObject({
+          status: "dispatched", attempt: originalStage!.attempt, result: null, receipt: null,
+        });
+      } else {
+        const outcome = await execution.result;
+        expect(outcome.runResult.status, JSON.stringify({cause: outcome.runResult.cause, failures})).toBe("completed");
+        expect(outcome.product.output.agentSummary).toBe(boundary === "returned" ? "Original response." : "Resumed original request.");
+        const observed = await readTaskModelResponseHandoff(store.activityHandoffs, retained.handoff);
+        expect(observed.kind).toBe("accepted");
+        const stage = observed.stage!;
+        const input = stage.request.input as PreparedContextInput;
+        expect(boundary === "returned" ? provider.requests[0] : next.requests[0]).toEqual(input.request);
+        if (boundary === "returned") {
+          expect(stage.request).toEqual(originalStage!.request);
+          expect(stage.attempt).toEqual(originalStage!.attempt);
+          expect(stage.result).toEqual(originalRaw);
+          expect(stage.receipt?.resultId).toBe(originalRaw!.id);
+        }
+      }
+      expect(next.requests).toHaveLength(boundary === "prepared" ? 1 : 0);
+      const sourceStage = await store.activityHandoffs.command({kind: "read_stage", requestId: `${retained.handoff.pathId}:source`}) as ActivityStageState;
+      expect(sourceStage.request.input).toEqual(source.input);
+      if (boundary !== "dispatched") {
+        const state = (await store.readRunTree(prepared.rootRunId))!.members[0]!.head.state;
+        expect(state.items.filter(item => item.payload.kind === "controller_turn")).toHaveLength(1);
+      }
+    } finally {
+      await store.close();
+      const target = resolve(directory);
+      if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-transport-recovery-")) throw new Error("Unexpected test path");
+      await rm(target, {recursive: true, force: true});
+    }
+  }), 30_000);
   it.each(["continue", "cancel"] as const)("restores an accepted Turn after lost acknowledgement and %s without recreating the decision", withExecutionScope(async (intent: "continue" | "cancel") => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-host-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
@@ -526,7 +721,7 @@ describe("Helarc Host Run composition", () => {
           });
         },
       );
-      const result = await executeReadOnlyTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings, inspection: observed ? inspection : undefined, now: () => "2026-06-28T00:00:00.000Z" });
+      const result = await executeReadOnlyTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings, inspection: observed ? inspection : undefined });
       return { result, provider };
     };
     try {
@@ -549,7 +744,7 @@ describe("Helarc Host Run composition", () => {
       expect((await queries.query({ ...scope, kind: "get_lifecycle", subject: runs[0]!.subject })).records.some((record) => record.payload.kind === "transition" && record.payload.to === "completed")).toBe(true);
       const execution = await queries.query({...scope,kind:"get_execution_flow",runId:recorded.result.runResult.runId,limit:500});
       expect(execution.records.flatMap(record=>record.payload.kind === "flow_invocation" ? [record.payload.observation.definition.id] : [])).toEqual(expect.arrayContaining([
-        "run-execution", "model-call-execution", "model-turn", "model-context-admission", "result-delivery",
+        "run-execution", "model-call-execution", "model-input-composition", "result-delivery",
       ]));
       const core = execution.records.find(record => record.payload.kind === "flow_invocation" && record.payload.observation.definition.id === "run-execution")!;
       const coreScope = {...scope, runId: recorded.result.runResult.runId, invocationId: core.subject.id};
@@ -566,7 +761,7 @@ describe("Helarc Host Run composition", () => {
           expect(detail.flow?.occurrence?.references.find(reference => reference.role === "output")?.contents[0]?.availability).toBe("present");
         }
       }
-      const supportingFlows = new Set(["agent-stop-dispatch", "model-turn", "model-input-composition", "model-context-admission", "model-response-interpretation", "retry-execution", "result-delivery"]);
+      const supportingFlows = new Set(["agent-stop-dispatch", "model-input-composition", "model-response-interpretation", "retry-execution", "result-delivery"]);
       for (const invocation of execution.records.filter(record => record.payload.kind === "flow_invocation" && supportingFlows.has(record.payload.observation.definition.id))) {
         const invocationScope = {...scope, runId: recorded.result.runResult.runId, invocationId: invocation.subject.id};
         const steps = (await queries.query({...invocationScope, kind: "list_flow_occurrences", limit: 500})).records;
@@ -589,6 +784,10 @@ describe("Helarc Host Run composition", () => {
       }
       const nativeRefs = execution.records.flatMap((record) => record.links.flatMap((link) => [link.from, link.to]))
         .filter((ref) => ref.kind === "request" || ref.kind === "operation");
+      // The Product flow returns source contributions. Sent requests belong to
+      // shared execution, and must be checked against the actual Provider calls.
+      nativeRefs.push(...recorded.provider.requests.map(request=>inspection.recorder!.ref(
+        "model-interaction","request",request.requestId,recorded.result.runResult.runId)));
       expect(nativeRefs.map((ref) => ref.kind)).toEqual(expect.arrayContaining(["request", "operation"]));
       const uniqueRefs = new Map(nativeRefs.map((ref) => [JSON.stringify(ref), ref]));
       for (const subject of uniqueRefs.values()) {
@@ -616,7 +815,9 @@ describe("Helarc Host Run composition", () => {
       protocol: defaults.protocol.map((entry) => ({ ...entry, enabled: false })),
       stop: defaults.stop.map((entry) => ({ ...entry, enabled: false })),
     };
-    const preparing = prepareTestHostRun({ ...createTask(workspaceRoot), provider, instructionSettings: settings });
+    // Open asynchronous fixture resources before testing synchronous input capture.
+    const executionStore = await openIsolatedExecutionStoreFixture();
+    const preparing = prepareTestHostRun({ ...createTask(workspaceRoot), provider, executionStore, instructionSettings: settings });
     settings.agent[0]!.enabled = true;
     settings.protocol[0]!.enabled = true;
     settings.stop[0]!.enabled = true;
@@ -663,7 +864,7 @@ describe("Helarc Host Run composition", () => {
 
   it("keeps the complete Run deadline separate from one Provider request window", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-run-deadline-"));
-    const startedAt = Date.parse("2026-08-20T00:00:00.000Z");
+    const startedAt = Date.now();
     let elapsedMs = 0;
     const provider = new ScriptedProvider(
       [{ kind: "completion", summary: "Completed after a long model request." }],
@@ -722,7 +923,6 @@ describe("Helarc Host Run composition", () => {
     const result = await executeReadOnlyTestHostRun({
       ...createTask(workspaceRoot),
       provider,
-      now: () => "2026-06-28T00:00:00.000Z",
     });
 
     expect(result.product.status).toBe("completed");
@@ -1003,43 +1203,32 @@ describe("Helarc Host Run composition", () => {
     expect(operationResults(result)).toEqual([]);
   }));
 
-  it("projects Provider request retry history through Runner activity", withExecutionScope(async () => {
+  it("retains Provider retry history in its original shared activity rather than a second Runner retry authority", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-provider-retry-"));
     const provider = new RetryThenCompleteProvider();
+    const store=await openIsolatedExecutionStoreFixture();
 
     const prepared = await prepareTestHostRun({
       ...createTask(workspaceRoot),
       provider,
-      now: () => "2026-07-14T00:00:00.000Z",
+      executionStore:store,
     });
     const composition = prepared.start();
     const result = await composition.result;
 
     expect(result.product.status, JSON.stringify({cause:result.runResult.cause, events:result.activity.filter(item=>item.kind.startsWith("retry") || item.kind.startsWith("controller"))})).toBe("completed");
     expect(provider.requests).toHaveLength(2);
-    const retryProjection = composition.activeRun.getStatus().retry;
-    expect(retryProjection).not.toBeNull();
-    const retryActivity = retryProjection?.recentEvents.filter((item) =>
-      item.owner === "provider_request"
-    );
-    expect(retryActivity?.map((item) => item.event)).toEqual([
-      "retry_attempt_started",
-      "retry_attempt_finished",
-      "retry_scheduled",
-      "retry_attempt_started",
-      "retry_attempt_finished",
-    ]);
-    expect(new Set(retryActivity?.map((item) => item.operationId))).toEqual(
-      new Set([`${provider.requests[0]!.correlation.controllerRequestId}:provider-request:1`]),
-    );
-    expect(retryActivity?.find((item) => item.event === "retry_scheduled")).toMatchObject({
-      owner: "provider_request",
-      attemptNumber: 2,
-      delayMs: 0,
-      code: "provider_unavailable",
-    });
-    expect(retryActivity?.every(Object.isFrozen)).toBe(true);
-    expect(JSON.stringify(retryActivity)).not.toContain("Provider is temporarily unavailable.");
+    const facts:ActivityHandoffFact[]=[];
+    for(let after=0;;){const page=await store.activityHandoffs.command({kind:"facts",runId:result.runResult.runId,after,limit:128}) as readonly ActivityHandoffFact[];
+      facts.push(...page);if(page.length<128)break;after=page.at(-1)!.sequence;}
+    const retries=facts.filter(fact=>fact.kind==="attempt_retry_accepted");
+    expect(retries).toHaveLength(1);
+    const stage=await store.activityHandoffs.command({kind:"read_stage",requestId:retries[0]!.requestId!}) as ActivityStageState;
+    expect(stage.attemptCount).toBe(2);
+    expect(stage.status).toBe("accepted");
+    expect(provider.requests[1]).toEqual(provider.requests[0]);
+    expect(facts.filter(fact=>fact.requestId===stage.request.id&&fact.kind==="raw_saved")).toHaveLength(2);
+    expect(composition.activeRun.getStatus().retry).toBeNull();
   }));
 
   it("runs Glob, Read, and Grep inside the Workspace scope", withExecutionScope(async () => {
@@ -1773,7 +1962,7 @@ describe("Helarc Host Run composition", () => {
       console.log("Approval composition timings", JSON.stringify(timings));
       await rm(workspaceRoot, {recursive: true, force: true});
     }
-  }), 20_000);
+  }), 60_000);
 
   it("rejects an ambiguous Edit without changing the file", withExecutionScope(async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-edit-ambiguous-"));
@@ -2394,9 +2583,5 @@ function nativeShellTool(): "Bash" | "PowerShell" {
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error("Timed out waiting for Helarc Host Run state.");
+  await expect.poll(predicate,{timeout:10_000,interval:20}).toBe(true);
 }

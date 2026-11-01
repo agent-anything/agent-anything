@@ -4,14 +4,18 @@ import {ActivityPurposeRegistry} from "../activity/ActivityPurpose.js";
 import {ActivityCheckpointError} from "../activity/ActivityCheckpoint.js";
 import type {ActivityDispatchReceipt,ActivityStageState,ActivityPathState} from "../activity/ActivityHandoff.js";
 import type {ModelActivityBinding} from "./ModelActivityBinding.js";
-import {ModelActivityJournal,type ModelActivityJournalSupport} from "./ModelActivityJournal.js";
+import {ModelActivityJournal,withActivityCheckpointErrors,type ModelActivityJournalSupport} from "./ModelActivityJournal.js";
 
 const purpose=new ActivityPurposeRegistry<null>().register({ref:{id:"model_transport",revision:"1"},inputOwner:"model_access",executionOwner:"model_access",interpretationOwner:"model_access",acceptanceOwner:"model_access",recoveryOwner:"model_access",stageKinds:["model_request"],capabilities:["model_request"],continuationKinds:[]},null);
 
 /** Physical transport occupancy ends when its outcome is retained, not after retry backoff. */
 export class ModelTransportJournal {
   private readonly dispatching:ModelActivityJournal;
-  constructor(private readonly support:ModelActivityJournalSupport,private readonly now:()=>string){this.dispatching=new ModelActivityJournal(support,now);}
+  private readonly support:ModelActivityJournalSupport;
+  constructor(support:ModelActivityJournalSupport,private readonly now:()=>string){
+    this.support={...support,port:withActivityCheckpointErrors(support.port)};
+    this.dispatching=new ModelActivityJournal(this.support,now);
+  }
   async execute(request:ProviderRequest,activity:ModelActivityBinding,attemptId:string,deadlineAt:string,signal:AbortSignal,send:()=>Promise<ProviderCallResult>):Promise<ProviderCallResult> {
     if(!this.support.scheduling)return send();
     const pool=this.support.scheduling.pool,port=this.support.port;

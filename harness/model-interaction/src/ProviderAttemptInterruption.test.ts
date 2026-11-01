@@ -6,6 +6,15 @@ import {
 } from "./ProviderAttemptInterruption.js";
 
 describe("ProviderAttemptInterruption", () => {
+  it("preserves accepted activity cancellation as narrower than Run cancellation",()=>{
+    const cancellation={runId:"run",requestId:"path:cancellation:2",activityId:"path",controlRevision:2};
+    const controller=new AbortController();
+    const attempt=createProviderAttemptInterruption({signal:controller.signal,
+      interruption:{kind:"activity_cancellation",cancellation}},1000);
+    controller.abort();
+    expect(providerResultFromInterruption(attempt.cause)).toEqual({kind:"cancelled",cancellation});
+    attempt.dispose();
+  });
   afterEach(() => vi.useRealTimers());
 
   it("keeps Run cancellation as the first cause when timeout fires later", async () => {

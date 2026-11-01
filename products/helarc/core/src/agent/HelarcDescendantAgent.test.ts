@@ -7,6 +7,22 @@ import { createHelarcDelegatedWorkerAgent } from "./HelarcAgent.js";
 import { createHelarcDescendantAgentContribution } from "./HelarcDescendantAgent.js";
 
 describe("Helarc descendant Agent contribution", () => {
+  it.each(["published","cancelled","absent"] as const)("projects a retained report as %s without claiming an inline summary",async mode=>{
+    const agent=createHelarcDelegatedWorkerAgent({providerId:"test",modelId:"test"});
+    const reference={id:"report",revision:`sha256:${"a".repeat(64)}`};
+    const publish=vi.fn().mockResolvedValue(mode==="published"?{status:"published",reference}:
+      {status:"unavailable",reason:"report_publication_cancelled"});
+    const {delegation}=createHelarcDescendantAgentContribution(agent,"2026-09-01T00:00:00.000Z",undefined,undefined,undefined,
+      mode==="absent"?undefined:{publish});
+    const signal=new AbortController().signal;
+    const result={terminal:{status:"completed",code:"completion_accepted"},narrative:{text:null,source:{bytes:32000}},
+      artifacts:{refs:[]},effects:{status:"none"},uncertainty:[],expectationCoverage:[],limitDisposition:{status:"within_limits"}} as unknown as DelegationResult;
+    const outcome=await delegation.resultProjection.project({result,continuation:null,signal});
+    expect(outcome).toMatchObject({status:mode==="published"?"succeeded":"partial",output:{status:"completed",summary:"",effect_status:"none",
+      report:{status:mode==="published"?"retained_material":"unavailable",reference:mode==="published"?reference:null,bytes:32000,inline:false}}});
+    if(mode!=="absent")expect(publish).toHaveBeenCalledWith(result,signal);
+    if(mode==="cancelled")expect(outcome.output).toMatchObject({report:{reason:"report_publication_cancelled"}});
+  });
   it("validates new continuation references and persists only the new assignment alongside inherited history", async () => {
     const agent = createHelarcDelegatedWorkerAgent({providerId: "test", modelId: "test"});
     const material = {id: "material-1", revision: `sha256:${"a".repeat(64)}`};
@@ -167,10 +183,9 @@ describe("Helarc descendant Agent contribution", () => {
     expect(projectNarrative("failed", [["  "], []])).toBeNull();
   });
 
-  it("marks a bounded report as truncated", () => {
+  it("preserves a long failed Child report for separate source retention", () => {
     const text = projectNarrative("failed", [["x".repeat(16_001)]]);
-    expect(text).toHaveLength(16_000);
-    expect(text).toMatch(/\[Child report truncated\.\]$/u);
+    expect(text).toBe("x".repeat(16_001));
     expect(projectNarrative("failed", [["x".repeat(16_000)]]))
       .toBe("x".repeat(16_000));
   });

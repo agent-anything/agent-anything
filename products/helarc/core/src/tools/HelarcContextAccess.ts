@@ -22,7 +22,12 @@ const readOutputSchema: ToolJsonObject = {type:"object",required:["description",
 }};
 const searchOutputSchema: ToolJsonObject = {type:"object",required:["matches","nextCursor","exhausted","scannedBytes","scannedDescriptions","frontier","limitations","stopReason"],properties:{
   matches:{type:"array",maxItems:16,items:{type:"object",required:["description","excerpt","byteStart","byteEnd"],properties:{description:descriptionSchema,excerpt:{type:"string"},byteStart:{type:"integer",minimum:0},byteEnd:{type:"integer",minimum:0}}}},
-  nextCursor:{type:["string","null"]},exhausted:{type:"boolean"},scannedBytes:{type:"integer",minimum:0},scannedDescriptions:{type:"integer",minimum:0},frontier:{type:"integer",minimum:0},limitations:{type:"array",items:{type:"string"}},stopReason:{enum:["scope_exhausted","result_limit","execution_budget"]},
+  nextCursor:{type:["string","null"]},exhausted:{type:"boolean"},scannedBytes:{type:"integer",minimum:0},scannedDescriptions:{type:"integer",minimum:0},
+  frontier:{oneOf:[{type:"integer",minimum:0},{type:"object",additionalProperties:false,required:["sources"],properties:{
+    sources:{type:"array",minItems:1,maxItems:16,items:{type:"object",additionalProperties:false,required:["id","frontier"],
+      properties:{id:{type:"string",minLength:1},frontier:{type:"integer",minimum:0}}}},
+  }}]},
+  limitations:{type:"array",items:{type:"string"}},stopReason:{enum:["scope_exhausted","result_limit","execution_budget"]},
 }};
 export const CONTEXT_ACCESS_DEFINITIONS = Object.freeze([
   {name: "ContextMaterialSearch" as const, operation: "context-search", outputSchema:searchOutputSchema, description:
@@ -46,8 +51,8 @@ export const CONTEXT_ACCESS_DEFINITIONS = Object.freeze([
 export function createHelarcContextAccess(admittedAt: string, access?: ContextMaterialAccessPort) {
   return CONTEXT_ACCESS_DEFINITIONS.map(definition => {
     const owner = `helarc.${definition.operation}`;
-    const revision = definition.name === "ContextMaterialSearch" ? "2" : "1";
-    const toolRevision = definition.name === "ContextMaterialSearch" ? "3" : "2";
+    const revision = definition.name === "ContextMaterialSearch" ? "3" : "1";
+    const toolRevision = definition.name === "ContextMaterialSearch" ? "4" : "2";
     const operationRef = {operation: {namespace: "helarc", name: definition.operation}, revision};
     const binding = {operation: operationRef, revision};
     const operation: RegisteredOperationDefinition = {admissionId: `${owner}.admission`, admittedAt, retirement: null, sourceRevision: revision, allowedRequestOrigins: ["tool_request"],
@@ -95,6 +100,12 @@ export function createHelarcContextAccess(admittedAt: string, access?: ContextMa
 }
 function record(value: unknown): value is Record<string, unknown> {return value !== null && typeof value === "object" && !Array.isArray(value);}
 function count(value:unknown):value is number {return Number.isSafeInteger(value) && (value as number)>=0;}
+function validFrontier(value:unknown):boolean {
+  if(count(value))return true;
+  if(!record(value)||!Array.isArray(value.sources)||!value.sources.length||value.sources.length>16)return false;
+  return value.sources.every(source=>record(source)&&typeof source.id==="string"&&source.id.length>0&&count(source.frontier))&&
+    new Set(value.sources.map(source=>source.id)).size===value.sources.length;
+}
 function validDescription(value:unknown):boolean {
   if (!record(value) || typeof value.originRunId!=="string" || !record(value.source) || typeof value.source.id!=="string" ||
       typeof value.source.owner!=="string" || typeof value.source.kind!=="string" || !(value.source.revision===null || typeof value.source.revision==="string") ||
@@ -111,7 +122,7 @@ function validContextAccessOutput(name:"ContextMaterialRead"|"ContextMaterialSea
     value.complete===(value.byteStart===0 && value.byteEnd===value.description.bytes) && value.coordinate==="utf8_view_bytes";
   return Array.isArray(value.matches) && value.matches.length<=16 && value.matches.every(match=>record(match) && validDescription(match.description) &&
     typeof match.excerpt==="string" && count(match.byteStart) && count(match.byteEnd) && match.byteEnd>=match.byteStart) &&
-    count(value.frontier) && count(value.scannedBytes) && value.scannedBytes<=CONTEXT_MATERIAL_LIMITS.searchBytes+CONTEXT_MATERIAL_LIMITS.queryBytes &&
+    validFrontier(value.frontier) && count(value.scannedBytes) && value.scannedBytes<=CONTEXT_MATERIAL_LIMITS.searchBytes+CONTEXT_MATERIAL_LIMITS.queryBytes &&
     count(value.scannedDescriptions) && typeof value.exhausted==="boolean" && Array.isArray(value.limitations) &&
     ["scope_exhausted","result_limit","execution_budget"].includes(value.stopReason as string) &&
     (value.stopReason==="scope_exhausted")===value.exhausted &&

@@ -15,6 +15,8 @@ import type {
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import type { FileHelarcProjectStore } from "./project/FileHelarcProjectStore.js";
 import type { FileHelarcInstructionSettingsStore } from "./instructions/FileHelarcInstructionSettingsStore.js";
+import type {FileHelarcContextSettingsStore} from "./context/FileHelarcContextSettingsStore.js";
+import {projectHelarcContextSettings} from "./context/HelarcContextSettingsProjection.js";
 import { HelarcResponseProgress } from "./workbench/HelarcResponseProgress.js";
 import { readToken, workScopeValid } from "./workbench/WorkbenchReadLimits.js";
 
@@ -25,6 +27,7 @@ export const HELARC_IPC_CHANNELS = {
   readConversation: "helarc:read-conversation",
   readConversationTurn: "helarc:read-conversation-turn",
   readCurrentWork: "helarc:read-current-work",
+  readExecutionActivities: "helarc:read-execution-activities",
   readTaskDetails: "helarc:read-task-details",
   readWorkHistory: "helarc:read-work-history",
   readArtifactContent: "helarc:read-artifact-content",
@@ -42,10 +45,14 @@ export const HELARC_IPC_CHANNELS = {
   cleanupStorage: "helarc:cleanup-storage",
   saveInspectionSettings: "helarc:save-inspection-settings",
   getInstructionSettings: "helarc:get-instruction-settings",
+  getContextSettings:"helarc:get-context-settings",
+  saveContextSettings:"helarc:save-context-settings",
   saveInstructionSettings: "helarc:save-instruction-settings",
   cancelRun: "helarc:cancel-run",
   chooseWorkspace: "helarc:choose-workspace",
   getRunStatus: "helarc:get-run-status",
+  listRecoverableWork:"helarc:list-recoverable-work",
+  recoverWork:"helarc:recover-work",
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
   resumeDescendant: "helarc:resume-descendant",
@@ -66,6 +73,7 @@ export interface RegisterHelarcIpcInput {
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   storage?: import("./storage/HelarcStorageService.js").HelarcStorageService;
   instructionSettingsStore?: FileHelarcInstructionSettingsStore | null;
+  contextSettingsStore?:FileHelarcContextSettingsStore|null;
   window: BrowserWindow;
   controller: HelarcMainController;
   providerCredentialStore?: ProviderCredentialStore | null;
@@ -74,6 +82,9 @@ export interface RegisterHelarcIpcInput {
 }
 
 export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
+  input.window.once("closed",()=>{
+    for(const channel of Object.values(HELARC_IPC_CHANNELS))ipcMain.removeHandler(channel);
+  });
   const selection = input.providerProfileStore && input.providerCredentialStore
     ? new HelarcProviderSelection(input.providerProfileStore, input.providerCredentialStore) : null;
   let providerRefreshSequence = 0;
@@ -119,7 +130,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     return selection.discover(query);
   });
   for (const method of ["listThreadRuns", "readCommandDetails", "readWorkbenchItem", "readCommandOutput",
-    "readConversation", "readConversationTurn", "readCurrentWork", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
+    "readConversation", "readConversationTurn", "readCurrentWork", "readExecutionActivities", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
     ipcMain.handle(HELARC_IPC_CHANNELS[method], (event, query) => {
       if (!trustedSender(event)) return { status: "rejected", code: "invalid_query" };
       return input.controller.workbench[method](query);
@@ -197,6 +208,11 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       "storage.cleanup": ({ recordingIds }) => {
         if (!input.storage) throw new Error("Storage maintenance is unavailable.");
         return input.storage.cleanup(recordingIds);
+      },
+      "context.save":async({settings,expectedRevision})=>{
+        if(!input.contextSettingsStore)throw new Error("Context settings storage is unavailable.");
+        const saved=await input.contextSettingsStore.save(settings,expectedRevision);
+        return projectHelarcContextSettings(input.controller.configureContextSettings(saved.settings));
       },
       "instructions.save": async ({ settings }) => {
         if (!input.instructionSettingsStore) throw new Error("Instruction settings storage is unavailable.");
@@ -357,6 +373,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.getInstructionSettings, () => input.controller.getInstructionSettings());
+  ipcMain.handle(HELARC_IPC_CHANNELS.getContextSettings,()=>projectHelarcContextSettings(input.controller.getContextSettings()));
+  ipcMain.handle(HELARC_IPC_CHANNELS.saveContextSettings,(_event,command:unknown)=>productCommands.dispatch(command,"context.save"));
   ipcMain.handle(HELARC_IPC_CHANNELS.getInspectionSettings, () => {
     if (!input.inspection) throw new Error("Inspection source is unavailable.");
     return input.inspection.snapshot();
@@ -394,8 +412,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   ipcMain.handle(HELARC_IPC_CHANNELS.startRun, (_event, command: unknown) => {
     return productCommands.dispatch(command, "run.start");
   });
-  ipcMain.handle("helarc:list-recoverable-work", () => input.controller.listRecoverableWork());
-  ipcMain.handle("helarc:recover-work", (_event, request) => input.controller.recoverWork(request));
+  ipcMain.handle(HELARC_IPC_CHANNELS.listRecoverableWork, () => input.controller.listRecoverableWork());
+  ipcMain.handle(HELARC_IPC_CHANNELS.recoverWork, (_event, request) => input.controller.recoverWork(request));
 
   ipcMain.handle(HELARC_IPC_CHANNELS.openThread, (_event, command: unknown) => {
     return productCommands.dispatch(command, "thread.open");

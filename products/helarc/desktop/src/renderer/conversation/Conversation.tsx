@@ -11,8 +11,9 @@ import type {
 import { useResponsePreview } from "./useResponsePreview.js";
 import {
   ConversationEntries,
-  ModelResponseProgress,
 } from "./ConversationEntries.js";
+import { modelResponseProgress } from "../../shared/ModelResponsePresentation.js";
+import { ExecutionActivitiesProvider, ForegroundActivity } from "../activity/ExecutionActivities.js";
 import { ConversationReadingBudget } from "./ConversationReadingBudget.js";
 import { ConversationFollowing, ConversationReading } from "./ConversationReading.js";
 
@@ -25,7 +26,10 @@ type Props = {
 export function Conversation(props: Props) {
   return (
     <ConversationReadingBudget key={props.snapshot.activeThread?.id ?? "empty"}>
-      <ConversationReader {...props} />
+      <ExecutionActivitiesProvider scope={props.scope} visible={props.visible}
+        revision={`${props.snapshot.activityRevision ?? 0}:${props.snapshot.run?.host.runRevision ?? 0}:${props.snapshot.run?.display.terminal ?? false}`}>
+        <ConversationReader {...props} />
+      </ExecutionActivitiesProvider>
     </ConversationReadingBudget>
   );
 }
@@ -313,7 +317,8 @@ function ConversationReader({ snapshot, scope, onInspect, visible }: Props) {
           />
           </ConversationReading.Provider>
           </ConversationFollowing.Provider>
-          <ModelResponseProgress attempts={previews.attempts} live={live} />
+          <ForegroundActivity scope={scope} active={live} showAvailability
+            responseProgress={live ? modelResponseProgress(previews.attempts.at(-1)) : null} />
           {previews.omitted > 0 && (
             <p className="wb-muted">Earlier response previews omitted.</p>
           )}

@@ -544,9 +544,15 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1
     devDependencies:
+      '@agent-anything/interaction':
+        specifier: workspace:*
+        version: link:../../../harness/interaction
       '@agent-anything/test-support':
         specifier: workspace:*
         version: link:../../../tooling/test-support
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../../harness/tools
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0

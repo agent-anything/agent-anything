@@ -34,6 +34,14 @@ export interface ActivityStageRequest {
   readonly capabilities: readonly string[];
   readonly dependencies: readonly {readonly requestId: string; readonly condition: "raw_result" | "accepted"}[];
 }
+/** A consumer fixes mutually exclusive supplied/unavailable entries, not control of its path. */
+export interface ActivityInputNeed {
+  readonly id:string;
+  readonly supplier:string;
+  readonly stage:Omit<ActivityStageRequest,"input">;
+  readonly unavailableStage:Omit<ActivityStageRequest,"input">;
+  readonly origin?:{readonly requestId:string;readonly receiptId:string};
+}
 export interface ActivityExecutorIdentity {
   readonly hostSession: string;
   readonly worker: string;
@@ -71,6 +79,27 @@ export interface ActivityProcessingClaim {
   readonly previousClaimId: string | null;
   readonly executor: ActivityExecutorIdentity;
 }
+/** Execution recovery acceptance; it neither replaces raw evidence nor advances professional progress. */
+export interface ActivityAttemptRetryReceipt {
+  readonly id:string;
+  readonly requestId:string;
+  readonly attemptId:string;
+  readonly resultId:string;
+  readonly owner:string;
+  readonly policy:import("./ActivityPurpose.js").ActivityPurposeRef;
+  readonly expectedStageEvidence:string;
+  readonly notBefore:string;
+  readonly decidedAt:string;
+  readonly reason:{readonly code:string;readonly category:string};
+}
+/** Confirms disposal of a cancelled consumer's original result, not professional progress. */
+export interface ActivitySettlementReceipt {
+  readonly id: string;
+  readonly requestId: string;
+  readonly resultId: string;
+  readonly owner: string;
+  readonly disposition: unknown;
+}
 export interface ActivityPathState {
   readonly intent: ActivityPathIntent;
   readonly controlRevision: number;
@@ -81,32 +110,56 @@ export interface ActivityPathState {
   readonly dispatchedAttempts: number;
   readonly resourceUse: {readonly admittedStages:number;readonly dispatchedAttempts:number};
 }
+/** A common-acceptance precondition, not a professional interpretation of progress. */
+export interface ActivityPathCondition {
+  readonly pathId:string;
+  readonly expected:null|{readonly controlRevision:number;readonly progressRevision:number;readonly cancelled:boolean};
+  readonly requireSettled:boolean;
+}
 export interface ActivityStageState {
   readonly request: ActivityStageRequest;
-  readonly status: "submitted" | "admitted" | "dispatched" | "raw_result" | "accepted";
+  readonly status: "submitted" | "admitted" | "dispatched" | "raw_result" | "accepted" | "settled" | "stopped";
   readonly attempt: ActivityAttempt | null;
   readonly result: ActivityRawResult | null;
   readonly receipt: ActivityProcessingReceipt | null;
   readonly processing: ActivityProcessingClaim | null;
+  readonly settlement?: ActivitySettlementReceipt | null;
   readonly dispatchRestriction?: {readonly code:string;readonly message:string} | null;
+  readonly authorizationRestrictions?:import("./ActivityAuthorization.js").ActivityAuthorizationRestrictions;
+  readonly stop?:import("./ActivityProfessionalStop.js").ActivityProfessionalStopReceipt|null;
+  /** Includes partial/unknown raw evidence, not only the selected complete result. */
+  readonly rawEvidenceRevision?:number;
+  readonly attemptCount?:number;
+  readonly retry?:ActivityAttemptRetryReceipt|null;
 }
 export type ActivityHandoffCommand =
+  | {readonly kind:"read_work_view";readonly scopeId:string;readonly limit:number}
   | import("./ActivityScheduling.js").ActivitySchedulingCommand
   | import("./ActivityReconsideration.js").ActivityReconsiderationCommand
-  | {readonly kind: "facts"; readonly runId: string; readonly after: number; readonly limit: number}
+  | {readonly kind: "facts"; readonly runId: string; readonly pathId?:string;readonly after: number; readonly limit: number}
   | {readonly kind: "open_path"; readonly intent: ActivityPathIntent}
   | {readonly kind: "submit"; readonly request: ActivityStageRequest}
+  | {readonly kind:"register_input_need";readonly need:ActivityInputNeed}
+  | {readonly kind:"read_input_need";readonly id:string}
   | {readonly kind: "admit"; readonly requestId: string; readonly expectedControlRevision: number}
   | {readonly kind: "restrict_dispatch"; readonly requestId:string;readonly restriction:{readonly code:string;readonly message:string}|null;readonly expectedControlRevision:number}
   | {readonly kind: "dispatch"; readonly attempt: ActivityAttempt; readonly expectedControlRevision: number}
   | {readonly kind: "save_raw"; readonly result: ActivityRawResult}
+  | {readonly kind:"retry_attempt";readonly receipt:ActivityAttemptRetryReceipt;readonly expectedControlRevision:number;readonly executor:ActivityExecutorIdentity}
+  | {readonly kind:"read_raw_result";readonly resultId:string}
+  | {readonly kind:"read_stage_input_need";readonly requestId:string}
   | {readonly kind: "claim_processing"; readonly claim: ActivityProcessingClaim; readonly expectedControlRevision: number}
   | {readonly kind: "accept"; readonly receipt: ActivityProcessingReceipt; readonly executor: ActivityExecutorIdentity; readonly expectedControlRevision: number; readonly participants?:readonly import("./SharedAcceptance.js").SharedAcceptancePart[]}
+  | {readonly kind: "settle"; readonly receipt: ActivitySettlementReceipt; readonly executor: ActivityExecutorIdentity; readonly expectedControlRevision: number; readonly participants?:readonly import("./SharedAcceptance.js").SharedAcceptancePart[]}
   | {readonly kind: "cancel"; readonly pathId: string; readonly expectedControlRevision: number}
+  | {readonly kind:"record_authorization_restriction";readonly requestId:string;readonly expectedControlRevision:number;
+      readonly expectedStageEvidence:string;readonly action:ActivityHandoffItem["kind"];readonly refusal:import("./ActivityAuthorization.js").ActivityAuthorizationRefusal|null}
+  | {readonly kind:"stop_professional_path";readonly receipt:import("./ActivityProfessionalStop.js").ActivityProfessionalStopReceipt}
   | {readonly kind:"reserve_resources";readonly reservation:ActivityResourceReservation;readonly expectedControlRevision:number}
   | {readonly kind:"resource_allowance";readonly pathId:string}
   | {readonly kind: "read_path"; readonly pathId: string}
   | {readonly kind: "read_stage"; readonly requestId: string}
+  | {readonly kind: "pending_scopes"; readonly afterRunId: string | null; readonly limit: number}
   | {readonly kind: "pending"; readonly runId: string; readonly after: number; readonly limit: number;readonly pathId?:string};
 
 export interface ActivityHandoffItem {
@@ -114,15 +167,16 @@ export interface ActivityHandoffItem {
   readonly runId: string;
   readonly pathId: string;
   readonly requestId: string;
-  readonly kind: "admission" | "execution" | "reconciliation" | "interpretation";
+  readonly kind: "admission" | "execution" | "reconciliation" | "interpretation" | "settlement";
 }
 export interface ActivityDispatchReceipt {readonly kind: "dispatch"; readonly stage: ActivityStageState; readonly granted: boolean; readonly scheduling?: import("./ActivityScheduling.js").ActivitySchedulingDispatch;}
+export interface ActivityPendingScope {readonly runId:string;}
 export interface ActivityHandoffFact {
   readonly sequence: number;
   readonly runId: string;
   readonly pathId: string;
   readonly requestId: string | null;
-  readonly kind: "path_opened" | "stage_submitted" | "stage_admitted" | "dispatch_restricted" | "dispatched" | "raw_saved" | "processing_claimed" | "accepted" | "cancelled" | "scheduling_accepted" | "scheduling_closed" | "scheduling_limited" | "scheduling_wait" | "fact_published" | "reconsideration_registered" | "reconsideration_accepted" | "resources_reserved";
+  readonly kind: "path_opened" | "input_needed" | "stage_submitted" | "stage_admitted" | "dispatch_restricted" | "authorization_restricted" | "professional_stopped" | "dispatched" | "raw_saved" | "attempt_retry_accepted" | "processing_claimed" | "accepted" | "settled" | "cancelled" | "scheduling_accepted" | "scheduling_paths_sealed" | "scheduling_closed" | "scheduling_limited" | "scheduling_wait" | "fact_published" | "reconsideration_registered" | "reconsideration_accepted" | "resources_reserved";
   readonly occurredAt: string;
   readonly details: Readonly<Record<string, unknown>>;
 }
@@ -131,7 +185,9 @@ export interface ActivityHandoffObserver {
   /** Durable content, supplementary to facts; projections are never execution authority. */
   observeStage?(runId:string,stage:ActivityStageState):void;
 }
-export type ActivityHandoffValue = ActivityPathState | ActivityStageState | ActivityDispatchReceipt | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] |
+export type ActivityHandoffValue = import("./ActivityWorkView.js").ActivityWorkView | ActivityPathState | ActivityStageState | ActivityRawResult | ActivityDispatchReceipt | ActivityInputNeed | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | readonly ActivityPendingScope[] |
+  import("./ActivityScheduling.js").ActivityScheduledPathPage |
+  import("./ActivityScheduling.js").ActivityScheduledSettlement |
   readonly import("./ActivityReconsideration.js").ActivityReconsiderationState[] |
   import("./ActivityScheduling.js").ActivityResourcePool | import("./ActivityScheduling.js").ActivitySchedulingAcceptance | import("./ActivityScheduling.js").ActivitySchedulingReview | readonly import("./ActivityScheduling.js").ActivitySchedulingCandidate[] |
   import("./ActivityReconsideration.js").ActivityFactSource | import("./ActivityReconsideration.js").ActivityPublishedFact | import("./ActivityReconsideration.js").ActivityReconsiderationState | import("./ActivityReconsideration.js").ActivityReconsiderationSnapshot | null;

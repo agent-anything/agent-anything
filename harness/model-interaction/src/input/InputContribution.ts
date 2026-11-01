@@ -3,8 +3,16 @@ import {modelInputValueDigest} from "./ModelWorkingView.js";
 import type {ModelInputComposition, ModelInputLineage} from "./ModelInput.js";
 import type {ProviderInteraction} from "../ProviderInteraction.js";
 import type {CapacityDimension} from "./InputCapacityEvidence.js";
+import type {ModelInputResultTextBinding} from "./ModelResultTextSlot.js";
 
 export type InputDuty = "behavior" | "objective" | "capabilities" | "continuity" | "working_understanding" | "evidence" | "new_information";
+
+export interface ModelInputDataTextBinding {
+  readonly sectionId:string;
+  readonly contentDigest:string;
+  readonly source:import("./ModelInput.js").ModelInputSourceRef;
+  readonly representation:import("./ModelInput.js").ModelInputSourceRef;
+}
 export interface InputFinding {
   readonly id: string;
   readonly owner: string;
@@ -27,6 +35,10 @@ export interface InputOption {
   readonly estimatedCost: number | null;
   /** Absence is a justified option, never an allocator-created empty substitute. */
   readonly omissionBasis: string | null;
+  /** Source-declared replacements inside native result bodies; retained for actual presentation acceptance. */
+  readonly resultTextBindings?:readonly ModelInputResultTextBinding[];
+  /** An explicitly authorized Host data body; this does not mark it as already delivered. */
+  readonly dataTextBindings?:readonly ModelInputDataTextBinding[];
 }
 export interface InputContribution {
   readonly id: string;
@@ -78,8 +90,23 @@ export function validateInputDemand(demand: InputOrganizationDemand): void {
       token(option.revision); cost(option.estimatedCost);
       if (!Number.isFinite(option.preference) || (!option.sections.length && !option.omissionBasis)) throw new TypeError("input_option_basis_missing");
       for (const occurrence of option.sections) if (!Number.isSafeInteger(occurrence.position) || occurrence.position < 0) throw new TypeError("input_position_invalid");
+      const resultSlots=new Set<string>();
+      for(const binding of option.resultTextBindings??[]) {
+        const occurrence=option.sections.find(o=>o.section.id===binding.sectionId),identity=modelInputValueDigest({section:binding.sectionId,slot:binding.slot});
+        if(!occurrence||occurrence.section.role!=="tool"||resultSlots.has(identity))throw new TypeError("input_result_text_binding_invalid");
+        resultSlots.add(identity);
+        for(const ref of [binding.source,binding.representation]){token(ref.owner);token(ref.kind);token(ref.id);if(ref.revision!==null)token(ref.revision);}
+      }
       for (const dependency of [...option.requires, ...option.excludes]) {
         if (!contributions.get(dependency.contributionId)?.options.some(o => o.id === dependency.optionId)) throw new TypeError("input_companion_missing");
+      }
+      const dataSections=new Set<string>();
+      for(const binding of option.dataTextBindings??[]) {
+        const occurrence=option.sections.find(o=>o.section.id===binding.sectionId);
+        if(!occurrence||occurrence.section.role!=="user"||occurrence.section.provenance?.author!=="host"||
+          dataSections.has(binding.sectionId))throw new TypeError("input_data_text_binding_invalid");
+        dataSections.add(binding.sectionId);token(binding.contentDigest);
+        for(const ref of [binding.source,binding.representation]){token(ref.owner);token(ref.kind);token(ref.id);if(ref.revision!==null)token(ref.revision);}
       }
       unique(option.findings, f => f.id);
       for (const finding of option.findings) {token(finding.owner); token(finding.basis); token(finding.requirement);}

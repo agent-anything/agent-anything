@@ -1,5 +1,6 @@
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
 import { RunCommitError } from "./RunCommitPort.js";
+import {retainRunCheckpointValue} from "./RunCommitSnapshot.js";
 import { canonicalEncode } from "@agent-anything/canonical-action/subject";
 import {
   InteractionExecution,
@@ -209,7 +210,7 @@ export class RunInteractionCoordinator {
     }
     let uniquenessChecked = false;
     try {
-      const request = protocol.createRequest({
+      const request = retainRunCheckpointValue(protocol.createRequest({
         requestId: input.requestId,
         requestVersion: input.requestVersion,
         subject: input.subject,
@@ -219,7 +220,7 @@ export class RunInteractionCoordinator {
         presentation: input.presentation,
         expiresAt: input.expiresAt,
         createdAt: input.createdAt,
-      });
+      }));
       const key = requestKey(request.ref);
       step.check("unique_request", this.records.has(key) ? "not_satisfied" : "passed");
       uniquenessChecked = true;
@@ -444,7 +445,7 @@ export class RunInteractionCoordinator {
   }
 
   checkpoint(): RunInteractionCheckpoint {
-    return snapshotUnknown({runId: this.dependencies.runId, revision: this.revision,
+    return retainRunCheckpointValue({runId: this.dependencies.runId, revision: this.revision,
       nextReceipt: this.nextReceipt, nextResolution: this.nextResolution, nextApplication: this.nextApplication,
       closed: this.settled, records: [...this.records.values()].map(active => ({
         request: active.request, execution: active.execution.getSnapshot(), submission: active.submission,
@@ -741,14 +742,7 @@ function protocolKey(input: InteractionProtocolRef): string {
 }
 
 function snapshotUnknown<T>(input: T): T {
-  return deepFreeze(structuredClone(input));
-}
-
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== "object" || seen.has(value)) return value;
-  seen.add(value);
-  for (const child of Object.values(value)) deepFreeze(child, seen);
-  return Object.freeze(value);
+  return retainRunCheckpointValue(input);
 }
 
 function unavailable(code: string, message: string): OpenRuntimeInteractionResult {

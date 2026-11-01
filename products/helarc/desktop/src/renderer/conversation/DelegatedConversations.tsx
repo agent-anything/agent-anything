@@ -3,6 +3,7 @@ import { useContext, useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, MessageSquare, Terminal, Wrench } from "lucide-react";
 import type { ConversationActivityItem, ConversationPage } from "../../shared/HelarcWorkbench.js";
 import { ConversationReading, ResponseExpansions } from "./ConversationReading.js";
+import { ChildExecutionActivity, useExecutionActivityItems } from "../activity/ExecutionActivities.js";
 
 export type ConversationChild = NonNullable<ConversationActivityItem["child"]>;
 export interface ChildReadingPosition {
@@ -47,6 +48,7 @@ function DelegatedBranch({child, visible, renderChild, readingFor}: {
   readingFor: (runId: string) => ChildReadingPosition;
 }) {
   const preserve = useContext(ConversationReading);
+  const execution = useExecutionActivityItems(child.scope);
   const navigation = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const seen = useRef(child.textRevision);
@@ -87,7 +89,7 @@ function DelegatedBranch({child, visible, renderChild, readingFor}: {
         <span>{child.textPreview?.text ?? child.label}</span>
       </div>
       <div className="wb-child-activity-preview" aria-label="Current activity">
-        {activity && <>
+        {activity && !(activity.kind === "model" && execution.some(item => item.placement === "foreground")) && <>
           <Icon size={13} aria-hidden="true" />
           {activity.runId !== child.scope.runId && <small>{activity.attribution}</small>}
           <span className="wb-child-activity-title" title={activity.title}>{activity.title}</span>
@@ -95,6 +97,7 @@ function DelegatedBranch({child, visible, renderChild, readingFor}: {
           {additional > 0 && <small className="wb-child-more" title={`${additional} additional activities`}>+{additional}</small>}
         </>}
       </div>
+      <ChildExecutionActivity scope={child.scope} />
     </div>}
     {open && <div id={`${id}-body`}>
       <div className="wb-child-objective">{child.label}</div>

@@ -197,6 +197,17 @@ describe("delegation request", () => {
 });
 
 describe("delegation result", () => {
+  it("retains an oversized report source without increasing the result envelope limit", () => {
+    const accepted=request(),text="\u539f\u6587".repeat(12000);
+    const childResult=succeededChildResult("run-child",{summary:text},[],[]);
+    const result=createDelegationResult({resultId:"large-result",request:accepted,correlation:childCorrelation(accepted),childResult,narrative:text,
+      effects:noEffects(),usage:usage(),limitDisposition:withinLimits(),createdAt:"2026-08-25T00:02:01.000Z"});
+    expect(result.narrative).toMatchObject({text:null,source:{recordId:"large-result:narrative",runId:"run-child",bytes:Buffer.byteLength(text),codeUnits:text.length}});
+    expect(result.terminal.status).toBe("completed");
+    expect(result.expectationCoverage.find(value=>value.form==="narrative")?.disposition).toBe("present");
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(accepted.limits.maxResultBytes);
+    expect(snapshotDelegationResult(result)).toEqual(result);
+  });
   it("constructs trusted settlement while retaining narrative as attributed output", () => {
     const accepted = request();
     const result = createDelegationResult({
@@ -456,7 +467,7 @@ function preparation(overrides: {
         { form: "evidence", required: false, maxItems: 8 },
         { form: "effects", required: true, maxItems: 1 },
       ],
-      maxNarrativeCharacters: 8_192,
+      maxInlineNarrativeCodeUnits: 8_192,
     }),
     contextPlan: createDelegationContextPlan({
       entries: overrides.contextEntries ?? [

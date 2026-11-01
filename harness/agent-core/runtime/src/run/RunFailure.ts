@@ -26,6 +26,7 @@ export interface RunContextFailure extends RuntimeFailure {
 }
 
 export type RunFailureCause =
+  | { readonly kind:"input_preparation";readonly failure:RuntimeFailure }
   | { readonly kind: "runtime"; readonly failure: RuntimeFailure }
   | { readonly kind: "model"; readonly failure: ModelFailure }
   | { readonly kind: "provider"; readonly failure: ProviderFailure }

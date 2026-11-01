@@ -76,6 +76,9 @@ function withSelectionFacts(provider: Provider, config: HelarcProviderConfig): P
       modelContext: Object.freeze({...provider.descriptor.capabilities.modelContext, capacity})}),
       metadata: Object.freeze({ ...provider.descriptor.metadata, modelSelection }) }),
     modelContext, requestBodyTransportLimit: provider.requestBodyTransportLimit,
+    ...(provider.inputMeasurement ? {inputMeasurement: provider.inputMeasurement} : {}),
+    ...(provider.encodeInput ? {encodeInput: provider.encodeInput.bind(provider)} : {}),
+    ...(provider.verifyEncodedInput ? {verifyEncodedInput: provider.verifyEncodedInput.bind(provider)} : {}),
     send: provider.send.bind(provider),
   });
 }

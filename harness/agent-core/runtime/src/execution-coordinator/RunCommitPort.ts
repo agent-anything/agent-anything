@@ -27,6 +27,7 @@ export interface RetainedDescendantTransfer {
   readonly relationId: string;
   readonly action: RuntimeRunAction;
   readonly result: DelegationResult | null;
+  readonly narrative: import("../delegation/index.js").RetainedDelegationNarrative | null;
   readonly status: "settled" | "failed";
   readonly code: "delegation_result_invalid" | null;
 }
@@ -79,6 +80,7 @@ export interface RunControlCheckpoint {
     readonly basisRevision: number;
     readonly prepared: import("./RunDecisionCheckpoint.js").RetainedControllerOperation;
     readonly status: "pending" | "returned" | "failed" | "interrupted";
+    readonly failureOutcome?: Extract<import("./RunFinalizationCheckpoint.js").RunTerminalCandidate, {readonly status: "failed"}>;
   };
   readonly retryEvents: readonly import("../retry/index.js").RetryEvent[];
   readonly completionNotification: import("./RunCompletionCheckpoint.js").RunCompletionNotificationCheckpoint | null;

@@ -10,8 +10,10 @@ import {
 import { snapshotModelInputUsageObservation, type ModelInputUsageObservation } from "@agent-anything/model-interaction/context";
 import type { RunItem } from "../run/RunItem.js";
 import { retainInputPresentation, snapshotInputDeliveryReceipt } from "./DecisionInputDelivery.js";
+import {applySelectedResultPresentations, validateSelectedResultPresentationResponse} from "./SelectedResultPresentation.js";
+import {snapshotTaskModelResponseRejection} from "./TaskModelResponseRejection.js";
 import { snapshotConversationOpeningReceipt, snapshotModelConversationSeed, type ModelConversationSeed } from "./TaskConversation.js";
-import { createExactModelWorkingView, type ModelInputSourceRef } from "@agent-anything/model-interaction/input";
+import { createExactModelWorkingView, modelInputFromSections, type ModelInputSourceRef } from "@agent-anything/model-interaction/input";
 import type {
   TaskDecisionModelItem,
   ModelInteractionProjection,
@@ -79,32 +81,39 @@ export function projectModelInteraction(input: {
       const {batch, receipt, turn} = item.payload;
       const next = input.items[index + 1];
       if (unsettled.size > 0 || batch.runId !== input.runId || next?.payload.kind !== "controller_turn" ||
-          next.payload.status !== "decided" || next.payload.turn.id !== turn.id ||
+          next.payload.turn.id !== turn.id ||
           next.committedInRevision !== item.committedInRevision) {
         throw projectionFailure("input_delivery_history_invalid", "Input delivery must immediately precede its atomically committed Controller Turn, after all Call results.");
       }
       const retainedReceipt = snapshotInputDeliveryReceipt(receipt, batch)!;
       if (retainedReceipt.via.kind === "provider") {
         const requestId = retainedReceipt.via.requestId;
-        if (next.payload.modelItems.some(value => value.kind === "model_response_correlation" && value.response.requestId !== requestId)) {
+        if (next.payload.modelItems.some(value => value.kind === "model_response_correlation" && value.response.requestId !== requestId) ||
+            next.payload.responseRejection && next.payload.responseRejection.requestId !== requestId) {
           throw projectionFailure("input_delivery_request_mismatch", "Accepted input must belong to the response request.");
         }
       }
-      if (retainedReceipt.via.kind === "provider") for (const [entryIndex, entry] of batch.entries.entries()) {
-        const presentation = retainedReceipt.via.presentations[entryIndex]!;
-        notificationHistory.push(Object.freeze({messageIndex: messages.length, batchId: batch.id,
-          batchRevision: batch.revision, sequence: entry.sequence, presentation}));
-        if (presentation.section.content.kind !== "model_message") throw projectionFailure("input_presentation_invalid", "Notification presentation must be a message.");
-        messages.push(presentation.section.content.message);
+      if (retainedReceipt.via.kind === "provider") for (const [presentationIndex,presentation] of retainedReceipt.via.presentations.entries()) {
+        const sequences=retainedReceipt.via.selection?retainedReceipt.via.selection.mapping.filter(value=>value.sectionIds.includes(presentation.section.id)).map(value=>value.sequence):
+          [batch.entries[presentationIndex]!.sequence];
+        for(const sequence of sequences)notificationHistory.push(Object.freeze({messageIndex: messages.length, batchId: batch.id,
+          batchRevision: batch.revision, sequence, presentation}));
+        const projected=modelInputFromSections([presentation.section]).messages;
+        if(projected.length!==1||projected[0]!.role!=="user")throw projectionFailure("input_presentation_invalid", "Notification presentation must be one user data message.");
+        messages.push(projected[0]!);
         historyPresentations.push(presentation);
       }
       continue;
     }
     if (item.payload.kind === "controller_turn") {
+      const rejection = item.payload.responseRejection ? snapshotTaskModelResponseRejection(item.payload.responseRejection) : null;
+      if(rejection&&(item.payload.modelItems.length||rejection.runId!==input.runId||rejection.controllerRequestId!==item.payload.toolExposure.controllerRequestId))
+        throw projectionFailure("response_rejection_binding_invalid", "Rejected output cannot contribute assistant text or Calls.");
       if (item.payload.openingReceipt) {
-        if (opening || latestTurn || item.payload.status !== "decided") throw projectionFailure("conversation_opening_repeated", "Opening may only be accepted with the first decided Turn.");
+        if (opening || latestTurn) throw projectionFailure("conversation_opening_repeated", "Opening may only be accepted with the first recorded exchange.");
         opening = snapshotConversationOpeningReceipt(item.payload.openingReceipt, input.runId);
-        if (item.payload.modelItems.some(value => value.kind === "model_response_correlation" && value.response.requestId !== opening!.requestId)) {
+        if (item.payload.modelItems.some(value => value.kind === "model_response_correlation" && value.response.requestId !== opening!.requestId) ||
+            rejection && rejection.requestId !== opening.requestId) {
           throw projectionFailure("conversation_opening_request_mismatch", "Accepted opening must belong to the response request.");
         }
       }
@@ -115,7 +124,23 @@ export function projectModelInteraction(input: {
           "A Controller turn cannot begin while a prior model call is unsettled.",
         );
       }
-      if (item.payload.status !== "decided" || item.payload.modelItems.length === 0) {
+      if (item.payload.resultPresentationReceipt) {
+        const response = item.payload.modelItems.find(value => value.kind === "model_response_correlation");
+        const requestId=response?.response.requestId??rejection?.requestId;
+        if (!requestId) throw projectionFailure("result_presentation_response_missing", "An accepted result presentation requires its original response.");
+        validateSelectedResultPresentationResponse(item.payload.resultPresentationReceipt, item.payload.modelItems, rejection);
+        const sections = applySelectedResultPresentations(item.payload.resultPresentationReceipt, historyPresentations.map(value => value.section),
+          input.runId, requestId, item.payload.toolExposure.controllerRequestId);
+        for (let i = 0; i < sections.length; i++) {
+          const section = sections[i]!;
+          if (section === historyPresentations[i]!.section) continue;
+          if (section.content.kind !== "model_message" || section.content.message.role !== "tool")
+            throw projectionFailure("result_presentation_message_invalid", "A result presentation must preserve its native Tool message.");
+          messages[i] = section.content.message;
+          historyPresentations[i] = retainInputPresentation(section);
+        }
+      }
+      if (item.payload.modelItems.length === 0) {
         continue;
       }
       const projected = projectControllerTurn(item.payload.modelItems);

@@ -7,6 +7,7 @@ import { assertAgentInstructionBindingMatches } from "../instructions/index.js";
 import type { RunState } from "../run/index.js";
 import type { PreparedDecisionSources } from "./DecisionActivityExecution.js";
 import { sameRunCommitValue as same } from "./RunCommitValue.js";
+import {retainRunCheckpointValue} from "./RunCommitSnapshot.js";
 
 export type RetainedControllerOperation = Omit<PreparedDecisionSources<unknown>, "input"> & {
   readonly input: Omit<TaskDecisionInputSources, "agent"> & {readonly agent: Omit<AgentDefinition, "output">};
@@ -43,7 +44,7 @@ export function validateDecisionCheckpoint(decision: RunDecisionCheckpoint, stat
 
 export function retainControllerOperation<T>(prepared: PreparedDecisionSources<T>): RetainedControllerOperation {
   const {output: _output, ...agent} = prepared.input.agent;
-  return structuredClone({...prepared, input: {...prepared.input, agent}});
+  return retainRunCheckpointValue({...prepared, input: {...prepared.input, agent}});
 }
 
 /** Rebind only executable validation; do not reproject Context or reselect Tools. */
