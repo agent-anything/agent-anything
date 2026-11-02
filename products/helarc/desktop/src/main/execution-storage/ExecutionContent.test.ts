@@ -2,6 +2,8 @@ import {describe, expect, it} from "vitest";
 import {canonicalEncode} from "@agent-anything/canonical-action/subject";
 import {contentDigest, packExecutionContent, unpackExecutionContent, executionContentReferences, ExecutionContentCache, ExecutionContentEncoder, ExecutionContentScope, ExecutionContentStatistics, snapshotEncodedExecutionContent, EXECUTION_CONTENT_LIMITS, type ExecutionContentBlock} from "./ExecutionContent.js";
 
+import {isImmutableExecutionContent} from "./ExecutionContent.js";
+
 function roundTrip(value: unknown) {
   const packed = packExecutionContent(value);
   const blocks = new Map(packed.blocks.map(block => [block.id, block]));
@@ -13,6 +15,23 @@ function roundTrip(value: unknown) {
 }
 
 describe("execution content", () => {
+  it("offers only verified retained transport bytes and forgets them on eviction or clear",()=>{
+    const cache=new ExecutionContentCache(1024,1),a=packExecutionContent({a:1}).blocks[0]!,b=packExecutionContent({b:2}).blocks[0]!;
+    expect(cache.verifiedBlock(a.id)).toBeUndefined();
+    cache.parse(a);expect(cache.verifiedBlock(a.id)).toEqual(a);
+    expect(()=>cache.parse({...a,text:b.text})).toThrow("execution_content_corrupt");
+    expect(cache.verifiedBlock(a.id)).toEqual(a);
+    cache.parse(b);expect(cache.verifiedBlock(a.id)).toBeUndefined();
+    cache.clear();expect(cache.verifiedBlock(b.id)).toBeUndefined();
+  });
+  it("recognizes only content-owned deep immutability, not arbitrary shallow freezing",()=>{
+    const input={nested:{value:1}},shallow=Object.freeze(input);
+    expect(isImmutableExecutionContent(shallow)).toBe(false);
+    packExecutionContent(input);const snapshot=snapshotEncodedExecutionContent(input);
+    expect(isImmutableExecutionContent(snapshot)).toBe(true);expect(isImmutableExecutionContent(snapshot.nested)).toBe(true);
+    input.nested.value=2;expect(snapshot.nested.value).toBe(1);
+    expect(isImmutableExecutionContent(input.nested)).toBe(false);
+  });
   const immutable = <T>(value: T): T => {packExecutionContent(value); return snapshotEncodedExecutionContent(value);};
   it("reuses a verified immutable container even when its large leaf strings are already cached",()=>{
     const statistics=new ExecutionContentStatistics(true),encoder=new ExecutionContentEncoder(undefined,statistics);

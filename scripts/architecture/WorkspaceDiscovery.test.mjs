@@ -245,6 +245,14 @@ test("rejects missing, extra, and path-mismatched architecture metadata", () => 
   }
 });
 
+test("discovers the explicitly admitted independent process evaluation entry", () => {
+  withWorkspace(root => {
+    writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "tooling/process-evaluation"\n');
+    createPackage(root, "tooling/process-evaluation", "@agent-anything/process-evaluation", {kind: "tooling", component: "process-evaluation"});
+    assert.deepEqual(discoverWorkspacePackages(root).map(({kind, component}) => ({kind, component})), [{kind: "tooling", component: "process-evaluation"}]);
+  });
+});
+
 test("rejects unsupported workspace patterns", () => {
   withWorkspace((root) => {
     writeFileSync(

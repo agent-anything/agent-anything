@@ -37,7 +37,7 @@ export async function methodCombinationEvidence(input:{
     for(const source of [...originalSources].sort((a,b)=>a.order-b.order))sources.push({...source,alias:alias(source.alias),indivisibleGroup:name(source.indivisibleGroup),order:sources.length});
     const originalRequirements=representationMethodRequirements(method.request),requirementBindings=originalRequirements.map(r=>({originalId:r.id,combinedId:name(r.id)}));
     requirements.push(...originalRequirements.map(r=>({...r,id:name(r.id)})));
-    producerEvidence.push({pathId,requestDigest:modelInputValueDigest(method.request),sourceBoundary:method.request.sourceBoundary,
+    producerEvidence.push({pathId,runId:method.request.recipient.runId,requestDigest:modelInputValueDigest(method.request),sourceBoundary:method.request.sourceBoundary,
       sources:aliasBindings,requirements:requirementBindings,candidates:candidates.map(c=>({id:c.id,representation:c.representation}))});
     const declared=new Map<string,MethodRelationship>();
     for(const relation of qualified?.relationships??[...method.request.relationships,...candidates.flatMap(c=>c.relationships)]) {

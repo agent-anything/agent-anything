@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
@@ -9,42 +8,11 @@ export default defineConfig({
   esbuild: {
     jsx: "automatic",
   },
-  resolve: {
-    alias: {
-      "@agent-anything/agent-runtime/decision": resolve(currentDir, "../../../harness/agent-core/runtime/src/decision/index.ts"),
-      "@agent-anything/agent-runtime/activity": resolve(currentDir, "../../../harness/agent-core/runtime/src/activity/index.ts"),
-      "@agent-anything/agent-runtime/model-access": resolve(currentDir, "../../../harness/agent-core/runtime/src/model-access/index.ts"),
-      "@agent-anything/agent-runtime/context-representation": resolve(currentDir, "../../../harness/agent-core/runtime/src/context-representation/index.ts"),
-      "@agent-anything/agent-runtime/delegation": resolve(currentDir, "../../../harness/agent-core/runtime/src/delegation/index.ts"),
-      "@agent-anything/agent-runtime/instructions": resolve(currentDir, "../../../harness/agent-core/runtime/src/instructions/index.ts"),
-      "@agent-anything/agent-runtime/plan": resolve(currentDir, "../../../harness/agent-core/runtime/src/plan/index.ts"),
-      "@agent-anything/agent-runtime/transcript": resolve(currentDir, "../../../harness/agent-core/runtime/src/transcript/index.ts"),
-      "@agent-anything/agent-runtime/retry": resolve(currentDir, "../../../harness/agent-core/runtime/src/retry/index.ts"),
-      "@agent-anything/agent-runtime/run": resolve(currentDir, "../../../harness/agent-core/runtime/src/run/index.ts"),
-      "@agent-anything/agent-runtime/execution-coordinator": resolve(currentDir, "../../../harness/agent-core/runtime/src/execution-coordinator/index.ts"),
-      "@agent-anything/helarc/configuration": resolve(currentDir, "../core/src/configuration/index.ts"),
-      "@agent-anything/helarc/work-context": resolve(currentDir, "../core/src/work-context/index.ts"),
-      "@agent-anything/helarc/run": resolve(currentDir, "../core/src/run/index.ts"),
-      "@agent-anything/helarc/composition": resolve(currentDir, "../core/src/composition/index.ts"),
-      "@agent-anything/helarc/task": resolve(currentDir, "../core/src/task/index.ts"),
-      "@agent-anything/helarc/task-fulfillment": resolve(currentDir, "../core/src/task-fulfillment/index.ts"),
-      "@agent-anything/helarc/controller": resolve(currentDir, "../core/src/controller/index.ts"),
-      "@agent-anything/helarc/interaction": resolve(currentDir, "../core/src/interaction/index.ts"),
-      "@agent-anything/helarc/prompt": resolve(currentDir, "../core/src/prompt/index.ts"),
-      "@agent-anything/helarc/tools": resolve(currentDir, "../core/src/tools/index.ts"),
-      "@agent-anything/helarc": resolve(currentDir, "../core/src/index.ts"),
-      "@agent-anything/helarc-code-agent/workspace": resolve(currentDir, "../code-agent/src/workspace/index.ts"),
-      "@agent-anything/helarc-code-agent/source": resolve(currentDir, "../code-agent/src/source/index.ts"),
-      "@agent-anything/helarc-code-agent/file-operation": resolve(currentDir, "../code-agent/src/file-operation/index.ts"),
-      "@agent-anything/helarc-local-environment/workspace": resolve(currentDir, "../local-environment/src/workspace/index.ts"),
-      "@agent-anything/helarc-local-environment/filesystem": resolve(currentDir, "../local-environment/src/filesystem/index.ts"),
-      "@agent-anything/helarc-local-environment/command": resolve(currentDir, "../local-environment/src/command/index.ts"),
-      "@agent-anything/helarc-local-environment/sandbox": resolve(currentDir, "../local-environment/src/sandbox/index.ts"),
-    },
-  },
+  // Cross-package integration consumes public builds, as the real Worker does.
+  // Source aliases mix duplicate runtime identities with built test-support imports.
   test: {
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     environment: "node",
-    poolMatchGlobs: [["**/HelarcHostRunComposition.test.ts", "forks"]],
+    poolMatchGlobs: [["**/HelarcHostRunComposition.test.ts", "forks"], ["**/HelarcMainController.test.ts", "forks"]],
   },
 });

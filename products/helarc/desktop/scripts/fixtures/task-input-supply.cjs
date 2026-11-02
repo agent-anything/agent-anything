@@ -3,6 +3,7 @@ const assert=require("node:assert/strict");
 const {join}=require("node:path");
 const {pathToFileURL}=require("node:url");
 const {writeFile,readFile}=require("node:fs/promises");
+const {appendFileSync}=require("node:fs");
 const [directory,phase,endpoint]=process.argv.slice(2);
 app.setPath("userData",join(directory,"electron"));app.disableHardwareAcceleration();
 let store,service,inspection,queries;
@@ -37,7 +38,9 @@ async function main() {
   const {OllamaProvider}=await import("@agent-anything/provider-integrations/ollama");
   const provider=new OllamaProvider({model:process.env.ACTIVITY_LIVE_MODEL??"controlled",baseUrl:endpoint,timeoutMs:60000,think:false,
     nativeToolInteraction:{supported:true},runtime:{contextWindowTokens:16384},requestBodyTransportLimit:{maximumBytes:1000000,source:"host_configured",revision:"1"}});
-  store=await HelarcExecutionStore.open(join(directory,"execution"));
+  store=await HelarcExecutionStore.open(join(directory,"execution"),undefined,undefined,undefined,undefined,undefined,undefined,{
+    observe(){},observeTiming(event){appendFileSync(join(directory,"original-work-timings.jsonl"),JSON.stringify(event)+"\n");}
+  });
   const a=command=>store.activityHandoffs.command(command),now=()=>new Date().toISOString(),registry=new ActivityPurposeRegistry();
   const deliveryLifetime={source:{id:"fixture-scope:root",runId:"root",owner:"fixture-host"},closedFactId:"fixture-scope:root:closed"};
   await a({kind:"register_fact_source",source:deliveryLifetime.source});
@@ -470,6 +473,10 @@ async function main() {
       await inspection.contextFoundationObserver.replay("root",store.contextFoundationFacts.bind(store));
       const {InspectionQueryService}=await import("@agent-anything/inspection/query");queries=new InspectionQueryService(join(directory,"inspection"));
       const {selection:inspectionSelection}=await require("./inspection-settlement.cjs").settleInspection(inspection.recorder,queries);
+      const processMetrics=await require("./process-metric-verification.cjs")({queries,recorder:inspection.recorder,runIds:["root"],replay:async()=>{
+        await inspection.activityObserver.replay("root",store.activityHandoffs);await inspection.contextFoundationObserver.replay("root",store.contextFoundationFacts.bind(store));
+      }});
+      await writeFile(join(directory,"process-metrics.json"),JSON.stringify(processMetrics,null,2));
       for(const fact of authorizationFacts) {
         const subject=inspection.recorder.ref("activity","event",`${fact.runId}:handoff:${fact.sequence}`,fact.runId);
         const visible=await queries.query({...inspectionSelection,kind:"get_subject",subject});
@@ -483,8 +490,9 @@ async function main() {
         authorization.inspectedFacts++;
       }
       const decisionSubject=inspection.recorder.ref("context-representation","contribution",retainedDecision.decision.id,"root");
+      await require("./process-query-verification.cjs").verifyDecisionQuery({queries,recorder:inspection.recorder,selection:inspectionSelection,original:retainedDecision,inputId:selected.input.exactInput.encoded.id});
       const visible=await queries.query({...inspectionSelection,kind:"get_subject",subject:decisionSubject});
-      assert(visible.records.some(record=>record.contents.some(content=>content.name==="Context policy decision and evidence")));
+      assert(visible.records.some(record=>record.contents.some(content=>content.name==="Owner-declared context evidence")));
       const flow=await queries.query({...inspectionSelection,kind:"get_data_flow",subject:decisionSubject});
       const exitSubject=inspection.recorder.ref("context_input_supply","contribution",need.id,"root");
       const exitVisible=await queries.query({...inspectionSelection,kind:"get_subject",subject:exitSubject});
@@ -493,13 +501,26 @@ async function main() {
       assert(exitFlow.graph.links.some(l=>l.kind==="observes"&&l.to.id===need.stage.id));
       assert(exitFlow.graph.links.some(l=>l.kind==="observes"&&l.to.id===supplyExit.scheduling.workId));
       assert(flow.graph.links.some(link=>link.kind==="observes"&&link.to.id===selected.input.exactInput.encoded.id),"The decision must link the actual selected input");
+      const facts=[];
+      for(let after=0;;) {
+        const page=await store.contextFoundationFacts("root",after,256);facts.push(...page);
+        if(page.length<256)break;after=page.at(-1).sequence;
+      }
+      const decisionFact=facts.find(f=>f.owner==="context_preparation_policy"&&f.subject===retainedDecision.decision.id);
+      assert(decisionFact?.evidence,"The actual policy acceptance must persist its owner-declared evidence");
+      assert(decisionFact.evidence.relationships.some(r=>r.to.owner==="context_preparation_policy"&&r.to.id===retainedDecision.decision.id&&r.to.revision===digest(retainedDecision)));
+      assert(decisionFact.evidence.relationships.some(r=>r.to.owner==="shared_acceptance"&&r.to.id===retainedDecision.acceptanceId));
+      for(const fact of facts.filter(f=>["context_selection","context_delivery","model-input-measurement"].includes(f.owner))) {
+        assert(fact.evidence,`${fact.owner}.${fact.kind}: original owner evidence missing`);
+        assert.equal(fact.evidence.subject.id,fact.subject);assert.equal(fact.evidence.subject.runId,fact.runId);
+      }
+      const bindingFact=facts.find(f=>f.owner==="context_selection"&&f.kind==="input_bound"&&f.subject===selected.input.id);
+      assert.deepEqual(bindingFact.details.deliveries,selected.input.deliveries,"Exact recipient positions must survive recovery");
+      assert(bindingFact.evidence.relationships.some(r=>r.to.owner==="activity"&&r.to.id===selected.input.stageRequestId));
+      const sent=facts.filter(f=>f.owner==="context_selection"&&f.kind==="sent"&&f.subject===selected.input.id);
+      assert.equal(sent.length,1,"Replaying evidence must not send the accepted input twice");
       if(taskPreparation==="accepted") {
         const shared=await store.sharedAcceptance.query(selected.acceptanceId);
-        const facts=[];
-        for(let after=0;;) {
-          const page=await store.contextFoundationFacts("root",after,256);facts.push(...page);
-          if(page.length<256)break;after=page.at(-1).sequence;
-        }
         const accesses=facts.filter(f=>f.kind==="access_admitted");
         assert(accesses.length>0);assert.equal(accesses.length,firstSelected.selection.representations.length);
         assert.equal(facts.filter(f=>f.kind==="published"&&f.owner==="material_custody").length,accesses.length,"Only original source instances should be published");
@@ -515,7 +536,7 @@ async function main() {
       assert(flow.graph.links.some(link=>link.kind==="observes"&&link.to.owner==="activity"&&link.to.id===retainedDecision.input.current.evidence.id),"Policy evidence must lead to its accepted preparation stage");
       const judgmentSubject=inspection.recorder.ref("representation","contribution",selected.input.combinationJudgmentId,"root");
       const judgment=await queries.query({...inspectionSelection,kind:"get_subject",subject:judgmentSubject});
-      assert(judgment.records.some(record=>record.contents.some(content=>content.name==="Representation judgment")));
+      assert(judgment.records.some(record=>record.contents.some(content=>content.name==="Owner-declared context evidence")));
       const judgmentFlow=await queries.query({...inspectionSelection,kind:"get_data_flow",subject:judgmentSubject});
       assert(judgmentFlow.graph.links.some(link=>link.kind==="observes"&&link.to.id===selected.input.exactInput.encoded.id));
       assert(judgmentFlow.graph.links.some(link=>link.kind==="observes"&&link.to.owner==="material_custody"));
@@ -525,15 +546,33 @@ async function main() {
       if(taskPreparation==="rejected"){
         const rejectionId=retainedDecision.input.admissionLimitations[0].acceptanceId;
         assert(flow.graph.links.some(link=>link.kind==="observes"&&link.to.id===rejectionId));
-        const rejected=await queries.query({...inspectionSelection,kind:"get_subject",subject:inspection.recorder.ref("shared_acceptance","contribution",rejectionId,"root")});
-        assert(rejected.records.some(record=>record.contents.some(content=>content.name==="Original preparation admission rejection")));
+        const relatedIndex=decisionFact.evidence.related.findIndex(r=>r.subject.id===rejectionId);assert(relatedIndex>=0);
+        const rejected=await queries.query({...inspectionSelection,kind:"get_subject",subject:inspection.recorder.ref("context_preparation_policy","event",`root:context-fact:${decisionFact.sequence}:related:${relatedIndex}`,"root")});
+        const content=rejected.records.flatMap(record=>record.contents).find(content=>content.name==="context.preparation_admission_rejection");assert(content);
+        const original=await queries.query({...inspectionSelection,kind:"get_content",contentId:content.id});
+        assert.deepEqual(JSON.parse(original.content.text),await store.sharedAcceptance.query(rejectionId));
       }
       await queries.close();queries=null;
       assert.equal(inspection.recorder.health().rejected,0);assert.equal(inspection.recorder.health().dropped,0);
+      const timings=(await readFile(join(directory,"original-work-timings.jsonl"),"utf8")).trim().split("\n").map(line=>JSON.parse(line));
+      const providerFinished=timings.filter(t=>t.phase==="provider"&&t.kind==="finished");
+      assert.equal(providerFinished.length,multipleTurns?2:1,"Recovery must not manufacture another physical Provider interval");
+      for(const interval of providerFinished){
+        const start=timings.find(t=>t.id===interval.id&&t.kind==="started");assert(start);
+        assert.equal(start.clock.domain,interval.clock.domain);assert.equal(start.scope.attemptId,interval.scope.attemptId);
+        assert(interval.durationMs>=0);assert.equal(interval.scope.runId,"root");
+      }
+      for(const phase of ["input.assembly","input.encoding","input.local_measurement","acceptance.persistence"])
+        assert(timings.some(t=>t.phase===phase&&t.kind==="finished"),`Missing actual owner interval ${phase}`);
+      const timingSummary={events:timings.length,clockDomains:new Set(timings.map(t=>t.clock.domain)).size,
+        providerIntervals:providerFinished.length,unclosed:timings.filter(t=>t.kind==="started"&&!timings.some(end=>end.id===t.id&&end.kind==="finished")).length};
+      assert(timingSummary.clockDomains>1,"Restarted processes must not reuse a monotonic clock domain");
       await writeFile(join(directory,"verification.json"),JSON.stringify({electron:process.versions.electron,generation:store.generation,
+        timingSummary,
         originalTaskSourceRestored:true,hostDrivenSupply:true,actualHelarcInterpretation:true,productTaskBinding:true,scopedResponseObservation:true,normalPreparationHistoryRestored:true,
         providerCalls:multipleTurns?2:1,taskKind:accepted.progress.proposal.kind,backgroundPreparation:taskPreparation??"not_requested",multipleTurns,
         inputAcceptanceAcknowledgementLost:!!taskPreparation,atomicRollbackVerified:taskPreparation==="accepted",inspectionPolicyLinksVerified:true,
+        ownerContextEvidenceRestored:true,exactDeliveryPositionsRestored:true,
         ...(authorization?{authorization}:{}),
         actualRunner:taskRunner,interruptedAfterRawResponse:interruptTask,runnerStatus:runnerResult?.status??null,
         selectedSourceCount:selected.selection.representations.length,inspection:inspection.recorder.health()},null,2));

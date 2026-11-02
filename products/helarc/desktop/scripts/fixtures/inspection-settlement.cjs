@@ -11,6 +11,10 @@ exports.settleInspection=async function(recorder,queries) {
     assert.equal(result.barrier.accepted,accepted,"Verification must not extend its capture boundary");
     const snapshot=await queries.query({kind:"get_snapshot",sourceId:recorder.source.sourceId,datasetId:recorder.manifest.datasetId});
     const recording=snapshot.coverage.recording;
+    const processProjection=snapshot.coverage.processProjection;
+    assert.equal(processProjection?.version,"1","Process evidence must use the typed projection");
+    assert.equal(processProjection.status,"live","A partial inspection rebuild is not settled recording");
+    assert(processProjection.cursor>=recording.native.target,"Every acknowledged native fact must have its atomic process projection");
     const progress=JSON.stringify([recording.native.persisted,recording.native.duplicates,recording.native.rejected,recording.projection.cursor]);
     if(progress!==lastProgress){lastProgress=progress;progressAt=performance.now();}
     samples.push({elapsedMs:performance.now()-started,result,recording});

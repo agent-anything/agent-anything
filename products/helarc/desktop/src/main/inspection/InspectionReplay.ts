@@ -1,13 +1,13 @@
 import type {InspectionRecorder} from "@agent-anything/inspection/recording";
 
 export type InspectionProjectionSink = Pick<InspectionRecorder, "ref" | "offer">;
+export type InspectionProjectionRefs = Pick<InspectionRecorder,"ref">;
 
-/** Hold one source fact's projection, never the full history, while awaiting recorder admission. */
-export async function replayInspectionProjection(recorder: InspectionRecorder,
-  project: (sink: InspectionProjectionSink) => void, signal?: AbortSignal): Promise<void> {
-  const records: Parameters<InspectionRecorder["offer"]>[0][] = [];
-  project({ref: recorder.ref.bind(recorder), offer: record => {records.push(record); return true;}});
+/** Pull the next observation only after the previous one has been admitted. */
+export async function replayInspectionRecords(recorder: Pick<InspectionRecorder,"offerWhenReady">,
+  records: Iterable<Parameters<InspectionRecorder["offer"]>[0]>, signal?: AbortSignal): Promise<void> {
   for (const record of records) {
+    if(signal?.aborted)throw new Error("inspection_replay_cancelled");
     if (!await recorder.offerWhenReady(record, {signal})) throw new Error("inspection_replay_record_rejected");
   }
 }

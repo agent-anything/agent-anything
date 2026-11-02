@@ -53,7 +53,7 @@ function representation(f:ReturnType<typeof open>,m:ReturnType<typeof material>,
 function selection(f:ReturnType<typeof open>,m:ReturnType<typeof material>,r:RepresentationRecord,id="first",previous:string|null=null,keep=false,deliveryIds:readonly string[]=[],consumer="root-agent",inlineFoundation=false) {
   if(!inlineFoundation)f.db.selectionCommand(f.db.generation,{kind:"scope",scope});
   const inputId=`input:${id}`,selectionId=keep?previous!:`selection:${id}`,exactInput={messages:[{role:"user",content:`${m.text}:${id}`}],model:scope.target};
-  const judgment:RepresentationJudgment={id:`judgment:${id}`,owner:scope.owner,kind:"combination",subjects:[r.ref],inputs:[m.range],purpose:scope.purpose,target:scope.target,
+  const judgment:RepresentationJudgment={id:`judgment:${id}`,owner:scope.owner,runId:scope.runId,evidenceSources:[],kind:"combination",subjects:[r.ref],inputs:[m.range],purpose:scope.purpose,target:scope.target,
     methodRevision:"fixture:1",dependencies:{inputDigest:modelInputValueDigest(exactInput)},coverage:[m.range],conclusion:"supported",limitations:["Controlled complete input, not a semantic compaction test"],basis:"independent fixture expectations"};
   if(!inlineFoundation)f.db.representationCommand(f.db.generation,{kind:"judge",judgment});
   const inputHold:MaterialHold={...m.hold,id:`input-hold:${id}`,responsibility:"input",basis:inputId};
@@ -79,6 +79,38 @@ function selection(f:ReturnType<typeof open>,m:ReturnType<typeof material>,r:Rep
   return {proposal,parts,judgment,inputHold,selectionHold,accept:()=>f.accept(proposal.id,parts)};
 }
 describe("material custody and consistent selection",()=>{
+  it("keeps a judgment's recipient scope distinct from its source representation across recovery",()=>{
+    const f=open(),m=material(f),r=representation(f,m),prepared=selection(f,m,r);
+    const judgment:RepresentationJudgment={...prepared.judgment,id:"child-judgment",owner:"child-specialist",runId:"child",
+      evidenceSources:[{owner:"activity",id:"child-raw-result",runId:"child",revision:null}]};
+    expect(f.accept("wrong-judgment-scope",[{owner:"representation",kind:"judge",proposal:judgment}],"root",judgment.owner).outcome).toBe("rejected");
+    expect(f.db.representationCommand(f.db.generation,{kind:"read_judgment",id:judgment.id}).representationValue).toBeNull();
+    expect(f.accept("child-judgment-acceptance",[{owner:"representation",kind:"judge",proposal:judgment}],"child",judgment.owner).outcome).toBe("accepted");
+    const fact=f.db.contextFoundationFacts("child",0,256).contextFacts.find(fact=>fact.subject===judgment.id)!;
+    expect(fact.evidence?.subject.runId).toBe("child");
+    expect(fact.evidence?.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:{owner:"representation",id:JSON.stringify([r.ref.id,r.ref.revision]),runId:"root",revision:null}}));
+    expect(fact.evidence?.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:judgment.evidenceSources[0]}));
+    f.db.close();const reopened=open(f.directory);
+    expect(reopened.db.representationCommand(reopened.db.generation,{kind:"read_judgment",id:judgment.id}).representationValue).toEqual(judgment);
+    expect(reopened.db.contextFoundationFacts("child",0,256).contextFacts.find(restored=>restored.subject===judgment.id)).toEqual(fact);
+  });
+  it("records exact material access and grant revisions without turning reads into state changes or delivery",()=>{
+    const f=open(),m=material(f,"original child material"),access={id:"page-observation",holdId:m.hold.id,recipient,range:m.range};
+    f.c({kind:"read",access,offset:0,length:8});
+    const read=f.db.contextFoundationFacts("root",0,256).contextFacts.find(fact=>fact.subject===access.id)!;
+    expect(read.details).toMatchObject({range:m.range,start:0,end:8,recipient,holdId:m.hold.id});
+    expect(read.evidence?.state).toBeNull();
+    expect(read.evidence?.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:expect.objectContaining({id:m.intent.instanceId,runId:"child"})}));
+    expect(read.evidence?.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:expect.objectContaining({id:m.range.materialId,revision:m.range.version,runId:null})}));
+    expect(read.evidence?.relationships.some(edge=>edge.kind==="delivers")).toBe(false);
+    f.c({kind:"grant",grant:{...m.grant,revision:1,allowed:false},expectedRevision:0});
+    expect(()=>f.c({kind:"read",access,offset:0,length:8})).toThrow("material_unavailable");
+    const facts=f.db.contextFoundationFacts("root",0,256).contextFacts;
+    expect(facts.filter(fact=>fact.kind==="grant_changed").map(fact=>fact.details)).toMatchObject([
+      {previousRevision:null,grant:{revision:0,allowed:true}},{previousRevision:0,grant:{revision:1,allowed:false}},
+    ]);
+    expect(facts.filter(fact=>fact.kind==="read"&&fact.subject===access.id)).toHaveLength(1);
+  });
   it("retires settled input, selection and holds together and restores the same acceptance",()=>{
     const f=open(),m=material(f),r=representation(f,m),s=selection(f,m,r);expect(s.accept().outcome).toBe("accepted");
     const release={owner:"context_selection",kind:"input_retirement",proposal:{inputIds:[s.proposal.input.id],withdrawals:[{
@@ -189,6 +221,12 @@ describe("material custody and consistent selection",()=>{
       .toMatchObject({entries:[{delivery:{id:"delivered"},selectedInputId:null}]});
     expect(restored.db.contextFoundationFacts("root",0,256).contextFacts.find(f=>f.kind==="published"&&f.owner==="context_delivery")?.details)
       .toMatchObject({acceptanceId:"child-delivery",acceptanceScope:"child"});
+    const publication=restored.db.contextFoundationFacts("root",0,256).contextFacts.filter(f=>f.kind==="published"&&f.owner==="context_delivery");
+    expect(publication).toHaveLength(1);
+    expect(publication[0]!.evidence?.subject).toMatchObject({owner:"context_delivery",id:"delivered",runId:"root"});
+    expect(publication[0]!.evidence?.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:expect.objectContaining({owner:"shared_acceptance",id:"child-delivery",runId:"child"})}));
+    expect(publication[0]!.evidence?.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:expect.objectContaining({owner:"material_custody",id:m.intent.instanceId,runId:"child"})}));
+    expect(publication[0]!.evidence?.relationships.some(edge=>edge.kind==="delivers")).toBe(false);
   });
   it.each([false,true])("associates multiple inputs and stages by identity, not part order (reverse=%s)",reverse=>{
     const f=open(),m=material(f),r=representation(f,m),first=selection(f,m,r,"first"),second=selection(f,m,r,"second");
@@ -385,6 +423,7 @@ describe("material custody and consistent selection",()=>{
     expect(f.c({kind:"read",access:{id:"other-consumer",holdId:m.hold.id,recipient,range:m.range},offset:0,length:32})).toMatchObject({text:m.text});
     const facts=f.db.contextFoundationFacts("root",0,256).contextFacts;
     expect(facts.some(fact=>fact.kind==="disposed")).toBe(true);expect(facts.some(fact=>fact.kind==="accepted")).toBe(false);
+    expect(facts.filter(fact=>fact.owner==="context_delivery").flatMap(fact=>fact.evidence!.relationships).some(edge=>edge.kind==="delivers")).toBe(false);
   });
   it("gives public tools the same scoped version, bounded search and revoked-access behavior as internal readers",async()=>{
     const f=open(),m=material(f,"alpha ".repeat(70000)+"TARGET"),signal=new AbortController().signal;
@@ -549,7 +588,7 @@ describe("material custody and consistent selection",()=>{
     f.db.representationCommand(f.db.generation,{kind:"record",record:a});
     expect(()=>f.db.representationCommand(f.db.generation,{kind:"record",record:{...a,ref:{id:"second",revision:"1"},inputs:[{role:"source",material:m.range,representation:a.ref}],losses:[]}})).toThrow("inherited_loss_missing");
     const prepared=selection(f,m,a,"reuse");
-    const request={id:"reuse:1",judgmentId:prepared.judgment.id,purpose:scope.purpose,target:scope.target,methodRevision:prepared.judgment.methodRevision,subjects:[a.ref],dependencies:prepared.judgment.dependencies};
+    const request={id:"reuse:1",runId:scope.runId,judgmentId:prepared.judgment.id,purpose:scope.purpose,target:scope.target,methodRevision:prepared.judgment.methodRevision,subjects:[a.ref],dependencies:prepared.judgment.dependencies};
     expect(f.db.representationCommand(f.db.generation,{kind:"reuse",request}).representationValue).toMatchObject({applicable:true});
     expect(f.db.representationCommand(f.db.generation,{kind:"reuse",request:{...request,id:"reuse:2",dependencies:{inputDigest:"changed"}}}).representationValue).toMatchObject({applicable:false,reasons:["dependencies_changed"]});
   });

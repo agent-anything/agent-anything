@@ -140,7 +140,7 @@ async function main(){
   if(process.env.ACTIVITY_NORMAL_POLICY) {
     const decision=await store.contextPolicy.query({kind:"latest",scopeId:"normal-policy-scope"});
     const visible=await queries.query({...selection,kind:"get_subject",subject:inspection.recorder.ref("context-representation","contribution",decision.decision.id,"parent")});
-    assert(visible.records.some(r=>r.contents.some(c=>c.name==="Context policy decision and evidence")),"The policy owner used by scheduling and reconsideration must resolve to a recorded decision");
+    assert(visible.records.some(r=>r.contents.some(c=>c.name==="Owner-declared context evidence")),"The policy owner used by scheduling and reconsideration must resolve to a recorded decision");
   }
   if(adoption?.consumerCancelled) {
     const rawStage=await a({kind:"read_stage",requestId:"parent-materialization:stage:1"});

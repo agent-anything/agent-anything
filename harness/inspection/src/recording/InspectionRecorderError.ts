@@ -20,3 +20,7 @@ export class InspectionRecorderError extends Error {
 export function inspectionRecorderFailureCode(error: unknown): string {
   return error instanceof Error && codes.has(error.message) ? error.message : "inspection_storage_unavailable";
 }
+
+export function inspectionProjectionFailureCode(error: unknown): string {
+  return error instanceof Error && codes.has(error.message) ? error.message : "inspection_projection_failed";
+}

@@ -1,0 +1,40 @@
+.context-process-workspace { min-width: 0; padding: 12px; overflow: auto; flex: 1; }
+.process-scope, .process-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 10px; }
+.process-scope label { flex: 1; min-width: 220px; }
+.process-scope label, .process-filters label { display: flex; flex-direction: column; gap: 4px; color: #52626c; font-size: 12px; }
+.process-scope .ant-select { width: 100%; }
+.process-filters .ant-select { min-width: 160px; }
+.process-filters .ant-input-search { width: 220px; }
+.process-filters .coverage-note { flex-basis: 100%; padding: 0; }
+.process-boundaries, .process-coverage { padding: 8px 0; border-bottom: 1px solid #dce2e7; margin-bottom: 8px; font-size: 12px; }
+.process-boundaries summary, .process-coverage summary { cursor: pointer; color: #405760; }
+.process-fact-button { background: transparent; border: 0; padding: 3px 0; text-align: left; cursor: pointer; color: #245c77; font: inherit; width: 100%; overflow-wrap: anywhere; }
+.process-fact-button:hover { text-decoration: underline; }
+.process-fact-state { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; color: #485965; }
+.process-object-id { display: block; color: #63737c; font-weight: normal; margin-top: 4px; overflow-wrap: anywhere; max-height: 34px; overflow: hidden; }
+.process-path-group .fact-link { white-space: normal; overflow-wrap: anywhere; height: auto; text-align: left; }
+.process-fact, .process-relation { padding: 14px 0; border-bottom: 1px solid #dce2e7; }
+.process-contents { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.process-contents > div { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.process-focus .ant-btn:not(.ant-btn-icon-only), .process-metric-evidence .ant-btn { height: auto; white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+.process-endpoint { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; padding: 6px 0; }
+.process-endpoint > .fact-link { flex: 1; min-width: 130px; }
+.process-location { flex-basis: 100%; background: #f4f7f9; padding: 8px; }
+.process-focus .canvas-frame, .process-metrics .canvas-frame { height: 460px; min-height: 300px; margin: 12px 0; }
+.process-focus .canvas-expanded, .process-metrics .canvas-expanded { height: auto; margin: 0; }
+.process-timeline { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
+.process-timeline .ant-select { width: 100%; }
+.process-timeline-surface { flex: 1; min-height: 0; }
+.process-timeline .vis-labelset .vis-label { max-width: 190px; overflow: hidden; }
+.process-timeline .vis-item-content { max-width: 300px; overflow: hidden; }
+.process-metric-evidence h3 { font-size: 14px; }
+.process-metrics .view-toolbar { flex-wrap: wrap; }
+.process-focus .fact-link { white-space: normal; height: auto; text-align: left; overflow-wrap: anywhere; }
+.process-evaluation { min-width: 0; }
+.process-evaluation h3 { font-size: 15px; overflow-wrap: anywhere; flex: 1; min-width: 120px; }
+.process-evaluation .view-toolbar { flex-wrap: wrap; }
+.process-evaluation .ant-table { overflow-wrap: anywhere; }
+.process-evaluation .ant-descriptions-item-content { overflow-wrap: anywhere; min-width: 0; }
+.process-evaluation .ant-btn:not(.ant-btn-icon-only) { height: auto; white-space: normal; overflow-wrap: anywhere; text-align: left; max-width: 100%; }
+.process-evaluation .process-path-group { margin-top: 16px; padding-top: 8px; border-top: 1px solid #dce2e7; }
+@media (max-width: 700px) { .context-process-workspace { padding: 8px; } .process-scope label { min-width: 150px; } .process-filters label { flex: 1; min-width: 130px; } .process-filters .ant-input-search { width: 100%; } }

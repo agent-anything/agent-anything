@@ -5,7 +5,7 @@ import {randomUUID} from "node:crypto";
 import {CONTEXT_MATERIAL_LIMITS, ContextMaterialError, type ContextMaterialAccessPort, type ContextMaterialPage, type ContextMaterialSearchPage} from "@agent-anything/context/material";
 import { restoreExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
 import { reportExecutionFailure, type ExecutionDiagnosticSink, type ExecutionDiagnosticContext } from "../diagnostics/HelarcExecutionDiagnostics.js";
-import {beginExecutionTiming, measureExecutionSync, type ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
+import {beginExecutionTiming, measureExecutionSync,executionPerformanceClock, type ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
 import { FILE_MATERIAL_POLICY, snapshotFileMaterialPreparation, type FileMaterialRecordPort, type FileMaterialPreparation, type FileMaterialReservation,
   type FileMaterialRecord, type FileMaterialRead, type FileMaterialObserver, type FileMaterialObservation } from "@agent-anything/helarc-local-environment/filesystem";
 import { snapshotExecutionEvidence, snapshotCompensationAssociation, type ExecutionEvidenceRecordPort, type ExecutionEvidenceRecord,
@@ -151,24 +151,16 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
           if (request.responseRoot) throw new ExecutionStoreError("execution_storage_protocol_invalid");
           request.responseRoot = reply.root;
           request.responsePending.add(reply.root.root);
-          this.readNext(request); return;
+          if (this.readNext(request)) return;
+          reply = {kind: "result", id: reply.id, value: this.expandResponse(request)};
         }
         if (reply.kind === "content_blocks") {
           if (!request.responseRoot || reply.blocks.length !== request.requestedBlocks.length ||
               reply.blocks.some((block, index) => block.id !== request.requestedBlocks[index])) throw new ExecutionStoreError("execution_storage_protocol_invalid");
           request.requestedBlocks = [];
-          for (const block of reply.blocks) {
-            request.responseBytes += Buffer.byteLength(block.text);
-            if (request.responseBytes > EXECUTION_CONTENT_LIMITS.hydratedBytes || request.responseBlocks.size >= EXECUTION_CONTENT_LIMITS.blocks) throw new ExecutionStoreError("execution_content_capacity_exceeded");
-            const refs = executionContentReferences(block, this.contentCache);
-            request.responseBlocks.set(block.id, block);
-            request.responsePending.delete(block.id);
-            for (const id of refs) if (!request.responseBlocks.has(id)) request.responsePending.add(id);
-          }
-          if (request.responsePending.size) { this.readNext(request); return; }
-          const value = measureExecutionSync(this.diagnostics, "storage.host.expand_response", request.context,
-            () => unpackExecutionContent(request.responseRoot!, id => request.responseBlocks.get(id)!, this.contentCache, true)) as ExecutionStoreValue;
-          reply = {kind: "result", id: reply.id, value};
+          for (const block of reply.blocks) this.acceptResponseBlock(request, block);
+          if (this.readNext(request)) return;
+          reply = {kind: "result", id: reply.id, value: this.expandResponse(request)};
         }
       } catch (error) { this.fail("execution_storage_acknowledgement_unknown", error, "storage_content_transfer"); return; }
       this.flight = null;
@@ -270,6 +262,15 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     write: async (id, stage, value) => {await this.contextPreparationRequest({kind: "write", id, stage, value});},
     retire: async (id, reason) => {await this.contextPreparationRequest({kind: "retire", id, reason});},
   };
+  readonly observeActivityTiming=(event:import("@agent-anything/agent-runtime/activity").ActivityTimingObservation):void=>{
+    try{this.activityObserver?.observeTiming?.(event);}catch{/* Optional observation cannot alter work. */}
+    const common={id:event.id,stage:`activity.${event.phase}`,occurredAt:event.occurredAt,
+      context:{runId:event.scope.runId,pathId:event.scope.pathId,stageId:event.scope.stageId,attemptId:event.scope.attemptId,
+        workId:event.scope.workId,purposeDigest:event.scope.purposeDigest,clockDomain:event.clock.domain,monotonicMs:event.clock.monotonicMs}};
+    try{if(event.kind==="started")this.diagnostics?.performance?.({...common,kind:"started"});
+      else if(event.durationMs!==null)this.diagnostics?.performance?.({...common,kind:"finished",durationMs:event.durationMs,outcome:event.outcome==="returned"?"ok":"failed"});
+    }catch{/* Diagnostics remain optional. */}
+  };
   readonly activityHandoffs: import("@agent-anything/agent-runtime/activity").ActivityHandoffPort = {
     command: async command => {
       const result = await this.request({kind: "activity_handoff", command});
@@ -279,7 +280,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
         try {
           const pathReply=await this.request({kind:"activity_handoff",command:{kind:"read_path",pathId:state.request.pathId}});
           if(pathReply && "activityValue" in pathReply && pathReply.activityValue && "intent" in pathReply.activityValue)
-            this.activityObserver.observeStage(pathReply.activityValue.intent.runId,state);
+            this.activityObserver.observeStage(pathReply.activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState,state);
         } catch { /* Durable facts permit replay; observation cannot alter acceptance. */ }
       }
       return result.activityValue;
@@ -625,9 +626,29 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       this.sendWire(request, {kind: "stage_content", blocks: batch});
     } else this.sendWire(request, request.content ? {kind: "invoke_content", root: request.content} : request.command!);
   }
-  private readNext(request: PendingRequest): void {
+  private acceptResponseBlock(request: PendingRequest, block: ExecutionContentBlock): void {
+    request.responseBytes += Buffer.byteLength(block.text);
+    if (request.responseBytes > EXECUTION_CONTENT_LIMITS.hydratedBytes || request.responseBlocks.size >= EXECUTION_CONTENT_LIMITS.blocks) throw new ExecutionStoreError("execution_content_capacity_exceeded");
+    const refs = executionContentReferences(block, this.contentCache);
+    request.responseBlocks.set(block.id, block);
+    request.responsePending.delete(block.id);
+    for (const id of refs) if (!request.responseBlocks.has(id)) request.responsePending.add(id);
+  }
+  private expandResponse(request: PendingRequest): ExecutionStoreValue {
+    return measureExecutionSync(this.diagnostics, "storage.host.expand_response", request.context,
+      () => unpackExecutionContent(request.responseRoot!, id => request.responseBlocks.get(id)!, this.contentCache, true)) as ExecutionStoreValue;
+  }
+  private readNext(request: PendingRequest): boolean {
+    // The current command has already been checked by the Worker. Reuse only
+    // verified bytes in this fresh response's content-addressed closure.
+    for (const id of request.responsePending) {
+      const block = this.contentCache.verifiedBlock(id);
+      if (block) this.acceptResponseBlock(request, block);
+    }
+    if (!request.responsePending.size) return false;
     request.requestedBlocks = [...request.responsePending].slice(0, 16);
     this.sendWire(request, {kind: "read_content", ids: request.requestedBlocks});
+    return true;
   }
   private sendWire(request: PendingRequest, command: ExecutionStoreWireCommand): void {
     request.wireKind = command.kind;
@@ -647,7 +668,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     this.recordFailure(stage, error, this.flight?.command ?? undefined, this.flight);
     for (const {event, receivedAt} of this.workerTimings.values()) {
       try {this.diagnostics?.performance?.({...event, kind: "finished", durationMs: performance.now() - receivedAt,
-        context: {...event.context, timingBasis: "host_elapsed_since_worker_start_received"},
+        context: {...event.context,...executionPerformanceClock(), timingBasis: "host_elapsed_since_worker_start_received",originalClockDomain:event.context.clockDomain??null},
         occurredAt: new Date().toISOString(), outcome: "unknown"});} catch { /* Observation is independent. */ }
     }
     this.workerTimings.clear();
@@ -683,6 +704,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
 function commandContext(command?: ExecutionStoreCommand): ExecutionDiagnosticContext {
   if (!command) return {};
   const base = {command: command.kind};
+  if(command.kind==="activity_handoff")return {...base,...activityCommandObservation(command.command)};
   const run = command.kind === "commit_run_tree" ? command.commit.runs[0]
     : command.kind === "commit_owner" && command.commit.kind === "run" ? command.commit.value : null;
   if (run) return {...base, runId: run.state.run.id, commitId: run.id, revision: run.state.revision,
@@ -696,3 +718,4 @@ function commandContext(command?: ExecutionStoreCommand): ExecutionDiagnosticCon
   if (command.kind === "file_material") return {...base, materialOperation: command.command.kind};
   return base;
 }
+import {activityCommandObservation} from "./ActivityCommandObservation.js";

@@ -3,6 +3,7 @@ import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {ContextUseScope} from "@agent-anything/context/selection";
 import type {MaterialHold} from "@agent-anything/context/custody";
 import type {RepresentationJudgment} from "@agent-anything/context/representation";
+import {contextProcessObject} from "@agent-anything/context/evidence";
 import type {ActivityInputNeed} from "../activity/index.js";
 import {validateOriginalInputSources,type OriginalInputSources} from "./OriginalInputSources.js";
 import {validateOriginalInputPublication,type OriginalInputPublicationPlan} from "./OriginalInputPublications.js";
@@ -46,9 +47,10 @@ export function prepareOriginalInputSelection(input:{
   });
   const inputDigest=modelInputValueDigest(prepared);
   const judgment:RepresentationJudgment={id:`original-input-combination:${modelInputValueDigest({scope:scope.id,sources:sources.id,inputDigest})}`,
-    owner:scope.owner,kind:"combination",subjects:retained.map(p=>p.published.representation.ref),inputs:retained.map(p=>p.published.access.range),
+    owner:scope.owner,runId:scope.runId,kind:"combination",subjects:retained.map(p=>p.published.representation.ref),inputs:retained.map(p=>p.published.access.range),
     purpose:scope.purpose,target:scope.target,methodRevision:"original-input-equality:1",
     dependencies:{inputDigest,inputSource:sources.id,originalSource:sources.originalSourceId,encodedInput:prepared.encoded.id,stage:prepared.preparationStageId},
+    evidenceSources:[contextProcessObject("model-input",prepared.encoded.id,scope.runId),contextProcessObject("activity",prepared.preparationStageId,scope.runId)],
     coverage:retained.map(p=>p.published.access.range),conclusion:"supported",
     limitations:["Exact original preservation only; source truth and transformed semantic quality are not assessed"],
     basis:"Complete original request content, ordered occurrences, declared duties, native groups and published source versions match"};

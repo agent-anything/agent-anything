@@ -5,12 +5,14 @@ import type { InspectionBatchReceipt, InspectionIngressHealth } from "../records
 
 export type InspectionOffer = InspectionNativeOffer;
 export type RecorderCommand =
+  | { readonly kind:"capture_policy";readonly policy:import("../content/index.js").InspectionCapturePolicy }
   | { readonly kind: "batch"; readonly id: string; readonly digest: string; readonly offers: readonly InspectionOffer[]; readonly health: InspectionIngressHealth }
   | { readonly kind: "health"; readonly health: InspectionIngressHealth }
   | { readonly kind: "receipt"; readonly id: string }
   | { readonly kind: "flush"; readonly id: number; readonly close: boolean; readonly health: InspectionIngressHealth;
     readonly barrier: {readonly accepted: number; readonly healthRevision: number} };
 export type RecorderReply =
+  | { readonly kind:"capture_ack";readonly coverage:InspectionCoverage }
   | { readonly kind: "initializing"; readonly completed: number }
   | { readonly kind: "ready"; readonly source: InspectionSource; readonly manifest: InspectionDatasetManifest }
   | { readonly kind: "ack"; readonly receipt: InspectionBatchReceipt; readonly coverage: InspectionCoverage }

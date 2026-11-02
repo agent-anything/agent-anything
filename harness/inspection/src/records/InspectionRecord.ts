@@ -1,6 +1,6 @@
 import type { ExecutionFlowDefinition, ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 
-export const INSPECTION_FORMAT_VERSION = 4 as const;
+export const INSPECTION_FORMAT_VERSION = 5 as const;
 
 export type InspectionJson = null | boolean | number | string |
   readonly InspectionJson[] | { readonly [key: string]: InspectionJson };
@@ -49,6 +49,13 @@ export interface InspectionLifecycleDefinition {
 }
 
 export interface InspectionPayloadMap {
+  evaluation_report: {readonly reportId: string; readonly comparison: "C01" | "C02" | "C03" | "C04";
+    readonly target: string; readonly startingBoundary: string; readonly status: "complete" | "partial";
+    readonly trialCount: number; readonly limitationCount: number};
+  work_measurement: import("./InspectionWorkMeasurement.js").InspectionWorkMeasurement;
+  process_evidence: import("./InspectionProcessEvidence.js").InspectionProcessEvidence;
+  process_relationship: import("./InspectionProcessEvidence.js").InspectionProcessRelationship;
+  work_timing: import("./InspectionProcessEvidence.js").InspectionWorkTiming;
   recording_link: {readonly stage: "recovery_prepared"; readonly target: {readonly sourceId: string; readonly datasetId: string; readonly runId: string} | null;
     readonly limitation: string | null};
   context_planning: {readonly requestId: string; readonly planningId: string; readonly disposition: string;
@@ -161,6 +168,8 @@ export interface InspectionRecord {
 }
 
 export interface InspectionCoverage {
+  readonly capture?:{readonly enabled:boolean;readonly policyRevision:string};
+  readonly processProjection?:{readonly version:"1";readonly cursor:number;readonly status:"live"|"rebuilding";readonly target:number|null};
   readonly recording?: import("./InspectionRecordingProgress.js").InspectionRecordingProgress;
   readonly status: "open" | "closed" | "unknown";
   readonly watermark: number;

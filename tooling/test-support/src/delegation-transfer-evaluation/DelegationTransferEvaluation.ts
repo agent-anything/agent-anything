@@ -32,7 +32,7 @@ export interface DelegationTransferMetrics {
   readonly completionRate: number;
   readonly toolCallCount: number;
   readonly modelTurnCount: number;
-  readonly latencyMs: number;
+  readonly logicalClockTicks: number;
   readonly humanInteractionEvents: number;
   readonly terminalOutcome: "completed" | "failed" | "cancelled";
 }
@@ -47,7 +47,7 @@ export interface DelegationTransferInvariantSummary {
 }
 
 export interface DelegationTransferEvaluationReport {
-  readonly revision: "delegation-transfer-deterministic-evaluation-v11";
+  readonly revision: "delegation-transfer-deterministic-evaluation-v12";
   readonly metrics: DelegationTransferMetrics;
   readonly invariants: DelegationTransferInvariantSummary;
   readonly descendantRunCount: number;
@@ -92,7 +92,7 @@ export async function runDelegationTransferDeterministicEvaluation(): Promise<
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
   const materialized = deepFreeze({
-    revision: "delegation-transfer-deterministic-evaluation-v11" as const,
+    revision: "delegation-transfer-deterministic-evaluation-v12" as const,
     metrics,
     invariants,
     descendantRunCount: started.length,
@@ -136,6 +136,7 @@ export async function runDelegationTransferModelDiagnostic(input: {
       limitations: Object.freeze([
         "diagnostic_only",
         "model_behavior_is_stochastic",
+        "logical_clock_ticks_are_not_elapsed_performance",
         "deterministic_contract_acceptance_remains_authoritative",
       ]),
     });
@@ -254,7 +255,7 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
       : 0,
     toolCallCount,
     modelTurnCount: material.providerRequests.length,
-    latencyMs: traceDuration(material),
+    logicalClockTicks: traceDuration(material),
     humanInteractionEvents: material.interactionSubmissionCount,
     terminalOutcome: material.runResult.status,
   });

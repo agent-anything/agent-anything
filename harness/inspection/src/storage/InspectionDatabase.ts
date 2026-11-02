@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { inspectionSubjectKey, INSPECTION_FORMAT_VERSION, type InspectionRecord, type InspectionCoverage, type InspectionContentDescriptor } from "../records/index.js";
 import { containedInspectionPath, validateOpaqueId, type InspectionDatasetManifest } from "../sources/index.js";
 import { initialInspectionProgress, initialInspectionTimings, type InspectionTimingStage, type InspectionBatchReceipt, type InspectionIngressHealth, type InspectionRecordingProgress } from "../records/index.js";
+import {validateInspectionInput} from "../records/InspectionValidation.js";
+import {InspectionProcessIndex,INSPECTION_PROCESS_SCHEMA,INSPECTION_PROCESS_TABLES} from "./InspectionProcessIndex.js";
 
 export interface InspectionContentWrite { readonly descriptor: InspectionContentDescriptor; readonly text: string | null }
 export interface InspectionNativeOffer { readonly record: InspectionRecord; readonly contents: readonly InspectionContentWrite[]; readonly bytes: number }
@@ -15,6 +17,7 @@ export interface InspectionTelemetryWrite {
 }
 
 const SCHEMA = `
+${INSPECTION_PROCESS_SCHEMA}
 CREATE TABLE dataset (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, manifest TEXT NOT NULL, watermark INTEGER NOT NULL, coverage TEXT NOT NULL);
 CREATE TABLE records (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE, capture_sequence INTEGER NOT NULL, subject_key TEXT NOT NULL, run_id TEXT, owner TEXT NOT NULL, subject_kind TEXT NOT NULL, kind TEXT NOT NULL, occurred_at TEXT, fingerprint TEXT NOT NULL, value TEXT NOT NULL);
 CREATE INDEX records_subject ON records(subject_key, sequence);
@@ -41,7 +44,7 @@ CREATE INDEX flow_occurrences ON flow_records(occurrence_id, sequence);
 CREATE INDEX flow_runs ON flow_records(run_id, event_kind, sequence);
 CREATE INDEX flow_steps ON flow_records(invocation_id, step_id, event_kind, sequence);
 `;
-const TABLES = ["dataset", "records", "relations", "contents", "bodies", "batch_receipts", "definitions", "lifecycle_definitions", "subject_snapshots", "telemetry_spans", "telemetry_logs", "telemetry_correlations", "capture_issues", "flow_definitions", "flow_records"];
+const TABLES = [...INSPECTION_PROCESS_TABLES,"dataset", "records", "relations", "contents", "bodies", "batch_receipts", "definitions", "lifecycle_definitions", "subject_snapshots", "telemetry_spans", "telemetry_logs", "telemetry_correlations", "capture_issues", "flow_definitions", "flow_records"];
 type Row = Record<string, string | number | null>;
 
 export class InspectionDatabase {
@@ -51,14 +54,16 @@ export class InspectionDatabase {
   private nativeTransactionMaxMs = 0;
   private timings = initialInspectionTimings();
   readonly directory: string;
+  readonly process:InspectionProcessIndex;
 
-  constructor(directory: string, manifest?: InspectionDatasetManifest) {
+  constructor(directory: string, manifest?: InspectionDatasetManifest, options:{writable?:boolean}={}) {
     this.directory = directory;
     if (manifest) {
       mkdirSync(directory, { recursive: true, mode: 0o700 });
     }
     const file = containedInspectionPath(directory, "inspection.sqlite");
-    this.db = new Database(file, { readonly: !manifest, fileMustExist: !manifest, timeout: 250 });
+    this.db = new Database(file, { readonly: !manifest&&!options.writable, fileMustExist: !manifest, timeout: 250 });
+    this.process=new InspectionProcessIndex(this.db);
     try {
       this.db.pragma("trusted_schema = OFF");
       if (manifest) {
@@ -70,6 +75,7 @@ export class InspectionDatabase {
         this.db.prepare("INSERT INTO dataset VALUES (1, ?, ?, 0, ?)").run(INSPECTION_FORMAT_VERSION, JSON.stringify(manifest), JSON.stringify(coverage));
       }
       this.validateSchema();
+      this.process.progress();
     } catch (error) { this.db.close(); throw error; }
   }
 
@@ -88,9 +94,11 @@ export class InspectionDatabase {
   }
 
   engineVersion(): string { return (this.db.prepare("SELECT sqlite_version() AS version").get() as { version: string }).version; }
+  /** Query-local WAL snapshot; released before returning a page, never across user navigation. */
+  beginReadSnapshot():()=>void {this.db.exec("BEGIN");return ()=>{if(this.db.inTransaction)this.db.exec("ROLLBACK");};}
   snapshot(): InspectionCoverage {
     const row = this.statement("SELECT watermark, coverage FROM dataset WHERE id=1").get() as Row;
-    return { ...JSON.parse(String(row.coverage)), watermark: Number(row.watermark) };
+    return { ...JSON.parse(String(row.coverage)), watermark: Number(row.watermark),processProjection:this.process.progress() };
   }
   manifest(): InspectionDatasetManifest {
     return JSON.parse(String((this.db.prepare("SELECT manifest FROM dataset WHERE id=1").get() as Row).manifest));
@@ -101,11 +109,12 @@ export class InspectionDatabase {
     const issue = this.db.prepare("SELECT value FROM capture_issues WHERE sequence<=? ORDER BY sequence DESC LIMIT 1").get(watermark) as Row | undefined;
     const base: InspectionCoverage = issue ? JSON.parse(String(issue.value)) : { ...current, status: "open", dropped: 0, rejected: 0, telemetryDropped: 0, limitations: [], recording: initialInspectionProgress(), heartbeat: this.manifest().createdAt };
     const row = this.db.prepare("SELECT COUNT(*) AS total FROM records WHERE sequence<=?").get(watermark) as Row;
-    return { ...base, watermark, captured: Number(row.total) };
+    return { ...base, watermark, captured: Number(row.total),processProjection:{...this.process.progress(),cursor:Math.min(watermark,this.process.progress().cursor)} };
   }
 
   write(record: InspectionRecord, contents: readonly InspectionContentWrite[]): { record: InspectionRecord; duplicate: boolean } {
-    const fingerprint = createHash("sha256").update(JSON.stringify({ subject: record.subject, payload: record.payload, links: record.links, contents: record.contents, occurredAt: record.occurredAt, ownerSequence: record.ownerSequence })).digest("hex");
+    validateRecordStructure(record);
+    const fingerprint = recordFingerprint(record);
     const prior = this.statement("SELECT fingerprint, value FROM records WHERE id=?").get(record.id) as Row | undefined;
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error("inspection_record_conflict");
@@ -139,6 +148,7 @@ export class InspectionDatabase {
         this.statement("INSERT INTO contents VALUES (?, ?, ?, ?, ?)").run(descriptor.id, sequence, record.id, bodyId, JSON.stringify(descriptor));
       }
       this.statement("INSERT INTO subject_snapshots VALUES (?, ?, ?)").run(key, sequence, record.id);
+      this.process.accept(committed);
       if (record.payload.kind === "definition") this.statement("INSERT INTO definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
       if (record.payload.kind === "lifecycle") this.statement("INSERT INTO lifecycle_definitions VALUES (?, ?, ?)").run(key, sequence, record.id);
       if (record.payload.kind === "flow_definition") {
@@ -156,6 +166,25 @@ export class InspectionDatabase {
 
   writeBatch<T>(write: () => T): T {
     return this.db.transaction(write)();
+  }
+
+  /** Rebuild only derived inspection indexes, without invoking a production owner. */
+  resetProcessProjection():void {this.db.transaction(()=>this.process.reset(this.snapshot().watermark))();}
+  rebuildProcessProjection(watermark:number,limit=100):ReturnType<InspectionProcessIndex["progress"]> {
+    if(!Number.isSafeInteger(watermark)||watermark<0||watermark>this.snapshot().watermark||!Number.isSafeInteger(limit)||limit<1||limit>100)throw new Error("inspection_process_page_invalid");
+    return this.db.transaction(()=>{
+      const progress=this.process.progress(),cursor=progress.cursor;
+      if(cursor>watermark||progress.status!=="rebuilding"||progress.target!==watermark)throw new Error("inspection_process_projection_boundary_invalid");
+      const rows=this.sqlRecordsForRebuild(cursor,watermark,limit);
+      for(const row of rows){const record=JSON.parse(row.value) as InspectionRecord;
+        if(record.commitSequence!==row.sequence||record.id!==row.id||recordFingerprint(record)!==row.fingerprint)throw new Error("inspection_process_source_corrupt");
+        validateRecordStructure(record);this.process.accept(record,true);}
+      if(rows.length<limit)this.statement("UPDATE process_projection SET cursor=?,status='live',target=NULL WHERE id=1").run(watermark);
+      return this.process.progress();
+    })();
+  }
+  private sqlRecordsForRebuild(after:number,watermark:number,limit:number):{id:string;sequence:number;value:string;fingerprint:string}[] {
+    return this.statement("SELECT id,sequence,value,fingerprint FROM records WHERE sequence>? AND sequence<=? ORDER BY sequence LIMIT ?").all(after,watermark,limit) as {id:string;sequence:number;value:string;fingerprint:string}[];
   }
 
   receipt(id: string): InspectionBatchReceipt | null {
@@ -329,6 +358,14 @@ export class InspectionDatabase {
     return (this.db.prepare(`SELECT value FROM records WHERE ${clauses.join(" AND ")} ORDER BY sequence LIMIT ?`).all(...values, Math.min(input.limit ?? 100, 501)) as Row[]).map((row) => JSON.parse(String(row.value)));
   }
 
+  measurementRecords(watermark:number,after:number,runIds:readonly string[],limit:number):InspectionRecord[] {
+    if(!runIds.length||runIds.length>64||limit<1||limit>101)throw new Error("inspection_query_invalid");
+    // Indexed bounded branches; no private payload traversal and no full-history materialization.
+    const rows=["work_measurement","work_timing"].flatMap(kind=>this.statement(`SELECT value FROM records WHERE kind=? AND sequence>? AND sequence<=? AND run_id IN (${runIds.map(()=>"?").join(",")}) ORDER BY sequence LIMIT ?`)
+      .all(kind,after,watermark,...runIds,limit) as {value:string}[]).map(row=>JSON.parse(row.value) as InspectionRecord);
+    return rows.sort((a,b)=>a.commitSequence-b.commitSequence).slice(0,limit);
+  }
+
   conversationDeliveries(requestKey: string, watermark: number, after: number, limit: number): InspectionRecord[] {
     const rows = this.statement(`SELECT DISTINCT r.sequence, r.value FROM relations l JOIN records r ON r.id=l.record_id
       WHERE l.to_key=? AND l.kind='includes' AND l.sequence<=? AND r.sequence>? AND r.sequence<=?
@@ -391,6 +428,17 @@ export class InspectionDatabase {
   record(id: string, watermark: number): InspectionRecord | null {
     const row = this.db.prepare("SELECT value FROM records WHERE id=? AND sequence<=?").get(id, watermark) as Row | undefined;
     return row ? JSON.parse(String(row.value)) : null;
+  }
+  verifiedRecord(id:string,watermark:number):InspectionRecord|null {
+    const row=this.statement("SELECT sequence,fingerprint,value FROM records WHERE id=? AND sequence<=?").get(id,watermark) as Row|undefined;
+    if(!row)return null;
+    try {const record=JSON.parse(String(row.value)) as InspectionRecord;validateRecordStructure(record);
+      if(record.id!==id||record.commitSequence!==row.sequence||recordFingerprint(record)!==row.fingerprint)throw new Error();return record;
+    } catch {throw new Error("inspection_dataset_corrupt");}
+  }
+  contentRecord(id:string,watermark:number):string|null {
+    const row=this.statement("SELECT record_id FROM contents WHERE id=? AND sequence<=?").get(id,watermark) as Row|undefined;
+    return row?String(row.record_id):null;
   }
 
   latest(subjectKey: string, watermark: number, kind?: string): InspectionRecord | null {
@@ -470,6 +518,16 @@ export class InspectionDatabase {
 function nextSequence(value: number): number {
   if (!Number.isSafeInteger(value) || value >= Number.MAX_SAFE_INTEGER) throw new Error("inspection_sequence_exhausted");
   return value + 1;
+}
+
+function recordFingerprint(record:InspectionRecord):string {
+  return createHash("sha256").update(JSON.stringify({subject:record.subject,payload:record.payload,links:record.links,contents:record.contents,occurredAt:record.occurredAt,ownerSequence:record.ownerSequence})).digest("hex");
+}
+function validateRecordStructure(record:InspectionRecord):void {
+  validateInspectionInput({...record,contents:record.contents.map(content=>{
+    const mediaType=content.mediaType;if(mediaType!=="application/json"&&mediaType!=="text/plain")throw new TypeError("inspection_content_media_type_invalid");
+    return {name:content.name,class:content.class,stage:content.stage,mediaType,value:null};
+  })});
 }
 
 function flowDefinitionKey(ref: {owner: string; id: string; revision: string}): string { return JSON.stringify([ref.owner, ref.id, ref.revision]); }

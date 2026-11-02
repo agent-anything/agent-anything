@@ -4,6 +4,10 @@
   "description": "Provider-neutral evaluation contracts and execution for Agent Harness.",
   "type": "module",
   "exports": {
+    "./process": {
+      "types": "./src/process/index.ts",
+      "import": "./dist/process/index.js"
+    },
     "./definition": {
       "types": "./src/definition/index.ts",
       "import": "./dist/definition/index.js"

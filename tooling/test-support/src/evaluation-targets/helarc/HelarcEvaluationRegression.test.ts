@@ -5,6 +5,7 @@ import { HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE, HELARC_EXPLICIT_FINAL_R
 import { HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE, HELARC_FINAL_PLAN_SUBMISSION_BASELINE_ACCEPTANCE } from "./baseline/HelarcFinalPlanSubmissionBaseline.js";
 import { HELARC_WORKING_CONVERSATION_ACCEPTED_BASELINE, HELARC_WORKING_CONVERSATION_BASELINE_ACCEPTANCE } from "./baseline/HelarcWorkingConversationBaseline.js";
 import { HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE, HELARC_RESPONSIBILITY_COMPOSITION_BASELINE_ACCEPTANCE } from "./baseline/HelarcResponsibilityCompositionBaseline.js";
+import { HELARC_EXPLICIT_TASK_EXECUTION_ACCEPTED_BASELINE } from "./baseline/HelarcExplicitTaskExecutionBaseline.js";
 import { describe, expect, it } from "vitest";
 import { HELARC_CHILD_REPORT_TRANSFER_ACCEPTED_BASELINE, HELARC_CHILD_REPORT_TRANSFER_BASELINE_ACCEPTANCE } from "./baseline/HelarcChildReportTransferBaseline.js";
 import { HELARC_NORMAL_STOP_SETTLEMENT_ACCEPTED_BASELINE, HELARC_NORMAL_STOP_SETTLEMENT_BASELINE_ACCEPTANCE } from "./baseline/HelarcNormalStopSettlementBaseline.js";
@@ -103,7 +104,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the responsibility composition successor", async () => {
+  it("preserves accepted history and proves the explicit task execution successor", async () => {
     const baselines = [
       HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
       HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -135,15 +136,16 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
       HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE,
       HELARC_WORKING_CONVERSATION_ACCEPTED_BASELINE,
+      HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE,
     ];
     const historyBefore = baselines.map((baseline) => JSON.stringify(baseline));
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_WORKING_CONVERSATION_ACCEPTED_BASELINE,
+      HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE,
+      HELARC_EXPLICIT_TASK_EXECUTION_ACCEPTED_BASELINE,
       candidate,
     );
 
@@ -163,15 +165,15 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
     expect(baselines.map((baseline) => JSON.stringify(baseline))).toEqual(historyBefore);
     expect(candidate.report.ref)
-      .toEqual(HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_EXPLICIT_TASK_EXECUTION_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.ref)
-      .toEqual(HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_EXPLICIT_TASK_EXECUTION_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_WORKING_CONVERSATION_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_WORKING_CONVERSATION_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_EXPLICIT_TASK_EXECUTION_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
     expect(HELARC_RESPONSIBILITY_COMPOSITION_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_WORKING_CONVERSATION_ACCEPTED_BASELINE.reportRef);
@@ -267,7 +269,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(latency?.pairs.every((pair) => pair.difference < 0)).toBe(true);
   });
 
-  it("preserves the accepted Delegation Transfer v1 while producing active v11 evidence", async () => {
+  it("preserves the accepted Delegation Transfer v1 while producing active v12 evidence", async () => {
     const predecessorBefore = JSON.stringify(
       HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
     );
@@ -277,7 +279,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     const candidate = await runDelegationTransferDeterministicEvaluation();
     const accepted = HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE.delegationTransfer;
     expect(candidate).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v11",
+      revision: "delegation-transfer-deterministic-evaluation-v12",
       metrics: {
         objectiveFidelityRate: 1,
         unnecessaryDelegationCount: 0,
@@ -288,7 +290,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
         toolCallCount: 5,
         humanInteractionEvents: 0,
         modelTurnCount: 5,
-        latencyMs: 381,
+        logicalClockTicks: expect.any(Number),
         terminalOutcome: "completed",
       },
       invariants: {
@@ -306,7 +308,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toBe("delegation-transfer-deterministic-evaluation-v1");
     expect(accepted.metrics.latencyMs).toBe(283);
     expect(accepted.metrics.modelTurnCount).toBe(5);
-    expect(candidate.metrics.latencyMs).toBe(381);
+    expect(candidate.metrics.logicalClockTicks).toBeGreaterThan(0);
     expect(candidate.digest).not.toBe(accepted.reportDigest);
     expect(HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef);

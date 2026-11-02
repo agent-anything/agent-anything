@@ -10,7 +10,7 @@ import { INSPECTION_STORAGE_POLICY } from "../storage/InspectionStoragePolicy.js
 import { closeFailedInspectionRecording } from "./InspectionRecordingFinalization.js";
 import { InspectionTelemetry } from "../telemetry/index.js";
 import type { RecorderCommand, RecorderReply } from "./InspectionRecorderProtocol.js";
-import { inspectionRecorderFailureCode } from "./InspectionRecorderError.js";
+import { inspectionRecorderFailureCode, inspectionProjectionFailureCode } from "./InspectionRecorderError.js";
 import { INSPECTION_FORMAT_VERSION, type InspectionCoverage } from "../records/index.js";
 
 const port = parentPort!;
@@ -87,6 +87,8 @@ try {
   manifest = { formatVersion: INSPECTION_FORMAT_VERSION, sourceId: source.sourceId, datasetId: randomUUID(), producerInstanceId: randomUUID(), createdAt: new Date().toISOString(), status: "open" };
   directory = datasetDirectory(workerData.root, source.sourceId, manifest.datasetId);
   db = new InspectionDatabase(directory, manifest);
+  const capturePolicy=validateInspectionCapturePolicy(workerData.policy);
+  db.updateCoverage({capture:{enabled:capturePolicy.enabled,policyRevision:capturePolicy.revision}});
   atomicInspectionJson(join(directory, "manifest.json"), manifest);
   refreshBudget(); usage.check(); progress();
   telemetry = new InspectionTelemetry(source.sourceId, manifest.datasetId);
@@ -136,9 +138,9 @@ async function projectSlice(): Promise<void> {
     db.recordTiming("projectionConversion", performance.now() - started);
     db.writeProjection(exported, {...progress.projection, cursor, issues: telemetry.issues}, telemetry.dropped);
     refreshBudget();
-  } catch {
+  } catch (error) {
     // SDK pairing/export state has advanced: do not replay this slice into it.
-    db.writeProjection([], {...progress.projection, status: "failed", code: "inspection_projection_failed",
+    db.writeProjection([], {...progress.projection, status: "failed", code: inspectionProjectionFailureCode(error),
       issues: telemetry.issues}, telemetry.dropped);
   } finally { db.recordTiming("projectionSlice", performance.now() - started); }
 }
@@ -179,6 +181,10 @@ if (!failed) port.on("message", (message: RecorderCommand) => {
       const receipt = db.writeNativeBatch(message.id, message.digest, message.offers, message.health);
       send({kind: "ack", receipt, coverage: db.snapshot()});
       refreshBudget(); usage.check(); scheduleProjection();
+    } else if(message.kind==="capture_policy") {
+      const policy=validateInspectionCapturePolicy(message.policy);
+      db.updateCoverage({capture:{enabled:policy.enabled,policyRevision:policy.revision}});
+      send({kind:"capture_ack",coverage:db.snapshot()});
     } else if (message.kind === "health") {
       db.updateIngress(message.health);
       send({kind: "health_ack", revision: message.health.revision, coverage: db.snapshot()});

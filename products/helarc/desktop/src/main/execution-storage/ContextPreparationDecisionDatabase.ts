@@ -1,5 +1,5 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {decideContextPreparation,contextPreparationWorkKey,REPRESENTATION_METHOD_PURPOSE,type ContextPreparationDecisionProposal,type ContextPreparationDecisionRecord,
+import {decideContextPreparation,contextPreparationDecisionEvidence,contextPreparationWorkKey,REPRESENTATION_METHOD_PURPOSE,type ContextPreparationDecisionProposal,type ContextPreparationDecisionRecord,
   type ContextPreparationDecisionQuery,type PreparedContextInput,type ContextMethodInputPlan} from "@agent-anything/agent-runtime/context-representation";
 import type {ActivityPathIntent,ActivityPathState,ActivityStageRequest,ActivityStageState,ActivitySchedulingIntent,ActivityResourceAllowance,SharedAcceptanceProposal,SharedAcceptanceReceipt} from "@agent-anything/agent-runtime/activity";
 import type {ContextUseScope,ContextUseControl} from "@agent-anything/context/selection";
@@ -109,14 +109,16 @@ export class ContextPreparationDecisionDatabase {
       this.records.sql("INSERT INTO context_policy_heads VALUES (?,?) ON CONFLICT(scope_id) DO UPDATE SET decision_id=excluded.decision_id").run(decision.scope.id,decision.id);
       if(record.input.observationReport)this.records.sql("INSERT INTO context_policy_observation_heads VALUES (?,?) ON CONFLICT(scope_id) DO UPDATE SET decision_id=excluded.decision_id")
         .run(decision.scope.id,decision.id);
+      const admissionRejections=(proposal.input.admissionLimitations??[]).map(limitation=>this.receipt(limitation.acceptanceId)!);
       this.records.fact(decision.scope.runId,"context_preparation_policy",decision.id,"decision_accepted",{decision,acceptanceId:acceptance.id,investment:record.investment,
+        record:{owner:"context_preparation_policy",id:decision.id,revision:digest},
         observationReport:proposal.input.observationReport??null,
         methodSupplyReport:proposal.input.methodSupplyReport??null,
         receptionOptions:proposal.input.receptionOptions??[],receptionSupplyReport:proposal.input.receptionSupplyReport??null,
         inputReceptions:proposal.input.inputReceptions??[],
         currentInputEvidence:proposal.input.current.evidence,
         rejectedInputs:proposal.input.rejectedInputs??[],
-        admissionRejections:(proposal.input.admissionLimitations??[]).map(limitation=>this.receipt(limitation.acceptanceId)!)});
+        admissionRejections},contextPreparationDecisionEvidence(record,admissionRejections));
     },validate:(prepared,acceptance)=>{
       // A scope may be established by another participant in this same atomic acceptance.
       const {proposal,record:{decision}}=prepared as Prepared;

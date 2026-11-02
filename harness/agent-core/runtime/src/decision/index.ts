@@ -45,3 +45,4 @@ export {TaskModelResponsePath,TaskModelResponseWork,TASK_MODEL_RESPONSE_PURPOSE}
 export type {TaskModelSource,TaskModelResponseProgress,TaskModelResponseSettlement} from "./TaskModelResponsePath.js";
 export {TaskModelResponseActivity} from "./TaskModelResponseActivity.js";
 export type {TaskModelResponseActivityPorts,TaskModelResponseSubmission} from "./TaskModelResponseActivity.js";
+export {taskModelStageObservation,type TaskModelStageObservation} from "./TaskModelStageObservation.js";

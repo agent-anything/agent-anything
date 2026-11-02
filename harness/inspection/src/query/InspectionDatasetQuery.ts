@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { containedInspectionPath, datasetDirectory, validateOpaqueId, type InspectionSource, type InspectionDatasetManifest } from "../sources/index.js";
+import { containedInspectionPath, datasetDirectory, validateOpaqueId, INSPECTION_SOURCE_FORMAT_VERSION, type InspectionSource, type InspectionDatasetManifest } from "../sources/index.js";
 import { inspectionSubjectKey, type InspectionRecord, type InspectionRelationKind, type InspectionSubjectRef } from "../records/index.js";
 import { snapshotInspectionJson, validateInspectionRef } from "../records/InspectionValidation.js";
 import { InspectionDatabase, wasInspectionDatasetRetired } from "../storage/index.js";
@@ -10,11 +10,17 @@ import { INSPECTION_FORMAT_VERSION } from "../records/index.js";
 import { executeFlowQuery, validateFlowQueryFields } from "./InspectionFlowQuery.js";
 import { readInspectionPageCursor, inspectionPageCursor } from "./InspectionPageCursor.js";
 import { readIntervals, resolveRunScope, summarizeObjects } from "./InspectionObjectQuery.js";
+import {isProcessQuery,validateProcessQuery} from "./InspectionProcessValidation.js";
+import {executeProcessQuery} from "./InspectionProcessRead.js";
+import {METRIC_QUERIES,validateMetricQuery} from "./InspectionMetricValidation.js";
+import {executeMetricQuery} from "./InspectionMetricRead.js";
 
 const viewKinds = ["list_definitions", "list_runs", "list_records", "get_hierarchy", "get_lifecycle", "get_data_flow", "get_dependencies", "get_scheduling", "get_model_request", "get_conversation_delivery", "get_context_evidence", "get_execution", "get_timeline", "get_telemetry"];
 export function validateInspectionQuery(value: unknown): InspectionQuery {
   const copy = snapshotInspectionJson(value, 256 * 1024) as unknown as Record<string, unknown>;
   if (copy === null || typeof copy !== "object" || typeof copy.kind !== "string") throw new Error("inspection_query_invalid");
+  if(METRIC_QUERIES.includes(copy.kind))return validateMetricQuery(copy);
+  if(isProcessQuery(copy.kind))return validateProcessQuery(copy);
   const all = ["list_sources", "list_datasets", "get_snapshot", "get_record", "get_subject", "get_content", "get_execution_flow", "list_flow_occurrences", "get_flow_occurrence", ...viewKinds];
   if (!all.includes(copy.kind)) throw new Error("inspection_query_invalid");
   const allowed = copy.kind === "list_sources" ? ["kind"] : copy.kind === "list_datasets" ? ["kind", "sourceId", "after"] : copy.kind === "get_snapshot" ? ["kind", "sourceId", "datasetId", "watermark"] : ["kind", "sourceId", "datasetId", "watermark", "subject", "runId", "includeDescendants", "from", "to", "recordKind", "after", "limit", "recordId", "contentId", "offset", "length", "invocationId", "occurrenceId", "stepId", "cursor"];
@@ -53,6 +59,8 @@ function directoryNames(path: string): string[] {
 export function executeInspectionQuery(root: string, input: InspectionQuery): InspectionReadResult {
   const query = validateInspectionQuery(input);
   const base: InspectionReadResult = { kind: query.kind, selection: null, coverage: null, readAt: new Date().toISOString(), sources: [], datasets: [], records: [], graph: null, intervals: [], telemetry: [], content: null, next: null, limitations: [] };
+  if(query.kind==="advance_process_metrics"||query.kind==="read_process_metrics"||query.kind==="release_process_metrics")return executeMetricQuery(root,query,base);
+  if("manifest" in query||query.kind==="open_process_scope")return executeProcessQuery(root,query,base);
   if (query.kind === "list_sources") {
     const sources: InspectionSource[] = [];
     const limitations: string[] = [];
@@ -62,14 +70,14 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
       try {
         validateOpaqueId(id);
         const source = readInspectionJson<InspectionSource>(containedInspectionPath(root, "sources", id, "source.json"));
-        if (source.sourceId !== id || source.formatVersion !== INSPECTION_FORMAT_VERSION || typeof source.name !== "string" || typeof source.application !== "string") throw new Error();
+        if (source.sourceId !== id || source.formatVersion !== INSPECTION_SOURCE_FORMAT_VERSION || typeof source.name !== "string" || typeof source.application !== "string") throw new Error();
         sources.push(source);
       } catch { limitations.push("unsupported_source"); }
     }
     return { ...base, sources, limitations };
   }
   const source = readInspectionJson<InspectionSource>(containedInspectionPath(root, "sources", query.sourceId, "source.json"));
-  if (source.sourceId !== query.sourceId || source.formatVersion !== INSPECTION_FORMAT_VERSION) throw new Error("inspection_source_unavailable");
+  if (source.sourceId !== query.sourceId || source.formatVersion !== INSPECTION_SOURCE_FORMAT_VERSION) throw new Error("inspection_source_unavailable");
   if (query.kind === "list_datasets") {
     const datasets: InspectionDatasetManifest[] = [];
     const limitations: string[] = [];

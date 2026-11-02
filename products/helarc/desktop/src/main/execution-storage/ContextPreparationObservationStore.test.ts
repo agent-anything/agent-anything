@@ -24,7 +24,8 @@ function fixture() {
   const reopen=()=>new ContextPreparationDecisionDatabase(records,value=>({value}) as never,root=>(root as unknown as {value:unknown}).value,
     ()=>({scope,control:{revision:0,allowed:true}}) as never,()=>null,()=>true,()=>({}) as never,()=>true,()=>null,()=>null);
   const add=(id:string,report:ContextPreparationEvidenceReport|null,scopeId=scope.id,expectedDecisionId?:string|null)=>{
-    const record={decision:{id,scope:{...scope,id:scopeId},investment:{kind:"none",reason:"fixture"}},input:{scope:{...scope,id:scopeId},
+    const record={decision:{id,scope:{...scope,id:scopeId},investment:{kind:"none",reason:"fixture"},
+      foreground:{kind:"limited",reason:"storage_fixture_without_consumer"},limitations:[],excluded:[]},input:{scope:{...scope,id:scopeId},
       current:{kind:report?"prepared":"gap",evidence:{id,owner:"activity",kind:"fact",revision:"1"}},
       ...(report?{observationReport:report}:{}),alternatives:[{input:{prepared:{encoded:{id:"independently-adopted-candidate"}}}}]},
       acceptanceId:`accept:${id}`,investment:null} as unknown as ContextPreparationDecisionRecord;

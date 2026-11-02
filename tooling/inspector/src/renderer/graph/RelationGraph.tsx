@@ -84,11 +84,11 @@ export function RelationGraph({ graph, selected, onSelect, onLink }: { graph: In
       if ((link.kind === "contains" || link.kind === "descendant") && tree.parents.get(target) === source && !collapsed.has(source)) return [];
       const pair = source + ":" + target;
       const ordinal = ordinals.get(pair) ?? 0; ordinals.set(pair, ordinal + 1);
-      const color = link.kind === "prerequisite" ? "#a55b19" : link.kind === "materializes" ? "#4772a2" : "#49716a";
+      const color = link.kind === "prerequisite" ? "#a55b19" : link.kind === "resume" || link.kind === "retry" ? "#87496d" : ["delivers","includes","transforms","produces","materializes"].includes(link.kind) ? "#326e9d" : ["contains","descendant"].includes(link.kind) ? "#707b84" : "#49716a";
       return [{ id: link.id, source, target, type: "evidence", markerEnd: { type: MarkerType.ArrowClosed, color },
         label: link.condition ? link.kind + ": " + link.condition : link.kind,
         data: { ordinal, folded: source !== actualFrom || target !== actualTo },
-        style: { stroke: color, strokeWidth: 1.7 }, interactionWidth: 24, zIndex: 10 }];
+        style: { stroke: color, strokeWidth: 1.7, strokeDasharray: link.kind === "resume" || link.kind === "retry" ? "6 3" : undefined }, interactionWidth: 24, zIndex: 10 }];
     });
   }, [graph, tree, collapsed]);
 

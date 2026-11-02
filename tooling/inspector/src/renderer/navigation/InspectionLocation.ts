@@ -4,6 +4,7 @@ const focusKeys = ["detail", "content", "flowRun", "flowInvocation", "flowOccurr
 export function inspectionReadLocation(params:URLSearchParams):string {
   const read=new URLSearchParams(params);
   for(const key of focusKeys) read.delete(key);
+  for(const key of [...read.keys()]) if(key.startsWith("cp")) read.delete(key);
   return read.toString();
 }
 export function readContentTarget(value:string|null):ContentTarget|null {

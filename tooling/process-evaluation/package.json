@@ -1,0 +1,24 @@
+{
+  "name": "@agent-anything/process-evaluation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent engineering entry for isolated process evaluation against formal targets.",
+  "scripts": {
+    "evaluate": "node src/main.mjs",
+    "compare": "node src/comparison-main.mjs",
+    "test:comparisons": "node src/comparison-verify.mjs",
+    "test:electron": "node src/verify.mjs",
+    "test:observation": "node src/observation-verify.mjs",
+    "test": "node --test src/*.test.mjs",
+    "build": "node src/check-syntax.mjs",
+    "typecheck": "node src/check-syntax.mjs"
+  },
+  "dependencies": {
+    "@agent-anything/evaluation": "workspace:*",
+    "@agent-anything/inspection": "workspace:*",
+    "electron": "^42.4.0"
+  },
+  "agentAnything": {"architecture": {"kind": "tooling", "component": "process-evaluation"}},
+  "license": "Apache-2.0"
+}

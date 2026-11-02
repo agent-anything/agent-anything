@@ -12,7 +12,8 @@ const counterKeys = new Set(["encode.nodes", "encode.reusedNodes", "encode.reuse
 const contextKeys = new Set(["command", "wireKind", "runId", "threadId", "productRunId", "commitId", "treeCommitId",
   "generation", "requestId", "revision", "expectedRevision", "recordId", "controllerTurnId", "controllerStatus",
   "materialOperation", "requestBytes", "contentBlocks", "pendingRequests", "pendingBytes", "workerThreadId",
-  "wireSequence", "transferOperation", "count", "totalMs", "maxMs", "bodyMs", "boundaryMs", "timingBasis"]);
+  "wireSequence", "transferOperation", "count", "totalMs", "maxMs", "bodyMs", "boundaryMs", "timingBasis",
+  "pathId", "stageId", "attemptId", "workId", "purposeDigest", "clockDomain", "monotonicMs", "originalClockDomain", "activityCommand"]);
 
 /** Bounded local timing evidence, independent of authoritative storage and Inspector. */
 export class HelarcPerformanceDiagnostics {

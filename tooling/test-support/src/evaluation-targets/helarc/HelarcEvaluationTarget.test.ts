@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
 import {
   FakeNativeToolProvider,
@@ -24,9 +27,12 @@ import {
 } from "./HelarcEvaluationTarget.js";
 
 let sharedCandidate: Promise<HelarcEvaluationBaselineArtifact> | null = null;
+let firstEvidence: unknown;
 
 function candidate(): Promise<HelarcEvaluationBaselineArtifact> {
-  sharedCandidate ??= runHelarcEvaluationBaselineCandidate();
+  sharedCandidate ??= runHelarcEvaluationBaselineCandidate({
+    observeEvidence: evidence => { firstEvidence = evidence; },
+  });
   return sharedCandidate;
 }
 
@@ -106,10 +112,18 @@ describe("Helarc deterministic Evaluation target", () => {
 
   it("repeats to an equivalent semantic baseline despite fresh temporary Workspaces", async () => {
     const first = await candidate();
-    const second = await runHelarcEvaluationBaselineCandidate();
+    let secondEvidence: unknown;
+    const second = await runHelarcEvaluationBaselineCandidate({
+      observeEvidence: evidence => { secondEvidence = evidence; },
+    });
     const comparison = compareHelarcEvaluationBaseline(first, second);
-
-    expect(comparison, JSON.stringify(comparison)).toMatchObject({
+    let evidencePath: string | null = null;
+    if (comparison.status !== "equivalent") {
+      const directory = await mkdtemp(join(tmpdir(), "helarc-baseline-difference-"));
+      evidencePath = join(directory, "evidence.json");
+      await writeFile(evidencePath, JSON.stringify({comparison, first: firstEvidence, second: secondEvidence}, null, 2));
+    }
+    expect(comparison, JSON.stringify({comparison, evidencePath})).toMatchObject({
       status: "equivalent",
     });
   }, 120_000);

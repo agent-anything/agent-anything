@@ -4,6 +4,7 @@ import {MaterialCustodyError,custodyToken,containsMaterialRange,type MaterialHol
 import type {ContextAcceptancePart,ContextDelivery,ContextDeliveryPage,ContextInputBinding,ContextSelectionCommand,ContextSelectionProposal,
   ContextSelectionSnapshot,ContextSelectionValue,ContextUseControl,ContextUseScope,ContextDeliveryState,ContextDeliveryFinalization} from "@agent-anything/context/selection";
 import type {RepresentationRef} from "@agent-anything/context/representation";
+import {contextProcessObject as object,contextProcessRelationship as relation,type ContextProcessRelationship} from "@agent-anything/context/evidence";
 import {activityFactSourceId,type SharedAcceptanceProposal,type ActivityReconsiderationReceipt} from "@agent-anything/agent-runtime/activity";
 import {validatePreparedContextInput,sourceMaterialOutcome,contextDeliveryFactSource,type SourceMaterialPublicationRequest,type PreparedContextInput,
   type ContextDeliveryFactPublisher,type ContextDeliveryTransition,type ContextDeliveryLifecycleReader} from "@agent-anything/agent-runtime/context-representation";
@@ -152,7 +153,7 @@ export class ContextSelectionDatabase {
       this.records.sql("INSERT INTO context_use_scopes VALUES (?,?,?,?,?,?,?,NULL)").run(scope.id,
         JSON.stringify([scope.runId,scope.recipient,scope.purpose,scope.continuity]),scope.runId,JSON.stringify(scope),modelInputValueDigest(scope),JSON.stringify(control),modelInputValueDigest(control));
       this.deliveryFacts.register(scope);
-      this.records.fact(scope.runId,"context_selection",scope.id,"scope_registered",{scope});return scope;
+      this.selectionFact(scope.runId,scope.id,"scope_registered",{scope},[],scope);return scope;
     })();
   }
   private scope(id:string):{scope:ContextUseScope;control:ContextUseControl;currentId:string|null} {
@@ -167,7 +168,7 @@ export class ContextSelectionDatabase {
       if(current.control.revision===control.revision){requireSame(current.control,control);return control;}
       if(current.control.revision!==expectedRevision || control.revision!==expectedRevision+1)reject("input_control_conflict");
       this.records.sql("UPDATE context_use_scopes SET control=?,control_digest=? WHERE id=?").run(JSON.stringify(control),modelInputValueDigest(control),control.scopeId);
-      this.records.fact(current.scope.runId,"context_selection",control.scopeId,"control_changed",{control});return control;
+      this.selectionFact(current.scope.runId,control.scopeId,"control_changed",{control},[],current.scope);return control;
     })();
   }
   private selection(id:string):Selection {
@@ -213,9 +214,20 @@ export class ContextSelectionDatabase {
       this.records.sql("UPDATE context_use_scopes SET current_id=? WHERE id=?").run(selection.id,scope.id);
     }
     this.records.sql("INSERT INTO context_input_bindings VALUES (?,?,?,?,?,NULL)").run(input.id,scope.id,acceptance.id,JSON.stringify(input),modelInputValueDigest(input));
-    this.records.fact(scope.runId,"context_selection",input.id,"input_bound",{acceptanceId:acceptance.id,scopeId:scope.id,selectionId:selection.id,activityId:input.activityId,
-      deliveryIds:input.deliveries.map(d=>d.id),holds:input.holds.map(h=>h.id),changedSelection:proposal.selection!==null,
-      exactInputDigest:input.exactInputDigest,combinationJudgmentId:input.combinationJudgmentId});
+    const subject=object("context_selection",input.id,scope.runId),selected=object("context_selection",selection.id,scope.runId);
+    this.selectionFact(scope.runId,input.id,"input_bound",{acceptanceId:acceptance.id,scopeId:scope.id,selectionId:selection.id,activityId:input.activityId,
+      stageRequestId:input.stageRequestId,deliveries:input.deliveries,deliveryIds:input.deliveries.map(d=>d.id),holds:input.holds.map(h=>h.id),changedSelection:proposal.selection!==null,
+      exactInputDigest:input.exactInputDigest,combinationJudgmentId:input.combinationJudgmentId},[
+      relation("observes",subject,object("shared_acceptance",acceptance.id,acceptance.scope)),
+      relation("includes",object("context_selection",scope.id,scope.runId),selected),relation("observes",subject,selected),
+      relation("observes",subject,object("activity",input.activityId,scope.runId)),relation("observes",subject,object("activity",input.stageRequestId,scope.runId)),
+      relation("observes",subject,object("representation",input.combinationJudgmentId,scope.runId)),
+      ...selection.representations.map(ref=>relation("includes",selected,object("representation",JSON.stringify([ref.id,ref.revision]),scope.runId))),
+      ...input.deliveries.map(delivery=>relation("includes",subject,object("context_delivery",delivery.id,scope.runId),"selected_for_input")),
+      ...input.holds.map(hold=>relation("observes",subject,object("material_custody",hold.id,hold.consumer.runId))),
+    ],scope,{basis:"accepted_input_retained_selection_and_judgment",input:proposal.selection===null?1:0,
+      content:proposal.selection===null?selection.representations.length:0,
+      checks:acceptance.parts.some(part=>part.owner==="representation"&&part.kind==="judge"&&(part.proposal as {id?:string}).id===input.combinationJudgmentId)?0:1});
   }
   private binding(id:string,checkCurrentControl:boolean):ContextSelectionSnapshot {
     // Read all related metadata in one view, then hydrate the immutable body outside it.
@@ -299,8 +311,23 @@ export class ContextSelectionDatabase {
       !(stage.status==="accepted"&&stage.receipt?.resultId===responseId||stage.status==="settled"&&stage.settlement?.resultId===responseId))
       reject("delivery_response_not_confirmed");
   }
-  private recordDelivery(recipient:MaterialRecipient,id:string,transition:ContextDeliveryTransition,details:Readonly<Record<string,unknown>>,acceptance:SharedAcceptanceProposal):void {
-    this.records.fact(recipient.runId,"context_delivery",id,transition,{...details,acceptanceId:acceptance.id,acceptanceScope:acceptance.scope});
+  private recordDelivery(recipient:MaterialRecipient,id:string,transition:ContextDeliveryTransition,
+    details:{inputId?:string;responseId?:string;detailHoldId?:string|null;sourceRunId?:string;sourceId?:string;material?:MaterialRange;holdId?:string;reason?:string;basis?:string},
+    acceptance:SharedAcceptanceProposal):void {
+    const delivery=this.delivery(id)!;
+    const subject=object("context_delivery",id,recipient.runId);
+    const relationships=[relation("observes",subject,object("shared_acceptance",acceptance.id,acceptance.scope)),
+      relation("observes",subject,object("material_custody",delivery.material.materialId,null,delivery.material.version)),
+      relation("observes",subject,object("material_custody",delivery.instanceId,delivery.sourceRunId)),
+      relation("observes",subject,object("material_custody",delivery.holdId,recipient.runId))];
+    if(delivery.lifetime)relationships.push(relation("observes",subject,object("activity",delivery.lifetime.sourcePathId,delivery.sourceRunId)),
+      relation("observes",subject,object("activity",delivery.lifetime.subscriptionId,delivery.sourceRunId)));
+    if(details.inputId)relationships.push(relation(transition==="accepted"?"delivers":"observes",subject,
+      object("context_selection",details.inputId,recipient.runId),transition==="accepted"?"purpose_accepted":transition));
+    if(details.responseId)relationships.push(relation("observes",subject,object("activity",details.responseId,recipient.runId)));
+    if(details.detailHoldId)relationships.push(relation("observes",subject,object("material_custody",details.detailHoldId,recipient.runId)));
+    this.records.fact(recipient.runId,"context_delivery",id,transition,{...details,delivery,acceptanceId:acceptance.id,acceptanceScope:acceptance.scope},
+      {revision:"1",category:"delivery",subject,scope:{purpose:recipient.purpose,recipient},state:{phase:transition==="accepted"||transition==="disposed"?"settled":"pending",status:transition},related:[],relationships});
     this.deliveryFacts.publish(recipient,id,transition,acceptance.id);
   }
   private applyDelivery(part:DeliveryPart,acceptance:SharedAcceptanceProposal):void {
@@ -398,7 +425,10 @@ export class ContextSelectionDatabase {
       if(!this.confirmAttempt(scope.scope.runId,input.activityId,input.stageRequestId,input.exactInputDigest,attemptId))reject("input_attempt_not_confirmed");
       for(const hold of input.holds)this.materials.requireProtected(hold.instanceId,hold.range,scope.scope,hold.id);
       const result=this.records.sql("INSERT OR IGNORE INTO context_input_sends VALUES (?,?)").run(inputId,attemptId);
-      if(result.changes)this.records.fact(scope.scope.runId,"context_selection",input.id,"sent",{attemptId});
+      if(result.changes)this.selectionFact(scope.scope.runId,input.id,"sent",{attemptId,activityId:input.activityId,stageRequestId:input.stageRequestId},[
+        relation("delivers",object("context_selection",input.id,scope.scope.runId),object("activity",attemptId,scope.scope.runId),"input_sent"),
+        relation("observes",object("context_selection",input.id,scope.scope.runId),object("activity",input.stageRequestId,scope.scope.runId)),
+      ],scope.scope);
     })();return null;
   }
   mayRelease(hold:MaterialHold):boolean {
@@ -414,7 +444,7 @@ export class ContextSelectionDatabase {
       if(retired!==null){if(retired!==basis)reject("input_retirement_conflict");return;}
       if(!this.pathSettled(input.activityId) || this.records.sql("SELECT 1 FROM context_recipient_deliveries WHERE input_id=? AND accepted_response IS NULL AND disposition IS NULL").get(id))reject("input_responsibility_unsettled");
       this.records.sql("UPDATE context_input_bindings SET retired=? WHERE id=? AND retired IS NULL").run(basis,id);
-      this.records.fact(scope.runId,"context_selection",id,"input_retired",{basis});
+      this.selectionFact(scope.runId,id,"input_retired",{basis},[],scope);
     })();return null;
   }
   private withdraw(command:Extract<ContextSelectionCommand,{kind:"withdraw"}>):null {
@@ -423,8 +453,14 @@ export class ContextSelectionDatabase {
       const current=this.scope(command.scopeId);
       if(current.currentId!==command.expectedSelectionId || current.control.revision!==command.expectedControlRevision)reject("selection_withdraw_conflict");
       this.records.sql("UPDATE context_use_scopes SET current_id=NULL WHERE id=?").run(command.scopeId);
-      this.records.fact(current.scope.runId,"context_selection",command.scopeId,"selection_withdrawn",{selectionId:command.expectedSelectionId,basis:command.basis});
+      this.selectionFact(current.scope.runId,command.scopeId,"selection_withdrawn",{selectionId:command.expectedSelectionId,basis:command.basis},[
+        relation("observes",object("context_selection",command.scopeId,current.scope.runId),object("context_selection",command.expectedSelectionId,current.scope.runId)),
+      ],current.scope);
     })();return null;
+  }
+  private selectionFact(runId:string,id:string,status:string,details:Readonly<Record<string,unknown>>,relationships:readonly ContextProcessRelationship[],scope:ContextUseScope,reuse?:import("@agent-anything/context/evidence").ContextProcessEvidence["reuse"]):void {
+    this.records.fact(runId,"context_selection",id,status,details,{revision:"1",category:"selection",subject:object("context_selection",id,runId),
+      scope:{purpose:scope.purpose,recipient:{runId:scope.runId,recipient:scope.recipient,purpose:scope.purpose}},...(reuse?{reuse}:{}),state:{phase:status==="input_retired"?"settled":"pending",status},related:[],relationships});
   }
 }
 function recipientKey(recipient:{runId:string;recipient:string;purpose:string}):string{return JSON.stringify([recipient.runId,recipient.recipient,recipient.purpose]);}

@@ -17,6 +17,8 @@
     "test": "vitest run --passWithNoTests",
     "test:ui": "playwright test",
     "test:recovery:electron": "node scripts/verify-execution-recovery.mjs",
+    "test:process-evaluation:electron": "node ../../../tooling/process-evaluation/src/verify.mjs",
+    "evaluation:process": "node ../../../tooling/process-evaluation/src/main.mjs",
     "test:files:electron": "node scripts/verify-file-tools.mjs",
     "test:persistence:electron": "node scripts/verify-projection-persistence.mjs",
     "test:host-persistence:electron": "node scripts/verify-host-persistence.mjs",

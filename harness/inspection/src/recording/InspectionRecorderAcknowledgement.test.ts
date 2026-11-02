@@ -1,6 +1,7 @@
 import {EventEmitter} from "node:events";
 import {afterEach, expect, it, vi} from "vitest";
 import {INSPECTION_FORMAT_VERSION, initialInspectionProgress, type InspectionCoverage, type InspectionBatchReceipt} from "../records/index.js";
+import {INSPECTION_SOURCE_FORMAT_VERSION} from "../sources/index.js";
 import type {RecorderCommand} from "./InspectionRecorderProtocol.js";
 import {InspectionRecorder} from "./InspectionRecorder.js";
 
@@ -24,7 +25,7 @@ async function setup() {
   const worker = new FakeWorker();
   fake.create = () => worker;
   const pending = InspectionRecorder.create({application: "test", name: "Test", root: "Z:/missing-inspection-test-root"});
-  worker.emit("message", {kind: "ready", source: {sourceId: "source", application: "test", name: "Test", formatVersion: INSPECTION_FORMAT_VERSION},
+  worker.emit("message", {kind: "ready", source: {sourceId: "source", application: "test", name: "Test", formatVersion: INSPECTION_SOURCE_FORMAT_VERSION},
     manifest: {sourceId: "source", datasetId: "dataset", formatVersion: INSPECTION_FORMAT_VERSION, producerInstanceId: "producer", createdAt: "2026-10-13T00:00:00Z", status: "open"}});
   const recorder = await pending; recorders.push(recorder);
   const coverage: InspectionCoverage = {status: "open", watermark: 1, captured: 1, dropped: 0, rejected: 0, telemetryDropped: 0,

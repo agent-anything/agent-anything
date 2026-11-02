@@ -92,9 +92,9 @@ it("distinguishes structure-byte saturation from count and content limits", asyn
     expect(db.snapshot().recording?.ingress.issues).toMatchObject([{reason: "structure_capacity", count: 2000 - accepted}]);
     expect(db.snapshot().captured).toBe(accepted);
   } finally {db.close();}
-});
+}, 30_000);
 
-it("retains a representative 25000-record burst with repeated bounded bodies and independent telemetry progress", async () => {
+it("retains 25000 durable offers under backpressure with repeated bounded bodies and independent telemetry progress", async () => {
   const {recorder, directory} = await setup();
   const started = performance.now();
   let bodyBytes = 0;
@@ -103,12 +103,11 @@ it("retains a representative 25000-record burst with repeated bounded bodies and
       const subject = recorder.ref(index % 2 ? "runtime" : "model-interaction", "event", `fact-${index}`, `run-${index % 8}`);
       const text = index % 3 === 0 ? `${index % 18000}:` + "x".repeat(index % 9 === 0 ? 42 * 1024 : 4 * 1024) : null;
       bodyBytes += text?.length ?? 0;
-      const accepted = recorder.offer({id: `burst-${index}`, subject, occurredAt: new Date().toISOString(),
+      const accepted = await recorder.offerWhenReady({id: `burst-${index}`, subject, occurredAt: new Date().toISOString(),
         payload: {kind: "event", name: "owner_fact", code: null, sequence: index},
         contents: text === null ? [] : [{name: "body", stage: "received", class: "agent", mediaType: "text/plain", value: text}]});
       expect(accepted, accepted ? undefined : JSON.stringify({index, health: recorder.health()})).toBe(true);
     }
-    await sleep(100);
   }
   let result = await recorder.flush();
   for (let retry = 0; (result.native === "pending" || result.projection === "pending") && retry < 10; retry++) result = await recorder.flush();

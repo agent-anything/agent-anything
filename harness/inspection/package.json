@@ -52,7 +52,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "test:storage": "node scripts/qualify-storage.mjs"
+    "test:storage": "node scripts/qualify-storage.mjs",
+    "test:metrics": "node scripts/qualify-metrics.mjs",
+    "test:ingress": "node scripts/qualify-ingress.mjs"
   },
   "agentAnything": {
     "architecture": {

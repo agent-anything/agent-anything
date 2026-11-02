@@ -61,6 +61,7 @@ export class InspectionRecorder {
         this.dispatch();
       }
       if (reply.kind === "health_ack") { this.coverage = reply.coverage; this.healthRevision = Math.max(this.healthRevision, reply.revision); this.healthFlight = false; this.scheduleHealth(); }
+      if (reply.kind === "capture_ack") this.coverage=reply.coverage;
       if (reply.kind === "flushed") { this.coverage = reply.coverage; this.completions.get(reply.id)?.(reply.coverage); this.completions.delete(reply.id); }
       if (reply.kind === "flush_rejected") { this.completions.get(reply.id)?.(null, reply.code); this.completions.delete(reply.id); }
     });
@@ -88,6 +89,7 @@ export class InspectionRecorder {
     // A user-triggered revocation must reach the reader even when capture has failed.
     atomicInspectionJson(containedInspectionPath(this.root, "sources", this.source.sourceId, "read-policy.json"), next);
     this.policy = next;
+    if(!this.closed&&!this.failure)this.post({kind:"capture_policy",policy:next});
   }
   health(): InspectionRecorderHealth {
     const health = this.accounting.snapshot();

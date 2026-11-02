@@ -1,4 +1,5 @@
 import {modelInputValueDigest as digest} from "@agent-anything/model-interaction/input";
+import {contextProcessObject as object,contextProcessRelationship as relationship} from "@agent-anything/context/evidence";
 import {activityToken,activityCount,type SharedAcceptanceProposal,type ActivityInputNeed,type ActivityPathState,type ActivityStageState,
   type ActivitySchedulingAcceptance,type ActivityReconsiderationState} from "@agent-anything/agent-runtime/activity";
 import {ContextMethodInputSupply,type InputSupplyHead,type AcceptedInputSupplyResponsibility,type InputSupplyExit,
@@ -98,8 +99,18 @@ export class InputSupplyExitDatabase {
         if(existing&&existing.responsibility_id!==entry.id)reject("responsibility_coverage_conflict");
         this.records.sql("INSERT OR IGNORE INTO context_input_supply_exit_coverage VALUES(?,?,?)").run(value.needId,pathId,entry.id);
       }
+      const subject=object(OWNER,entry.id,exit.origin.runId),subscriptionId=`${entry.target.pathId}:consumer`;
       this.records.fact(exit.origin.runId,OWNER,entry.id,disposition.kind,{needId:value.needId,exitRevision:exit.revision+1,target:entry.target,
-        coveredPathIds,...(disposition.kind==="reception_transferred"?{subscriptionId:`${entry.target.pathId}:consumer`,closureAcceptanceId:closure?.id??null}:{}),acceptanceId:acceptance.id});
+        coveredPathIds,...(disposition.kind==="reception_transferred"?{subscriptionId,closureAcceptanceId:closure?.id??null}:{}),acceptanceId:acceptance.id},
+        {revision:"1",category:"responsibility",subject,state:{phase:"settled",status:disposition.kind},related:[],relationships:[
+          relationship("observes",subject,object("activity",value.needId,exit.origin.runId)),
+          ...coveredPathIds.map(id=>{const path=this.paths.path(id);if(!path)reject("covered_path_missing");
+            return relationship("observes",subject,object("activity",id,path.intent.runId));}),
+          ...(entry.target.workId?[relationship("observes",subject,object("activity",entry.target.workId,exit.origin.runId))]:[]),
+          ...(disposition.kind==="reception_transferred"?[relationship("delivers",subject,object("activity",subscriptionId,exit.origin.runId),"consumer_responsibility_transfer")]:[]),
+          ...(closure?[relationship("observes",subject,object("activity",closure.id,exit.origin.runId))]:[]),
+          relationship("settles",object("shared_acceptance",acceptance.id,acceptance.scope),subject),
+        ]});
     }
     if(value.kind==="complete"&&this.pendingRows(value.needId,1).length)reject("responsibilities_unsettled");
     this.save({...exit,revision:exit.revision+1,status:value.kind==="complete"?"closed":"closing",acceptanceId:acceptance.id},
@@ -192,7 +203,14 @@ export class InputSupplyExitDatabase {
   private save(exit:InputSupplyExit,kind:string,acceptance:SharedAcceptanceProposal):void {
     this.records.sql("INSERT INTO context_input_supply_exits VALUES(?,?,?,?) ON CONFLICT(need_id) DO UPDATE SET revision=excluded.revision,value=excluded.value,digest=excluded.digest")
       .run(exit.origin.needId,exit.revision,JSON.stringify(exit),digest(exit));
-    this.records.fact(exit.origin.runId,OWNER,exit.origin.needId,kind,{exit,acceptanceId:acceptance.id});this.changed(exit);
+    const subject=object(OWNER,exit.origin.needId,exit.origin.runId);
+    this.records.fact(exit.origin.runId,OWNER,exit.origin.needId,kind,{exit,acceptanceId:acceptance.id},
+      {revision:"1",category:"responsibility",subject,state:{phase:exit.status==="closed"?"settled":"pending",status:kind},related:[],relationships:[
+        ...[exit.origin.needId,exit.origin.consumerPathId,exit.origin.source.stageId,exit.subscriptionId,
+          ...(exit.basis.kind==="returned"?[exit.basis.stageId]:[]),...(exit.scheduling?[exit.scheduling.workId]:[])]
+          .map(id=>relationship("observes",subject,object("activity",id,exit.origin.runId))),
+        relationship("settles",object("shared_acceptance",acceptance.id,acceptance.scope),subject),
+      ]});this.changed(exit);
   }
 }
 export function sameSupplySchedulingBinding(a:NonNullable<InputSupplyHead["scheduling"]>,b:NonNullable<InputSupplyHead["scheduling"]>):boolean {

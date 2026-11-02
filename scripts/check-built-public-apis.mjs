@@ -75,6 +75,7 @@ const packageExportKeys = {
     "./grading",
     "./metrics",
     "./persistence",
+    "./process",
     "./report",
     "./trial",
   ],
@@ -250,8 +251,11 @@ const expectedLowerValueExports = {
   "@agent-anything/agent-core/task": ["snapshotAgentTask", "snapshotTaskRef"],
   "@agent-anything/context/evidence": [
     "EvidenceBuilder",
+    "contextProcessObject",
+    "contextProcessRelationship",
     "settleEvidenceContribution",
     "snapshotEvidenceContribution",
+    "validateContextProcessEvidence",
   ],
   "@agent-anything/context/contract": ["ContextContractError"],
   "@agent-anything/context/contribution": [
@@ -866,6 +870,7 @@ const expectedValueExports = {
     "snapshotSelectedResultPresentationReceipt",
     "snapshotTaskDecisionFeedback",
     "snapshotTaskModelExchange",
+    "taskModelStageObservation",
     "validateTaskDecisionProposal",
     "validateTaskDecisionSource",
   ],
@@ -977,7 +982,10 @@ const expectedValueExports = {
     "activityFactSourceId",
     "activityStageEvidence",
     "activityToken",
+    "captureActivityClock",
+    "createActivityWorkTiming",
     "isActivityDispatchWaitCode",
+    "measureActivityWork",
     "validateActivityAuthorizationRefusal",
     "validateActivityAuthorizationResult",
     "validateActivityExecutor",
@@ -1008,6 +1016,7 @@ const expectedValueExports = {
     "SourcePublicationLifecycle",
     "TaskInputSupply",
     "acceptedConversationRepresentationContinuity",
+    "contextActivityFactObservation",
     "contextDeliveryFact",
     "contextDeliveryFactSource",
     "contextEmpiricalRange",
@@ -1019,9 +1028,11 @@ const expectedValueExports = {
     "contextPreparationAdoption",
     "contextPreparationApplicabilityKey",
     "contextPreparationCostEvidence",
+    "contextPreparationDecisionEvidence",
     "contextPreparationReconsideration",
     "contextPreparationWorkKey",
     "contextReceptionAdmissionKey",
+    "contextStageObservation",
     "decideContextPreparation",
     "describeOriginalInputAccountScope",
     "describeOriginalInputDataTextScope",
@@ -1477,6 +1488,12 @@ const expectedEvaluationValueExports = {
     "commitEvaluationSnapshot",
     "createEvaluationQueryProjection",
   ],
+  "@agent-anything/evaluation/process": [
+    "EvaluationProcessExecution", "EvaluationProcessStimulusDelivery", "ProcessResourceScope",
+    "assembleProcessCapture", "assembleProcessComparison", "assertProcessBranchIsolation", "assertProcessCaptureBinding",
+    "createEvaluationProcessPlan", "createProcessComparison", "processComparisonBoundaries", "processEvidenceGrade",
+    "processStartingStateFacets", "projectProcessTargetInput", "reviewProcessStartingState", "sameProcessValue", "selectProcessStimuli",
+  ],
 };
 
 const expectedRemoteIntegrationValueExports = {
@@ -1844,14 +1861,14 @@ checkBuiltSurfaces(
 );
 
 checkBuiltSurfaces({
-  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "initialInspectionTimings", "inspectionSubjectKey"],
-  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "initialInspectionProgress", "initialInspectionTimings", "inspectionSubjectKey"],
+  "@agent-anything/inspection": ["INSPECTION_FORMAT_VERSION", "INSPECTION_PROCESS_CATEGORIES", "INSPECTION_PROCESS_PROJECTION_VERSION", "initialInspectionProgress", "initialInspectionTimings", "inspectionEvidenceKey", "inspectionMeasurementObservationOrigin", "inspectionSubjectKey", "readInspectionEvaluationReport", "validWorkMeasurement"],
+  "@agent-anything/inspection/records": ["INSPECTION_FORMAT_VERSION", "INSPECTION_PROCESS_CATEGORIES", "INSPECTION_PROCESS_PROJECTION_VERSION", "initialInspectionProgress", "initialInspectionTimings", "inspectionEvidenceKey", "inspectionMeasurementObservationOrigin", "inspectionSubjectKey", "readInspectionEvaluationReport", "validWorkMeasurement"],
   "@agent-anything/inspection/content": ["DEFAULT_INSPECTION_CAPTURE_POLICY", "captureClassEnabled", "redactInspectionContent", "validateInspectionCapturePolicy"],
-  "@agent-anything/inspection/sources": ["atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "inspectionSourceId", "registerInspectionSource", "validateOpaqueId"],
+  "@agent-anything/inspection/sources": ["INSPECTION_SOURCE_FORMAT_VERSION", "atomicInspectionJson", "containedInspectionPath", "datasetDirectory", "defaultInspectionRoot", "inspectionSourceId", "registerInspectionSource", "validateOpaqueId"],
   "@agent-anything/inspection/recording": ["InspectionRecorder", "InspectionRecorderError"],
   "@agent-anything/inspection/storage": ["INSPECTION_STORAGE_POLICY", "InspectionDatabase", "InspectionStorageMaintenance", "inspectionSourceBytes", "maintainInspectionStorage", "readInspectionStorageInventory", "retireInspectionDatasets", "wasInspectionDatasetRetired"],
   "@agent-anything/inspection/telemetry": ["InspectionTelemetry"],
-  "@agent-anything/inspection/query": ["InspectionQueryService", "executeInspectionQuery", "readInspectionJson", "validateInspectionQuery"],
+  "@agent-anything/inspection/query": ["INSPECTION_PROCESS_QUERY_VERSION", "InspectionQueryService", "PROCESS_QUERY_KINDS", "executeInspectionQuery", "readInspectionJson", "validateInspectionQuery"],
   "@agent-anything/inspection/adapters": ["ActionExecutionInspectionAdapter", "DefinitionInspectionAdapter", "ExecutionEvidenceInspectionAdapter", "ExecutionFlowInspectionAdapter", "ProviderInspectionAdapter", "RunExecutionInspectionAdapter", "RunInspectionAdapter", "RunTraceInspectionAdapter", "RunTranscriptInspectionAdapter", "RuntimeEventInspectionAdapter", "inspectionContentId", "inspectionLink", "inspectionModelSource"],
 }, ["@agent-anything/inspection/recording/InspectionRecorderWorker", "@agent-anything/inspection/storage/InspectionDatasetAccess"], join(repoRoot, "harness/inspection"));
 

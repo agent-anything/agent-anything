@@ -4,7 +4,7 @@ import {startInspectorServer} from "../dist/server/InspectorServer.js";
 import {createTestRecording} from "./recording.js";
 import {InspectionRecorder} from "@agent-anything/inspection/recording";
 
-test("request context evidence is paged, linked and usable on desktop and narrow layouts",async({page},testInfo)=>{
+test("request entry uses process investigation without silently interpreting old context projections",async({page},testInfo)=>{
   const recording=await createTestRecording(), r=recording.recorder;
   const request=r.ref("model-interaction","request","parent-request","root-run");
   const links=(from:typeof request)=>[{kind:"binding" as const,from,to:request,condition:null,operation:null,sourceLocation:null,targetLocation:null}];
@@ -24,16 +24,13 @@ test("request context evidence is paged, linked and usable on desktop and narrow
     await page.goto(url.toString());
     await page.locator(".summary-table .ant-table-row").filter({hasText:"test-model"}).first().click();
     await page.getByRole("tab",{name:"Context",exact:true}).click();
-    const context=page.locator(".context-evidence");
-    await expect(context.locator(".ant-table-row")).toHaveCount(50);
-    await context.getByRole("button",{name:"More evidence"}).click();
-    await expect(context.locator(".ant-table-row")).toHaveCount(53);
-    await context.locator(".ant-table-row").first().scrollIntoViewIfNeeded();
+    await page.getByRole("button",{name:"Investigate Context Process"}).click();
+    const context=page.locator(".process-focus");
+    await expect(context).toContainText("parent-request");
     await page.screenshot({path:testInfo.outputPath("context-desktop.png"),fullPage:true,animations:"disabled"});
     await page.setViewportSize({width:600,height:900});
     await page.screenshot({path:testInfo.outputPath("context-narrow.png"),fullPage:true,animations:"disabled"});
-    await context.locator(".ant-table-row").first().getByRole("button").click();
-    await expect(page.getByText("Working target",{exact:true})).toBeVisible();
+    await expect(page.locator(".context-evidence")).toHaveCount(0);
   } finally {await server.close();await recording.close();}
 });
 

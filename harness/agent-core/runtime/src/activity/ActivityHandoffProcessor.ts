@@ -1,5 +1,6 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {ActivityCancellationError} from "./ActivityCancellation.js";
+import {createActivityWorkTiming,measureActivityWork,type ActivityWorkTiming,type ActivityTimingObservation} from "./ActivityWorkTiming.js";
 import {isActivityDispatchWaitCode} from "./ActivityDispatchWait.js";
 import type {ActivityPurposeResolver} from "./ActivityPurpose.js";
 import {activityStageEvidence,type ActivityProfessionalLimitation} from "./ActivityProfessionalStop.js";
@@ -13,7 +14,7 @@ export interface ActivityPurposeHandler {
   /** Interprets a recorded restriction, never substitutes a fabricated execution result. */
   handleLimitation?(path:ActivityPathState,stage:ActivityStageState,limitation:ActivityProfessionalLimitation,signal:AbortSignal,
     acceptance:{readonly id:string}):Promise<{readonly kind:"stop";readonly progress:unknown}|{readonly kind:"wait"}>;
-  execute(path: ActivityPathState, stage: ActivityStageState, attempt: ActivityAttempt, signal: AbortSignal): Promise<ActivityRawResult>;
+  execute(path: ActivityPathState, stage: ActivityStageState, attempt: ActivityAttempt, signal: AbortSignal,timing?:ActivityWorkTiming): Promise<ActivityRawResult>;
   /** Inspect original work only. Null means unresolved, never permission to execute again. */
   reconcile(path: ActivityPathState, stage: ActivityStageState, signal: AbortSignal): Promise<ActivityRawResult | null>;
   prepareRetry?(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal):Promise<import("./ActivityHandoff.js").ActivityAttemptRetryReceipt|null>;
@@ -43,7 +44,7 @@ export class ActivityHandoffProcessor {
     private readonly purposes: ActivityPurposeResolver<ActivityPurposeHandler>,
     private readonly executor: ActivityExecutorIdentity,
     private readonly now: () => string,
-    private readonly acceptedPurposeIds?:readonly string[]) {}
+    private readonly acceptedPurposeIds?:readonly string[],private readonly observeTiming?:(event:ActivityTimingObservation)=>void) {}
 
   /** Bounded discovery/dispatch never waits for a long external execution. */
   async scan(runId:string,signal:AbortSignal,maximum=64):Promise<ActivityDrainResult> {
@@ -106,6 +107,7 @@ export class ActivityHandoffProcessor {
       }
       signal.throwIfAborted();
       try {
+        const timing=createActivityWorkTiming(path,stage,this.observeTiming);
         const recorded=stage.authorizationRestrictions?.[item.kind];
         const limitation:ActivityProfessionalLimitation|null=!path.cancelled&&recorded?.kind==="denied"?
           {kind:"authorization",action:item.kind,refusal:recorded}:!path.cancelled&&!stage.attempt&&Date.parse(this.now())>=Date.parse(path.intent.deadlineAt)?
@@ -120,7 +122,7 @@ export class ActivityHandoffProcessor {
         }
         let refusal:ActivityAuthorizationRefusal|null=null;
         try {
-          const authorization=await handler.authorize(path,stage,signal,item.kind);
+          const authorization=await measureActivityWork(timing,"authorization",()=>handler.authorize(path,stage!,signal,item.kind));
           validateActivityAuthorizationResult(authorization);
           if(authorization.kind!=="allowed")refusal=authorization;
         }
@@ -141,7 +143,7 @@ export class ActivityHandoffProcessor {
         if(stage.dispatchRestriction&&!path.cancelled&&!stage.attempt)stage=await this.port.command({kind:"restrict_dispatch",requestId:stage.request.id,expectedControlRevision:path.controlRevision,restriction:null}) as ActivityStageState;
         switch (item.kind) {
           case "admission":
-            await this.port.command({kind:"admit",requestId:item.requestId,expectedControlRevision:path.controlRevision});
+            await measureActivityWork(timing,"admission.persistence",()=>this.port.command({kind:"admit",requestId:item.requestId,expectedControlRevision:path.controlRevision}));
             break;
           case "execution": {
             const attempt:ActivityAttempt = {id:`${stage.request.id}:attempt:${(stage.attemptCount??0)+1}`,requestId:stage.request.id,
@@ -150,10 +152,11 @@ export class ActivityHandoffProcessor {
             if (!dispatched.granted) {pending.push({requestId:item.requestId,reason:"dispatch_already_accepted"}); continue;}
             const controller=new AbortController(),executionSignal=AbortSignal.any([signal,controller.signal]);
             const execution=async()=>{
-              const result=await handler.execute(path,dispatched.stage,attempt,executionSignal);
+              const executionTiming=createActivityWorkTiming(path,dispatched.stage,this.observeTiming);
+              const result=await measureActivityWork(executionTiming,"execution",()=>handler.execute(path,dispatched.stage,attempt,executionSignal,executionTiming));
               this.resultMatches(result,attempt.id);
               // Raw persistence is not cancelled when the consumer no longer needs the result.
-              await this.port.command({kind:"save_raw",result});
+              await measureActivityWork(executionTiming,"raw.persistence",()=>this.port.command({kind:"save_raw",result}));
             };
             if(wait)await execution();
             else {
@@ -165,7 +168,7 @@ export class ActivityHandoffProcessor {
             break;
           }
           case "reconciliation": {
-            const result = await handler.reconcile(path,stage,signal);
+            const result = await measureActivityWork(timing,"reconciliation",()=>handler.reconcile(path,stage!,signal));
             if (!result) {pending.push({requestId:item.requestId,reason:"external_result_unknown"}); continue;}
             this.resultMatches(result,stage.attempt!.id);
             await this.port.command({kind:"save_raw",result});
@@ -182,24 +185,24 @@ export class ActivityHandoffProcessor {
               claim:{id:claimId,requestId:stage.request.id,previousClaimId:stage.processing?.id ?? null,executor:this.executor},expectedControlRevision:path.controlRevision}) as ActivityStageState;
             const acceptanceId=`${stage.request.id}:processing-receipt:${path.progressRevision}`;
             const interpretationStarted=performance.now();
-            const outcome = await handler.interpret(path,claimed,signal,{id:acceptanceId});
+            const outcome = await measureActivityWork(timing,"interpretation",()=>handler.interpret(path,claimed,signal,{id:acceptanceId}));
             const interpretationMs=performance.now()-interpretationStarted;
             signal.throwIfAborted();
-            await this.port.command({kind:"accept",receipt:{id:acceptanceId,requestId:stage.request.id,
+            await measureActivityWork(timing,"acceptance.persistence",()=>this.port.command({kind:"accept",receipt:{id:acceptanceId,requestId:stage!.request.id,
               resultId:claimed.result!.id,owner:path.intent.owner,expectedProgressRevision:path.progressRevision,
               progress:outcome.progress,next:outcome.next,interpretationMs},executor:this.executor,expectedControlRevision:path.controlRevision,
-              ...(outcome.participants?{participants:outcome.participants}:{})});
+              ...(outcome.participants?{participants:outcome.participants}:{})}));
             break;
           }
           case "settlement": {
             if (!handler.settle) {pending.push({requestId:item.requestId,reason:"settlement_handler_unavailable"});continue;}
             const acceptanceId=`${stage.request.id}:settlement:${path.controlRevision}`;
-            const outcome=await handler.settle(path,stage,signal,{id:acceptanceId});
+            const outcome=await measureActivityWork(timing,"settlement.interpretation",()=>handler.settle!(path,stage!,signal,{id:acceptanceId}));
             signal.throwIfAborted();
-            await this.port.command({kind:"settle",receipt:{id:acceptanceId,requestId:stage.request.id,
-              resultId:stage.result!.id,owner:path.intent.purpose.contract.recoveryOwner,disposition:outcome.disposition},
+            await measureActivityWork(timing,"settlement.persistence",()=>this.port.command({kind:"settle",receipt:{id:acceptanceId,requestId:stage!.request.id,
+              resultId:stage!.result!.id,owner:path.intent.purpose.contract.recoveryOwner,disposition:outcome.disposition},
               executor:this.executor,expectedControlRevision:path.controlRevision,
-              ...(outcome.participants?{participants:outcome.participants}:{})});
+              ...(outcome.participants?{participants:outcome.participants}:{})}));
             break;
           }
         }

@@ -10,7 +10,7 @@ export function bindHelarcContextExecution(input:{
   readonly reconsideration?:(owner:string,subscription:import("@agent-anything/agent-runtime/activity").ActivityReconsiderationSubscription)=>ActivityReconsiderationHandler|null;
 }):{readonly processor:ActivityHandoffProcessor;readonly pump:ActivityHandoffPump;close():void} {
   const processor=new ActivityHandoffProcessor(input.store.activityHandoffs,input.registry,
-    input.store.activityJournal.executor,input.now,input.purposeIds);
+    input.store.activityJournal.executor,input.now,input.purposeIds,input.store.observeActivityTiming);
   const reconsideration=input.reconsideration?new ActivityReconsiderationProcessor(input.store.activityHandoffs,input.store.sharedAcceptance,input.reconsideration):undefined;
   const pump=new ActivityHandoffPump(input.store.activityHandoffs,processor,reconsideration);
   const unsubscribe=input.store.onActivityChange(()=>pump.wake());

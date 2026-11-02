@@ -59,3 +59,6 @@ export {originalInputDataTextScopes,describeOriginalInputDataTextScope,validateO
 export {supplyOriginalInputDataTextMethod,type OriginalInputDataTextMethodSupply} from "./OriginalInputDataTextMethod.js";
 export {originalInputDataTextDemand} from "./OriginalInputDataTextDemand.js";
 export {validateOriginalDataTextPresentations} from "./OriginalDataTextPresentation.js";
+export {contextPreparationDecisionEvidence} from "./ContextPreparationDecisionEvidence.js";
+export {contextStageObservation,type ContextStageObservation} from "./ContextStageObservation.js";
+export * from "./ContextActivityFactObservation.js";

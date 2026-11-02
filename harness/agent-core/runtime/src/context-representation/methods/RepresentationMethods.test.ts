@@ -11,12 +11,14 @@ import {methodCombinationEvidence} from "./MethodCombinationEvidence.js";
 import type {MaterialCustodyPort} from "@agent-anything/context/custody";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {methodTextUnits} from "./RepresentationMethodRanges.js";
+import {createRepresentationMethodInput} from "./RepresentationMethodInput.js";
 import {methodPreservationSupport,methodSupportCovers,qualifiedMethodRelation} from "./MethodPreservationSupport.js";
 import {quoteRepresentationMethod} from "./RepresentationMethodQuotation.js";
 import {RepresentationMethodPath,type RepresentationMethodDependencies} from "./RepresentationMethodPath.js";
 import {REPRESENTATION_METHOD_PURPOSE} from "./RepresentationMethod.js";
 import type {ActivityPurposeHandler} from "../../activity/ActivityHandoffProcessor.js";
 import type {ActivityPathState,ActivityStageState} from "../../activity/ActivityHandoff.js";
+import {contextStageObservation} from "../ContextStageObservation.js";
 
 const recipient={runId:"run",recipient:"context-representation",purpose:"aux"};
 function request():RepresentationMethodRequest {
@@ -35,6 +37,22 @@ function candidate():MethodCandidate {
   return {id:"c",representation:{id:"c",revision:"1"},access:{id:"ca",holdId:"ch",recipient,range},sources:job.sources,losses:[],relationships:[],unknowns:[],generatedBy:job.id,level:0,
     segments:r.sources.map((s,i)=>({id:`c_s${i}`,sources:[s.alias],range:{...range,start:i*20,end:(i+1)*20}}))};
 }
+
+it("retains per-stage method measurements when model input contains no cumulative method state",async()=>{
+  const before={...startRepresentationMethod(request()),current:job,readBytes:90,storedBytes:40},after={...before,storedBytes:65,candidates:[candidate()]};
+  const handler=new RepresentationMethodPath({} as RepresentationMethodDependencies);
+  const interpretation=handler as unknown as {interpretStage:ActivityPurposeHandler["interpret"]};
+  vi.spyOn(interpretation,"interpretStage").mockResolvedValue({progress:{method:after},next:[]});
+  const purpose={contract:REPRESENTATION_METHOD_PURPOSE,digest:modelInputValueDigest(REPRESENTATION_METHOD_PURPOSE)};
+  const path={intent:{id:"path",runId:"run",purpose},progress:{method:before}} as ActivityPathState;
+  const stage={request:{id:"model-stage",pathId:"path",stageKind:"model",input:{kind:"prepared_context_input"}},result:{id:"raw"}} as ActivityStageState;
+  const result=await handler.interpret(path,stage,new AbortController().signal,{id:"accepted"});
+  expect(result.progress).toMatchObject({methodObservation:{resourcesDelta:{readBytes:0,storedBytes:25},generated:[candidate().representation]}});
+  const accepted={...stage,receipt:{progress:result.progress}} as ActivityStageState;
+  const observation=contextStageObservation({...path,progress:{method:{...after,readBytes:9999}}},accepted);
+  expect(observation.method?.resourcesDelta).toEqual({readBytes:0,storedBytes:25});
+  expect(observation.method?.generated).toEqual([candidate().representation]);
+});
 
 describe("scoped text refinement and preservation support",()=>{
   it("refines explicit UTF-8 bodies without breaking code points or claiming semantic independence",()=>{
@@ -77,6 +95,24 @@ describe("scoped text refinement and preservation support",()=>{
 });
 
 describe("representation method authorization",()=>{
+  it("quotes the exact combination body once, separate from host transport bindings",()=>{
+    const r=request(),body=JSON.stringify({messages:[{role:"user",content:'Keep "exact" values'}]});
+    const encoded={id:"encoded-original",mediaType:"application/json",body,endpoint:"https://private-target.invalid",adapterRevision:"host-binding"};
+    const input={...r,method:"check_combination",combinationDigest:"combination",template:{purpose:"aux",correlation:{controllerRequestId:"turn",branchId:"branch"},
+      composition:{providerId:"provider",model:"model",lineage:{instructionModel:{providerId:"provider",model:"model"}}},
+      modelContext:{assessment:null,requestedOutput:{unit:"tokens",maximum:100,source:"host_configured",revision:"1"},headroom:{unit:"tokens",amount:0,policy:{id:"test",revision:"1"}}}},
+      combination:{prepared:{encoded,locations:[],deliveries:[]},scope:{target:"target"}}} as unknown as RepresentationMethodRequest;
+    const prepared=createRepresentationMethodInput(input,{...job,kind:"combination"},[],"2026-11-01T00:00:00.000Z");
+    const sections=prepared.template.composition.sections,metadataSection=sections.find(s=>s.id.endsWith(":combination"))!;
+    if(metadataSection.content.kind!=="text")throw new Error("Expected quoted combination metadata");
+    const metadata=JSON.parse(metadataSection.content.text),quoted=sections.find(s=>s.id===metadata.encoded.bodySection)!;
+    expect(metadata.encoded).toEqual({id:encoded.id,mediaType:encoded.mediaType,bodySection:quoted.id});
+    expect(quoted.content).toEqual({kind:"text",text:body});
+    expect(sections.filter(s=>s.content.kind==="text"&&s.content.text===body)).toHaveLength(1);
+    expect(JSON.stringify(sections)).not.toContain(encoded.endpoint);
+    expect(input.combination!.prepared.encoded).toBe(encoded);
+    expect(prepared.demand.contributions.every(c=>c.options.every(o=>o.sections.every(s=>s.section.necessity==="mandatory")))).toBe(true);
+  });
   it.each(["allowed","temporary","denied"] as const)("preserves %s in exact, preparation, measurement and settlement branches",async kind=>{
     const result=kind==="allowed"?{kind}:kind==="temporary"?{kind,code:"pending",message:"Await authority"}:
       {kind,code:"denied",message:"Authority revoked",decision:{owner:"host",id:"denial",revision:"1"}};
@@ -107,7 +143,7 @@ describe("qualified source evidence for a new recipient combination",()=>{
       findings:[],requirements:[{id:"r",conclusion:"supported",basis:"original evidence"}],supported:true,rawResultId:`raw${tag}`,judgmentIds:[`judgment${tag}`],scope:"both"};
     const method={...startRepresentationMethod(r),state:"ready" as const,candidates:[c],assessments:[local],resultIds:[c.id]};
     const prior={...structuredClone(method),state:"working" as const,current:checkJob,assessments:[]};
-    const judgment={id:`judgment${tag}`,kind:"semantic",conclusion:"supported",methodRevision:"bidirectional:1",subjects:[c.representation],
+    const judgment={id:`judgment${tag}`,runId:r.recipient.runId,evidenceSources:[],kind:"semantic",conclusion:"supported",methodRevision:"bidirectional:1",subjects:[c.representation],
       dependencies:{stage:`stage${tag}`,rawResult:`raw${tag}`,acceptance:"accepted",conditions:methodAssessmentConditions(r,checkJob,methodInputSources(prior,checkJob))}};
     const stage={request:{pathId:`producer${tag}`,input:{method:prior}},status:"accepted",result:{id:`raw${tag}`},
       receipt:{id:"accepted",progress:{method:structuredClone(method)}}};
@@ -284,7 +320,7 @@ describe("representation method contracts and bounded professional planning",()=
     const sources=[...r.sources,{...r.sources[0]!,alias:"c",role:"candidate" as const,representation:{id:"c",revision:"1"}}];
     const conditions=methodAssessmentConditions(r,j,sources);
     const normalized=parseRepresentationMethodOutput(returned(assessment()),r,j);
-    const judgment={id:"prior",kind:"semantic",conclusion:"supported",methodRevision:"bidirectional:1",dependencies:{conditions,stage:"original",acceptance:"accepted",rawResult:"raw"},subjects:[{id:"c",revision:"1"}],basis:"Original accepted findings"} as RepresentationJudgment;
+    const judgment={id:"prior",runId:r.recipient.runId,evidenceSources:[],kind:"semantic",conclusion:"supported",methodRevision:"bidirectional:1",dependencies:{conditions,stage:"original",acceptance:"accepted",rawResult:"raw"},subjects:[{id:"c",revision:"1"}],basis:"Original accepted findings"} as RepresentationJudgment;
     const catalog:RepresentationCatalogPort={command:async()=>judgment};
     const activities={command:async()=>({status:"accepted",result:{id:"raw"},receipt:{id:"accepted",progress:{method:{assessments:[{...normalized,scope:"both",supported:true,judgmentIds:["prior"],rawResultId:"raw"}]}}}})} as ActivityHandoffPort;
     expect(await findMethodAssessmentReuse(catalog,activities,{...r,reuseJudgments:["prior"]},j,sources,new AbortController().signal)).toMatchObject({judgmentId:"prior"});

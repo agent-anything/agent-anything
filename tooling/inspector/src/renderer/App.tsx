@@ -16,6 +16,8 @@ import { readContentTarget } from "./navigation/InspectionLocation.js";
 import { inspectionObjectHistoryLocation, inspectionObjectViewLocation, readInspectionDetailTarget, type InspectionDetailTarget } from "./navigation/InspectionDetailTarget.js";
 
 import { CanvasFrame } from "./canvas/CanvasFrame.js";
+import {processLocation} from "./context-process/ProcessNavigation.js";
+const ContextProcessWorkspace = lazy(async () => ({default: (await import("./context-process/ContextProcessWorkspace.js")).ContextProcessWorkspace}));
 const RelationGraph = lazy(async () => ({ default: (await import("./graph/RelationGraph.js")).RelationGraph }));
 const DataFlowView = lazy(async () => ({ default: (await import("./data-flow/DataFlowView.js")).DataFlowView }));
 const ExecutionTimeline = lazy(async () => ({ default: (await import("./timeline/ExecutionTimeline.js")).ExecutionTimeline }));
@@ -50,7 +52,7 @@ export function App() {
   const selectionRef = loading && detail ? detail.subject : selected;
   const selectionRecord = detail && selectionRef && inspectionSubjectKey(detail.subject) === inspectionSubjectKey(selectionRef) ? detail : null;
   const hasTree = area !== "Definitions";
-  const sideDetail = view !== "Data Flow" && (area === "Definitions" || area === "Comparison" || view === "Records" || !!selectedLink);
+  const sideDetail = area !== "Context Process" && view !== "Data Flow" && (area === "Definitions" || area === "Comparison" || view === "Records" || !!selectedLink);
   const availableViews = areaViews[area]!;
   const mainViews = area === "Runs" ? availableViews.slice(0,5) : availableViews;
   const visibleSelection = !selected || inventory.some((record) => inspectionSubjectKey(record.subject) === selectionKey);
@@ -87,6 +89,7 @@ export function App() {
             <Tooltip title="Clear object selection"><Button size="small" type="text" aria-label="Clear object selection" icon={<CloseOutlined />} onClick={() => navigate({ subject: null, record: null })} /></Tooltip>
           </div>
           <span className="object-selection-kind">{selectionRef.kind}</span>
+          {area !== "Context Process" && <Button size="small" onClick={() => navigate(processLocation(selectionRef))}>Context Process</Button>}
         </div>}
         <div className="object-list">{hasTree ? <RunTree records={bundle?.inventory.records ?? []} selected={runId} search={search} onSelect={selectRun} /> : <>{inventory.map((record) => <button key={record.id} className={`object-row ${inspectionSubjectKey(record.subject) === selectionKey ? "selected" : ""}`} onClick={() => choose(record.subject)}>
           <span className="object-kind">{record.subject.kind}</span><strong title={label(record)}>{label(record)}</strong><small>{record.subject.owner}{record.payload.kind === "snapshot" ? ` / ${record.payload.status}` : ""}</small>
@@ -96,14 +99,14 @@ export function App() {
       <section className="investigation" data-view={bundle?.view.kind} data-watermark={bundle?.snapshot.selection?.watermark}>
         {!visibleSelection && !hasTree && !loading && <div className="coverage-note">Selected object is outside the loaded catalog or current filter.</div>}
         <Suspense fallback={<div className="view-loading"><Spin /></div>}>
-          {area === "Comparison" ? <div className="comparison-view"><div className="view-toolbar">
+          {area === "Context Process" ? bundle?.snapshot.selection && <ContextProcessWorkspace selection={bundle.snapshot.selection} records={bundle.inventory.records} runId={runId} params={params} navigate={navigate}/> : area === "Comparison" ? <div className="comparison-view"><div className="view-toolbar">
             <Button icon={<SwapOutlined />} disabled={!detail || loading} onClick={() => { if (detail && bundle?.snapshot.selection) setComparison({ record: detail, selection: bundle.snapshot.selection }); }}>Pin selection</Button>
             <span>{comparison ? `Baseline: ${comparison.record.subject.id} @ ${comparison.selection.watermark}` : "No baseline selected"}</span>
           </div>{detail && comparison ? <ContentViewer text={JSON.stringify(detail, null, 2)} compare={JSON.stringify(comparison.record, null, 2)} language="json" /> : <Empty description="Pin a baseline, then select another object" />}</div> : <>
             <div className="investigation-scope">{hasTree && <><span title={runId}>{runId ? `Run ${runId.slice(0,16)}` : "All Runs"}</span>{runId && <Checkbox checked={includeDescendants} onChange={event=>navigate({descendants:event.target.checked?"true":null})}>Include descendants</Checkbox>}</>}</div>
             <Tabs className="view-tabs" activeKey={view} onChange={(value) => navigate({ view: value })} items={[...mainViews,...(mainViews.includes(view)?[]:[view])].map((key) => ({ key, label: key }))} tabBarExtraContent={area === "Runs" ? <Dropdown menu={{items:availableViews.slice(5).map(key=>({key,label:key})),onClick:({key})=>navigate({view:key})}}><Button type="text">More views</Button></Dropdown>:undefined} />
             <div className="view-content">{view === "Overview" ? <RunOverview summary={bundle?.inventory.summaries?.find(item=>item.subject.id===runId)} onRecord={setFactId} onContent={setContentId} onView={value=>navigate({view:value,subject:JSON.stringify(bundle?.inventory.records.find(record=>record.subject.id===runId)?.subject ?? selected)})}/>
-              : view === "Requests" || view === "Calls" || view === "Scheduling" ? <ObjectSummaries kind={view} scope={bundle?.snapshot.selection ?? null} summaries={bundle?.view.summaries ?? []} onRecord={setFactId} onContent={setContentId} onHistory={openHistory}/>
+              : view === "Requests" || view === "Calls" || view === "Scheduling" ? <ObjectSummaries kind={view} scope={bundle?.snapshot.selection ?? null} summaries={bundle?.view.summaries ?? []} onRecord={setFactId} onContent={setContentId} onHistory={openHistory} onProcess={subject=>navigate(processLocation(subject))}/>
               : view === "Execution Flow" ? bundle?.snapshot.selection && runId ? <ExecutionFlowView key={`${sourceId}:${datasetId}:${runId}`} scope={bundle.snapshot.selection} runId={runId} paused={loading} params={params} navigate={navigate} onContent={setContentId} onRecord={setFactId} onSubject={openHistory} /> : <Empty description="Select a Run to inspect its execution flow" />
               : view === "Data Flow" && graph ? <DataFlowView key={`${sourceId}:${datasetId}:${bundle?.snapshot.selection?.watermark}:${selectionKey}:${runId}:${includeDescendants}`} graph={graph} selected={selected?.kind === "run" && params.get("dataFocus") !== "true" ? null : selected} runId={runId} onFocus={subject=>navigate({subject:JSON.stringify(subject),record:null,dataFocus:"true"})} onReset={()=>navigate({subject:null,record:null,dataFocus:null})} onRecord={setFactId} onContent={setContent} />
               : graph ? graph.nodes.length ? <CanvasFrame title={view}><RelationGraph graph={graph} selected={selected} onSelect={choose} onLink={(id) => setSelectedLink(graph.links.find((link) => link.id === id) ?? null)} /></CanvasFrame> : <Empty description="No recorded relations in this scope" />

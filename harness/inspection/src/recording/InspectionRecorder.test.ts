@@ -88,7 +88,7 @@ describe("Inspection recording", () => {
         sources: [{owner: "context", kind: "context_contribution", id: `material-${index}`, revision: "1", runId: run}],
         presenter: {owner: "test", kind: "presenter", id: "opening", revision: "1"}, coverage: [`material-${index}`], limitations: []}});
     const offer = (runId: string, requestId: string, sections: readonly ModelInputSectionCandidate[]) => provider.observe({
-      stage: "request", runId, requestId, attemptId: `${requestId}:attempt`, providerId: "fixture", model: "fixture", occurredAt: now,
+      stage: "request", runId, requestId, attemptId: `${requestId}:attempt`, providerId: "fixture", model: "fixture", occurredAt: now, status: "requested",
       request: {requestId, purpose: "controller", ...modelInputFromSections(sections), composition: {id: requestId, sections, lineage: {},
         workingView: createExactModelWorkingView({sections, recipientRunId: runId, boundary: "request"})},
         interaction: {kind: "native_tool_turn", callables: []}},
@@ -243,7 +243,8 @@ describe("Inspection recording", () => {
       expect.objectContaining({kind: "materializes", from: expect.objectContaining({id: "controller-request"}), to: expect.objectContaining({id: "model-turn"})}),
       expect.objectContaining({kind: "produces", from: expect.objectContaining({id: "provider-request"}), to: expect.objectContaining({id: "model-turn"})}),
     ]));
-    expect(records.filter(record => record.subject.kind === "provider-attempt").map(record => record.subject.id)).toEqual(["http-attempt", "http-attempt"]);
+    expect(records.filter(record => record.subject.kind === "provider-attempt" && record.payload.kind !== "work_measurement").map(record => record.subject.id)).toEqual(["http-attempt", "http-attempt"]);
+    expect(records.filter(record => record.payload.kind === "work_measurement").every(record => record.subject.id === "http-attempt")).toBe(true);
     expect(records.find(record => record.subject.id === "logical-attempt")?.subject).toMatchObject({owner: "retry", kind: "attempt"});
     expect(records.find(record => record.subject.id === "retry-operation")?.subject).toMatchObject({owner: "retry", kind: "operation"});
     expect(records.find(record => record.subject.id === "controller-request")).toBeDefined();
@@ -349,7 +350,7 @@ describe("Inspection recording", () => {
     const actual = applyModelInputOwnerForms(sections, forms, "consumer-run");
     const workingView = createOwnerModelWorkingView({sections: actual, recipientRunId: "consumer-run", boundary: "request", forms});
     provider.observe({stage: "request", runId: "consumer-run", requestId: "request-replay", attemptId: "attempt-replay",
-      occurredAt: "2026-10-13T00:00:00Z", providerId: "fixture", model: "fixture", controllerRequestId: null,
+      occurredAt: "2026-10-13T00:00:00Z", providerId: "fixture", model: "fixture", controllerRequestId: null, status: "requested",
       request: {requestId: "request-replay", purpose: "controller", composition: {id: "composition", sections: actual, lineage: {}, workingView},
         ...modelInputFromSections(actual), interaction: {kind: "text_generation"}}} as never);
     await recorder.flush();

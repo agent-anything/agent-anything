@@ -98,7 +98,7 @@ export class TaskModelResponsePath<T=unknown> implements ActivityPurposeHandler 
       return this.ports.authorize(path,stage,signal,action);
     }
   }
-  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
+  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal,timing?:ActivityWorkTiming):Promise<ActivityRawResult> {
     if(stage.request.stageKind==="model") {
       if(this.ports.requestObserved) {
         const original=await this.source(path,stage);
@@ -107,7 +107,7 @@ export class TaskModelResponsePath<T=unknown> implements ActivityPurposeHandler 
           if(result&&typeof (result as PromiseLike<unknown>).then==="function")void Promise.resolve(result).catch(()=>{});
         } catch { /* Observation does not authorize or change the accepted input. */ }
       }
-      return this.execution.execute(path,stage,attempt,signal);
+      return this.execution.execute(path,stage,attempt,signal,timing);
     }
     if(stage.request.stageKind==="input-unavailable") {
       signal.throwIfAborted();const limitation=await this.limitation(path,stage);
@@ -273,3 +273,4 @@ export class TaskModelResponseWork<T=unknown> {
       ]:[])];
   }
 }
+import type {ActivityWorkTiming} from "../activity/ActivityWorkTiming.js";

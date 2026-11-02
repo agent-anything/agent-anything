@@ -4,6 +4,7 @@ const {join}=require("node:path");
 const {pathToFileURL}=require("node:url");
 const {randomUUID}=require("node:crypto");
 const {writeFile,readFile}=require("node:fs/promises");
+const {createWriteStream}=require("node:fs");
 const [directory,phase,endpoint]=process.argv.slice(2);
 const continuation=process.env.TASK_DELEGATION_CONTINUATION==="1";
 const largeResult=process.env.TASK_DELEGATION_LARGE_RESULT==="1";
@@ -30,7 +31,13 @@ async function main(){
   const profile=createHelarcProviderProfile({id:"isolated",providerKind:"ollama",displayName:"Isolated",baseUrl:endpoint,model:"controlled",timeoutMs:60000,
     ollamaRuntime:{contextWindowTokens:16384},credentialStatus:"empty_allowed"});assert(profile.ok);
   const context=bindHelarcContextSettings(createDefaultHelarcContextSettings(),profile.profile);
-  store=await HelarcExecutionStore.open(join(directory,"execution"));
+  let diagnostics;
+  if(process.env.TASK_DELEGATION_DIAGNOSTICS==="1") {
+    const output=createWriteStream(join(directory,`${phase}-performance.jsonl`));let events=0;
+    output.on("error",()=>{diagnostics.performance=()=>{};});
+    diagnostics={performance:event=>{if(event.kind==="finished"&&["storage.host.request","storage.worker.dispatch","storage.worker.content.expand"].includes(event.stage)&&events++<100000)output.write(JSON.stringify(event)+"\n");}};
+  }
+  store=await HelarcExecutionStore.open(join(directory,"execution"),undefined,undefined,undefined,diagnostics);
   const {createHelarcMaterialAccess}=await load("context/HelarcMaterialAccess.js");
   const {createHelarcMaterialHandoff}=await load("execution-storage/HelarcMaterialHandoff.js");
   const {createHelarcReportMaterialHandoff}=await load("context/HelarcReportMaterialHandoff.js");
@@ -244,7 +251,7 @@ async function main(){
     await inspection.contextFoundationObserver.replay("root",store.contextFoundationFacts.bind(store));
     await require("./inspection-settlement.cjs").settleInspection(inspection.recorder,queries);
   }
-  let presentationReceipts=0,supplyResponsibilities=0,supplyNeeds=0;
+  let presentationReceipts=0,supplyResponsibilities=0,supplyNeeds=0;const methodTotals=[];
   if(redistribute) {
     const reader=tree.members.find(m=>m.admission.input.task.input.prompt.includes("READ_MATERIAL_CASE"));assert(reader);
     const reference=reader.admission.input.task.input.material_refs[0];assert(reference);
@@ -256,6 +263,11 @@ async function main(){
   for(const runId of runIds){
     const facts=[];let after=0;
     while(true){const page=await a({kind:"facts",runId,after,limit:64});if(!page.length)break;facts.push(...page);after=page.at(-1).sequence;}
+    for(const pathId of new Set(facts.map(f=>f.pathId).filter(Boolean))){
+      const path=await a({kind:"read_path",pathId});
+      if(path?.intent.purpose.contract.executionOwner==="representation-execution"&&path.progress?.method)
+        methodTotals.push({pathId,readBytes:path.progress.method.readBytes,storedBytes:path.progress.method.storedBytes});
+    }
     for(const fact of facts.filter(f=>f.kind==="input_needed")){
       const need=fact.details.need,head=await store.inputSupplies.query({kind:"head",needId:need.id});
       assert(head,`Accepted task input must retain its original supply responsibility: ${need.id}`);
@@ -304,6 +316,7 @@ async function main(){
     assert.equal(new Set(sentInputs).size,stages.length,"Each actual sent input retains its own durable binding");
     if(largeResult&&runId==="root")assert.equal(new Set(window.inputs.map(i=>i.representationContinuity)).size,2,"Accepted native result conversion starts a distinct comparable series");
     const policyFlow=await queries.query({...selection,kind:"get_data_flow",subject:inspection.recorder.ref("context-representation","contribution",latestEvidence.decision.id,runId)});
+    await require("./process-query-verification.cjs").verifyDecisionQuery({queries,recorder:inspection.recorder,selection,original:latestEvidence,inputId:sentInputs.at(-1)});
     assert(policyFlow.graph.links.length>=window.inputs.length,"Observed inputs must remain reachable from the policy decision");
   }
   let reportProbes=[];
@@ -317,6 +330,9 @@ async function main(){
     await require("./inspection-settlement.cjs").settleInspection(inspection.recorder,queries);
   }
   const health=inspection.recorder.health();assert.equal(health.dropped,0);assert.equal(health.rejected,0);
+  const processMetrics=await require("./process-metric-verification.cjs")({queries,recorder:inspection.recorder,runIds,methodTotals,replay:async()=>{
+    for(const runId of runIds){await inspection.activityObserver.replay(runId,store.activityHandoffs);await inspection.contextFoundationObserver.replay(runId,store.contextFoundationFacts.bind(store));}
+  }});
   if(largeResult){
     assert.equal(presentationReceipts,1,"Only actual replacement needs a new presentation receipt");
     assert(result.items.some(item=>item.payload.kind==="model_call_settlement"&&item.payload.result.content?.output?.summary?.length>10000),
@@ -324,7 +340,7 @@ async function main(){
   }
   await writeFile(join(directory,"verification.json"),JSON.stringify({electron:process.versions.electron,generation:store.generation,
     runs:tree.members.map(m=>({runId:m.head.state.run.id,status:m.head.state.status,turns:m.head.state.counters.controllerTurns})),
-    finalOutput:result.finalOutput,originalResponseResumed:true,observationWindowsRestored:true,supplyNeeds,supplyExitsClosed:originalNeeds.length,supplyResponsibilities,presentationReceipts,reportProbes,inspection:{captured:health.coverage.captured,dropped:health.dropped,rejected:health.rejected}},null,2));
+    finalOutput:result.finalOutput,originalResponseResumed:true,observationWindowsRestored:true,supplyNeeds,supplyExitsClosed:originalNeeds.length,supplyResponsibilities,presentationReceipts,reportProbes,processMetrics,inspection:{captured:health.coverage.captured,dropped:health.dropped,rejected:health.rejected}},null,2));
   await queries.close();queries=null;if(service)await service.close();service=null;await inspection.close();inspection=null;await store.close();store=null;app.exit(0);
 }
 main().catch(async error=>{

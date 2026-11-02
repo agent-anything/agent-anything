@@ -215,7 +215,7 @@ async function main(){
     const detail=await queries.query({kind:"get_data_flow",...selection,subject});
     assert(detail.graph.links.some(l=>l.kind==="observes"&&l.to.id===accepted.investment.pathId));
     const recorded=await queries.query({kind:"get_subject",...selection,subject});
-    const content=recorded.records.flatMap(r=>r.contents).find(c=>c.name==="Context policy decision and evidence");assert.equal(content.availability,"present");
+    const content=recorded.records.flatMap(r=>r.contents).find(c=>c.name==="Owner-declared context evidence");assert.equal(content.availability,"present");
     const body=await queries.query({kind:"get_content",...selection,contentId:content.id});
     assert(JSON.parse(body.content.text).methodSupplyReport.originalWork.some(w=>w.pathId===accepted.investment.pathId&&w.available));
     const health=inspection.recorder.health();assert.equal(health.dropped,0);assert.equal(health.rejected,0);

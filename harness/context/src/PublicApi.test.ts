@@ -49,8 +49,11 @@ describe("Context public API", () => {
     ]);
     expect(Object.keys(evidenceApi).sort()).toEqual([
       "EvidenceBuilder",
+      "contextProcessObject",
+      "contextProcessRelationship",
       "settleEvidenceContribution",
       "snapshotEvidenceContribution",
+      "validateContextProcessEvidence",
     ]);
     expect(Object.keys(persistenceApi)).toEqual([]);
     expect(Object.keys(custodyApi).sort()).toEqual(["CustodyMaterialAccess", "MaterialCustodyError", "containsMaterialRange", "custodyCount", "custodyToken", "materialViewReference", "materialViewReferenceId", "sameMaterialVersion"]);

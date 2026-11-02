@@ -36,6 +36,7 @@ try {
       const command = wireCommand.kind === "invoke_content"
         ? measureExecutionSync(timingSink, "storage.worker.hydrate_command", timingContext, () => database.hydrateContent(wireCommand.root)) as ExecutionStoreCommand : wireCommand;
       timingContext.command = command.kind;
+      if(command.kind==="activity_handoff")Object.assign(timingContext,activityCommandObservation(command.command));
       const request = {...wire, command};
       const endDispatch = beginExecutionTiming(timingSink, "storage.worker.dispatch", timingContext);
       try {
@@ -130,3 +131,4 @@ function send(reply: ExecutionStoreReply): void {
 function code(error: unknown): string {
   return error instanceof ExecutionStoreError || error instanceof Error && "code" in error && typeof error.code === "string" ? error.code as string : "execution_storage_failed";
 }
+import {activityCommandObservation} from "./ActivityCommandObservation.js";

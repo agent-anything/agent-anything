@@ -86,7 +86,7 @@ function select(f:Fixture,p:Awaited<ReturnType<typeof publish>>) {
   const inputId=`input:${id}`,pathId=`consumer:${id}`,requestId=`${pathId}:model`,selectionId=`selection:${id}`;
   const hold=(responsibility:"input"|"selection"):MaterialHold=>({id:`${responsibility}:${id}`,instanceId:p.value.intent.instanceId,consumer:target,
     responsibility,range:p.published.access.range,basis:responsibility==="input"?inputId:selectionId,releaseCondition:"original responsibility settles"});
-  const judgment:RepresentationJudgment={id:`judgment:${id}`,owner:scope.owner,kind:"combination",subjects:[p.published.representation.ref],
+  const judgment:RepresentationJudgment={id:`judgment:${id}`,owner:scope.owner,runId:scope.runId,evidenceSources:[],kind:"combination",subjects:[p.published.representation.ref],
     inputs:[p.published.access.range],purpose:target.purpose,target:"model",methodRevision:"fixture:1",dependencies:{inputDigest:digest(exactInput)},
     coverage:[p.published.access.range],conclusion:"supported",limitations:["Controlled input, not a semantic test"],basis:"Exact original notification"};
   f.db.representationCommand(f.db.generation,{kind:"judge",judgment});

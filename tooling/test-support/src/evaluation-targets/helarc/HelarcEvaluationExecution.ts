@@ -157,7 +157,9 @@ interface HelarcEvaluationAggregation {
   readonly artifact: HelarcEvaluationBaselineArtifact;
 }
 
-export async function runHelarcEvaluationBaselineCandidate(): Promise<HelarcEvaluationBaselineArtifact> {
+export async function runHelarcEvaluationBaselineCandidate(options: {
+  readonly observeEvidence?: (evidence: {readonly captures: readonly EvaluationCapture[]; readonly observations: readonly EvaluationTargetObservation[]}) => void;
+} = {}): Promise<HelarcEvaluationBaselineArtifact> {
   const corpus = createHelarcEvaluationCorpus();
   const targetAdapter = createHelarcEvaluationTargetAdapter(corpus);
   const campaignState = new MemorySnapshotStore<EvaluationCampaignSnapshot>();
@@ -244,6 +246,7 @@ export async function runHelarcEvaluationBaselineCandidate(): Promise<HelarcEval
       : ` Trial statuses: ${trialStates.values.map((item) => item.status).join(", ")}.`;
     throw new Error(`Helarc Evaluation Campaign settled as '${snapshot.status}'.${detail}`);
   }
+  options.observeEvidence?.({captures: captures.records, observations: observations.records});
   return completedAggregation.artifact;
 }
 
@@ -409,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.responsibility-composition-baseline-result`,
+      id: `${definition.ref.id}.explicit-task-execution-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -420,7 +423,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.responsibility-composition.report.baseline",
+      id: "helarc.explicit-task-execution.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -466,7 +469,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.working-conversation.report.baseline",
+      id: "helarc.responsibility-composition.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -482,13 +485,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.responsibility-composition.baseline-acceptance",
+      id: "helarc.explicit-task-execution.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "responsibility-composition-v1",
+      revision: "explicit-task-execution-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -497,14 +500,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Task judgment, representation preparation, model access and execution coordination have distinct owners. Outcome and safety gates remain unchanged; the logical clock also counts durable model-activity binding. Actual elapsed performance and cross-process recovery are verified separately.",
+      "The isolated scripted target explicitly supplies task execution and uses the current Stop protocol. Outcome and safety gates remain unchanged. Logical-clock ticks are not performance evidence; formal Desktop process and recovery evidence are evaluated separately.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.working-conversation.baseline-acceptance",
+      id: "helarc.responsibility-composition.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -529,10 +532,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v28-")) {
-    throw new TypeError(`Unknown responsibility-composition Target revision '${revision}'.`);
+  if (!revision.startsWith("v29-")) {
+    throw new TypeError(`Unknown explicit-task-execution Target revision '${revision}'.`);
   }
-  return revision.replace(/^v28-/, "v27-");
+  return revision.replace(/^v29-/, "v28-");
 }
 
 function gradeExpectedOutcome(

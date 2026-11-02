@@ -8,6 +8,12 @@ export interface InspectorServerOptions { readonly root?: string; readonly asset
 export interface InspectorServer { readonly url: string; readonly launchUrl: string; close(): Promise<void> }
 const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".ttf": "font/ttf", ".json": "application/json", ".txt": "text/plain" };
 const codes: Record<string, number> = { inspection_query_invalid: 400, inspection_cursor_invalid: 400, inspection_access_denied: 403, inspection_reference_unknown: 404, inspection_source_unavailable: 404, inspection_dataset_unavailable: 404, inspection_dataset_cleared: 410, inspection_dataset_unsupported: 409, inspection_cursor_reset: 409, inspection_query_too_large: 413, inspection_query_busy: 503, inspection_query_timeout: 504, inspection_dataset_corrupt: 409 };
+codes.inspection_process_projection_unsupported = 409;
+codes.inspection_query_cancelled = 499;
+codes.inspection_aggregation_expired = 410;
+codes.inspection_aggregation_scope_changed = 409;
+codes.inspection_aggregation_capacity = 429;
+codes.inspection_aggregation_corrupt = 409;
 
 async function jsonBody(request: IncomingMessage): Promise<unknown> {
   if (request.headers["content-type"]?.split(";")[0] !== "application/json") throw new Error("inspection_query_invalid");

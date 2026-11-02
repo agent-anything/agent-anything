@@ -2,6 +2,7 @@ import type {Provider,ProviderCallResult} from "@agent-anything/model-interactio
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {containsMaterialRange,type MaterialCustodyPort,type MaterialReadPage,type MaterialSearchPage,type MaterialHold,type MaterialAccess,type MaterialAccessDescription} from "@agent-anything/context/custody";
 import type {RepresentationCatalogPort,RepresentationRecord,RepresentationJudgment,RepresentationLoss} from "@agent-anything/context/representation";
+import {contextProcessObject} from "@agent-anything/context/evidence";
 import type {ContextSelectionPort,ContextUseScope} from "@agent-anything/context/selection";
 import type {ActivityPurposeHandler} from "../../activity/ActivityHandoffProcessor.js";
 import type {ActivityPathState,ActivityStageState,ActivityStageRequest,ActivityAttempt,ActivityRawResult,ActivityHandoffPort} from "../../activity/ActivityHandoff.js";
@@ -76,22 +77,22 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     signal.throwIfAborted();
     return {disposition:{kind:"retained_method_result",resultId:stage.result!.id,adopted:false}};
   }
-  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
+  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal,timing?:ActivityWorkTiming):Promise<ActivityRawResult> {
     const started=performance.now();
-    try {return await this.executeStage(path,stage,attempt,signal);}
+    try {return await this.executeStage(path,stage,attempt,signal,timing);}
     catch(error) {
       if(!(error instanceof MethodEvidenceUnavailable)&&!this.resourceExhausted(error))throw error;
       return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:"returned",value:{kind:"gap",code:error.message},usage:{localMs:performance.now()-started},recordedAt:this.ports.now()};
     }
   }
-  private async executeStage(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
+  private async executeStage(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal,timing?:ActivityWorkTiming):Promise<ActivityRawResult> {
     if(stage.request.stageKind==="model") {
       await this.reserve(path,stage,`model:${attempt.id}`,{modelCalls:1});
-      return this.execution.execute(path,stage,attempt,signal);
+      return this.execution.execute(path,stage,attempt,signal,timing);
     }
     if(["organize","measure"].includes(stage.request.stageKind)) {
       if(stage.request.stageKind==="measure")await this.reserve(path,stage,"measurement",{measurementCalls:1});
-      return this.preparation.execute(path,stage,attempt,signal);
+      return this.preparation.execute(path,stage,attempt,signal,timing);
     }
     signal.throwIfAborted();const started=performance.now(),method=this.state(path,stage),input=stage.request.input as Input;
     let value:unknown;
@@ -147,17 +148,25 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     return this.execute(path,stage,stage.attempt!,signal);
   }
   async interpret(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,acceptance:{id:string}):Promise<Outcome> {
+    const before=this.state(path,stage);
     let outcome:Outcome;
     try {outcome=await this.interpretStage(path,stage,signal,acceptance);}
     catch(error) {
       if(!this.resourceExhausted(error))throw error;
-      return this.gap(this.state(path,stage),stage,"representation_shared_allowance_exhausted",{code:(error as Error).message});
+      outcome=this.gap(before,stage,"representation_shared_allowance_exhausted",{code:(error as Error).message});
     }
     if(outcome.next.length&&!this.hasStageRoom(path)) {
       const method=(outcome.progress as {method:RepresentationMethodProgress}).method;
-      return {...this.gap(method,stage,"representation_execution_budget_exhausted",{resources:path.resourceUse}),participants:outcome.participants};
+      outcome={...this.gap(method,stage,"representation_execution_budget_exhausted",{resources:path.resourceUse}),participants:outcome.participants};
     }
-    return outcome;
+    const progress=outcome.progress as {method:RepresentationMethodProgress},method=progress.method;
+    const previousCandidates=new Set(before.candidates.map(candidate=>modelInputValueDigest(candidate.representation)));
+    const delta=(current:number,previous:number)=>Number.isSafeInteger(current)&&Number.isSafeInteger(previous)&&current>=previous?current-previous:null;
+    return {...outcome,progress:{...progress,methodObservation:{
+      resourcesDelta:{readBytes:delta(method.readBytes,before.readBytes),storedBytes:delta(method.storedBytes,before.storedBytes)},
+      generated:method.candidates.filter(candidate=>!previousCandidates.has(modelInputValueDigest(candidate.representation))&&
+        (candidate.generatedBy===before.current?.id||candidate.generatedBy===stage.request.id)).map(candidate=>candidate.representation),
+    }}};
   }
   private async interpretStage(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,acceptance:{id:string}):Promise<Outcome> {
     if((stage.result?.value as {kind?:string;code?:string}|undefined)?.code==="activity_resource_limit_exceeded")return this.gap(this.state(path,stage),stage,"representation_shared_allowance_exhausted",stage.result!.value);
@@ -295,7 +304,8 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
       const basis=`${modelId}:${responsibility}`;
       return {id:`${basis}:hold:${index}`,instanceId:descriptor.hold.instanceId,consumer:method.request.recipient,responsibility,range,basis,releaseCondition:"auxiliary input settled and method release"};
     });
-    const judgment:RepresentationJudgment={id:`${job.id}:input-structure`,owner:scope.owner,kind:"combination",subjects:refs,inputs:ranges,purpose:scope.purpose,target:scope.target,
+    const judgment:RepresentationJudgment={id:`${job.id}:input-structure`,owner:scope.owner,runId:scope.runId,kind:"combination",subjects:refs,inputs:ranges,purpose:scope.purpose,target:scope.target,
+      evidenceSources:[contextProcessObject("model-input",prepared.encoded.id,scope.runId),contextProcessObject("activity",prepared.preparationStageId,scope.runId)],
       methodRevision:"auxiliary-evidence-input:1",dependencies:{inputDigest:modelInputValueDigest(prepared),job:methodJobKey(job)},coverage:ranges,conclusion:"supported",
       limitations:["Suitability for the auxiliary investigation only; candidate semantics are NOT accepted for task use"],basis:"Exact authorized evidence, read-only background, fixed method and output contract; candidate is untrusted data"};
     await this.ports.representations.command({kind:"judge",judgment});
@@ -389,7 +399,19 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     for(const source of this.inputSources(method,job).filter(s=>(job.relationshipBasis?job.sources:job.candidates).includes(s.alias)))subjects.push((await originalMethodRepresentation(method.request,source,this.ports.representations)).ref);
     const ranges=this.inputSources(method,job).map(s=>s.access.range);
     const combination=job.kind==="combination"?method.request.combination:null;
-    const judgment:RepresentationJudgment={id:`${job.id}:judgment`,owner:method.request.recipient.recipient,kind:job.kind==="combination"?"combination":"semantic",subjects:combination?.subjects??subjects,
+    const reused=(stage.result!.value as {kind?:string;judgmentId?:string}).kind==="reused_assessment"?(stage.result!.value as {judgmentId:string}).judgmentId:null;
+    const supporting=[];
+    for(const id of new Set([...(job.relationshipBasis?.supportingJudgments??[]),...(reused?[reused]:[])])){
+      const original=await this.ports.representations.command({kind:"read_judgment",id}) as RepresentationJudgment|null;
+      if(!original)throw new TypeError("representation_judgment_source_missing");
+      supporting.push(contextProcessObject("representation",original.id,original.runId));
+    }
+    const judgment:RepresentationJudgment={id:`${job.id}:judgment`,owner:method.request.recipient.recipient,runId:path.intent.runId,kind:job.kind==="combination"?"combination":"semantic",subjects:combination?.subjects??subjects,
+      evidenceSources:[contextProcessObject("activity",stage.request.id,path.intent.runId),contextProcessObject("activity",stage.result!.id,path.intent.runId),
+        contextProcessObject("shared_acceptance",acceptanceId,path.intent.runId),...supporting,
+        ...(combination?.producers??[]).map(p=>contextProcessObject("activity",p.pathId,p.runId)),
+        ...(combination?.inheritedChecks??[]).flatMap(check=>[contextProcessObject("activity",check.producerPathId,check.runId),
+          ...check.assessments.map(a=>contextProcessObject("representation",a.judgmentIds[0]!,check.runId))])],
       inputs:ranges,purpose:combination?.scope.purpose??method.request.recipient.purpose,target:combination?.scope.target??method.request.targetRevision,methodRevision:"bidirectional:1",dependencies:{method:method.request.methodRevision,job:methodJobKey(job),conditions:methodAssessmentConditions(method.request,job,this.inputSources(method,job)),
         ...((stage.result!.value as {kind?:string}).kind==="reused_assessment"?{reusedJudgment:(stage.result!.value as {judgmentId:string}).judgmentId}:{}),
         stage:stage.request.id,rawResult:stage.result!.id,acceptance:acceptanceId,...(method.request.combinationDigest?{inputDigest:method.request.combinationDigest}:{}),
@@ -503,3 +525,4 @@ export class RepresentationMethodPath implements ActivityPurposeHandler {
     return result;
   }
 }
+import type {ActivityWorkTiming} from "../../activity/ActivityWorkTiming.js";

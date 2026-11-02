@@ -1,4 +1,6 @@
 import {randomUUID} from "node:crypto";
+const clockDomain=randomUUID();
+export function executionPerformanceClock():{clockDomain:string;monotonicMs:number}{return {clockDomain,monotonicMs:performance.now()};}
 
 export type PerformanceContext = Readonly<Record<string, string | number | boolean | null>>;
 export type ExecutionPerformanceEvent = {
@@ -16,12 +18,12 @@ export function beginExecutionTiming(sink: ExecutionPerformanceSink | undefined,
   if (!sink?.performance) return (_outcome: "ok" | "failed" | "unknown" = "ok", _counters?: Readonly<Record<string, number>>) => {};
   const id = randomUUID(), started = performance.now();
   const emit = (event: ExecutionPerformanceEvent) => {try {sink.performance?.(event);} catch { /* Observation is not execution. */ }};
-  emit({id, stage, context, kind: "started", occurredAt: new Date().toISOString()});
+  emit({id, stage, context:{...context,...executionPerformanceClock()}, kind: "started", occurredAt: new Date().toISOString()});
   let finished = false;
   return (outcome: "ok" | "failed" | "unknown" = "ok", counters?: Readonly<Record<string, number>>) => {
     if (finished) return;
     finished = true;
-    emit({id, stage, context, kind: "finished", outcome, durationMs: performance.now() - started, occurredAt: new Date().toISOString(),
+    emit({id, stage, context:{...context,...executionPerformanceClock()}, kind: "finished", outcome, durationMs: performance.now() - started, occurredAt: new Date().toISOString(),
       ...(counters ? {counters} : {})});
   };
 }

@@ -1,4 +1,5 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import {contextProcessObject as object,contextProcessRelationship as relationship} from "@agent-anything/context/evidence";
 import {ContextMethodInputSupply,inputSupplyResponsibility, SOURCE_MATERIAL_PUBLICATION_PURPOSE,CONTEXT_INPUT_PREPARATION_PURPOSE,REPRESENTATION_METHOD_PURPOSE,CONTEXT_INPUT_MATERIALIZATION_PURPOSE,
   type InputSupplyBinding, type InputSupplyHead, type InputSupplyRegistration,
   type InputSupplyResponsibility, type AcceptedInputSupplyResponsibility, type InputSupplyResponsibilityQuery,
@@ -111,15 +112,28 @@ export class InputSupplyResponsibilityDatabase {
           reject("target_already_owned");
         const entry:AcceptedInputSupplyResponsibility={...responsibility,needId:binding.needId,acceptanceId:acceptance.id};
         this.records.sql("INSERT INTO context_input_supply_responsibilities(need_id,id,path_id,intent_digest,relation,value,digest) VALUES(?,?,?,?,?,?,?)").run(binding.needId,entry.id,entry.target.pathId,entry.target.intentDigest,entry.relation,JSON.stringify(entry),modelInputValueDigest(entry));
+        const subject=object(OWNER,entry.id,binding.runId);
         this.records.fact(binding.runId,OWNER,entry.id,"responsibility_registered",{needId:binding.needId,consumerPathId:binding.consumerPathId,
-          sourceStageId:binding.source.stageId,acceptanceId:acceptance.id,role:entry.role,relation:entry.relation,target:entry.target});
+          sourceStageId:binding.source.stageId,acceptanceId:acceptance.id,role:entry.role,relation:entry.relation,target:entry.target},
+          {revision:"1",category:"responsibility",subject,state:{phase:"pending",status:"responsibility_registered"},related:[],relationships:[
+            ...[binding.needId,binding.consumerPathId,binding.source.stageId,entry.target.pathId,...(entry.target.workId?[entry.target.workId]:[])]
+              .map(id=>relationship("observes",subject,object("activity",id,binding.runId))),
+            relationship("settles",object("shared_acceptance",acceptance.id,acceptance.scope),subject),
+          ]});
         changed=true;
       }
       if(changed) {
         const head:InputSupplyHead={binding,scheduling,revision:(current?.revision??0)+1,acceptanceId:acceptance.id};
         this.records.sql("INSERT INTO context_input_supplies VALUES(?,?,?,?,?) ON CONFLICT(need_id) DO UPDATE SET revision=excluded.revision,value=excluded.value,digest=excluded.digest")
           .run(binding.needId,binding.runId,head.revision,JSON.stringify(head),modelInputValueDigest(head));
-        this.records.fact(binding.runId,OWNER,binding.needId,current?"membership_changed":"supply_registered",{binding,revision:head.revision,acceptanceId:acceptance.id});
+        const subject=object(OWNER,binding.needId,binding.runId),status=current?"membership_changed":"supply_registered";
+        this.records.fact(binding.runId,OWNER,binding.needId,status,{binding,revision:head.revision,acceptanceId:acceptance.id},
+          {revision:"1",category:"responsibility",subject,state:{phase:"pending",status},related:[],relationships:[
+            ...[binding.needId,binding.consumerPathId,binding.source.stageId,...(scheduling?[scheduling.workId]:[])]
+              .map(id=>relationship("observes",subject,object("activity",id,binding.runId))),
+            ...proposal.responsibilities.map(entry=>relationship("includes",subject,object(OWNER,entry.id,binding.runId))),
+            relationship("settles",object("shared_acceptance",acceptance.id,acceptance.scope),subject),
+          ]});
         this.changed(binding,head.revision,"membership");
       }
     },validate:(value,acceptance)=>{

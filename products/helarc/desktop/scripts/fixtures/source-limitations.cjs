@@ -78,7 +78,8 @@ async function main() {
       const facts=await a({kind:"facts",runId:run(id),after:0,limit:128});
       assert.equal(facts.filter(f=>f.kind==="dispatched").length,["captured","temporary"].includes(id)?1:0);
       assert.equal(facts.filter(f=>f.kind==="professional_stopped").length,id==="temporary"?0:1);
-      for(const fact of facts)observer.observe(fact);observer.observeStage(run(id),await stage(id));
+      for(const fact of facts)observer.observe(fact);
+      const observedStage=await stage(id);observer.observeStage(await a({kind:"read_path",pathId:observedStage.request.pathId}),observedStage);
     }
     await recorder.flush();const health=recorder.health();assert.equal(health.dropped,0);assert.equal(health.rejected,0);
     const selection=(await queries.query({kind:"get_snapshot",sourceId:recorder.source.sourceId,datasetId:recorder.manifest.datasetId})).selection;

@@ -5,6 +5,7 @@ import type { ExecutionFlowDefinition, ExecutionFlowSubjectRef } from "@agent-an
 export interface InspectionSelection { readonly sourceId: string; readonly datasetId: string; readonly watermark: number }
 export type InspectionViewQuery = "list_definitions" | "list_runs" | "list_records" | "get_hierarchy" | "get_lifecycle" | "get_data_flow" | "get_dependencies" | "get_scheduling" | "get_model_request" | "get_conversation_delivery" | "get_context_evidence" | "get_execution" | "get_timeline" | "get_telemetry";
 export type InspectionQuery =
+  | import("./InspectionMetricQuery.js").InspectionMetricQuery
   | { readonly kind: "list_sources" }
   | { readonly kind: "list_datasets"; readonly sourceId: string; readonly after?: string }
   | { readonly kind: "get_snapshot"; readonly sourceId: string; readonly datasetId: string; readonly watermark?: number }
@@ -12,7 +13,9 @@ export type InspectionQuery =
   | ({ readonly kind: "get_record"; readonly recordId: string } & InspectionSelection)
   | ({ readonly kind: "get_subject"; readonly subject: InspectionSubjectRef } & InspectionSelection)
   | ({ readonly kind: "get_content"; readonly contentId: string; readonly offset?: number; readonly length?: number } & InspectionSelection)
-  | InspectionFlowQuery;
+  | InspectionFlowQuery
+  | import("./InspectionProcessQuery.js").InspectionProcessQuery
+  | import("./InspectionProcessQuery.js").InspectionProcessScopeQuery;
 
 export type InspectionFlowQuery = InspectionSelection & ({readonly kind: "get_execution_flow"} | {readonly kind: "list_flow_occurrences"} | {readonly kind: "get_flow_occurrence"}) & {
   readonly runId: string;
@@ -63,6 +66,8 @@ export interface InspectionTimelineInterval { readonly id: string; readonly subj
   readonly markers:readonly {readonly label:string;readonly occurredAt:string;readonly recordId:string}[];
 }
 export interface InspectionReadResult {
+  readonly measurement?:import("./InspectionMetricQuery.js").InspectionMetricRead;
+  readonly process?: import("./InspectionProcessQuery.js").InspectionProcessRead;
   readonly kind: InspectionQuery["kind"];
   readonly selection: InspectionSelection | null;
   readonly coverage: InspectionCoverage | null;

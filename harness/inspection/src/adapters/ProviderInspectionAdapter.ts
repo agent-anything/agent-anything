@@ -6,6 +6,7 @@ import { modelInputSectionLocations } from "@agent-anything/model-interaction/in
 import type { ProviderObservation, ProviderObserver } from "@agent-anything/model-interaction/transport";
 import type { InspectionJson, InspectionLink, InspectionRecordInput, InspectionSubjectRef } from "../records/index.js";
 import type { InspectionRecorder } from "../recording/index.js";
+import {providerMeasurement} from "./ProviderMeasurement.js";
 
 type Link = NonNullable<InspectionRecordInput["links"]>[number];
 export function inspectionLink(kind: InspectionLink["kind"], from: InspectionSubjectRef, to: InspectionSubjectRef, details: Partial<Omit<Link, "from" | "to" | "kind">> = {}): Link {
@@ -23,6 +24,8 @@ export class ProviderInspectionAdapter implements ProviderObserver {
   constructor(private readonly recorder: InspectionRecorder) {}
   observe(value: ProviderObservation): void {
     const recorder = this.recorder;
+    const measurement=providerMeasurement(recorder,value);
+    if(measurement)recorder.offer(measurement);
     const run = value.runId ? recorder.ref("runtime", "run", value.runId, value.runId) : null;
     const request = recorder.ref("model-interaction", "request", value.requestId, value.runId);
     const attempt = recorder.ref("provider", "provider-attempt", value.attemptId, value.runId);

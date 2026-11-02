@@ -664,6 +664,18 @@ importers:
         specifier: 8.0.16
         version: 8.0.16(@types/node@25.9.1)(esbuild@0.28.0)
 
+  tooling/process-evaluation:
+    dependencies:
+      '@agent-anything/evaluation':
+        specifier: workspace:*
+        version: link:../../harness/evaluation
+      '@agent-anything/inspection':
+        specifier: workspace:*
+        version: link:../../harness/inspection
+      electron:
+        specifier: ^42.4.0
+        version: 42.4.0
+
   tooling/test-support:
     dependencies:
       '@agent-anything/action-execution':

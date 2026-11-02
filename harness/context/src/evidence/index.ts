@@ -18,3 +18,5 @@ export {
   type EvidenceSettlementFailure,
   type EvidenceSettlementResult,
 } from "./EvidenceSettlement.js";
+export type { ContextProcessObjectRef, ContextProcessRelationship, ContextProcessEvidence } from "./ContextProcessEvidence.js";
+export { contextProcessObject, contextProcessRelationship, validateContextProcessEvidence } from "./ContextProcessEvidence.js";

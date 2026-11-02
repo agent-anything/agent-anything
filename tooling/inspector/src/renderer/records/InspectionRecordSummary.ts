@@ -2,6 +2,12 @@ import type { InspectionPayload } from "@agent-anything/inspection/records";
 
 export function payloadSummary(payload: InspectionPayload): string {
   switch (payload.kind) {
+    case "evaluation_report": return `${payload.comparison} / ${payload.reportId} / ${payload.status}`;
+    case "process_evidence": return `${payload.category} / ${payload.name}${payload.status ? ` / ${payload.status}` : ""}`;
+    case "process_relationship": return `Recorded relation / ${payload.ordinal + 1} of ${payload.total}`;
+    case "work_timing": return `${payload.phase} / ${payload.boundary}${payload.durationMs === null ? "" : ` / ${Math.round(payload.durationMs)} ms`}`;
+    case "work_measurement": return payload.data.kind==="quantity"?`${payload.data.metric} / ${payload.data.evidence} / ${payload.data.value??"unknown"} ${payload.data.unit}`:
+      payload.data.kind==="attempt"?`Physical attempt / ${payload.data.boundary} / ${payload.data.status}`:`Responsibility / ${payload.data.state}`;
     case "recording_link": return `Recovery recording / ${payload.target ? "previous recording registered" : payload.limitation ?? "unavailable"}`;
     case "context_planning": return `Context ${payload.disposition} / ${payload.measurement} / ${payload.inputTokens === null ? "input tokens unknown" : `${payload.inputTokens} input tokens`}`;
     case "working_view": return `Working input / ${payload.selectionCount} selections / ${payload.groupCount} native groups / ${payload.stage}`;

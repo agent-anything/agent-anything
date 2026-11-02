@@ -7,6 +7,7 @@ import {activityCount, activityToken, activityFactSourceId, activityStageEvidenc
   type ActivityStageRequest, type ActivityStageState, type ActivityAttempt, type ActivityRawResult,
   type ActivityProcessingReceipt, type ActivitySettlementReceipt, type ActivityProcessingClaim, type ActivityHandoffItem, type ActivityHandoffFact,type ActivityInputNeed} from "@agent-anything/agent-runtime/activity";
 import type {ExecutionContentRoot} from "./ExecutionContent.js";
+import {isImmutableExecutionContent} from "./ExecutionContent.js";
 import {SharedAcceptanceRejection, type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
 import {ActivitySchedulingDatabase,ACTIVITY_SCHEDULING_SCHEMA} from "./ActivitySchedulingDatabase.js";
 import {ActivityReconsiderationDatabase,ACTIVITY_RECONSIDERATION_SCHEMA,PENDING_RECONSIDERATION_FACTS_SQL} from "./ActivityReconsiderationDatabase.js";
@@ -60,6 +61,8 @@ export class ActivityHandoffDatabase {
   private readonly statements = new Map<string, Database.Statement>();
   private observationCursor: number | null = null;
   private currentPreparation:PreparedContent|null=null;
+  private readonly immutableDigests=new WeakMap<object,string>();
+  private readonly contentDigests=new Map<string,string>();
   private readonly acceptanceContent=new WeakMap<object,{bodies:Map<string,unknown>;digests:Map<unknown,string>}>();
   private readonly scheduling:ActivitySchedulingDatabase;
   private readonly reconsideration:ActivityReconsiderationDatabase;
@@ -284,15 +287,16 @@ export class ActivityHandoffDatabase {
     // Content completion precedes publication. Execution content is not collected while this store exists.
     const staged = new Map<unknown, string>();
     const bodies=new Map<string,unknown>(),digests=new Map<unknown,string>();
-    const remember=(root:string,value:unknown)=>{bodies.set(root,value);digests.set(value,modelInputValueDigest(value));};
+    const remember=(root:string,value:unknown)=>{bodies.set(root,value);digests.set(value,this.contentDigest(root,value));};
     const prepare = (value: unknown) => {const root = JSON.stringify(this.retain(value)); staged.set(value, root);remember(root,value); return root;};
     const warm=(root:string|null)=>{if(root===null)return null;if(!bodies.has(root))remember(root,this.hydrate(JSON.parse(root)));return bodies.get(root);};
     const visited=new Set<string>();
     const path=(id:string)=>{const row=this.sql("SELECT progress FROM activity_paths WHERE id=?").get(id) as {progress:string|null}|undefined;if(row)warm(row.progress);};
-    const stage=(id:string)=>{
+    const stage=(id:string,readOnly=false)=>{
       if(visited.has(id))return;visited.add(id);
       const row=this.sql("SELECT * FROM activity_stages WHERE id=?").get(id) as StageRow|undefined;if(!row)return;
-      const request=warm(row.request) as ActivityStageRequest;digests.set(request.input,modelInputValueDigest(request.input));path(row.path_id);
+      const request=warm(row.request) as ActivityStageRequest;
+      if(!readOnly){digests.set(request.input,this.digest(request.input));path(row.path_id);}
       for(const [table,key] of [["activity_raw_results",row.result_id],["activity_processing_receipts",row.receipt_id]] as const){
         if(key){const value=this.sql(`SELECT value FROM ${table} WHERE id=?`).get(key) as {value:string}|undefined;if(value)warm(value.value);}
       }
@@ -308,7 +312,7 @@ export class ActivityHandoffDatabase {
       else {const need=this.inputNeed(command.subscription.binding.id);if(need)path(need.stage.pathId);}
     }
     if(command.kind==="reserve_resources")stage(command.reservation.requestId);
-    if("requestId" in command)stage(command.requestId);
+    if("requestId" in command)stage(command.requestId,command.kind==="read_stage");
     if(command.kind==="open_path")path(command.intent.id);
     if(command.kind==="dispatch") {
       stage(command.attempt.requestId);
@@ -353,7 +357,23 @@ export class ActivityHandoffDatabase {
     if(this.db.inTransaction)fail("content_not_prepared");
     return this.hydrate(JSON.parse(root));
   }
-  private digest(value:unknown):string{return this.currentPreparation?.digests.get(value)??modelInputValueDigest(value);}
+  private digest(value:unknown):string {
+    const prepared=this.currentPreparation?.digests.get(value);if(prepared!==undefined)return prepared;
+    // Only reuse a pure calculation for a content-owned, deeply immutable identity.
+    const immutable=isImmutableExecutionContent(value),known=immutable?this.immutableDigests.get(value):undefined;
+    if(known!==undefined)return known;
+    const digest=modelInputValueDigest(value);if(immutable)this.immutableDigests.set(value,digest);return digest;
+  }
+  private contentDigest(root:string,value:unknown):string {
+    // Hydration has already validated this immutable content graph. A root cache
+    // keeps only the calculation, not the large decoded graph or its availability.
+    if(!isImmutableExecutionContent(value))return this.digest(value);
+    let digest=this.contentDigests.get(root);
+    if(digest===undefined)digest=this.digest(value);
+    this.contentDigests.delete(root);this.contentDigests.set(root,digest);
+    if(this.contentDigests.size>256)this.contentDigests.delete(this.contentDigests.keys().next().value!);
+    this.immutableDigests.set(value,digest);return digest;
+  }
   private same(left:unknown,right:unknown):void{if(this.digest(left)!==this.digest(right))fail("identity_conflict");}
 
   private execute(command: ActivityHandoffCommand, prepared: (value: unknown) => string): ActivityHandoffValue {
@@ -656,7 +676,8 @@ export class ActivityHandoffDatabase {
         this.closeHandoff(stage.request.id,"settlement");
         this.fact(path.intent,stage.request.id,"settled",{receiptId:receipt.id,resultId:receipt.resultId,controlRevision:path.controlRevision});
         this.reconsideration.publish({id:`${receipt.id}:settled`,sourceId:activityFactSourceId("progress",path.intent.id),
-          ref:{owner:path.intent.owner,kind:"result_settled",id:stage.request.id,revision:receipt.id}});
+          ref:{owner:path.intent.owner,kind:"result_settled",id:stage.request.id,revision:receipt.id},
+          origin:{stageId:stage.request.id,acceptanceId:receipt.id}});
         return this.stage(stage.request.id);
       }
       case "cancel": {
@@ -753,7 +774,7 @@ export class ActivityHandoffDatabase {
     if (!row) return null;
     const request = this.body(row.request) as ActivityStageRequest;
     if(!Number.isSafeInteger(row.raw_evidence_revision)||row.raw_evidence_revision<0)fail("corrupt");
-    if (row.digest !== this.digest(request) || request.id !== row.id || request.pathId !== row.path_id) fail("corrupt");
+    if (row.digest !== this.contentDigest(row.request,request) || request.id !== row.id || request.pathId !== row.path_id) fail("corrupt");
     return {request, status:row.status, attempt:row.attempt_id ? this.requireAttempt(row.attempt_id) : null,
       result:row.result_id ? this.value<ActivityRawResult>("activity_raw_results", row.result_id, true) : null,
       receipt:row.receipt_id ? this.value<ActivityProcessingReceipt>("activity_processing_receipts", row.receipt_id, true) : null,
@@ -799,7 +820,7 @@ export class ActivityHandoffDatabase {
     const row = this.sql(`SELECT value,digest FROM ${table} WHERE id=?`).get(id) as ValueRow | undefined;
     if (!row) return null;
     const value = packed ? this.body(row.value) : JSON.parse(row.value);
-    if (this.digest(value) !== row.digest) fail("corrupt");
+    if ((packed?this.contentDigest(row.value,value):this.digest(value)) !== row.digest) fail("corrupt");
     return value as T;
   }
   private handoff(path: ActivityPathState, requestId: string, kind: ActivityHandoffItem["kind"],reopen=false): void {
@@ -864,7 +885,7 @@ export class ActivityHandoffDatabase {
     this.recordFact(intent.runId,intent.id,requestId,kind,details);
   }
   private recordFact(runId:string,pathId:string,requestId:string|null,kind:ActivityHandoffFact["kind"],details:Readonly<Record<string,unknown>>): void {
-    const fact = {runId,pathId,requestId,kind,occurredAt:new Date().toISOString(),details};
+    const fact = {runId,pathId,requestId,kind,occurredAt:new Date().toISOString(),clock:captureActivityClock(),details};
     this.sql("INSERT INTO activity_facts(run_id,path_id,request_id,kind,occurred_at,value,digest) VALUES (?,?,?,?,?,?,?)")
       .run(fact.runId,fact.pathId,fact.requestId,fact.kind,fact.occurredAt,JSON.stringify(fact),modelInputValueDigest(fact));
   }
@@ -893,3 +914,4 @@ export class ActivityHandoffDatabase {
   }
 }
 function fail(code: string): never {throw Object.assign(new Error(`activity_${code}`), {code: `activity_${code}`});}
+import {captureActivityClock} from "@agent-anything/agent-runtime/activity";

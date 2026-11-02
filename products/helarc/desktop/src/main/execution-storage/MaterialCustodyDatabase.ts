@@ -8,6 +8,7 @@ import type {ContextAcceptancePart} from "@agent-anything/context/selection";
 import {SharedAcceptanceRejection,type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
 import {ContextFoundationRecords,checkedJson,requireSame} from "./ContextFoundationRecords.js";
 import {snapshotContextMaterialRef} from "@agent-anything/context/material";
+import {contextProcessObject as object,contextProcessRelationship as relation,type ContextProcessRelationship} from "@agent-anything/context/evidence";
 
 export const MATERIAL_CUSTODY_SCHEMA=`
 CREATE TABLE material_custodies(sequence INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,instance_id TEXT NOT NULL UNIQUE,run_id TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL,cleanup_id TEXT,manifest TEXT,manifest_digest TEXT);
@@ -111,7 +112,13 @@ export class MaterialCustodyDatabase {
             !containsMaterialRange(grant.range,hold.range))
             fail("material_access_admission_invalid");
           this.grant(grant,null);this.acquire(hold);
-          this.records.fact(grant.recipient.runId,"material_custody",grant.id,"access_admitted",{source,grant,hold,reference:materialViewReference(hold.range,state.version!)});
+          const reference=materialViewReference(hold.range,state.version!),subject=object("material_custody",grant.id,grant.recipient.runId);
+          this.observe(grant.recipient.runId,grant.id,"access_admitted",{source,grant,hold,reference},[
+            relation("observes",subject,object("material_custody",source.holdId,source.recipient.runId)),
+            relation("produces",subject,object("material_custody",hold.id,hold.consumer.runId)),
+            relation("includes",object("material_custody",grant.range.materialId,null,grant.range.version),subject),
+            relation("includes",object("context-material",reference.id,null,reference.revision),subject),
+          ],"pending");
         } else {
           for(const hold of part.proposal.acquire) this.acquire(hold);
           for(const id of part.proposal.release) this.release(id,part.proposal.basis);
@@ -225,7 +232,10 @@ export class MaterialCustodyDatabase {
     const state=this.instance(hold.instanceId);if(!state || state.state!=="published")fail("material_unavailable");
     this.range(state.version!,hold.range);this.authorized(hold.instanceId,hold.range,hold.consumer);
     this.records.sql("INSERT INTO material_holds VALUES (?,?,?,?,?,NULL,?,?)").run(hold.id,hold.instanceId,hold.consumer.runId,JSON.stringify(hold),modelInputValueDigest(hold),materialViewReferenceId(hold.range),recipientKey(hold.consumer));
-    this.records.fact(hold.consumer.runId,"material_custody",hold.id,"hold_acquired",{instanceId:hold.instanceId,responsibility:hold.responsibility,range:hold.range,basis:hold.basis});
+    this.observe(hold.consumer.runId,hold.id,"hold_acquired",{hold,instanceId:hold.instanceId,responsibility:hold.responsibility,range:hold.range,basis:hold.basis},[
+      relation("observes",object("material_custody",hold.id,hold.consumer.runId),object("material_custody",hold.instanceId,state.intent.version.origin.runId)),
+      relation("observes",object("material_custody",hold.id,hold.consumer.runId),object("material_custody",hold.range.materialId,null,hold.range.version)),
+    ],"pending");
   }
   private release(id:string,basis:string):void {
     custodyToken(basis);
@@ -235,7 +245,10 @@ export class MaterialCustodyDatabase {
     const hold=checkedJson<MaterialHold>(old);
     if(!this.mayRelease(hold))fail("material_consumer_still_active");
     this.records.sql("UPDATE material_holds SET released=? WHERE id=?").run(basis,id);
-    this.records.fact(hold.consumer.runId,"material_custody",id,"hold_released",{basis,instanceId:hold.instanceId});
+    const state=this.instance(hold.instanceId)!;
+    this.observe(hold.consumer.runId,id,"hold_released",{basis,hold,instanceId:hold.instanceId},[
+      relation("observes",object("material_custody",id,hold.consumer.runId),object("material_custody",hold.instanceId,state.intent.version.origin.runId)),
+    ],"settled");
   }
   private grant(grant:MaterialGrant,expected:number|null):void {
     [grant.id,grant.basis,grant.recipient.runId,grant.recipient.recipient,grant.recipient.purpose].forEach(custodyToken);custodyCount(grant.revision);
@@ -246,6 +259,10 @@ export class MaterialCustodyDatabase {
     if(old){const previous=checkedJson<MaterialGrant>(old);if(previous.instanceId!==grant.instanceId || recipientKey(previous.recipient)!==recipientKey(grant.recipient))fail("material_grant_identity_invalid");}
     this.records.sql("INSERT INTO material_grants VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,value=excluded.value,digest=excluded.digest")
       .run(grant.id,grant.instanceId,recipientKey(grant.recipient),grant.revision,JSON.stringify(grant),modelInputValueDigest(grant));
+    this.observe(grant.recipient.runId,grant.id,"grant_changed",{grant,previousRevision:expected},[
+      relation("observes",object("material_custody",grant.id,grant.recipient.runId),object("material_custody",grant.instanceId,state.intent.version.origin.runId)),
+      relation("observes",object("material_custody",grant.id,grant.recipient.runId),object("material_custody",grant.range.materialId,null,grant.range.version)),
+    ],"pending");
   }
   private authorized(instanceId:string,range:MaterialRange,recipient:MaterialRecipient):void {
     const rows=this.records.sql("SELECT value,digest FROM material_grants WHERE instance_id=? AND recipient_key=?").all(instanceId,recipientKey(recipient)) as {value:string;digest:string}[];
@@ -281,7 +298,7 @@ export class MaterialCustodyDatabase {
     const page=bytes.subarray(0,end-offset);
     let text:string|null=null;
     if(textual){try{text=new TextDecoder("utf-8",{fatal:true}).decode(page);}catch{fail("material_encoding_invalid");}}
-    this.records.fact(access.recipient.runId,"material_custody",access.id,"read",{instanceId:state.intent.instanceId,start:offset,end,purpose:access.recipient.purpose});
+    this.observeAccess(access,state,"read",{start:offset,end});
     return {version,instanceId:state.intent.instanceId,start:offset,end,bytesBase64:page.toString("base64"),text,next:end<access.range.end?end:null};
   }
   private search(request:MaterialSearchRequest):MaterialSearchPage {
@@ -317,7 +334,7 @@ export class MaterialCustodyDatabase {
     if(complete)stop="range_end";
     const result={version:state.version!.ref,matches,scanned:{start,end:position},complete,
       next:complete?null:Buffer.from(JSON.stringify({binding,position})).toString("base64url"),stop};
-    this.records.fact(request.recipient.runId,"material_custody",request.id,"search",{instanceId:state.intent.instanceId,range:request.range,query:request.query,caseMode:request.caseMode,scanned:result.scanned,complete,stop,matches:matches.length});
+    this.observeAccess(request,state,"search",{query:request.query,caseMode:request.caseMode,scanned:result.scanned,complete,stop,matches:matches.length});
     return result;
   }
   private readStructure(command:Extract<MaterialCustodyCommand,{kind:"read_structure"}>):MaterialCustodyValue {
@@ -335,7 +352,7 @@ export class MaterialCustodyDatabase {
       value=(value as Record<string,unknown>)[part];
     }
     if(Buffer.byteLength(JSON.stringify(value))>command.maximumResultBytes)fail("material_structure_result_budget");
-    this.records.fact(command.access.recipient.runId,"material_custody",command.access.id,"structure_read",{instanceId:state.intent.instanceId,path:command.path,sourceRange:command.access.range});
+    this.observeAccess(command.access,state,"structure_read",{path:command.path,sourceRange:command.access.range});
     return {version,instanceId:state.intent.instanceId,path:command.path,value,sourceRange:command.access.range,coordinate:"json_path",complete:true};
   }
   searchFrontier():number {
@@ -405,7 +422,24 @@ export class MaterialCustodyDatabase {
     })();
   }
   private fact(state:MaterialCustodyState,kind:string,details:Readonly<Record<string,unknown>>):void {
-    this.records.fact(state.intent.version.origin.runId,"material_custody",state.intent.instanceId,kind,{version:state.intent.version.ref,origin:state.intent.version.origin,...details});
+    const {origin,ref}=state.intent.version,subject=object("material_custody",state.intent.instanceId,origin.runId);
+    this.observe(origin.runId,state.intent.instanceId,kind,{version:ref,origin,...details},[
+      relation("observes",subject,object(origin.owner,origin.recordId,origin.runId,origin.revision)),
+      relation("includes",object("material_custody",ref.materialId,null,ref.version),subject),
+      relation("observes",subject,object("activity",state.intent.activityId,origin.runId)),
+    ],kind==="content_deleted"?"settled":"pending");
+  }
+  private observeAccess(access:MaterialAccess,state:MaterialCustodyState,kind:string,details:Readonly<Record<string,unknown>>):void {
+    const subject=object("material_custody",access.id,access.recipient.runId);
+    this.observe(access.recipient.runId,access.id,kind,{...details,instanceId:state.intent.instanceId,range:access.range,recipient:access.recipient,holdId:access.holdId,purpose:access.recipient.purpose},[
+      relation("observes",subject,object("material_custody",state.intent.instanceId,state.intent.version.origin.runId)),
+      relation("observes",subject,object("material_custody",access.range.materialId,null,access.range.version)),
+      relation("observes",subject,object("material_custody",access.holdId,access.recipient.runId)),
+    ]);
+  }
+  private observe(runId:string,id:string,kind:string,details:Readonly<Record<string,unknown>>,relationships:readonly ContextProcessRelationship[],phase:"pending"|"settled"|null=null):void {
+    this.records.fact(runId,"material_custody",id,kind,details,{revision:"1",category:"material",subject:object("material_custody",id,runId),
+      state:phase?{phase,status:kind}:null,related:[],relationships});
   }
 }
 function recipientKey(recipient:MaterialRecipient):string{return JSON.stringify([recipient.runId,recipient.recipient,recipient.purpose]);}

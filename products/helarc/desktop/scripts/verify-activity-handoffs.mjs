@@ -129,6 +129,7 @@ try {
     assert.equal(second.messages.filter(m=>m.role==="assistant"&&m.tool_calls?.some(c=>c.function.name==="update_plan")).length,1);
   }
   const verification=JSON.parse(await readFile(join(directory,"verification.json"),"utf8"));
+  try{verification.processMetrics=JSON.parse(await readFile(join(directory,"process-metrics.json"),"utf8"));}catch(error){if(error.code!=="ENOENT")throw error;}
   if(taskAuthorization) {
     assert.equal(verification.authorization.recoveredBoundaries,7);
     assert.equal(verification.authorization.restrictions.length,3);

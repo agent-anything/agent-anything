@@ -24,6 +24,10 @@ const hashPattern = /^[a-f0-9]{64}$/;
 const immutableValues = new WeakSet<object>();
 const validatedImmutableShapes = new WeakSet<object>();
 
+export function isImmutableExecutionContent(value:unknown):value is object {
+  return value!==null&&typeof value==="object"&&immutableValues.has(value);
+}
+
 /** Call after encoding validation; keep only locally proven immutable identities. */
 export function snapshotEncodedExecutionContent<T>(value: T): T {
   const copies = new WeakMap<object, object>();
@@ -343,6 +347,14 @@ export class ExecutionContentCache {
 
   constructor(private readonly maxBytes = 8 * 1024 * 1024, private readonly maxEntries = 4096,
     readonly statistics = new ExecutionContentStatistics()) {}
+
+  /** Transport bytes only. A fresh owner response must establish the requested root. */
+  verifiedBlock(id: string): ExecutionContentBlock | undefined {
+    const entry = this.entries.get(id);
+    if (!entry) return undefined;
+    this.entries.delete(id); this.entries.set(id, entry);
+    return {id, text: entry.text};
+  }
 
   parse(block: ExecutionContentBlock): Block {
     const previous = this.entries.get(block.id);

@@ -36,6 +36,19 @@ function claim(send:ReturnType<typeof open>["send"]) {
   send({kind:"claim_processing",claim:{id:"claim:1",requestId:request.id,previousClaimId:null,executor},expectedControlRevision:0});
 }
 describe("durable activity handoff", () => {
+  it("does not reuse mutable stage state or stored integrity decisions with immutable value digests",()=>{
+    const f=open();seed(f.send);
+    expect(f.send({kind:"read_stage",requestId:request.id})).toMatchObject({status:"dispatched",result:null});
+    f.send({kind:"save_raw",result});
+    expect(f.send({kind:"read_stage",requestId:request.id})).toMatchObject({status:"raw_result",result});
+    const raw=new SqliteDatabase(join(f.directory,"execution.sqlite"));
+    try{raw.prepare("UPDATE activity_stages SET digest='changed' WHERE id=?").run(request.id);
+      expect(()=>f.send({kind:"read_stage",requestId:request.id})).toThrow(/corrupt/);
+      const changed=f.db.retainContent({...request,input:{source:"different retained bytes"}});
+      raw.prepare("UPDATE activity_stages SET request=?,digest=? WHERE id=?").run(JSON.stringify(changed),modelInputValueDigest(request),request.id);
+      expect(()=>f.send({kind:"read_stage",requestId:request.id})).toThrow(/corrupt/);
+    }finally{raw.close();}
+  });
   it("resumes a same-stage retry without replacing input, failure evidence or cumulative attempts",()=>{
     const f=open(),retryPurpose=registry.register({...purpose.contract,ref:{id:"retryable",revision:"1"},
       attemptRetry:{ref:{id:"technical",revision:"1"},stageKinds:["generate"],maximumAttempts:2}},null);

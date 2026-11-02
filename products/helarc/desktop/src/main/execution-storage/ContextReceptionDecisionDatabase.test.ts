@@ -62,6 +62,11 @@ describe("recipient option joint acceptance",()=>{
     expect(f.reopen().query({kind:"latest",scopeId:f.scope.id})?.input.receptionOptions![0]!.members).toEqual(f.input.receptionOptions![0]!.members);
     const fact=f.records.facts(f.scope.runId,0,32).find(f=>f.kind==="decision_accepted")!;
     expect(fact.details.receptionOptions).toEqual(f.input.receptionOptions);
+    expect(fact.evidence).toMatchObject({revision:"1",category:"decision",subject:{owner:"context-representation",id:decision.id,runId:"root"},state:{phase:"settled",status:"decision_accepted"}});
+    for(const id of ["path-a","path-b","work-a","work-b"])
+      expect(fact.evidence!.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:expect.objectContaining({id})}));
+    expect(fact.evidence!.relationships).toContainEqual(expect.objectContaining({kind:"observes",to:{owner:"context_preparation_policy",id:decision.id,runId:"root",revision:digest(f.reopen().query({kind:"latest",scopeId:f.scope.id}))}}));
+    expect(new ContextFoundationRecords(f.db as never).facts(f.scope.runId,0,32)).toEqual(f.records.facts(f.scope.runId,0,32));
   });
   it.each(["cancelled","request_changed","work_changed","authority_changed"])("rejects the second producer when %s, atomically",kind=>{
     const f=fixture(),old=f.paths.get("path-b")!;
@@ -87,5 +92,13 @@ describe("recipient option joint acceptance",()=>{
     const f=fixture();
     expect(()=>f.accept(f.input,f.plan,()=>{f.paths.set("path-b",{...f.paths.get("path-b")!,cancelled:true});})).toThrow("producer_binding_changed");
     expect(f.reopen().query({kind:"latest",scopeId:f.scope.id})).toBeNull();expect(f.records.facts(f.scope.runId,0,32)).toEqual([]);
+  });
+  it("rejects a correctly hashed evidence descriptor bound to another Run",()=>{
+    const f=fixture();f.accept();
+    const fact=f.records.facts(f.scope.runId,0,32)[0]!;
+    const {sequence,...value}=fact;
+    const tampered={...value,evidence:{...fact.evidence!,subject:{...fact.evidence!.subject,runId:"child"}}};
+    f.db.prepare("UPDATE context_foundation_facts SET value=?,digest=? WHERE sequence=?").run(JSON.stringify(tampered),digest(tampered),sequence);
+    expect(()=>new ContextFoundationRecords(f.db as never).facts(f.scope.runId,0,32)).toThrow("context_fact_evidence_scope_invalid");
   });
 });

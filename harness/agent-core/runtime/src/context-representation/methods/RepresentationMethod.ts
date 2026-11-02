@@ -31,6 +31,7 @@ export interface MethodSource {
 export interface MethodRequirement {readonly id:string;readonly revision:string;readonly basis:string;readonly description:string;}
 export interface MethodRelationship {readonly id:string;readonly sources:readonly string[];readonly basis:string;readonly description:string;readonly requiresCommonEvidence:boolean;}
 export interface InheritedMethodCheck {
+  readonly runId:string;
   readonly producerPathId:string;readonly requestDigest:string;readonly assessments:readonly MethodAssessment[];
   readonly objective:string;readonly sourceRanges:readonly MaterialRange[];readonly requirements:readonly MethodRequirement[];
   readonly requirementBindings:readonly {readonly originalId:string;readonly combinedId:string}[];
@@ -39,6 +40,7 @@ export interface InheritedMethodCheck {
     readonly losses:readonly RepresentationLoss[];readonly unknowns:readonly MethodUnknown[]}[];
 }
 export interface CombinationProducerEvidence {
+  readonly runId:string;
   readonly pathId:string;readonly requestDigest:string;readonly sourceBoundary:string;
   readonly sources:readonly {readonly originalAlias:string;readonly combinedAlias:string}[];
   readonly requirements:readonly {readonly originalId:string;readonly combinedId:string}[];
@@ -183,7 +185,7 @@ export function validateRepresentationMethodRequest(value:RepresentationMethodRe
       new Set(qualified.map(c=>modelInputValueDigest(c.representation))).size!==qualified.length||
       new Set(checks.flatMap(c=>c.requirementBindings.map(b=>b.combinedId))).size!==checks.reduce((n,c)=>n+c.requirementBindings.length,0))
       throw new TypeError("representation_inherited_check_binding_invalid");
-    for(const inherited of checks)if(!inherited.producerPathId||!inherited.requestDigest||!inherited.assessments.length||
+    for(const inherited of checks)if(!inherited.producerPathId||!inherited.runId||!inherited.requestDigest||!inherited.assessments.length||
       new Set(inherited.assessments.map(a=>a.id)).size!==inherited.assessments.length||
       inherited.assessments.some(a=>!a.supported||a.scope!=="both"||a.judgmentIds.length!==1)||inherited.requirementBindings.length!==inherited.requirements.length||
       new Set(inherited.requirementBindings.map(b=>b.originalId)).size!==inherited.requirements.length||
@@ -193,11 +195,11 @@ export function validateRepresentationMethodRequest(value:RepresentationMethodRe
       inherited.candidates.some(c=>!value.sources.some(s=>s.alias===c.qualifiedSource&&s.role==="source"&&s.originalRole==="qualified_representation"&&
         modelInputValueDigest(s.representation)===modelInputValueDigest(c.representation))))throw new TypeError("representation_inherited_check_binding_invalid");
     const producers=combination.producers??[],equal=(a:unknown,b:unknown)=>modelInputValueDigest(a)===modelInputValueDigest(b);
-    if(new Set(producers.map(p=>p.pathId)).size!==producers.length||producers.some(p=>!p.pathId||!p.requestDigest||!p.sourceBoundary||
+    if(new Set(producers.map(p=>p.pathId)).size!==producers.length||producers.some(p=>!p.pathId||!p.runId||!p.requestDigest||!p.sourceBoundary||
       !p.candidates.length||p.candidates.some(c=>!combination.subjects.some(s=>equal(s,c.representation)))||
       p.sources.some(s=>!s.originalAlias||!value.sources.some(v=>v.alias===s.combinedAlias))||
       p.requirements.some(r=>!r.originalId||!value.requirements.some(v=>v.id===r.combinedId)))||
-      producers.length&&checks.some(c=>!producers.some(p=>p.pathId===c.producerPathId&&p.requestDigest===c.requestDigest&&equal(p.requirements,c.requirementBindings))))
+      producers.length&&checks.some(c=>!producers.some(p=>p.pathId===c.producerPathId&&p.runId===c.runId&&p.requestDigest===c.requestDigest&&equal(p.requirements,c.requirementBindings))))
       throw new TypeError("representation_combination_producer_binding_invalid");
   }
   for(const key of ["readBytes","storedBytes","modelCalls","repairs","levels","pageBytes","ranges"] as const)if(!Number.isSafeInteger(value.bounds[key])||value.bounds[key]<0)throw new TypeError("representation_bound_invalid");

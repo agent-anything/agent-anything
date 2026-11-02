@@ -206,6 +206,9 @@ export function expectedArchitectureForPath(repoRoot, packageRoot) {
   if (path === "tooling/inspector") {
     return architecture("tooling", "inspector");
   }
+  if (path === "tooling/process-evaluation") {
+    return architecture("tooling", "process-evaluation");
+  }
 
   throw new Error(
     `Workspace package location '${path}' is not an accepted Harness, Product, or Tooling package.`,

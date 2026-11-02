@@ -8,10 +8,12 @@ export class InspectionQueryService {
   private readonly readers: ReadWorker[] = [];
   private nextId = 0;
   private closed = false;
+  private readonly terminating=new Set<Promise<number>>();
+  private terminate(worker:Worker):Promise<number>{const done=worker.terminate();this.terminating.add(done);void done.then(()=>this.terminating.delete(done),()=>this.terminating.delete(done));return done;}
   constructor(private readonly root = defaultInspectionRoot()) {}
   query(input: InspectionQuery, signal?: AbortSignal): Promise<InspectionReadResult> {
     const query = validateInspectionQuery(input);
-    if (this.closed || signal?.aborted) return Promise.reject(new Error("inspection_source_unavailable"));
+    if (this.closed || signal?.aborted) return Promise.reject(new Error(signal?.aborted?"inspection_query_cancelled":"inspection_source_unavailable"));
     let reader = this.readers.find((item) => !item.busy);
     if (!reader && this.readers.length < 2) {
       reader = { worker: new Worker(new URL("./InspectionQueryWorker.js", import.meta.url), { workerData: { root: this.root } }), busy: false };
@@ -28,7 +30,7 @@ export class InspectionQueryService {
         clearTimeout(timeout); signal?.removeEventListener("abort", abort);
         current.worker.off("message", message); current.worker.off("error", error); current.worker.off("exit", error);
         current.busy = false;
-        if (recycle) { const index = this.readers.indexOf(current); if (index >= 0) this.readers.splice(index, 1); void current.worker.terminate(); }
+        if (recycle) { const index = this.readers.indexOf(current); if (index >= 0) this.readers.splice(index, 1); void this.terminate(current.worker); }
         if (code) reject(new Error(code)); else resolve(result!);
       };
       const message = (reply: { id: number; code?: string; result?: InspectionReadResult }) => { if (reply.id === id) finish(reply.code, reply.result); };
@@ -41,5 +43,5 @@ export class InspectionQueryService {
       try { current.worker.postMessage({ id, query }); } catch { error(); }
     });
   }
-  async close(): Promise<void> { this.closed = true; for (const reader of this.readers.splice(0)) { reader.cancel?.(); await reader.worker.terminate(); } }
+  async close(): Promise<void> { this.closed = true; for (const reader of this.readers.splice(0)) { if(reader.cancel)reader.cancel();else void this.terminate(reader.worker); } await Promise.allSettled([...this.terminating]); }
 }

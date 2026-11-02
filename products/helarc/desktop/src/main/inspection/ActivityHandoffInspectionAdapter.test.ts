@@ -1,18 +1,68 @@
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {expect, it} from "vitest";
-import type {ActivityStageState} from "@agent-anything/agent-runtime/activity";
+import {expect, it, vi} from "vitest";
+import type {ActivityPathState,ActivityPurposeContract,ActivityStageState} from "@agent-anything/agent-runtime/activity";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import {createActivityWorkTiming} from "@agent-anything/agent-runtime/activity";
 import {InspectionQueryService} from "@agent-anything/inspection/query";
 import {HelarcInspection} from "./HelarcInspection.js";
 import {ActivityHandoffInspectionAdapter} from "./ActivityHandoffInspectionAdapter.js";
+import {TASK_MODEL_RESPONSE_PURPOSE} from "@agent-anything/agent-runtime/decision";
+import {SOURCE_MATERIAL_PUBLICATION_PURPOSE} from "@agent-anything/agent-runtime/context-representation";
+
+it("replays every original fact but reads a current stage only once per bounded page",async()=>{
+  const records:import("@agent-anything/inspection/records").InspectionRecordInput[]=[];
+  const recorder={ref:(owner:string,kind:string,id:string,runId:string|null,revision:string|null=null)=>
+    ({sourceId:"source",datasetId:"dataset",owner,kind,id,runId,revision}),offerWhenReady:async(record:typeof records[number])=>{records.push(record);return true;}};
+  const observer=new ActivityHandoffInspectionAdapter(recorder as unknown as import("@agent-anything/inspection/recording").InspectionRecorder);
+  const original=vi.spyOn(observer as unknown as {stageRecords:()=>Generator<typeof records[number]>},"stageRecords").mockImplementation(function*(){});
+  const facts=["stage_submitted","raw_saved","accepted","settled"].map((kind,index)=>({sequence:index+1,runId:"run",pathId:"path",requestId:"stage",kind,
+    occurredAt:"2026-11-02T00:00:00Z",details:{}}));
+  const command=vi.fn(async(input:import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand)=>{
+    if(input.kind==="facts")return facts;
+    if(input.kind==="read_stage")return {request:{id:"stage",pathId:"path"},status:"accepted"};
+    if(input.kind==="read_path")return {intent:{id:"path",runId:"run"}};
+    throw new Error("Unexpected replay access");
+  });
+  await observer.replay("run",{command} as import("@agent-anything/agent-runtime/activity").ActivityHandoffPort);
+  expect(original).toHaveBeenCalledTimes(1);
+  expect(command.mock.calls.filter(([c])=>c.kind==="read_stage")).toHaveLength(1);
+  expect(records.filter(r=>r.payload.kind==="process_evidence"&&r.payload.origin.owner==="activity.fact").map(r=>
+    r.payload.kind==="process_evidence"?r.payload.origin.id:null)).toEqual(["1","2","3","4"]);
+});
+
+function observeStage(observer:ActivityHandoffInspectionAdapter,runId:string,stage:ActivityStageState,purpose:ActivityPurposeContract=TASK_MODEL_RESPONSE_PURPOSE):void {
+  const request={...stage.request,pathId:stage.request.pathId??"fixture-path"};
+  observer.observeStage({intent:{id:request.pathId,runId,purpose:{contract:purpose,digest:modelInputValueDigest(purpose)}}} as ActivityPathState,{...stage,request});
+}
+
+it("records original clock intervals separately from execution lifecycle",async()=>{
+  const directory=await mkdtemp(join(tmpdir(),"helarc-work-timing-inspection-")),root=join(directory,"inspection");
+  const inspection=await HelarcInspection.create(join(directory,"settings.json"),root),queries=new InspectionQueryService(root);
+  try{
+    const r=inspection.recorder!,observer=new ActivityHandoffInspectionAdapter(r);
+    const path={intent:{id:"path",runId:"child",owner:"task",purpose:{digest:"original-purpose"}}} as ActivityPathState;
+    const stage={request:{id:"stage",pathId:"path"},attempt:{id:"attempt"}} as ActivityStageState;
+    const events:import("@agent-anything/agent-runtime/activity").ActivityTimingObservation[]=[];
+    await createActivityWorkTiming(path,stage,event=>{events.push(event);observer.observeTiming(event);})!.measure("provider",async()=>42);
+    await r.flush();expect(r.health()).toMatchObject({rejected:0,dropped:0});
+    const scope=(await queries.query({kind:"get_snapshot",sourceId:r.source.sourceId,datasetId:r.manifest.datasetId})).selection!;
+    const record=await queries.query({...scope,kind:"get_subject",subject:r.ref("activity-timing","event",events[0]!.id,"child")});
+    expect(record.records).toHaveLength(1);
+    const history=await queries.query({...scope,kind:"list_records",runId:"child",limit:20});
+    expect(history.records.filter(value=>value.subject.owner==="activity-timing"&&value.subject.id===events[0]!.id)).toHaveLength(2);
+    expect(record.records.flatMap(v=>v.links).some(link=>link.to.id==="attempt")).toBe(true);
+    expect(events[0]!.durationMs).toBeNull();expect(events[1]!.durationMs).toBeGreaterThanOrEqual(0);
+  }finally{await inspection.close();await queries.close();await rm(directory,{recursive:true,force:true});}
+},30000);
 
 it("links a retained Product source to its shared stage without inventing a sent request",async()=>{
   const directory=await mkdtemp(join(tmpdir(),"helarc-task-source-inspection-")),root=join(directory,"inspection");
   const inspection=await HelarcInspection.create(join(directory,"settings.json"),root),queries=new InspectionQueryService(root);
   try {
     const r=inspection.recorder!,observer=new ActivityHandoffInspectionAdapter(r);
-    observer.observeStage("run",{request:{id:"task:source",pathId:"task",stageKind:"source",input:{kind:"task_model_source",
+    observeStage(observer,"run",{request:{id:"task:source",pathId:"task",stageKind:"source",input:{kind:"task_model_source",
       request:{requestId:"original-source",messages:[]}}},status:"submitted",attempt:null,result:null,receipt:null} as unknown as ActivityStageState);
     await r.flush();
     const scope=(await queries.query({kind:"get_snapshot",sourceId:r.source.sourceId,datasetId:r.manifest.datasetId})).selection!;
@@ -23,6 +73,9 @@ it("links a retained Product source to its shared stage without inventing a sent
     expect(stage.graph?.links.some(link=>link.kind==="binding"&&link.from.id===source.id)).toBe(true);
     const phantom=await queries.query({kind:"get_subject",...scope,subject:r.ref("model-interaction","request","original-source","run")});
     expect(phantom.records).toHaveLength(0);
+    const manifest=(await queries.query({kind:"open_process_scope",recordings:[{...scope,via:null}]})).process!.manifest;
+    const evidence=(await queries.query({kind:"get_context_path",manifest,section:"facts",subject:r.ref("activity","contribution","task:source","run")})).process!.entries.find(e=>e.record.payload.kind==="process_evidence");
+    expect(evidence?.record.payload).toMatchObject({executionPath:r.ref("activity","contribution","task","run")});
     expect(r.health()).toMatchObject({dropped:0,rejected:0});
   } finally {await inspection.close();await queries.close();await rm(directory,{recursive:true,force:true});}
 },30000);
@@ -67,8 +120,8 @@ it("links independent source closure without claiming material release or Parent
   const inspection=await HelarcInspection.create(join(directory,"settings.json"),root),queries=new InspectionQueryService(root);
   try {
     const r=inspection.recorder!,observer=new ActivityHandoffInspectionAdapter(r);
-    observer.observeStage("child",{request:{id:"publication:capture",pathId:"publication",input:{kind:"source_material_publication",
-      lifecycle:{revision:"1",scheduling:{workId:"source-work"}}}},status:"accepted",result:null,receipt:null} as unknown as ActivityStageState);
+    observeStage(observer,"child",{request:{id:"publication:capture",pathId:"publication",input:{kind:"source_material_publication",
+      lifecycle:{revision:"1",scheduling:{workId:"source-work"}}}},status:"accepted",result:null,receipt:null} as unknown as ActivityStageState,SOURCE_MATERIAL_PUBLICATION_PURPOSE);
     observer.observe({sequence:1,runId:"child",pathId:"publication:source-lifecycle",requestId:null,kind:"reconsideration_accepted",
       occurredAt:"2026-10-31T00:00:00.000Z",details:{receipt:{id:"source-close",subscriptionId:"publication:source-lifecycle",factIds:[],
         decision:{owner:"material-source",kind:"source_publication_closed",id:"publication",revision:"1"},close:true}}});
@@ -92,7 +145,7 @@ it.each([false,true])("records input limitation submission and acceptance withou
   try {
     const r=inspection.recorder!,observer=new ActivityHandoffInspectionAdapter(r),occurredAt="2026-10-31T00:00:00.000Z";
     observer.observe({sequence:1,runId:"run",pathId:"task",requestId:"limitation",kind:"stage_submitted",occurredAt,details:{inputNeedId:"need",inputOutcome:"unavailable"}});
-    observer.observeStage("run",{request:{id:"limitation",input:{kind:"context_input_unavailable",needId:"need",supplier:"context-representation",boundary:"B",reason:"original_reception_unsupported",
+    observeStage(observer,"run",{request:{id:"limitation",input:{kind:"context_input_unavailable",needId:"need",supplier:"context-representation",boundary:"B",reason:"original_reception_unsupported",
       evidence:[{owner:"context-representation",kind:"decision",id:"decision",revision:"4"}]}},status:accepted?"accepted":"submitted",
       result:accepted?{id:"raw",outcome:"returned",recordedAt:occurredAt}:null,
       receipt:accepted?{id:"accepted",owner:"task-decision",requestId:"limitation",resultId:"raw",progress:{kind:"task_input_unavailable"}}:null} as unknown as ActivityStageState);
@@ -115,16 +168,17 @@ it("links actual native result presentation separately from its original executi
     const r=inspection.recorder!,observer=new ActivityHandoffInspectionAdapter(r),time="2026-10-31T00:00:00.000Z";
     const presentation={digest:"presentation",inputAcceptanceId:"input-accepted",responseAcceptanceId:"response-accepted",requestId:"request",
       rawResultId:"raw",inputId:"selected-input",presentations:[{sectionId:"native-result",bindings:[{slot:{callId:"original-call"},representation:{id:"short-report",revision:"1"}}]}]};
-    observer.observeStage("parent",{request:{id:"response-stage",pathId:"task",stageKind:"model",input:{}},status:"accepted",
+    observeStage(observer,"parent",{request:{id:"response-stage",pathId:"task",stageKind:"model",input:{}},status:"accepted",
       result:{id:"raw",outcome:"returned",recordedAt:time},receipt:{id:"accepted",progress:{kind:"task_model_response",exchange:{resultPresentationReceipt:presentation}}}} as unknown as ActivityStageState);
     await r.flush();expect(r.health().rejected).toBe(0);
     const selection=(await queries.query({kind:"get_snapshot",sourceId:r.source.sourceId,datasetId:r.manifest.datasetId})).selection!;
     const subject=await queries.query({kind:"get_subject",...selection,subject:r.ref("task-result-presentation","contribution","presentation","parent")});
     expect(subject.records.map(record=>record.payload)).toContainEqual(expect.objectContaining({executionKind:"native_result_presentation",status:"response_accepted"}));
-    const links=subject.records.flatMap(record=>record.links);
+    const links=(await queries.query({kind:"get_data_flow",...selection,subject:r.ref("task-result-presentation","contribution","presentation","parent")})).graph!.links;
     for(const id of ["original-call","raw","selected-input","request"])expect(links).toContainEqual(expect.objectContaining({to:expect.objectContaining({id})}));
     expect(links.some(link=>link.to.id==='["short-report","1"]')).toBe(true);
-    expect(links.filter(link=>link.kind==="settles")).toEqual([expect.objectContaining({from:expect.objectContaining({id:"response-accepted"})})]);
+    const execution=await queries.query({kind:"get_execution",...selection,subject:r.ref("task-result-presentation","contribution","presentation","parent")});
+    expect(execution.graph!.links.filter(link=>link.kind==="settles")).toEqual([expect.objectContaining({from:expect.objectContaining({id:"response-accepted"})})]);
   }finally{await inspection.close();await queries.close();await rm(directory,{recursive:true,force:true});}
 },30000);
 
@@ -137,7 +191,7 @@ it("links consumer closure and original settlement without claiming recipient de
       [1,{owner:"context-representation",kind:"method_input_closed",id:"consumer-path",revision:"closed"}],
       [2,{owner:"context-representation",kind:"result_settled",id:"read-stage",revision:"settlement-acceptance"}],
     ] as const)observer.observe({sequence,runId:"child",pathId:"source",requestId:null,kind:"fact_published",occurredAt:"2026-10-31T00:00:00.000Z",
-      details:{fact:{id:`publication-${sequence}`,sourceId:"source",ref}}});
+      details:{fact:{id:`publication-${sequence}`,sourceId:"source",ref,...(sequence===2?{origin:{stageId:"read-stage",acceptanceId:"settlement-acceptance"}}:{})}}});
     await r.flush();expect(r.health().rejected).toBe(0);
     const selection=(await queries.query({kind:"get_snapshot",sourceId:r.source.sourceId,datasetId:r.manifest.datasetId})).selection!;
     const flow=await queries.query({kind:"get_data_flow",...selection,subject:r.ref("activity-publication","contribution","publication-2","child")});
@@ -159,7 +213,7 @@ it.each([{settled:false,usable:true},{settled:true,usable:true},{settled:false,u
     const receipt = {id: "response-accepted", requestId: "model-stage", resultId: "raw", owner: "task-decision", progress};
     const settlement = {id: "response-accepted", requestId: "model-stage", resultId: "raw", owner: "task-decision",
       disposition: {kind: "retained_task_result", resultId: "raw", decisionAccepted: false, response: progress}};
-    observer.observeStage("run", {request: {id: "model-stage", input: {}}, status: settled ? "settled" : "accepted",
+    observeStage(observer,"run", {request: {id: "model-stage", input: {}}, status: settled ? "settled" : "accepted",
       result: {id: "raw", outcome: "returned", recordedAt: "2026-10-30T00:00:00.000Z"},
       receipt: settled ? null : receipt, settlement: settled ? settlement : null} as unknown as ActivityStageState);
     await r.flush();
@@ -168,7 +222,9 @@ it.each([{settled:false,usable:true},{settled:true,usable:true},{settled:false,u
     const flow = await queries.query({kind: "get_data_flow", ...selected, subject: r.ref("task-input-delivery", "contribution", "delivery-receipt", "run")});
     expect(flow.graph?.links).toContainEqual(expect.objectContaining({kind: "delivers", to: expect.objectContaining({id: "request", kind: "request"})}));
     const delivered = await queries.query({kind: "get_subject", ...selected, subject: r.ref("task-input-delivery", "contribution", "delivery-receipt", "run")});
-    expect(delivered.records.flatMap(record => record.links)).toContainEqual(expect.objectContaining({kind: "settles", from: expect.objectContaining({id: "response-accepted"})}));
+    expect(delivered.records).toHaveLength(1);
+    const execution=await queries.query({kind:"get_execution",...selected,subject:delivered.records[0]!.subject});
+    expect(execution.graph?.links).toContainEqual(expect.objectContaining({kind: "settles", from: expect.objectContaining({id: "response-accepted"})}));
     for (const id of ["source-one", "source-two"]) expect(flow.graph?.links).toContainEqual(expect.objectContaining({kind: "includes", to: expect.objectContaining({id})}));
     const stage = await queries.query({kind: "get_subject", ...selected, subject: r.ref("activity", "contribution", "model-stage", "run")});
     expect(stage.records.map(record => record.payload)).toContainEqual(expect.objectContaining({executionKind: "purpose_bound_stage", status: settled ? "settled" : "accepted"}));

@@ -1,4 +1,5 @@
 import type {MaterialRange} from "../custody/MaterialCustody.js";
+import type {ContextProcessObjectRef} from "../evidence/ContextProcessEvidence.js";
 
 export interface RepresentationRef {readonly id:string;readonly revision:string;}
 export interface RepresentationInput {
@@ -32,6 +33,7 @@ export interface RepresentationRecord {
 }
 export interface RepresentationJudgment {
   readonly id:string;
+  readonly runId:string;
   readonly owner:string;
   readonly kind:"structure"|"measurement"|"semantic"|"combination"|"policy";
   readonly subjects:readonly RepresentationRef[];
@@ -40,6 +42,7 @@ export interface RepresentationJudgment {
   readonly target:string;
   readonly methodRevision:string;
   readonly dependencies:Readonly<Record<string,string>>;
+  readonly evidenceSources:readonly ContextProcessObjectRef[];
   readonly coverage:readonly MaterialRange[];
   readonly conclusion:"supported"|"unsupported"|"unknown";
   readonly limitations:readonly string[];
@@ -47,6 +50,7 @@ export interface RepresentationJudgment {
 }
 export interface RepresentationReuse {
   readonly id:string;
+  readonly runId:string;
   readonly judgmentId:string;
   readonly purpose:string;
   readonly target:string;

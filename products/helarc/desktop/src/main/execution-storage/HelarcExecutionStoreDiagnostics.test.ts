@@ -7,7 +7,8 @@ import {packExecutionContent} from "./ExecutionContent.js";
 import {HelarcExecutionStore} from "./HelarcExecutionStore.js";
 
 const wire=vi.hoisted(()=>({commands:[] as ExecutionStoreWireCommand[],rejectAt:"activity_handoff",
-  rejection:null as {code:string;error:ExecutionErrorDetails}|null,responseRoot:null as ExecutionContentRoot|null}));
+  rejection:null as {code:string;error:ExecutionErrorDetails}|null,responseRoot:null as ExecutionContentRoot|null,
+  blocks:new Map<string,{id:string;text:string}>()}));
 vi.mock("node:worker_threads",async importOriginal=>{
   const actual=await importOriginal<typeof import("node:worker_threads")>();
   const {EventEmitter}=await import("node:events");
@@ -29,6 +30,9 @@ vi.mock("node:worker_threads",async importOriginal=>{
         if(kind==="activity_handoff"&&wire.responseRoot) {
           this.reply({kind:"content_result",id:request.id,root:wire.responseRoot});return;
         }
+        if(request.command.kind==="read_content") {
+          this.reply({kind:"content_blocks",id:request.id,blocks:request.command.ids.map(id=>wire.blocks.get(id)!)});return;
+        }
         if(kind==="list_product_runs") {this.reply({kind:"result",id:request.id,value:[]});return;}
         throw new Error(`Unexpected fixture wire command ${kind}`);
       });
@@ -39,7 +43,7 @@ vi.mock("node:worker_threads",async importOriginal=>{
 });
 
 const stores:HelarcExecutionStore[]=[];
-beforeEach(()=>{wire.commands=[];wire.rejectAt="activity_handoff";wire.rejection=null;wire.responseRoot=null;});
+beforeEach(()=>{wire.commands=[];wire.rejectAt="activity_handoff";wire.rejection=null;wire.responseRoot=null;wire.blocks.clear();});
 afterEach(async()=>{for(const store of stores.splice(0))await store.close();});
 async function open(record=vi.fn()) {
   const store=await HelarcExecutionStore.open("unused-mocked-worker-directory",undefined,undefined,undefined,{record});
@@ -57,6 +61,25 @@ function reject(code:string) {
 }
 
 describe("execution Store dispatch-wait diagnostics",()=>{
+  it("reuses only verified transport bytes after a fresh authoritative response",async()=>{
+    const {store}=await open();
+    const value={activityValue:{retained:"large-content".repeat(10000)}};
+    const packed=packExecutionContent(value);wire.responseRoot={format:1,root:packed.root};
+    for(const block of packed.blocks)wire.blocks.set(block.id,block);
+    await expect(store.activityHandoffs.command({kind:"read_path",pathId:"path"})).resolves.toEqual(value.activityValue);
+    const reads=wire.commands.filter(c=>c.kind==="read_content").length;
+    expect(reads).toBeGreaterThan(0);
+    await expect(store.activityHandoffs.command({kind:"read_path",pathId:"path"})).resolves.toEqual(value.activityValue);
+    expect(wire.commands.filter(c=>c.kind==="read_content")).toHaveLength(reads);
+    expect(wire.commands.filter(c=>c.kind==="activity_handoff")).toHaveLength(2);
+    const expected=reject("execution_owner_stale");
+    await expect(store.activityHandoffs.command({kind:"read_path",pathId:"path"})).rejects.toMatchObject(expected);
+    wire.rejection=null;
+    const changed=packExecutionContent({activityValue:{...value.activityValue,revision:2}});
+    wire.responseRoot={format:1,root:changed.root};for(const block of changed.blocks)wire.blocks.set(block.id,block);
+    await expect(store.activityHandoffs.command({kind:"read_path",pathId:"path"})).resolves.toEqual({...value.activityValue,revision:2});
+    expect(wire.commands.filter(c=>c.kind==="read_content").length).toBeGreaterThan(reads);
+  });
   it.each(["activity_dependency_waiting","activity_slot_waiting","activity_schedule_turn_waiting",
     "activity_schedule_not_ready","activity_authorization_restricted"])("returns %s unchanged without a storage failure",async code=>{
     const {store,record}=await open(),expected=reject(code);

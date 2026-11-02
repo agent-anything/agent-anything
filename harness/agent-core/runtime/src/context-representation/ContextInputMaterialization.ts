@@ -82,15 +82,15 @@ export class ContextInputMaterializationWork implements ActivityPurposeHandler {
     }
     return authorization;
   }
-  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
+  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal,timing?:ActivityWorkTiming):Promise<ActivityRawResult> {
     const start=performance.now(),input=stageInput(stage);signal.throwIfAborted();
     let value:MaterializationValue;
     try {
       const pending=nextRead(input);
       if(stage.request.stageKind==="read"&&pending) {
-        const page=await this.dependencies.materials.command({kind:"read",access:pending.access,offset:pending.start,length:pending.end-pending.start}) as MaterialReadPage;
+        const page=await measureActivityWork(timing,"material.read",()=>this.dependencies.materials.command({kind:"read",access:pending.access,offset:pending.start,length:pending.end-pending.start})) as MaterialReadPage;
         validatePage(pending,page);value={kind:"page",accessId:accessKey(pending.access),page};
-      }else if(stage.request.stageKind==="assemble"&&!pending)value={kind:"assembled",request:await this.assemble(path,input,signal)};
+      }else if(stage.request.stageKind==="assemble"&&!pending)value={kind:"assembled",request:await measureActivityWork(timing,"material.assembly",()=>this.assemble(path,input,signal))};
       else throw new TypeError("input_materialization_stage_invalid");
     }catch(error) {
       if(error instanceof MaterialCustodyError)value={kind:"gap",reason:error.code};
@@ -238,3 +238,4 @@ function validatePage(expected:{access:MaterialAccess;start:number;end:number},p
     page.version.ref.version!==expected.access.range.version||Buffer.from(page.bytesBase64,"base64").length!==page.end-page.start)
     throw new TypeError("input_materialization_page_mismatch");
 }
+import {measureActivityWork,type ActivityWorkTiming} from "../activity/ActivityWorkTiming.js";

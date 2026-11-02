@@ -76,6 +76,7 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/evaluation/grading",
       "@agent-anything/evaluation/metrics",
       "@agent-anything/evaluation/persistence",
+      "@agent-anything/evaluation/process",
       "@agent-anything/evaluation/report",
       "@agent-anything/evaluation/trial",
     ]),

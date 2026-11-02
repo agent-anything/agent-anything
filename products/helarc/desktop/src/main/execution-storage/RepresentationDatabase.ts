@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {custodyToken,containsMaterialRange,type MaterialRange} from "@agent-anything/context/custody";
 import type {RepresentationCommand,RepresentationValue,RepresentationRecord,RepresentationRef,RepresentationJudgment,RepresentationReuse} from "@agent-anything/context/representation";
+import {contextProcessObject as object,contextProcessRelationship as relation,type ContextProcessRelationship} from "@agent-anything/context/evidence";
 import {ContextFoundationRecords,checkedJson,requireSame} from "./ContextFoundationRecords.js";
 import {MaterialCustodyDatabase} from "./MaterialCustodyDatabase.js";
 import type {ContextAcceptancePart} from "@agent-anything/context/selection";
@@ -19,7 +20,7 @@ export class RepresentationDatabase {
     type Part=Extract<ContextAcceptancePart,{owner:"representation"}>;
     return {owner:"representation",kinds:["record","judge"],prepare:(part,acceptance)=>{
       const value=part as Part;
-      if(value.proposal.owner!==acceptance.actor || value.kind==="record"&&value.proposal.runId!==acceptance.scope)
+      if(value.proposal.owner!==acceptance.actor || value.proposal.runId!==acceptance.scope)
         throw new SharedAcceptanceRejection("representation","representation_owner_mismatch");
       this.bound(value.proposal);
       return structuredClone(value);
@@ -69,14 +70,22 @@ export class RepresentationDatabase {
       this.materials.requireProtected(hold.instanceId,range,reader,hold.id);
     }
     for(const coverage of record.declaredCoverage) if(!record.inputs.some(i=>i.role==="source"&&containsMaterialRange(i.material,coverage)))throw new TypeError("representation_coverage_outside_input");
-    for(const input of record.inputs) if(input.representation) {
+    const subject=object("representation",key(record.ref),record.runId),relationships:ContextProcessRelationship[]=[];
+    for(const input of record.inputs) {
+      relationships.push(relation("includes",object("material_custody",input.material.materialId,null,input.material.version),subject));
+      if(!input.representation)continue;
       const parent=this.read(input.representation);if(!parent)throw new TypeError("representation_parent_missing");
+      relationships.push(relation(input.role==="source"?"transforms":"includes",object("representation",key(parent.ref),parent.runId),subject));
       if(!containsMaterialRange(parent.body,input.material))throw new TypeError("representation_input_not_parent_body");
       if(input.role==="source")for(const loss of parent.losses) {
         const inherited=record.losses.find(value=>value.id===loss.id);
         if(!inherited)throw new TypeError("representation_inherited_loss_missing");requireSame(inherited,loss);
       }
     }
+    if(record.method)relationships.push(relation("produces",object("activity",record.method.activityId,record.runId),subject),
+      relation("transforms",object("activity",record.method.rawResultId,record.runId),subject),
+      relation("settles",object("shared_acceptance",record.method.acceptanceId,record.runId),subject));
+    for(const range of [record.body,...record.details])relationships.push(relation("observes",subject,object("material_custody",range.materialId,null,range.version)));
     for(const restoration of record.restorations) {
       const loss=record.losses.find(value=>value.id===restoration.lossId),judgment=this.judgment(restoration.judgmentId);
       if(!loss || !containsMaterialRange(loss.source,restoration.range) || !judgment || judgment.conclusion!=="supported" ||
@@ -85,7 +94,8 @@ export class RepresentationDatabase {
     }
     this.db.transaction(()=>{
       this.records.sql("INSERT INTO context_representations VALUES (?,?,?,?,?)").run(record.ref.id,record.ref.revision,record.runId,JSON.stringify(record),modelInputValueDigest(record));
-      this.records.fact(record.runId,"representation",key(record.ref),"recorded",{ref:record.ref,form:record.form,body:record.body,inputs:record.inputs,method:record.method,losses:record.losses,restorations:record.restorations});
+      this.records.fact(record.runId,"representation",key(record.ref),"recorded",{ref:record.ref,form:record.form,body:record.body,inputs:record.inputs,method:record.method,losses:record.losses,restorations:record.restorations},
+        {revision:"1",category:"representation",subject,state:{phase:"settled",status:"recorded"},related:[],relationships});
     })();
     return record;
   }
@@ -93,17 +103,25 @@ export class RepresentationDatabase {
     this.bound(judgment);
     for(const values of [judgment.subjects,judgment.inputs,judgment.coverage,judgment.limitations])
       if(!Array.isArray(values)||values.length>256)throw new TypeError("representation_judgment_bound");
-    [judgment.id,judgment.owner,judgment.purpose,judgment.target,judgment.methodRevision,judgment.basis].forEach(custodyToken);
+    [judgment.id,judgment.runId,judgment.owner,judgment.purpose,judgment.target,judgment.methodRevision,judgment.basis].forEach(custodyToken);
+    if(!Array.isArray(judgment.evidenceSources))throw new TypeError("representation_judgment_evidence_missing");
     const old=this.judgment(judgment.id);if(old){requireSame(old,judgment);return old;}
     if(!["supported","unsupported","unknown"].includes(judgment.conclusion) || !judgment.subjects.length || judgment.subjects.length>256)throw new TypeError("representation_judgment_invalid");
     const subjects=judgment.subjects.map(ref=>this.read(ref));if(subjects.some(v=>!v))throw new TypeError("representation_judgment_subject_missing");
     for(const range of judgment.coverage)if(!judgment.inputs.some(input=>containsMaterialRange(input,range)))throw new TypeError("representation_judgment_coverage_invalid");
     this.db.transaction(()=>{
       this.records.sql("INSERT INTO context_judgments VALUES (?,?,?)").run(judgment.id,JSON.stringify(judgment),modelInputValueDigest(judgment));
-      this.records.fact(subjects[0]!.runId,"representation",judgment.id,"judgment_recorded",{kind:judgment.kind,subjects:judgment.subjects,conclusion:judgment.conclusion,coverage:judgment.coverage,limitations:judgment.limitations,dependencies:judgment.dependencies,basis:judgment.basis});
+      const subject=object("representation",judgment.id,judgment.runId);
+      this.records.fact(judgment.runId,"representation",judgment.id,"judgment_recorded",{kind:judgment.kind,subjects:judgment.subjects,conclusion:judgment.conclusion,coverage:judgment.coverage,limitations:judgment.limitations,dependencies:judgment.dependencies,evidenceSources:judgment.evidenceSources,basis:judgment.basis},
+        {revision:"1",category:"representation",subject,state:{phase:"settled",status:"judgment_recorded"},related:[],relationships:[
+          ...judgment.evidenceSources.map(source=>relation("observes",subject,source)),
+          ...subjects.map(value=>relation("observes",subject,object("representation",key(value!.ref),value!.runId))),
+          ...judgment.coverage.map(range=>relation("observes",subject,object("material_custody",range.materialId,null,range.version))),
+        ]});
     })();return judgment;
   }
   private reuse(request:RepresentationReuse):RepresentationValue {
+    custodyToken(request.runId);
     const digest=modelInputValueDigest(request);
     const previous=this.records.sql("SELECT value,digest,request_digest FROM context_reuse_checks WHERE id=?").get(request.id) as {value:string;digest:string;request_digest:string}|undefined;
     if(previous){if(previous.request_digest!==digest)throw new TypeError("representation_reuse_identity_conflict");return checkedJson(previous);}
@@ -127,8 +145,11 @@ export class RepresentationDatabase {
     const value={id:request.id,judgmentId:request.judgmentId,applicable:reasons.length===0,reasons:[...new Set(reasons)]};
     this.db.transaction(()=>{
       this.records.sql("INSERT INTO context_reuse_checks VALUES (?,?,?,?)").run(request.id,digest,JSON.stringify(value),modelInputValueDigest(value));
-      const subject=request.subjects[0]&&this.read(request.subjects[0]);
-      if(subject)this.records.fact(subject.runId,"representation",request.id,"reuse_checked",value);
+      const subject=object("representation",request.id,request.runId);
+      this.records.fact(request.runId,"representation",request.id,"reuse_checked",value,
+        {revision:"1",category:"representation",subject,scope:{purpose:request.purpose,recipient:null},
+          reuse:{eligibility:value.applicable?1:0,basis:"original_judgment_currently_applicable_not_yet_consumed"},state:{phase:"settled",status:"reuse_checked"},related:[],relationships:
+          judgment?[relation("observes",subject,object("representation",judgment.id,judgment.runId))]:[]});
     })();return value;
   }
 }

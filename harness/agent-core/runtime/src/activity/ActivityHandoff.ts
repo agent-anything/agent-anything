@@ -179,11 +179,13 @@ export interface ActivityHandoffFact {
   readonly kind: "path_opened" | "input_needed" | "stage_submitted" | "stage_admitted" | "dispatch_restricted" | "authorization_restricted" | "professional_stopped" | "dispatched" | "raw_saved" | "attempt_retry_accepted" | "processing_claimed" | "accepted" | "settled" | "cancelled" | "scheduling_accepted" | "scheduling_paths_sealed" | "scheduling_closed" | "scheduling_limited" | "scheduling_wait" | "fact_published" | "reconsideration_registered" | "reconsideration_accepted" | "resources_reserved";
   readonly occurredAt: string;
   readonly details: Readonly<Record<string, unknown>>;
+  readonly clock?:import("./ActivityWorkTiming.js").ActivityClockSample;
 }
 export interface ActivityHandoffObserver {
   observe(fact: ActivityHandoffFact): void;
   /** Durable content, supplementary to facts; projections are never execution authority. */
-  observeStage?(runId:string,stage:ActivityStageState):void;
+  observeStage?(path:ActivityPathState,stage:ActivityStageState):void;
+  observeTiming?(event:import("./ActivityWorkTiming.js").ActivityTimingObservation):void;
 }
 export type ActivityHandoffValue = import("./ActivityWorkView.js").ActivityWorkView | ActivityPathState | ActivityStageState | ActivityRawResult | ActivityDispatchReceipt | ActivityInputNeed | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | readonly ActivityPendingScope[] |
   import("./ActivityScheduling.js").ActivityScheduledPathPage |

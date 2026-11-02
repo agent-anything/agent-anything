@@ -13,6 +13,7 @@ export interface ActivityPublishedFact {
   readonly id:string;
   readonly sourceId:string;
   readonly ref:{readonly owner:string;readonly kind:string;readonly id:string;readonly revision:string};
+  readonly origin?:{readonly stageId:string;readonly acceptanceId:string};
 }
 export interface ActivityReconsiderationSubscription {
   readonly id:string;

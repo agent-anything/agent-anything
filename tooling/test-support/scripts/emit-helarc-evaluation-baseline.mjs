@@ -1,10 +1,10 @@
 import {
-  HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
-  HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
 } from "../dist/evaluation-targets/helarc/index.js";
+import {HELARC_RESPONSIBILITY_COMPOSITION_ACCEPTED_BASELINE as predecessor} from "../dist/evaluation-targets/helarc/baseline/HelarcResponsibilityCompositionBaseline.js";
+import {HELARC_EXPLICIT_TASK_EXECUTION_ACCEPTED_BASELINE as accepted} from "../dist/evaluation-targets/helarc/baseline/HelarcExplicitTaskExecutionBaseline.js";
 import {
   runContextContinuityEvaluationCandidate,
 } from "../dist/context-continuity-evaluation/index.js";
@@ -17,11 +17,11 @@ const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
 const agentHooks = await runAgentHookDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
-  HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE,
+  predecessor,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE,
+  accepted,
   systemCandidate,
 );
 
@@ -29,12 +29,12 @@ process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
   kind: "context_continuity_and_helarc_evaluation_candidate",
   predecessor: {
-    reportRef: HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_EXPLICIT_FINAL_RESULT_ACCEPTED_BASELINE.acceptanceRef,
+    reportRef: predecessor.reportRef,
+    acceptanceRef: predecessor.acceptanceRef,
   },
   acceptedSuccessor: {
-    reportRef: HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_FINAL_PLAN_SUBMISSION_ACCEPTED_BASELINE.acceptanceRef,
+    reportRef: accepted.reportRef,
+    acceptanceRef: accepted.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),

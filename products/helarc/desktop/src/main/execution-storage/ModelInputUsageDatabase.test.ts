@@ -96,6 +96,13 @@ describe("accepted usage from original complete responses",()=>{
     expect(f.stage(s.request.id)).toMatchObject({status:"accepted",result:s.raw,receipt:{id:s.acceptanceId,resultId:s.raw.id}});
     expect(f.usage.latest(queryOf(s.value))).toEqual(s.value);
     expect(f.records.facts("root",0,16)).toMatchObject([{kind:"input_usage_accepted",subject:s.value.id,details:{usage:s.value}}]);
+    const evidence=f.records.facts("root",0,16)[0]!.evidence!;
+    expect(evidence.category).toBe("measurement");
+    expect(evidence.relationships.map(edge=>[edge.kind,edge.to.owner,edge.to.id])).toEqual([
+      ["observes","model-input",s.prepared.encoded.id],["observes","activity",s.request.id],
+      ["observes","activity",s.raw.id],["observes","shared_acceptance",s.acceptanceId],
+    ]);
+    expect(f.reopen().records.facts("root",0,16)[0]!.evidence).toEqual(evidence);
     expect(s.value.inputTokens).toBe(100);
   });
   it.each(["text_generation","structured_generation"] as const)("reads %s response usage, not the activity usage summary",kind=>{

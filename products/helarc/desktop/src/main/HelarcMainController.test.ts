@@ -35,6 +35,7 @@ import { HelarcMainController, type HelarcMainControllerInput, type HelarcMainSn
 import {ExecutionFixtureScope} from "./run/fixtures/ExecutionFixtureScope.js";
 import {bindFixtureProviderEncoding} from "./run/fixtures/EncodedFixtureProvider.js";
 import {closeExecutionScope} from "./run/fixtures/ManagedExecutionTest.js";
+import {startExecutionTestCpuProfile} from "./run/fixtures/ExecutionTestCpuProfile.js";
 import { FileHelarcThreadStore, InMemoryHelarcThreadStore } from "./thread/index.js";
 import { HelarcWorkbenchQueries } from "./workbench/HelarcWorkbenchQueries.js";
 import { CommandOutputRegistry } from "./workbench/CommandOutputRegistry.js";
@@ -61,7 +62,11 @@ async function createTestController(input: Omit<HelarcMainControllerInput, "acti
   readonly executionStore?: HelarcExecutionStore;
 }): Promise<HelarcMainController> {
   const scope = new ExecutionFixtureScope();
-  onTestFinished(() => closeExecutionScope(scope), 0);
+  const stopProfile = await startExecutionTestCpuProfile();
+  onTestFinished(async () => {
+    try { await closeExecutionScope(scope); }
+    finally { await stopProfile?.(); }
+  }, 0);
   const store = input.executionStore ?? await scope.open(async () => {
     const directory = await mkdtemp(join(executionDirectory, "store-"));
     const opened = await openExecutionStoreFixture(directory, executionWorker);

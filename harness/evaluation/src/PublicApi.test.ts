@@ -7,9 +7,16 @@ import * as metrics from "./metrics/index.js";
 import * as persistence from "./persistence/index.js";
 import * as report from "./report/index.js";
 import * as trial from "./trial/index.js";
+import * as process from "./process/index.js";
 
 describe("Evaluation public API", () => {
-  it("exposes only the eight focused value surfaces", () => {
+  it("exposes focused value surfaces including process evaluation", () => {
+    expect(Object.keys(process).sort()).toEqual([
+      "EvaluationProcessExecution", "EvaluationProcessStimulusDelivery", "ProcessResourceScope", "assembleProcessCapture",
+      "assertProcessBranchIsolation", "assertProcessCaptureBinding", "createEvaluationProcessPlan", "processStartingStateFacets",
+      "projectProcessTargetInput", "reviewProcessStartingState", "sameProcessValue", "selectProcessStimuli",
+      "assembleProcessComparison", "createProcessComparison", "processComparisonBoundaries", "processEvidenceGrade",
+    ].sort());
     expect(Object.keys(definition).sort()).toEqual([
       "EvaluationContractError",
       "createEvaluationCase",

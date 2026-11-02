@@ -113,14 +113,14 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
     return {disposition:{kind:"retained_input_preparation_result",resultId:stage.result!.id,adopted:false}};
   }
 
-  async execute(_path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
+  async execute(_path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal,timing?:ActivityWorkTiming):Promise<ActivityRawResult> {
     signal.throwIfAborted();
     const started=performance.now(),input=readInput(stage);
     let value:WithoutTiming<PreparationResult>;
     try {
       value=stage.request.stageKind==="measure"?
-        {kind:"remote_returned",raw:await this.dependencies.provider.inputMeasurement!.send(input.pending!.remote,signal)}:
-        await this.process(stage,input,signal);
+        {kind:"remote_returned",raw:await measureActivityWork(timing,"input.remote_measurement",()=>this.dependencies.provider.inputMeasurement!.send(input.pending!.remote,signal))}:
+        await this.process(stage,input,signal,timing);
     } catch(error) {
       if(!(error instanceof RemoteInputMeasurementNotDispatchedError)||stage.request.stageKind!=="measure")throw error;
       value={kind:"remote_not_dispatched",code:error.code,dependency:error.dependency};
@@ -166,7 +166,7 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
     throw new TypeError("input_preparation_result_invalid");
   }
 
-  private async process(stage:ActivityStageState,input:PreparationStageInput,signal:AbortSignal):Promise<WithoutTiming<PreparationResult>> {
+  private async process(stage:ActivityStageState,input:PreparationStageInput,signal:AbortSignal,timing?:ActivityWorkTiming):Promise<WithoutTiming<PreparationResult>> {
     const provider=this.dependencies.provider,{demand,template,policy}=input.request;
     let progress=input.progress;
     const step=nextInputCombination(demand,progress);
@@ -176,13 +176,13 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
     progress=step.progress;
     let request:ProviderRequest,encoded:EncodedModelInput,measurement:ModelInputMeasurement;
     {
-      const composition=composeInputChoice(demand,step.choice,{providerId:template.composition.providerId,model:template.composition.model,
-        interaction:template.interaction,lineage:template.composition.lineage,composedAt:template.composition.composedAt});
+      const composition=await measureActivityWork(timing,"input.assembly",async()=>composeInputChoice(demand,step.choice,{providerId:template.composition.providerId,model:template.composition.model,
+        interaction:template.interaction,lineage:template.composition.lineage,composedAt:template.composition.composedAt}));
       request=snapshotProviderRequest({...template,requestId:composition.id,composition,instructions:composition.instructions,messages:composition.messages,
         modelContext:{...template.modelContext,assessment:null}});
-      encoded=provider.encodeInput!(request,input.request.deliveryMode);
+      encoded=await measureActivityWork(timing,"input.encoding",async()=>provider.encodeInput!(request,input.request.deliveryMode));
       if(encoded.targetDigest!==demand.targetRevision)throw new TypeError("input_preparation_target_changed");
-      measurement=provider.modelContext.measure(composition,this.dependencies.now());
+      measurement=await measureActivityWork(timing,"input.local_measurement",async()=>provider.modelContext.measure(composition,this.dependencies.now()));
       if(measurement.status==="unknown" && input.request.allowExternalMeasurement && provider.inputMeasurement && progress.externalMeasurements<demand.maximumExternalMeasurements) {
         progress=chargeInputCombination(demand,progress,{externalMeasurements:1,readBytes:0});
         const remote=provider.inputMeasurement.prepare(request,encoded);
@@ -296,3 +296,4 @@ function targetCapacity(provider:Provider,request:ContextInputPreparationRequest
   limits.push({id:"target:transport",targetRevision,dimension:"request_bytes",maximum:transport.maximumBytes,source:`${transport.source}:${transport.revision}`});
   return {limits,reservations};
 }
+import {measureActivityWork,type ActivityWorkTiming} from "../activity/ActivityWorkTiming.js";

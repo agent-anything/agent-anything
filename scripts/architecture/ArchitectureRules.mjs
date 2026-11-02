@@ -181,6 +181,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
 });
 
 export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
+  "@agent-anything/process-evaluation": ["@agent-anything/evaluation", "@agent-anything/inspection", "electron"],
   "@agent-anything/inspector": ["@agent-anything/inspection","@ant-design/icons","@xyflow/react","antd","elkjs","jsonc-parser","monaco-editor","react","react-dom","react-router-dom","vis-data","vis-timeline"],
   "@agent-anything/test-support": [
     "@agent-anything/action-execution",

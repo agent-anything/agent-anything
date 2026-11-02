@@ -3,6 +3,7 @@ import {acceptedModelInputUsage} from "@agent-anything/agent-runtime/model-acces
 import type {ActivityStageState,ActivityPathState,SharedAcceptanceProposal,ActivityHandoffCommand} from "@agent-anything/agent-runtime/activity";
 import {SharedAcceptanceRejection,type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
 import {ContextFoundationRecords} from "./ContextFoundationRecords.js";
+import {contextProcessObject as object,contextProcessRelationship as relation} from "@agent-anything/context/evidence";
 
 export const MODEL_INPUT_USAGE_SCHEMA=`
 CREATE TABLE model_input_usage(sequence INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,run_id TEXT NOT NULL,purpose TEXT NOT NULL,target TEXT NOT NULL,basis TEXT NOT NULL,schema_digest TEXT NOT NULL,value TEXT NOT NULL,digest TEXT NOT NULL);
@@ -32,7 +33,14 @@ export class ModelInputUsageDatabase {
       if(old){if(old.digest!==digest)reject("input_usage_identity_conflict");return;}
       this.records.sql("INSERT INTO model_input_usage(id,run_id,purpose,target,basis,schema_digest,value,digest) VALUES (?,?,?,?,?,?,?,?)")
         .run(value.id,value.runId,value.purpose,value.targetRevision,value.footprint.basisKey,value.footprint.schemaDigest,JSON.stringify(value),digest);
-      this.records.fact(value.runId,"model-input-measurement",value.id,"input_usage_accepted",{usage:value});
+      const subject=object("model-input-measurement",value.id,value.runId,digest);
+      this.records.fact(value.runId,"model-input-measurement",value.id,"input_usage_accepted",{usage:value},{revision:"1",category:"measurement",subject,
+        state:{phase:"settled",status:"input_usage_accepted"},related:[],relationships:[
+          relation("observes",subject,object("model-input",value.encodedInputId,value.runId)),
+          relation("observes",subject,object("activity",value.stageId,value.runId)),
+          relation("observes",subject,object("activity",value.rawResultId,value.runId)),
+          relation("observes",subject,object("shared_acceptance",value.acceptanceId,value.runId)),
+        ]});
     },validate:(prepared,proposal)=>{
       const value=prepared as AcceptedInputUsage,stage=this.stage(value.stageId);
       if(stage?.status!=="accepted"||stage.receipt?.id!==proposal.id||stage.receipt.resultId!==value.rawResultId)reject("input_usage_acceptance_missing");

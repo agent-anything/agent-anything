@@ -24,18 +24,18 @@ export class PreparedInputExecution implements ActivityPurposeHandler {
   async authorize(path:ActivityPathState,stage:ActivityStageState,signal:AbortSignal,action:Parameters<ActivityPurposeHandler["authorize"]>[3]):ReturnType<ActivityPurposeHandler["authorize"]> {
     await this.read(path,stage,action==="admission"||action==="execution");return this.dependencies.authorize(path,stage,signal,action);
   }
-  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal):Promise<ActivityRawResult> {
+  async execute(path:ActivityPathState,stage:ActivityStageState,attempt:ActivityAttempt,signal:AbortSignal,timing?:ActivityWorkTiming):Promise<ActivityRawResult> {
     const started=performance.now();
-    const binding=await this.read(path,stage),prepared=binding.input.exactInput as PreparedContextInput;
+    const binding=await measureActivityWork(timing,"input.binding_validation",()=>this.read(path,stage)),prepared=binding.input.exactInput as PreparedContextInput;
     signal.throwIfAborted();
     let observer:ProviderDeliveryObserver|undefined;
     try {observer=typeof this.dependencies.observer==="function"?this.dependencies.observer(path,stage,attempt,signal):this.dependencies.observer;}
     catch { /* Failure to bind optional observation cannot change dispatch facts. */ }
     await this.dependencies.selections.command({kind:"sent",inputId:binding.input.id,attemptId:attempt.id});
     const dispatchedAt=performance.now();
-    const result:ProviderCallResult=await this.dependencies.provider.send(prepared.request,{signal,
+    const result:ProviderCallResult=await measureActivityWork(timing,"provider",()=>this.dependencies.provider.send(prepared.request,{signal,
       get interruption(){return activityInvocationInterruption(signal,path);}},
-      {mode:prepared.encoded.mode,invocationId:attempt.id,encodedInput:prepared.encoded,observer});
+      {mode:prepared.encoded.mode,invocationId:attempt.id,encodedInput:prepared.encoded,observer}));
     return {id:`${attempt.id}:raw`,attemptId:attempt.id,completeness:"complete",outcome:result.kind==="cancellation_unconfirmed"?"unknown":"returned",value:result,
       usage:{...(result.kind==="succeeded"?(result.response.kind==="native_tool_turn"?result.response.turn.usage:result.response.usage):{}),providerElapsedMs:performance.now()-dispatchedAt,preDispatchMs:dispatchedAt-started},recordedAt:this.dependencies.now()};
   }
@@ -65,3 +65,4 @@ export class PreparedInputExecution implements ActivityPurposeHandler {
     return binding;
   }
 }
+import {measureActivityWork,type ActivityWorkTiming} from "../activity/ActivityWorkTiming.js";

@@ -15,3 +15,4 @@ export * from "./ActivityAuthorization.js";
 export * from "./ActivityWorkView.js";
 export * from "./ActivityScopeLifetime.js";
 export * from "./ActivityHostUnavailableError.js";
+export * from "./ActivityWorkTiming.js";

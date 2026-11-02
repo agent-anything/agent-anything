@@ -44,6 +44,14 @@ test("an unreviewed package owner fails closed", () => {
   assert.equal(violations[0]?.rule, "dependency_policy_missing");
 });
 
+test("process evaluation remains independent from production execution", () => {
+  const owner = {kind: "tooling", name: "@agent-anything/process-evaluation"};
+  for (const name of ["@agent-anything/evaluation", "@agent-anything/inspection", "electron"])
+    assert.deepEqual(evaluateProductionDependency({owner, imported: {name}}), []);
+  assert.notEqual(evaluateProductionDependency({owner, imported: {name: "@agent-anything/agent-runtime"}}).length, 0);
+  assert.notEqual(evaluateProductionDependency({owner: {name: "@agent-anything/helarc-desktop"}, imported: {name: "@agent-anything/evaluation"}}).length, 0);
+});
+
 test("lower Contract dependencies are exact and acyclic", () => {
   assert.deepEqual(expectedProductionDependencies("@agent-anything/workspace"), []);
   assert.deepEqual(

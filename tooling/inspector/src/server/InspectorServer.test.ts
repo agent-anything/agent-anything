@@ -24,6 +24,9 @@ describe("Inspector local access", () => {
     const result = await fetch(`${server.url}/api/inspection/query`, { method: "POST", headers: { Cookie: cookie, Origin: server.url, "Content-Type": "application/json" }, body: JSON.stringify({ kind: "sql", sql: "SELECT *" }) });
     expect(result.status).toBe(400);
     expect(result.headers.get("cache-control")).toBe("no-store");
+    const unsupported=await fetch(`${server.url}/api/inspection/query`,{method:"POST",headers:{Cookie:cookie,Origin:server.url,"Content-Type":"application/json"},body:JSON.stringify({kind:"list_context_process",manifest:{version:"1",projectionVersion:"future",recordings:[]},section:"facts",runId:"root"})});
+    expect(unsupported.status).toBe(409);
+    expect(await unsupported.json()).toEqual({code:"inspection_process_projection_unsupported"});
   });
   it("consumes bootstrap once and removes session authority on logout", async () => {
     const server = await start(); const cookie = await authenticate(server);

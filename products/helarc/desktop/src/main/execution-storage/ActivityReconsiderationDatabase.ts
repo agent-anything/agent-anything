@@ -31,6 +31,7 @@ export class ActivityReconsiderationDatabase {
   }
   publish(fact:ActivityPublishedFact):ActivityPublishedFact {
     [fact.id,fact.sourceId,fact.ref.owner,fact.ref.kind,fact.ref.id,fact.ref.revision].forEach(activityToken);
+    if(fact.origin)[fact.origin.stageId,fact.origin.acceptanceId].forEach(activityToken);
     const source=this.read<ActivityFactSource>("activity_fact_sources",fact.sourceId);if(!source||source.owner!==fact.ref.owner)fail("source_invalid");
     const old=this.read<ActivityPublishedFact>("activity_published_facts",fact.id);if(old){same(old,fact);return old;}
     const sequence=Number(this.sql("INSERT INTO activity_published_facts(id,source_id,value,digest) VALUES (?,?,?,?)").run(fact.id,fact.sourceId,JSON.stringify(fact),modelInputValueDigest(fact)).lastInsertRowid);

@@ -19,7 +19,7 @@ export async function validateMethodAssessmentEvidence(input:EvidencePorts,asses
   if(!assessment.supported||assessment.scope!=="both"||assessment.judgmentIds.length!==1)return false;
   signal.throwIfAborted();
   const judgment=await input.representations.command({kind:"read_judgment",id:assessment.judgmentIds[0]!}) as RepresentationJudgment|null;
-  if(!judgment||judgment.kind!=="semantic"||!judgment.dependencies.stage)return false;
+  if(!judgment||judgment.runId!==method.request.recipient.runId||judgment.kind!=="semantic"||!judgment.dependencies.stage)return false;
   const stage=await input.activities.command({kind:"read_stage",requestId:judgment.dependencies.stage}) as ActivityStageState|null;
   const inputState=stage?.request.input as {method?:RepresentationMethodProgress;kind?:string;preparationStageId?:string;demand?:{dependencies:Readonly<Record<string,string>>}}|undefined;
   let prior=inputState?.method;
@@ -90,7 +90,7 @@ export async function qualifiedMethodSources(input:EvidencePorts&{readonly candi
   }
   const relationships=[...relationsById.values()];
   return {sources,relationships:relationships.map(r=>({...r,sources:[...new Set(r.sources.flatMap(s=>mapping.get(s)??[s]))]})),
-    inheritedChecks:{producerPathId:input.producerPathId,requestDigest:modelInputValueDigest(method.request),assessments:[...assessments.values()],
+    inheritedChecks:{producerPathId:input.producerPathId,runId:method.request.recipient.runId,requestDigest:modelInputValueDigest(method.request),assessments:[...assessments.values()],
       objective:method.request.objective,sourceRanges:method.request.sources.map(s=>s.access.range),requirements:representationMethodRequirements(method.request),
       requirementBindings:representationMethodRequirements(method.request).map(r=>({originalId:r.id,combinedId:r.id})),relationships,candidates:qualified}};
 }

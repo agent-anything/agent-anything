@@ -5,7 +5,7 @@ import type { InspectionReadResult, InspectionViewQuery } from "@agent-anything/
 import { inspectionQuery, openInspectorSession } from "./InspectorClient.js";
 import { inspectionReadLocation } from "../navigation/InspectionLocation.js";
 
-export const areas = ["Definitions", "Runs", "Model Interaction", "Execution", "Comparison"];
+export const areas = ["Definitions", "Runs", "Model Interaction", "Execution", "Context Process", "Comparison"];
 export const views: Record<string, InspectionViewQuery | "get_execution_flow"> = { Overview: "list_runs", Requests: "get_model_request", Calls: "get_execution", Records: "list_records", "Execution Flow": "get_execution_flow", Hierarchy: "get_hierarchy", Lifecycle: "get_lifecycle", "Data Flow": "get_data_flow", Scheduling: "get_scheduling", Dependencies: "get_dependencies", Timeline: "get_timeline", Telemetry: "get_telemetry" };
 export const areaViews: Record<string, string[]> = {
   Definitions: ["Records", "Data Flow", "Dependencies"],
@@ -13,6 +13,7 @@ export const areaViews: Record<string, string[]> = {
   "Model Interaction": ["Requests", "Data Flow", "Records", "Telemetry"],
   Execution: ["Calls", "Scheduling", "Timeline", "Dependencies", "Data Flow", "Records"],
   Comparison: ["Records"],
+  "Context Process": ["Records"],
 };
 export interface InspectionBundle {
   snapshot: InspectionReadResult;
@@ -82,7 +83,7 @@ export function useInspectionSnapshot() {
       const recordId = params.get("record");
       const detail = recordId ? await inspectionQuery({ ...scope, kind: "get_record", recordId }, abort.signal)
         : selected ? await inspectionQuery({ ...scope, kind: "get_subject", subject: selected }, abort.signal) : null;
-      const result = await inspectionQuery(view === "Execution Flow"
+      const result = await inspectionQuery(area === "Context Process" ? {...scope, kind: "list_records", limit: 1} : view === "Execution Flow"
         ? runId ? { ...scope, kind: "get_execution_flow", runId, limit: 100 } : { ...scope, kind: "list_records", limit: 1 }
         : { ...scope, ...viewFilter(), limit: view === "Requests" || view === "Calls" || view === "Scheduling" ? 50 : 100 }, abort.signal);
       if (active !== generation.current) return;
@@ -99,7 +100,7 @@ export function useInspectionSnapshot() {
     if (completedKey.current !== key) void load();
   }, [ready, key]);
 
-  function navigate(values: Record<string, string | null>) {
+  function navigate(values: Record<string, string | null>, replace = false) {
     const next = new URLSearchParams(params);
     if (values.area && values.area !== area) {
       next.delete("view"); next.delete("record");
@@ -107,13 +108,13 @@ export function useInspectionSnapshot() {
       next.delete("detail"); next.delete("content");
     }
     for (const [name, value] of Object.entries(values)) { if (value === null) next.delete(name); else next.set(name, value); }
-    setParams(next);
+    setParams(next, {replace});
   }
   function choose(subject: InspectionSubjectRef) {
     navigate({subject: JSON.stringify(subject), record: null});
   }
   function selectRun(subject: InspectionSubjectRef) {
-    navigate({run: subject.id, subject: JSON.stringify(subject), record: null, detail:null, content:null, flowRun:null, flowInvocation:null, flowOccurrence:null, flowStep:null, dataFocus:null});
+    navigate({run: subject.id, subject: JSON.stringify(subject), record: null, detail:null, content:null, flowRun:null, flowInvocation:null, flowOccurrence:null, flowStep:null, dataFocus:null, cpRuns:null, cpPage:null, cpMetric:null, cpMetricPage:null});
   }
   function showRecord(record: InspectionRecord) { navigate({ subject: JSON.stringify(record.subject), record: record.id }); }
   async function findRecord(recordId: string) {
@@ -145,7 +146,7 @@ export function useInspectionSnapshot() {
     finally { pagePending.current = false; setPaging(false); }
   }
   async function refresh() {
-    if (datasetId) { await load(true); await loadDatasets(false); return; }
+    if (datasetId) { await load(true); await loadDatasets(false); if(area==="Context Process")setParams(current=>{const next=new URLSearchParams(current);next.set("cpRefresh","true");return next;}); return; }
     if (sourceId) { await loadDatasets(false); return; }
     try { const result = await inspectionQuery({ kind: "list_sources" }); setSources(result.sources); }
     catch (failure) { setError((failure as Error).message); }

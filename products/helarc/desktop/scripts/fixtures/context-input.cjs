@@ -121,7 +121,7 @@ async function main(){
     await accept({id:"consumer-input-need",scope:"parent",actor:"parent-agent",parts:[{owner:"activity",kind:"input_need",proposal:{id:"input-need",supplier:"context-representation",
       stage:{id:"model-request",pathId:"model-path",stageKind:"model",capabilities:["model-access"],dependencies:[]},
       unavailableStage:{id:"model-unavailable",pathId:"model-path",stageKind:"input-unavailable",capabilities:[],dependencies:[]}}}]});
-    const judgment={id:"combination",owner:"context-representation",kind:"combination",subjects:[representation.ref],inputs:[range],purpose:recipient.purpose,target,
+    const judgment={id:"combination",owner:"context-representation",runId:recipient.runId,evidenceSources:[],kind:"combination",subjects:[representation.ref],inputs:[range],purpose:recipient.purpose,target,
       methodRevision:"original-exact:1",dependencies:{inputDigest:digest(prepared)},coverage:[range],conclusion:"supported",limitations:["Original identity and known structure, not generated semantic preservation"],basis:"Original Child bytes, source and recipient retained without transformation"};
     await store.representations.command({kind:"judge",judgment});
     const proposal=contextInputAcceptance({id:"accept-input",scope,expectedSelectionId:null,expectedControlRevision:0,

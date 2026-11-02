@@ -32,7 +32,7 @@ export class HelarcActivityService {
 
   constructor(private readonly options:HelarcActivityServiceOptions) {
     this.processor=new ActivityHandoffProcessor(options.store.activityHandoffs,options.purposes,
-      options.store.activityJournal.executor,()=>new Date().toISOString(),options.purposeIds);
+      options.store.activityJournal.executor,()=>new Date().toISOString(),options.purposeIds,options.store.observeActivityTiming);
     this.pump=new ActivityHandoffPump(options.store.activityHandoffs,this.processor,options.reconsideration?
       new ActivityReconsiderationProcessor(options.store.activityHandoffs,options.store.sharedAcceptance,options.reconsideration):undefined);
     this.unsubscribe=options.store.onActivityChange(()=>this.pump.wake());

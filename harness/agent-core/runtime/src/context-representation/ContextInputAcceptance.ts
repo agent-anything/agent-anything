@@ -30,7 +30,7 @@ export function contextInputAcceptance(input:{
   const selectionId=input.selection?.id??input.retainedSelectionId;
   if(!selectionId || prepared.demand.runId!==scope.runId || prepared.demand.recipient!==scope.recipient ||
     prepared.demand.purpose!==scope.purpose || prepared.demand.targetRevision!==scope.target ||
-    judgment.owner!==scope.owner || judgment.kind!=="combination" || judgment.conclusion!=="supported" ||
+    judgment.owner!==scope.owner || judgment.runId!==scope.runId || judgment.kind!=="combination" || judgment.conclusion!=="supported" ||
     judgment.purpose!==scope.purpose || judgment.target!==scope.target || judgment.dependencies.inputDigest!==modelInputValueDigest(prepared)) {
     throw new TypeError("input_acceptance_owner_basis_invalid");
   }

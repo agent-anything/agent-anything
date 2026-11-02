@@ -1,4 +1,6 @@
 import type { InspectionJson, InspectionRecordInput, InspectionSubjectRef } from "./InspectionRecord.js";
+import {INSPECTION_PROCESS_CATEGORIES} from "./InspectionProcessEvidence.js";
+import {validWorkMeasurement} from "./InspectionWorkMeasurement.js";
 import { validateExecutionFlowDefinition, type ExecutionFlowDefinition } from "@agent-anything/observability/execution-flow";
 
 const kinds = new Set(["run", "turn", "request", "provider-attempt", "call", "operation", "action", "attempt", "control", "definition", "artifact", "context", "contribution", "hook", "event", "process", "process-observation", "flow-definition", "flow-invocation", "flow-step"]);
@@ -8,6 +10,7 @@ const text: Check = (value) => typeof value === "string" && value.length <= 4096
 const identity: Check = (value) => typeof value === "string" && value.length > 0 && value.length <= 512;
 const integer: Check = (value) => Number.isSafeInteger(value) && Number(value) >= 0;
 const bool: Check = (value) => typeof value === "boolean";
+const duration:Check = value=>typeof value==="number"&&Number.isFinite(value)&&value>=0;
 const nullable = (check: Check): Check => (value) => value === null || check(value);
 const oneOf = (...values: string[]): Check => (value) => typeof value === "string" && values.includes(value);
 const array = (check: Check): Check => (value) => Array.isArray(value) && value.length <= 2048 && value.every(check);
@@ -16,6 +19,15 @@ function shape(fields: Record<string, Check>): Check {
     Object.keys(value).length === Object.keys(fields).length && Object.entries(fields).every(([key, check]) => check((value as Record<string, unknown>)[key]));
 }
 const payloads: Record<string, Record<string, Check>> = {
+  evaluation_report: {reportId: identity, comparison: oneOf("C01", "C02", "C03", "C04"), target: text,
+    startingBoundary: identity, status: oneOf("complete", "partial"), trialCount: integer, limitationCount: integer},
+  work_measurement:{version:oneOf("1"),origin:()=>true,purpose:()=>true,target:()=>true,data:()=>true},
+  process_evidence: {version:oneOf("1"),origin:shape({owner:identity,id:identity,runId:nullable(identity),revision:identity}),digest:identity,
+    category:oneOf(...INSPECTION_PROCESS_CATEGORIES),subject:value=>{try{validateInspectionRef(value as InspectionSubjectRef);return true;}catch{return false;}},
+    name:identity,status:nullable(identity),purpose:nullable(identity),recipient:nullable(shape({runId:identity,recipient:identity,purpose:identity})),relationCount:integer},
+  process_relationship: {version:oneOf("1"),evidence:shape({origin:shape({owner:identity,id:identity,runId:nullable(identity),revision:identity}),digest:identity}),ordinal:integer,total:integer},
+  work_timing:{version:oneOf("1"),intervalId:identity,owner:identity,runId:identity,pathId:identity,stageId:identity,attemptId:nullable(identity),workId:nullable(identity),
+    purposeDigest:identity,phase:identity,boundary:oneOf("started","finished"),clock:shape({domain:identity,monotonicMs:duration}),durationMs:nullable(duration),outcome:nullable(oneOf("returned","threw"))},
   recording_link: {stage: oneOf("recovery_prepared"), target: nullable(shape({sourceId: identity, datasetId: identity, runId: identity})), limitation: nullable(identity)},
   context_planning: {requestId: identity, planningId: identity, disposition: identity, measurement: identity,
     inputTokens: nullable(integer), proxyBytes: integer, workingTarget: nullable(integer), anchorRequestId: nullable(identity), limitationCount: integer},
@@ -138,12 +150,30 @@ export function validateInspectionInput(input: InspectionRecordInput): void {
   if (input.id !== undefined && (typeof input.id !== "string" || input.id.length === 0 || input.id.length > 512)) throw new TypeError("Invalid inspection record ID.");
   if (input.occurredAt !== null && !Number.isFinite(Date.parse(input.occurredAt))) throw new TypeError("Invalid observation time.");
   if (input.ownerSequence != null && (!Number.isSafeInteger(input.ownerSequence) || input.ownerSequence < 0)) throw new TypeError("Invalid owner sequence.");
-  const fields = payloads[input.payload.kind];
+  if(!payloads[input.payload.kind])throw new TypeError("Invalid inspection payload.");
+  if(input.payload.kind==="work_measurement"){
+    const {kind:_,...measurement}=input.payload;
+    if(!validWorkMeasurement(measurement)||measurement.origin.runId!==input.subject.runId)throw new TypeError("Invalid inspection measurement.");
+  }
+  const fields = input.payload.kind==="work_timing"&&input.payload.category!==undefined?{...payloads.work_timing,category:oneOf("work","resource_wait","dependency_wait")}:
+    input.payload.kind==="process_evidence"?{...payloads.process_evidence,
+    ...(input.payload.executionPath?{executionPath:(value:unknown)=>{try{validateInspectionRef(value as never);return true;}catch{return false;}}}:{}),
+    ...(input.payload.judgment!==undefined?{judgment:shape({foreground:identity,investment:identity,adoption:nullable(identity),detailsContentOrdinal:(value)=>integer(value)&&Number(value)<32})}:{})}:payloads[input.payload.kind];
   if (!fields || !shape({ kind: oneOf(input.payload.kind), ...fields })(input.payload)) throw new TypeError("Invalid inspection payload.");
+  const payload=input.payload;
+  if(payload.kind==="process_evidence") {
+    if(payload.subject.sourceId!==input.subject.sourceId||payload.subject.datasetId!==input.subject.datasetId||payload.origin.runId!==input.subject.runId)
+      throw new TypeError("Invalid process evidence scope.");
+    if(payload.executionPath&&(payload.executionPath.sourceId!==input.subject.sourceId||payload.executionPath.datasetId!==input.subject.datasetId||payload.executionPath.runId!==payload.origin.runId))throw new TypeError("Invalid process evidence path scope.");
+  }
+  if(payload.kind==="process_relationship"&&(payload.ordinal>=payload.total||(input.links?.length??0)!==1||payload.evidence.origin.runId!==input.subject.runId))
+    throw new TypeError("Invalid process relationship coverage.");
+  if(payload.kind==="work_timing"&&(payload.runId!==input.subject.runId||payload.boundary==="started"&&(payload.durationMs!==null||payload.outcome!==null)))
+    throw new TypeError("Invalid work timing boundary.");
   for (const link of input.links ?? []) {
     validateInspectionRef(link.from);
     validateInspectionRef(link.to);
-    if (![link.from, link.to].every((ref) => ref.sourceId === input.subject.sourceId && ref.datasetId === input.subject.datasetId) || !relationKinds.includes(link.kind)) throw new TypeError("Invalid inspection relation scope.");
+    if (![link.from, link.to].some((ref) => ref.sourceId === input.subject.sourceId && ref.datasetId === input.subject.datasetId) || !relationKinds.includes(link.kind)) throw new TypeError("Invalid inspection relation scope.");
     const location = nullable(shape({ contentId: nullable(identity), partId: nullable(identity), jsonPointer: nullable(text), stage: identity }));
     if (!location(link.sourceLocation) || !location(link.targetLocation) || !nullable(text)(link.operation) || !nullable(oneOf("settled", "succeeded", "result"))(link.condition)) throw new TypeError("Invalid inspection relation.");
     if (link.kind === "prerequisite" && link.condition === null) throw new TypeError("A prerequisite needs its condition.");
