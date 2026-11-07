@@ -692,17 +692,6 @@ function mapNativeChatCompletionResponse(
         call: readOpenAIToolCall(candidate, request, turnId, ordinal),
       });
     }
-    if (
-      assistantContent.length === 0 &&
-      finish.kind !== "output_limit" &&
-      !(typeof refusal === "string" && refusal.trim().length > 0)
-    ) {
-      return failed(
-        "response",
-        "provider_response_empty",
-        "Provider returned an empty normal assistant turn.",
-      );
-    }
 
     return succeeded({
       kind: "native_tool_turn",

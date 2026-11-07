@@ -60,8 +60,11 @@ interface PendingRequest {
 
 /** Bounded acknowledgement-based writer; queue admission is not persistence. */
 export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRecordPort, RunCommitPort, CompositeCommitPort, RunTreeCommitPort, AgentHookRecordPort, ProcessRecordPort, ShellSessionRecordPort, ExecutionEvidenceRecordPort, FileMaterialRecordPort {
-  private readonly activityListeners=new Set<()=>void>();
-  onActivityChange(listener:()=>void):()=>void {this.activityListeners.add(listener);return ()=>{this.activityListeners.delete(listener);};}
+  private readonly activityListeners=new Set<{listener:()=>void;paths:ReadonlySet<string>|null}>();
+  onActivityChange(listener:()=>void,interest?:import("@agent-anything/agent-runtime/activity").ActivityChangeInterest):()=>void {
+    const entry={listener,paths:interest?new Set(interest.pathIds):null};
+    this.activityListeners.add(entry);return ()=>{this.activityListeners.delete(entry);};
+  }
   readonly hostSession = randomUUID();
   get activityJournal(): import("@agent-anything/agent-runtime/model-access").ModelActivityJournalSupport {
     return {port:this.activityHandoffs,executor:{hostSession:this.hostSession,worker:`model-access:main:${process.pid}`,generation:this.generation},scheduling:{pool:this.modelExecutionPool}};
@@ -112,7 +115,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       }
       if (reply.kind === "activity_observation") {
         try {this.activityObserver?.observe(reply.fact);} catch { /* Execution acknowledgement is independent of diagnostic projection. */ }
-        for(const listener of this.activityListeners){try{listener();}catch{/* Durable discovery remains authoritative. */}}
+        for(const {listener,paths} of this.activityListeners)if(!paths||paths.has(reply.fact.pathId)){try{listener();}catch{/* Durable discovery remains authoritative. */}}
         return;
       }
       if (reply.kind === "context_material_observation") {
@@ -188,9 +191,11 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver,
     activityObserver?: import("@agent-anything/agent-runtime/activity").ActivityHandoffObserver,
     contextFoundationObserver?:import("./ContextFoundationRecords.js").ContextFoundationObserver): Promise<HelarcExecutionStore> {
-    const endStartup = beginExecutionTiming(diagnostics, "storage.host.startup");
+    const startupId=randomUUID();
+    const endStartup = beginExecutionTiming(diagnostics, "storage.host.startup",{startupId});
     let worker: Worker;
-    try {worker = new Worker(workerUrl, { workerData: { directory, performanceDiagnostics: Boolean(diagnostics?.performance) } });}
+    try {worker = new Worker(workerUrl, { workerData: { directory, performanceDiagnostics: Boolean(diagnostics?.performance),
+      startup:{id:startupId,processId:process.pid,timeOrigin:performance.timeOrigin,monotonicMs:performance.now()} } });}
     catch (error) {endStartup("failed"); throw error;}
     const store = await new Promise<HelarcExecutionStore>((resolve, reject) => {
       const timer = setTimeout(() => failed(new ExecutionStoreError("execution_storage_start_timeout")), EXECUTION_STORE_LIMITS.acknowledgementMs);
@@ -203,6 +208,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       };
       const prematureExit = () => failed(new ExecutionStoreError("execution_storage_start_failed"));
       const message = (reply: ExecutionStoreReply) => {
+        if (reply.kind === "performance") {try {diagnostics?.performance?.(reply.event);} catch {} return;}
         if (reply.kind === "startup_failed") { failed(new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)})); return; }
         if (reply.kind !== "ready") { failed(new ExecutionStoreError("execution_storage_protocol_invalid")); return; }
         const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher, contextMaterialObserver,activityObserver,contextFoundationObserver);
@@ -212,7 +218,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       };
       worker.once("error", failed);
       worker.once("exit", prematureExit);
-      worker.once("message", message);
+      worker.on("message", message);
     });
     try {
       // Product delivery and bounded material release can be interrupted separately.
@@ -523,6 +529,9 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   async readRunTree(rootRunId: string): Promise<RunTreeRecoveryRecords | null> {
     return await this.request({kind: "read_run_tree", rootRunId}) as RunTreeRecoveryRecords | null;
   }
+  async prepareConversationHandoff(sourceRunId: string, sessionId: string): Promise<import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff> {
+    return await this.request({kind: "prepare_conversation_handoff", sourceRunId, sessionId}) as import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff;
+  }
   async readRunCommit(recordId: string): Promise<RunCommit | null> {
     const result = await this.request({kind: "read_owner_commit", recordId}) as ExecutionOwnerCommit | null;
     if (result && result.kind !== "run") throw new ExecutionStoreError("execution_commit_owner_mismatch");
@@ -559,6 +568,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
       end("failed");
       throw error;
     });
+    for(const {listener} of this.activityListeners){try{listener();}catch{}}
     return this.closing;
   }
 
@@ -665,6 +675,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     this.failure = code;
     const error = new ExecutionStoreError(code, cause === undefined ? undefined : {cause});
     this.failureCause = error;
+    for(const {listener} of this.activityListeners){try{listener();}catch{}}
     this.recordFailure(stage, error, this.flight?.command ?? undefined, this.flight);
     for (const {event, receivedAt} of this.workerTimings.values()) {
       try {this.diagnostics?.performance?.({...event, kind: "finished", durationMs: performance.now() - receivedAt,

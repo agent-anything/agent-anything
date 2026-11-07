@@ -63,6 +63,7 @@ describe("ActivityHandoffProcessor control races",()=>{
       if(command.kind==="pending")return [{sequence:1,runId:"run",pathId:"path",requestId:"stage",kind:stage.status==="admitted"?"execution":"reconciliation"}];
       if(command.kind==="read_stage")return stage;
       if(command.kind==="read_path") {if(finishDuringRead){release();await processor.settled();}return path;}
+      if(command.kind==="observe_paths") {if(finishDuringRead){release();await processor.settled();}return [{pathId:"path",runId:"run",changeRevision:1,controlRevision:0,progressRevision:0,cancelled:false}];}
       if(command.kind==="dispatch"){stage={...stage,status:"dispatched",attempt:command.attempt};return {granted:true,stage};}
       if(command.kind==="save_raw"){stage={...stage,status:"raw_result",result:command.result};return stage;}
       if(command.kind==="review_scheduling")return null;

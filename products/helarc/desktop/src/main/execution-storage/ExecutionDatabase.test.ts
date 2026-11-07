@@ -37,7 +37,7 @@ afterEach(async () => {
 function directory(): string { const value = mkdtempSync(join(tmpdir(), "helarc-execution-")); directories.push(value); return value; }
 function open(path: string): ExecutionDatabase { const value = new ExecutionDatabase(path); databases.push(value); return value; }
 
-it.each([31,32,33,34,35])("refuses recovery format %i without migrating or deleting its retained content", version => {
+it.each([31,32,33,34,35,41,42])("refuses recovery format %i without migrating or deleting its retained content", version => {
   const path = directory(), first = open(path);
   const intent = {id:"retained-report",runId:"child",basis:"original-report",predecessor:null,deadlineAt:"2099-01-01T00:00:00Z",stages:["source"]};
   first.contextPreparationCommand(first.generation,{kind:"open",intent});
@@ -109,6 +109,24 @@ it("retains exact reference transfers and stable bounded public-execution pages 
 
 // Real Worker restarts and FULL durable commits are not five-second unit tests.
 describe("execution owner persistence", {timeout: 20_000}, () => {
+  it("returns verified large content without rewriting it and still rejects corruption after warm reads",async()=>{
+    const root=directory(),base=treeCommit(0),commit={...base,runs:base.runs.map(run=>({...run,control:{...run.control,
+      controllerCheckpoints:[["large",{text:"immutable evidence ".repeat(10000)}]]}}))} as unknown as RunTreeCommit;
+    const events:import("../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent[]=[];
+    const store=await HelarcExecutionStore.open(root,compiledWorker,undefined,undefined,{record(){},performance(e){events.push(e);}});stores.push(store);
+    await store.commitRunTree(commit);
+    const raw=new Database(join(root,"execution.sqlite"));
+    try {
+      const count=()=>raw.prepare("SELECT count(*) AS n FROM execution_content").get();
+      const before=count();expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);expect(count()).toEqual(before);
+      // The next command also drains asynchronous timing reports for the preceding read.
+      expect(await store.readRunTreeCommit(commit.id)).toEqual(commit);await store.readLatestRunTree("run-1");
+      expect(events.some(e=>e.kind==="finished"&&(e.counters?.["content.returnRootReuses"]??0)>0)).toBe(true);
+      const row=raw.prepare("SELECT value FROM run_tree_commits WHERE record_id=?").get(commit.id) as {value:string};
+      raw.prepare("DELETE FROM execution_content WHERE id=?").run(JSON.parse(row.value).root);
+      await expect(store.readRunTreeCommit(commit.id)).rejects.toMatchObject({code:"execution_records_corrupt"});
+    }finally{raw.close();}
+  });
   describe.sequential("measures growing retained conversations across Worker reopen",()=>{
     let root="";
     let revision = 0;
@@ -177,6 +195,13 @@ describe("execution owner persistence", {timeout: 20_000}, () => {
     expect(await reopened.readLatestRunTree("run-1")).toEqual(commit);
     await reopened.close();
     const finished = events.filter(event => event.kind === "finished");
+    const entries=finished.filter(event=>event.stage==="storage.worker.entry");
+    expect(entries).toHaveLength(2);
+    for(const entry of entries){
+      const startup=finished.find(event=>event.stage==="storage.host.startup"&&event.context.startupId===entry.context.startupId)!;
+      expect(entry.context.timingBasis).toBe("shared_process_clock_create_to_entry");
+      expect(entry.durationMs).toBeLessThanOrEqual(startup.durationMs);
+    }
     for (const stage of ["storage.host.encode", "storage.host.queue", "storage.host.round_trip", "storage.host.worker_start_wait",
       "storage.worker.dispatch", "storage.worker.encode_reply", "storage.worker.checkpoint.transaction", "storage.worker.checkpoint.boundary"]) {
       expect(finished.some(event => event.stage === stage && event.durationMs >= 0)).toBe(true);

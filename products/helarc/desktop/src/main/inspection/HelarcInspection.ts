@@ -12,6 +12,7 @@ import { FileMaterialInspectionAdapter } from "./FileMaterialInspectionAdapter.j
 import {ContextMaterialInspectionAdapter} from "./ContextMaterialInspectionAdapter.js";
 import {ActivityHandoffInspectionAdapter} from "./ActivityHandoffInspectionAdapter.js";
 import {ContextFoundationInspectionAdapter} from "./ContextFoundationInspectionAdapter.js";
+import {ExecutionPerformanceInspectionAdapter} from "./ExecutionPerformanceInspectionAdapter.js";
 
 const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: true, provider: true, execution: true });
 
@@ -27,6 +28,7 @@ export class HelarcInspection {
   readonly fileMaterialObserver: FileMaterialInspectionAdapter | undefined;
   readonly contextMaterialObserver: ContextMaterialInspectionAdapter | undefined;
   readonly activityObserver: ActivityHandoffInspectionAdapter | undefined;
+  readonly performanceObserver:ExecutionPerformanceInspectionAdapter|undefined;
   readonly contextFoundationObserver:ContextFoundationInspectionAdapter|undefined;
   readonly traceObserver: RunTraceInspectionAdapter | undefined;
   readonly processObserver: import("@agent-anything/helarc-local-environment/command").ProcessExecutionObserver | undefined;
@@ -48,6 +50,7 @@ export class HelarcInspection {
     this.fileMaterialObserver = recorder ? new FileMaterialInspectionAdapter(recorder) : undefined;
     this.contextMaterialObserver = recorder ? new ContextMaterialInspectionAdapter(recorder) : undefined;
     this.activityObserver = recorder ? new ActivityHandoffInspectionAdapter(recorder) : undefined;
+    this.performanceObserver=recorder?new ExecutionPerformanceInspectionAdapter(recorder):undefined;
     this.contextFoundationObserver=recorder?new ContextFoundationInspectionAdapter(recorder):undefined;
     this.traceObserver = recorder ? new RunTraceInspectionAdapter(recorder) : undefined;
     this.executionFlow = recorder ? {observer: new ExecutionFlowInspectionAdapter(recorder)} : undefined;
@@ -84,10 +87,25 @@ export class HelarcInspection {
         contents: [{name: "Recovered result delivery", class: "execution", stage: "delivered", mediaType: "application/json", value: input}]});
     } catch { /* Optional observation cannot invalidate an acknowledged delivery. */ }
   }
+  recordConversationHandoff(runId: string, handoff: import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff, recovered: boolean): void {
+    const r = this.recorder;
+    if (!r) return;
+    try {
+      const seed = handoff.seed;
+      const subject = r.ref("helarc", "contribution", `${runId}:conversation-handoff`, runId, seed.digest);
+      r.offer({subject, occurredAt: new Date().toISOString(),
+        payload: {kind: "event", name: "conversation.handoff.admitted", sequence: null, code: null},
+        links: [inspectionLink("produces", r.ref("runtime", "run", seed.sourceRunId, seed.sourceRunId, seed.sourceRevision), subject),
+          inspectionLink("includes", subject, r.ref("runtime", "run", runId, runId))],
+        contents: [{name: "Conversation handoff", class: "agent", stage: recovered ? "recovered" : "admitted", mediaType: "application/json",
+          value: JSON.parse(JSON.stringify({runId, recovered, ...handoff}))}]});
+    } catch { /* Observation cannot change accepted conversation or material access. */ }
+  }
   async save(candidate: unknown): Promise<HelarcInspectionSettingsSnapshot> {
     const settings = snapshotHelarcInspectionSettings(candidate);
     await this.file.transact(async (file) => {
       await file.replaceText(JSON.stringify({ formatVersion: 1, settings }));
+      this.performanceObserver?.flush();
       this.recorder?.setPolicy({ revision: randomUUID(), ...settings });
       this.settings = settings;
     });
@@ -136,6 +154,7 @@ export class HelarcInspection {
       links: [inspectionLink("includes", r.ref("runtime", "run", runId, runId), subject)]});
   }
   async close(): Promise<void> {
+    this.performanceObserver?.close();
     const result = await this.recorder?.flush(true);
     if (result && (result.native !== "settled" || result.projection !== "settled"))
       console.warn("Helarc inspection closure is incomplete.", result);

@@ -131,6 +131,7 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly conversationSourceRunId?: string;
   readonly activityHost:HelarcActivityHost;
   readonly executionStore: HelarcExecutionStore;
   readonly recoveryAdmission?: HelarcExecutionAdmission;
@@ -506,7 +507,12 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     now,
   });
   const manager = createHostRunManager({ runner, now });
+  const conversationHandoff = input.recoveryAdmission ? input.recoveryAdmission.conversationHandoff : (input.conversationSourceRunId ? {
+    ...await input.executionStore.prepareConversationHandoff(input.conversationSourceRunId, input.sessionId),
+    recipientAgent: {id: product.agent.id, revision: product.agent.revision},
+  } : undefined);
   const hostRunStartInput = {
+    modelInteractionSeed: conversationHandoff?.seed,
     sessionId: input.sessionId,
     agent: product.agent,
     runInput: {
@@ -592,6 +598,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
         .filter(key => recoveryEnvironment!.environment[key] !== process.env[key]).sort()});
   } else if (input.executionStore) {
     await input.executionStore.admitProductRun({version: 3, rootRunId, productRunId: input.productRunId,
+      ...(conversationHandoff ? {conversationHandoff} : {}),
       sessionId: input.sessionId, createdAt: now(), task: input.task, inputItems: input.inputItems,
       workspace: runWorkspace, identity: runContext.identity, providerProfile: input.providerProfile,
       providerBinding: retainHelarcProviderBinding(input.provider),
@@ -602,6 +609,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       executionBindings, commandEnvironment: input.executionStore.retainCommandEnvironment(commandActions.recoveryEnvironment)});
   }
   if (input.executionStore) await input.inspection?.registerExecutionRecording(rootRunId, Boolean(input.recoveryAdmission), input.executionStore);
+  if (conversationHandoff) input.inspection?.recordConversationHandoff(rootRunId, conversationHandoff, Boolean(input.recoveryAdmission));
   await activities.prepareActivation();
   let started = false;
   let releaseExecution: (() => void) | undefined;

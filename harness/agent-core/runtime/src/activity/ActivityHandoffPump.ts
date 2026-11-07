@@ -31,7 +31,7 @@ export class ActivityHandoffPump {
       if(scope.signal.aborted)continue;
       try {
         if(this.reconsideration)reconsiderations.push({runId:scope.runId,result:await this.reconsideration.scan(scope.runId,scope.signal)});
-        runs.push({runId:scope.runId,result:await this.processor.scan(scope.runId,scope.signal)});
+        runs.push({runId:scope.runId,result:await this.processor.scan(scope.runId,scope.signal,64,true)});
       }
       catch(error){if(!scope.signal.aborted||error!==scope.signal.reason)failures.push({runId:scope.runId,error});}
     }

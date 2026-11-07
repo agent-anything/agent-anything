@@ -459,6 +459,18 @@ export class ActivityHandoffDatabase {
         return this.path(intent.id);
       }
       case "read_path": return this.path(command.pathId);
+      case "observe_paths": {
+        if(!Array.isArray(command.pathIds)||!command.pathIds.length||command.pathIds.length>64||new Set(command.pathIds).size!==command.pathIds.length)fail("observation_scope_invalid");
+        return command.pathIds.map(pathId=>{
+          activityToken(pathId);
+          const row=this.sql("SELECT run_id,control_revision,progress_revision,cancelled FROM activity_paths WHERE id=?").get(pathId) as
+            Pick<PathRow,"run_id"|"control_revision"|"progress_revision"|"cancelled">|undefined;
+          if(!row)return null;
+          const fact=this.sql("SELECT sequence FROM activity_facts WHERE run_id=? AND path_id=? ORDER BY sequence DESC LIMIT 1").get(row.run_id,pathId) as {sequence:number}|undefined;
+          if(!fact)fail("observation_fact_missing");
+          return {pathId,runId:row.run_id,changeRevision:fact.sequence,controlRevision:row.control_revision,progressRevision:row.progress_revision,cancelled:row.cancelled===1};
+        });
+      }
       case "resource_allowance":return this.resources.allowance(this.requirePath(command.pathId).intent);
       case "reserve_resources": {
         const reservation=command.reservation,path=this.requirePath(reservation.pathId),stage=this.requireStage(reservation.requestId);

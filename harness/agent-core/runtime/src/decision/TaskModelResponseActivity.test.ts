@@ -20,11 +20,14 @@ function fixture() {
   let stage: ActivityStageState | null = {request: {id: "task:model", pathId: "task", stageKind: "model"}, status: "accepted",
     result: {id: "raw", completeness: "complete", outcome: "returned"}, receipt: {id: "acceptance", requestId: "task:model", resultId: "raw", owner: "task-decision", progress}} as ActivityStageState;
   let unavailable:ActivityStageState|null=null;
+  let observationRevision=1;
   const listeners = new Set<() => void>(), records = new Map<string, unknown>(), order: string[] = [];
   let receipt: SharedAcceptanceReceipt | null = null;
   const changed = () => {for (const listener of listeners) listener();};
   const activities: ActivityHandoffPort = {command: vi.fn(async command => {
     order.push(command.kind);
+    if(command.kind==="observe_paths")return command.pathIds.map(pathId=>({pathId,runId:"root",changeRevision:observationRevision,
+      controlRevision:path.controlRevision,progressRevision:0,cancelled:path.cancelled}));
     if (command.kind === "read_path") return structuredClone(path);
     if(command.kind==="read_input_need")return {id:"task:input-need",supplier:"context-representation",
       stage:{id:"task:model",pathId:"task"},unavailableStage:{id:"task:input-unavailable",pathId:"task"}};
@@ -53,8 +56,8 @@ function fixture() {
     host: {assertAvailable: vi.fn(), subscribe: (listener: () => void) => {order.push("subscribe"); listeners.add(listener); return () => {listeners.delete(listener);};}, wake: changed},
     rediscoveryMs: 5, settlementWaitMs: 100};
   return {input, context, source, path, proposal, progress, records, listeners, order, activities, acceptance, ports, cancellation,
-    activity: new TaskModelResponseActivity(ports), setStage: (value: ActivityStageState | null, notify = true) => {stage = value; if (notify) changed();},
-    stage: stage!, setUnavailable:(value:ActivityStageState)=>{stage=null;unavailable=value;changed();},setReceipt: (value: SharedAcceptanceReceipt) => {receipt = value;}};
+    activity: new TaskModelResponseActivity(ports), setStage: (value: ActivityStageState | null, notify = true) => {stage = value; observationRevision++; if (notify) changed();},
+    stage: stage!, setUnavailable:(value:ActivityStageState)=>{stage=null;unavailable=value;observationRevision++;changed();},setReceipt: (value: SharedAcceptanceReceipt) => {receipt = value;}};
 }
 
 describe("TaskModelResponseActivity", () => {

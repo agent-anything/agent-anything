@@ -53,6 +53,8 @@ interface EncodedSubtree {
 
 /** Representation evidence only. Never proves that bytes exist in SQLite. */
 export class ExecutionContentScope {
+  readonly verifiedRoots = new WeakMap<object, ExecutionContentRoot>();
+  readonly verifiedRootBytes = new WeakMap<object, number>();
   readonly decoded = new Map<string, DecodedSubtree>();
   readonly encoded = new WeakMap<object, Omit<EncodedSubtree, "blocks">>();
   readonly blocks = new Map<string, ExecutionContentBlock>();
@@ -449,6 +451,14 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
   if (!root || root.format !== 1 || typeof root.root !== "string" || !hashPattern.test(root.root) ||
       Object.keys(root).some(key => key !== "format" && key !== "root" && key !== "blocks" && key !== "bytes")) fail("execution_content_format_invalid");
   const cache = new Map<string, Block>();
+  const sourceBlocks = new Map<string,ExecutionContentBlock>();
+  const representations:[object,Omit<EncodedSubtree,"blocks">][]=[];
+  const represented=new WeakSet<object>();
+  const rememberRepresentation=(value:unknown,node:Node,size:number,height:number)=>{
+    if(scope&&immutable&&value!==null&&typeof value==="object"&&!represented.has(value)&&representations.length<EXECUTION_CONTENT_LIMITS.blocks) {
+      represented.add(value);representations.push([value,{node,bytes:size,height}]);
+    }
+  };
   // Scope sharing to this expansion. These values already belong to its result;
   // large subtrees need not be retained in the bounded cross-call cache.
   const decodedSubtrees = new Map<string, DecodedSubtree>();
@@ -469,6 +479,7 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
       value = verified ? verified.parse(block) : parseExecutionContentBlock(block);
       if (immutable) references.set(id, verified ? verified.references(block) : contentReferences(value));
       cache.set(id, value);
+      if(scope&&immutable)sourceBlocks.set(id,block);
       if (cache.size > EXECUTION_CONTENT_LIMITS.blocks) fail("execution_content_capacity_exceeded");
     }
     return value;
@@ -538,6 +549,7 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
         frame.height = Math.max(frame.height, depth + retained.height - frame.depth);
         frame.pathHeight = Math.max(frame.pathHeight, path.size + retained.pathHeight - frame.basePath);
       }
+      rememberRepresentation(retained.value,node as Node,retained.bytes,retained.height);
       return retained.value;
     }
     for (const frame of frames) frame.height = Math.max(frame.height, depth - frame.depth);
@@ -556,6 +568,7 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
         if ((reference || entry.bytes >= 4096) && decodedSubtrees.size < EXECUTION_CONTENT_LIMITS.blocks) decodedSubtrees.set(key, entry);
         if (reference || entry.bytes >= 4096) scope?.rememberDecoded(key, entry);
         verified?.rememberDecoded(key, entry);
+        rememberRepresentation(value,node as Node,entry.bytes,entry.height);
       }
       return value;
     } finally {frames.pop();}
@@ -575,7 +588,15 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
     };
     verifyClosure(root.root);
   }
-  return using(root.root, block => { if (block[0] !== "value") fail("execution_content_corrupt"); return visit(block[1], 0); });
+  const value=using(root.root, block => { if (block[0] !== "value") fail("execution_content_corrupt"); return visit(block[1], 0); });
+  if(scope&&immutable) {
+    scope.retain([...sourceBlocks.values()],representations);
+    if(value!==null&&typeof value==="object") {
+      scope.verifiedRoots.set(value,Object.freeze({format:1,root:root.root}));
+      scope.verifiedRootBytes.set(value,bytes);
+    }
+  }
+  return value;
 }
 
 /** Freeze only already validated/decoded JSON; never invokes arbitrary input accessors. */

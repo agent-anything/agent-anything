@@ -7,18 +7,19 @@ import type {MaterialCustodyDatabase} from "./MaterialCustodyDatabase.js";
 import type {ContextMaterialDatabase,ContextMaterialTransfer} from "./ContextMaterialDatabase.js";
 import type {SharedAcceptanceDatabase} from "./SharedAcceptanceDatabase.js";
 
-/** Called only within the validated Run commit transaction, never by model arguments alone. */
+/** Called within validated Run or Product admission transactions, never by model arguments alone. */
 export class RunMaterialTransfers {
   constructor(private readonly legacy:ContextMaterialDatabase,private readonly custody:MaterialCustodyDatabase,
     private readonly acceptance:SharedAcceptanceDatabase,private readonly head:(runId:string)=>RunCommit|null) {}
 
-  accept(transfer:ContextMaterialTransfer):void {
+  accept(transfer:ContextMaterialTransfer, admittedRecipient?:MaterialRecipient):void {
     const references=snapshotContextMaterialRefs(transfer.references);
     const retained=references.filter(ref=>!ref.id.startsWith("custody:"));
     if(retained.length)this.legacy.accept({...transfer,references:retained});
     const managed=references.filter(ref=>ref.id.startsWith("custody:"));
     if(!managed.length)return;
-    const source=this.recipient(transfer.sourceRunId),recipient=this.recipient(transfer.recipientRunId);
+    const source=this.recipient(transfer.sourceRunId),recipient=admittedRecipient??this.recipient(transfer.recipientRunId);
+    if(recipient.runId!==transfer.recipientRunId)throw new ContextMaterialError("material_recipient_mismatch",transfer.id);
     for(const reference of managed) {
       const description=this.custody.command({kind:"resolve_reference",reference,recipient:source}) as MaterialAccessDescription;
       const id=`${transfer.id}:custody:${modelInputValueDigest(reference)}`,basis=`${transfer.basis.kind}:${transfer.basis.id}`;
@@ -31,6 +32,23 @@ export class RunMaterialTransfers {
         }}]});
       if(receipt.outcome!=="accepted")throw new ContextMaterialError(receipt.rejection?.code??"material_transfer_unaccepted",id);
     }
+  }
+
+  visibleReferences(runId:string):readonly import("@agent-anything/context/material").ContextMaterialRef[] {
+    const refs:import("@agent-anything/context/material").ContextMaterialRef[]=[];
+    let after:string|null=null;
+    for(;;) {
+      const page=this.legacy.visibleReferences(runId,after);
+      if(!page.length)break;
+      refs.push(...page);after=page.at(-1)!.id;
+    }
+    const recipient=this.recipient(runId);after=null;
+    do {
+      const page=this.custody.command({kind:"list_references",recipient,after,limit:16}) as MaterialReferencePage;
+      if(page.nextAfter!==null&&page.nextAfter<=(after??""))throw new TypeError("material_reference_page_invalid");
+      refs.push(...page.references);after=page.nextAfter;
+    }while(after!==null);
+    return refs;
   }
 
   inherit(input:Omit<ContextMaterialTransfer,"references">):void {

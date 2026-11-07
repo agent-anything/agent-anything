@@ -11,6 +11,7 @@ import {TaskModelResponseWork, type TaskModelSource} from "./TaskModelResponsePa
 import {TaskDecisionActivityError} from "./TaskDecisionActivityError.js";
 import {RetryInvocationInvalidatedError} from "../retry/RetryWaitControl.js";
 import {ActivityChangeWait as ResultWake} from "../activity/ActivityChangeWait.js";
+import {ActivityObservationCursor,type ActivityChangeInterest} from "../activity/ActivityObservation.js";
 
 export interface TaskModelResponseSubmission {
   readonly identity: Omit<ActivityPathIntent, "purpose" | "owner">;
@@ -30,7 +31,7 @@ export interface TaskModelResponseActivityPorts<T> {
   readonly resourceMetering: TaskDecisionResourceMetering;
   /** Pure original-source binding. It must not dispatch work or decide context representation. */
   readonly prepare: (input: TaskDecisionInputSources<T>, context: AgentActivityExecutionContext) => TaskModelResponseSubmission | Promise<TaskModelResponseSubmission>;
-  readonly host: {assertAvailable(): void; subscribe(listener: () => void): () => void; wake(): void};
+  readonly host: {assertAvailable(): void; subscribe(listener: () => void,interest?:ActivityChangeInterest): () => void; wake(): void};
   readonly rediscoveryMs: number;
   readonly settlementWaitMs: number;
 }
@@ -116,11 +117,15 @@ export class TaskModelResponseActivity<T = unknown> implements TaskDecisionActiv
   private async observe(retained: RetainedTaskSubmission, context: AgentActivityExecutionContext, interrupting: boolean): Promise<TaskDecisionProposal<T> | null> {
     const deadline = interrupting ? Date.now() + this.ports.settlementWaitMs : Date.parse(context.retry.deadlineAt);
     if (!Number.isFinite(deadline)) throw new TypeError("task_response_deadline_invalid");
-    const wake = new ResultWake(this.ports.host, interrupting ? null : context.cancellation.signal);
+    const paths=[retained.handoff.pathId];
+    const wake = new ResultWake(this.ports.host, interrupting ? null : context.cancellation.signal,{pathIds:paths});
+    const cursor=new ActivityObservationCursor(this.ports.activities,paths);
+    let observed:TaskModelResponseObservation<T>|null=null;
     try {
       while (true) {
         const version = wake.version;
-        const observed = await readTaskModelResponseHandoff<T>(this.ports.activities, retained.handoff);
+        if(await cursor.changed())observed = await readTaskModelResponseHandoff<T>(this.ports.activities, retained.handoff);
+        if(!observed)throw new TaskResponseBindingError("task_response_observation_missing");
         if(observed.kind==="input_unavailable") {
           if(interrupting)return null;
           throw new TaskDecisionActivityError({kind:"input_preparation",failure:{code:"context_input_unavailable",

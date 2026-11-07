@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 export const baselineScenarios = Object.freeze([
   "accepted", "effect", "child", "opening_prepared", "continued_child", "approval", "approval_applied",
-  "ending_feedback", "ending_exhausted", "interaction_admitted", "interaction_prepared", "interaction_accepted",
+  "ending_feedback", "ending_exhausted", "ending_empty_feedback", "ending_empty_exhausted", "interaction_admitted", "interaction_prepared", "interaction_accepted",
   "interaction_call_feedback", "interaction_steering", "material_child", "material_read_prepared",
 ]);
 

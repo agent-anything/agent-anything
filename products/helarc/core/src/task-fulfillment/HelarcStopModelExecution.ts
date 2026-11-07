@@ -1,7 +1,7 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {InvocationInterruptionContext} from "@agent-anything/agent-core/control";
 import type {AgentStopEvent} from "@agent-anything/agent-hooks/events";
-import {ActivityChangeWait,type ActivityHandoffPort,type SharedAcceptancePort,type ActivityPathIntent,type ActivityPathState,
+import {ActivityChangeWait,ActivityObservationCursor,type ActivityChangeInterest,type ActivityHandoffPort,type SharedAcceptancePort,type ActivityPathIntent,type ActivityPathState,
   type ActivitySchedulingIntent,type ActivityStageState} from "@agent-anything/agent-runtime/activity";
 import {validateContextInputUnavailability,type ContextInputUnavailability} from "@agent-anything/agent-runtime/context-representation";
 import {HELARC_STOP_MODEL_PURPOSE,HelarcStopModelWork,interpretHelarcStopModelOutcome,type HelarcStopModelProgress} from "./HelarcStopModelWork.js";
@@ -16,7 +16,7 @@ interface Ports {
   readonly arrange:(source:HelarcStopModelSource,pathId:string)=>Promise<{
     readonly identity:Omit<ActivityPathIntent,"purpose"|"owner">;readonly schedule:ActivitySchedulingIntent;
   }>;
-  readonly host:{assertAvailable():void;subscribe(listener:()=>void):()=>void;wake():void};
+  readonly host:{assertAvailable():void;subscribe(listener:()=>void,interest?:ActivityChangeInterest):()=>void;wake():void};
   readonly rediscoveryMs:number;
 }
 
@@ -66,11 +66,17 @@ export class HelarcStopModelExecution implements HelarcStopExecution {
     if(original.id!==source.id||modelInputValueDigest(original.event)!==modelInputValueDigest(source.event)||
       original.request.metadata.stopInstructionsRevision!==source.request.metadata.stopInstructionsRevision||
       modelInputValueDigest(original.request.interaction)!==modelInputValueDigest(source.request.interaction))throw new TypeError("stop_original_source_changed");
-    const wake=new ActivityChangeWait(this.ports.host,interruption.signal);
+    const wake=new ActivityChangeWait(this.ports.host,interruption.signal,{pathIds:[pathId]});
+    const cursor=new ActivityObservationCursor(this.ports.activities,[pathId]);
     try {
       this.ports.host.wake();
       while(true) {
-        const version=wake.version,path=await this.path(pathId);
+        const version=wake.version;
+        this.ports.host.assertAvailable();interruption.signal.throwIfAborted();
+        if(!await cursor.changed()&&Date.now()<Date.parse(originalPath.intent.deadlineAt)) {
+          await wake.wait(version,Math.max(0,Math.min(this.ports.rediscoveryMs,Date.parse(originalPath.intent.deadlineAt)-Date.now())));continue;
+        }
+        const path=await this.path(pathId);
         if(!path)throw new TypeError("stop_original_path_missing");
         const need=await readCurrentModelInputNeed(this.ports.activities,path,`${pathId}:input-need`,`${pathId}:source`);
         const model=need?await this.stage(need.stage.id):null,unavailable=need?await this.stage(need.unavailableStage.id):null;

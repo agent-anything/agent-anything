@@ -94,9 +94,6 @@
 .wb-title-line strong {
   min-width: 0;
 }
-.wb-title-line .wb-status {
-  flex-shrink: 0;
-}
 .wb-request-elapsed {
   display: inline-flex;
   align-items: center;

@@ -107,6 +107,42 @@ remains pending and is captured as external-input evidence, not invented approva
 or an automatically supplied answer. The original timeout/cancellation policy
 still joins target cleanup before allowing the next trial.
 
+## S01 Conversation Check
+
+The focused Desktop driver `products/helarc/desktop/scripts/evaluation/s01-target.cjs`
+takes a new isolated directory, `live` or `denial`, and an optional Ollama URL.
+It uses the formal Desktop conversation entry, real SQLite storage and Inspector;
+it is not a substitute for the general EvaluationProcess or a published Report.
+The live target is gemma4:e4b at localhost:11435 by default. Never set
+ELECTRON_RUN_AS_NODE when launching the Electron driver. Build Desktop first.
+
+The two inputs aggregate a fixed CSV and then correct one value without changing
+the source. File changes to result.csv use the declared fixture approval policy;
+other actions wait for an explicit `decision-<key>.json` with the exact disclosed
+interaction `identity` and `kind: accept | decline`. Review the original request
+before supplying that decision. Questions are not automatically answered.
+The denial variant scripts the Provider, not execution or permission results.
+
+`--continue-terminal` reopens the original thread for the predeclared second input
+after the first result exists. It does not resume active work or rerun the first
+operation. Failed Runs remain failed. All source files and intermediate evidence
+are retained. Exact-text comparison fields are not CSV-semantic grades.
+
+Run `node src/s01-capture.mjs <directory>` from this package to read every original
+recording at a fixed watermark, compare encoded inputs to actual HTTP bodies, and
+check same-Run and cross-Run history continuity, native exchange closure and the
+occurrences of the original assignment and subsequent correction. This is
+read-only and does not call the model.
+Its request match counts describe observations of one input, not multiple sends.
+
+From the Desktop package, `node scripts/verify-conversation-handoff.mjs` runs three
+real Electron processes over SQLite: commit the source effect and target admission,
+interrupt before the first target request, then recover and reopen for verification.
+It checks the original seed, scoped material access, Inspector and an effect that
+must occur exactly once. `node scripts/verify-execution-recovery.mjs` also accepts
+the `ending_empty_feedback` and `ending_empty_exhausted` scenario names to verify
+that normal empty responses retain their recovery count across process loss.
+
 Published reports are available under Context Process > Evaluation when Inspector
 opens the printed `inspection` root. Reports retain original recording watermarks,
 scope, exclusions and missing measurements, and work without a live Run. Reading

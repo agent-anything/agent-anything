@@ -147,6 +147,12 @@ export class ContextMaterialDatabase {
     }
     return references;
   }
+  visibleReferences(runId: string, after: string | null): readonly ContextMaterialRef[] {
+    const refs = this.sql("SELECT m.id,m.revision FROM context_material_members p JOIN context_materials m ON m.id=p.material_id WHERE p.run_id=? AND m.id>? ORDER BY m.id LIMIT 16")
+      .all(runId, after ?? "") as ContextMaterialRef[];
+    for (const ref of refs) this.access(runId, ref);
+    return refs;
+  }
   private consumer(id: string): {state:string; digest:string; value:string} | undefined {
     const row = this.sql("SELECT state,digest,value FROM context_material_consumers WHERE id=?").get(id) as {state:string; digest:string; value:string} | undefined;
     if (row && (contextMaterialDigest(row.value) !== row.digest || !["prepared", "accepted", "released"].includes(row.state))) fail("context_consumer_corrupt");

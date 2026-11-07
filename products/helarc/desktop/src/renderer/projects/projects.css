@@ -14,9 +14,11 @@
 .project-conversation:hover { background: #eaf0ec; }
 .project-conversation[aria-current="page"] { color: #214f3e; background: #e0ebe4; }
 .project-conversation-spinner { color: #346b97; animation: project-conversation-spin 1s linear infinite; }
+.project-conversation-attention { color: #8a640b; animation: project-conversation-attention 2.4s ease-in-out infinite; }
 @keyframes project-conversation-spin { to { transform: rotate(360deg); } }
+@keyframes project-conversation-attention { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 @media (prefers-reduced-motion: reduce) {
-  .project-conversation-spinner { animation: none; }
+  .project-conversation-spinner, .project-conversation-attention { animation: none; }
 }
 .project-row[data-selected="true"] .project-heading { color: #214f3e; }
 .project-editor { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 24px; border: 1px solid #cfd7d1; border-radius: 8px; color: #242b28; box-shadow: 0 16px 64px #172e3426; overflow: auto; font: 13px system-ui, sans-serif; }

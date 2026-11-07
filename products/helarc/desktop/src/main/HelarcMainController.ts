@@ -229,6 +229,7 @@ export type HelarcMainErrorCode =
   | "thread_not_selected"
   | "thread_selection_mismatch"
   | "thread_not_open"
+  | "conversation_history_unavailable"
   | "thread_workspace_mismatch"
   | HelarcWorkContextError["code"]
   | ProviderCredentialStoreError["code"]
@@ -281,6 +282,7 @@ type HelarcRunStartCommitTarget =
     };
 
 interface ResolvedHelarcRunStartTarget {
+  readonly conversationSourceRunId: string | null;
   readonly project: HelarcProjectRef | null;
   readonly threadId: string;
   readonly startedAt: string;
@@ -700,6 +702,7 @@ export class HelarcMainController {
       workspaceProfileId,
       workspaceProfiles,
       project,
+      conversationSourceRunId,
     } = resolvedTarget.target;
     const preparedStart = prepareHelarcRunStart({
       runId,
@@ -773,6 +776,7 @@ export class HelarcMainController {
         runTranscriptPort: this.runTranscriptPort,
         inspection: this.inspection,
         inputItems,
+        conversationSourceRunId: conversationSourceRunId ?? undefined,
         permissionPreset: preparedStart.prepared.run.permissionPreset,
         sessionAuthorityPort: this.sessionAuthorityStore,
         persistentPolicyAmendments: this.policyAmendmentStore,
@@ -1011,6 +1015,7 @@ export class HelarcMainController {
       return {
         ok: true,
         target: {
+          conversationSourceRunId: null,
           project: projectRef,
           threadId,
           startedAt: requestedStartedAt,
@@ -1091,28 +1096,13 @@ export class HelarcMainController {
       });
     }
 
-    const inputItems: RunInputItem[] = [];
-    for (const message of record.messages) {
-      if (
-        message.role === "system" ||
-        message.role === "user" ||
-        message.role === "assistant"
-      ) {
-        inputItems.push({
-          id: message.id,
-          kind: "message",
-          role: message.role,
-          content: message.content,
-          createdAt: message.createdAt,
-          metadata: {source: "prior_conversation", threadId: record.thread.id,
-            sequence: message.sequence, relatedRunIds: [...message.relatedRunIds]},
-        });
-      }
-    }
+    const sourceRun = record.runs.find(run => run.id === record.thread.latestRunId);
+    if (!sourceRun?.harnessRunId) return rejectRunStartTarget("conversation_history_unavailable", "The conversation's execution history is unavailable.");
 
     return {
       ok: true,
       target: {
+        conversationSourceRunId: sourceRun.harnessRunId,
         project: projectRef,
         threadId: record.thread.id,
         startedAt,
@@ -1121,7 +1111,7 @@ export class HelarcMainController {
           (workspace) => workspace.profileId,
         ),
         workspaceProfiles: project ? capturedProfiles : workspaceProfiles,
-        inputItems,
+        inputItems: [],
         commitTarget: {
           kind: "existing_thread",
           threadId: record.thread.id,

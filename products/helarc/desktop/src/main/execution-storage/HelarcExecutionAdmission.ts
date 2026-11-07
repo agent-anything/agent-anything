@@ -12,6 +12,9 @@ import type {RetainedCommandEnvironment} from "./ExecutionEnvironmentProtection.
 
 /** Original Product composition, with command environment sealed by the Host. Never executable services. */
 export interface HelarcExecutionAdmission {
+  readonly conversationHandoff?: import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff & {
+    readonly recipientAgent: import("@agent-anything/agent-core/agent").AgentDefinitionRevisionRef;
+  };
   readonly version: 3;
   readonly rootRunId: string;
   readonly productRunId: string;

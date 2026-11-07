@@ -36,6 +36,22 @@ function claim(send:ReturnType<typeof open>["send"]) {
   send({kind:"claim_processing",claim:{id:"claim:1",requestId:request.id,previousClaimId:null,executor},expectedControlRevision:0});
 }
 describe("durable activity handoff", () => {
+  it("observes bounded path heads without unfolding content, survives reopen and does not certify corrupt input",()=>{
+    const f=open();seed(f.send);
+    const first=f.send({kind:"observe_paths",pathIds:["path","absent"]});
+    expect(first).toEqual([expect.objectContaining({pathId:"path",runId:"child",cancelled:false}),null]);
+    expect(f.send({kind:"observe_paths",pathIds:["path","absent"]})).toEqual(first);
+    f.send({kind:"save_raw",result});
+    expect(f.send({kind:"observe_paths",pathIds:["path","absent"]})).not.toEqual(first);
+    expect(()=>f.send({kind:"observe_paths",pathIds:Array.from({length:65},(_,i)=>`p-${i}`)})).toThrow();
+    const changed=f.send({kind:"observe_paths",pathIds:["path"]});f.db.close();
+    const recovered=open(f.directory);expect(recovered.send({kind:"observe_paths",pathIds:["path"]})).toEqual(changed);
+    const raw=new SqliteDatabase(join(f.directory,"execution.sqlite"));
+    try{raw.prepare("UPDATE activity_stages SET digest='changed' WHERE id=?").run(request.id);
+      expect(recovered.send({kind:"observe_paths",pathIds:["path"]})).toEqual(changed);
+      expect(()=>recovered.send({kind:"read_stage",requestId:request.id})).toThrow(/corrupt/);
+    }finally{raw.close();}
+  });
   it("does not reuse mutable stage state or stored integrity decisions with immutable value digests",()=>{
     const f=open();seed(f.send);
     expect(f.send({kind:"read_stage",requestId:request.id})).toMatchObject({status:"dispatched",result:null});

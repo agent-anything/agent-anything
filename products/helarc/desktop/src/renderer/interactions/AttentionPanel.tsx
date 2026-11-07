@@ -9,6 +9,7 @@ import {
   ClarificationPromptPanel,
   defaultGrantedPermissions,
 } from "./InteractionPanels.js";
+import { currentInteractionRequests, requiresUserInput } from "./InteractionAttention.js";
 
 export function AttentionPanel({
   snapshot,
@@ -25,8 +26,10 @@ export function AttentionPanel({
   const [selected, setSelected] = useState<string | null>(null),
     [collapsed, setCollapsed] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
-  const requests =
-    snapshot.execution === "active" && run && !run.display.terminal ? run.host.pendingInteractions : [];
+  const requests = currentInteractionRequests(snapshot);
+  const attentionCount = requests.filter(requiresUserInput).length;
+  const submittedCount = requests.filter(request => request.phase === "submitted_for_resolution").length;
+  const title = attentionCount ? "Needs your input" : submittedCount ? "Processing your response" : "Interaction unavailable";
   const identity = (r: HelarcPendingInteractionSnapshot) =>
     JSON.stringify([
       r.runId,
@@ -35,7 +38,7 @@ export function AttentionPanel({
       r.request.requestVersion,
     ]);
   const selectedRequest =
-    requests.find((r) => identity(r) === selected) ?? requests[0];
+    requests.find((r) => identity(r) === selected) ?? requests.find(requiresUserInput) ?? requests[0];
   useEffect(() => {
     if (!target) return;
     const request = requests.find((r) => r.runId === target.runId);
@@ -47,13 +50,13 @@ export function AttentionPanel({
   }, [target?.sequence]);
   if (!run || !requests.length) return null;
   return (
-    <section className="wb-attention" aria-label="Needs your input">
+    <section className="wb-attention" aria-label={title}>
       <header className="wb-attention-heading">
         <h2 ref={heading} tabIndex={-1}>
-          Needs your input <span>{requests.length}</span>
+          {title} <span>{attentionCount || submittedCount || requests.length}</span>
         </h2>
         <button className="wb-link" onClick={() => setCollapsed((v) => !v)}>
-          {collapsed ? "Review / answer" : "Collapse"}
+          {collapsed ? attentionCount ? "Review / answer" : "Show" : "Collapse"}
         </button>
       </header>
       <div hidden={collapsed} className="wb-attention-body">
@@ -66,7 +69,7 @@ export function AttentionPanel({
                 aria-pressed={r === selectedRequest}
                 onClick={() => setSelected(identity(r))}
               >
-                {r.family === "approval" ? "Approval" : "Question"} {i + 1}:{" "}
+                {r.family === "approval" ? "Approval" : r.family === "clarification" ? "Question" : "Unavailable interaction"} {i + 1}:{" "}
                 {r.runId === run.harnessRunId
                   ? "Main task"
                   : (tasks.find((t) => t.runId === r.runId)?.label ??
@@ -101,7 +104,7 @@ function RequestForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function submit(payload: (id: string) => unknown) {
-    if (busy || request.phase !== "pending") return;
+    if (busy || !requiresUserInput(request)) return;
     setBusy(true);
     setError(null);
     const id = crypto.randomUUID();
@@ -130,7 +133,8 @@ function RequestForm({
     <section className="wb-request">
       <header>
         <span>
-          {request.family === "approval" ? "Approval needed" : "Question"}
+          {request.phase === "submitted_for_resolution" ? "Response submitted"
+            : request.family === "approval" ? "Approval needed" : request.family === "clarification" ? "Question" : "Interaction unavailable"}
         </span>
 
         {request.expiresAt && (

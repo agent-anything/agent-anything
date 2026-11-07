@@ -7,6 +7,8 @@ const {writeFileSync} = require("node:fs");
 const {inspect} = require("node:util");
 const [directory, scenario, stage] = process.argv.slice(2);
 const endingRecovery = scenario.startsWith("ending_");
+const endingExhausted = scenario.endsWith("_exhausted");
+const emptyTurn = scenario.startsWith("ending_empty_");
 const interactionRecovery = scenario.startsWith("interaction_");
 const materialRecovery = scenario.startsWith("material_");
 app.setPath("userData", join(directory, "electron-user-data"));
@@ -41,6 +43,14 @@ async function main() {
   const inspection = process.env.HELARC_RECOVERY_INSPECTION === "1" && stage === "resume"
     ? await HelarcInspection.create(join(directory, "inspection-settings.json"), inspectionRoot) : null;
   if (inspection) assert.equal(inspection.snapshot().health.available, true);
+  if (inspection) {
+    const offer = inspection.recorder.offer.bind(inspection.recorder);
+    inspection.recorder.offer = input => {
+      const accepted = offer(input);
+      if (!accepted) writeFileSync(join(directory, `rejected-${Date.now()}.json`), JSON.stringify(input, null, 2));
+      return accepted;
+    };
+  }
   const store = await HelarcExecutionStore.open(join(directory, "execution"), undefined, inspection?.evidenceObserver,
     inspection?.fileMaterialObserver, diagnostics, new ElectronSafeStorageCredentialCipher(), inspection?.contextMaterialObserver,inspection?.activityObserver,inspection?.contextFoundationObserver);
   const activityHost=createHelarcActivityHost(store,{diagnostics});
@@ -182,7 +192,7 @@ async function main() {
           : [];
       } else if (scenario === "interaction_accepted" && stage === "seed" && calls === 3) {
         requested = [{name: "update_plan", input: {plan: [{step: "Append the execution marker", status: "in_progress"}]}}];
-      } else if (endingRecovery && (stage === "seed" && calls > 1 || stage !== "seed" && scenario === "ending_exhausted")) {
+      } else if (endingRecovery && (stage === "seed" && calls > 1 || stage !== "seed" && endingExhausted)) {
         requested = [];
       } else if (stage !== "seed") {
         // Only a genuine final response is supplied after restart: never recreate accepted work.
@@ -201,7 +211,7 @@ async function main() {
         providerCallRef: {providerId: provider.descriptor.id, id: `${responseId}:${ordinal}`}, ordinal,
         name: ["final_result", "update_plan"].includes(call.name) ? call.name : request.interaction.callables.find(value => value.name.startsWith(`${call.name}_`)).name,
         input: call.input})}));
-      if (requested.length === 0) content.push({kind: "text", text: `Ordinary report without an ending signal (${stage}:${calls}).`});
+      if (requested.length === 0 && !emptyTurn) content.push({kind: "text", text: `Ordinary report without an ending signal (${stage}:${calls}).`});
       return {kind: "succeeded", response: snapshotProviderResponse({kind: "native_tool_turn", turn: {turnId, assistant: {role: "assistant", content},
         finish: {kind: "normal"}, usage: {inputTokens: 1000 + runCall * 100, outputTokens: 12,
           totalTokens: 1000 + runCall * 100 + 12, costUnits: null, metadata: {}},
@@ -441,8 +451,8 @@ async function main() {
       await writeFile(join(directory, "submitted-approval.json"), JSON.stringify(submitted, null, 2));
     }
     const outcome = await result;
-    assert.equal(outcome.runResult.status, scenario === "ending_exhausted" ? "failed" : "completed", JSON.stringify(outcome.runResult.cause));
-    if (scenario === "ending_exhausted") assert.equal(outcome.runResult.cause.failure.failure.code,
+    assert.equal(outcome.runResult.status, endingExhausted ? "failed" : "completed", JSON.stringify(outcome.runResult.cause));
+    if (endingExhausted) assert.equal(outcome.runResult.cause.failure.failure.code,
       "model_protocol_recovery_exhausted", JSON.stringify(outcome.runResult.cause));
     assert.equal(await readFile(marker, "utf8"), "x");
     const after = await store.readRunTree(rootRunId);
@@ -467,7 +477,7 @@ async function main() {
         requests.filter(request => request.metadata.runId === previous.head.state.run.id && !request.composition.lineage.auxiliary).length + replayedTurn);
       assert.equal(next.head.state.startedAt, previous.head.state.startedAt);
       assert.equal(next.head.state.deadlineAt, previous.head.state.deadlineAt);
-      assert.equal(next.head.state.plan.steps[0].status, scenario === "ending_exhausted" ? "in_progress" : "completed");
+      assert.equal(next.head.state.plan.steps[0].status, endingExhausted ? "in_progress" : "completed");
       if (previous.head.state.plan) assert.equal(next.head.state.plan.id, previous.head.state.plan.id);
     }
     const processes = (await Promise.all(after.members.map(member => store.readProcesses(member.head.state.run.id)))).flat();
@@ -499,7 +509,7 @@ async function main() {
         }
         assert(observed,"Accepted input usage must survive SQLite Worker persistence with original stage and input");
       } else {
-        assert.equal(scenario, "ending_exhausted", "This fixture only leaves the exhausted final response unaccepted");
+        assert(endingExhausted, "This fixture only leaves the exhausted final response unaccepted");
       }
       assert.equal(request.instructions.content.length, 0, "Recovery must not enable optional Instructions");
       assert(!request.composition.sections.some(section => section.kind === "active_run_context"));
@@ -546,8 +556,8 @@ async function main() {
     if (endingRecovery) {
       const state = after.members[0].head.control.controllerCheckpoints.find(([key]) =>
         JSON.parse(key)[2] === "helarc.ending-signal-recovery")[1];
-      assert.equal(state.consecutiveMissing, scenario === "ending_exhausted" ? 3 : 0);
-      assert.equal(state.disposition, scenario === "ending_exhausted" ? "exhausted" : "reset");
+      assert.equal(state.consecutiveMissing, endingExhausted ? 3 : 0);
+      assert.equal(state.disposition, endingExhausted ? "exhausted" : "reset");
       assert.equal(seed.calls, 3, "One command turn plus two correction turns before restart");
       assert(requests.every(request => request.instructions.content.length === 0), "Recovery must not enable System Instructions");
     }
@@ -608,6 +618,7 @@ async function main() {
     if (inspection) {
       await inspection.close();
       const health = inspection.recorder.health();
+      await writeFile(join(directory, `${stage}-inspection-health.json`), JSON.stringify(health));
       assert.equal(health.dropped, 0); assert.equal(health.rejected, 0);
       assert.equal(health.unpersisted, 0); assert.equal(health.unconfirmed, 0);
       const {InspectionQueryService} = await import("@agent-anything/inspection/query");
@@ -631,25 +642,28 @@ async function main() {
           const value = JSON.parse((await query.query({...selection, kind: "get_content", contentId: content.id})).content.text);
           assert(value.references.some(ref => ref.id === materialRef.id && ref.revision === materialRef.revision));
         }
-        const bindings = records.filter(record => record.payload.kind === "event" && record.payload.name === "Model activity binding");
-        assert(bindings.length > 0, "Actual recovered model access must be recorded");
+        // T07 records purpose-bound stages, not the retired model-activity-access flow.
+        // Compare the actual recovered requests with their retained dispatch evidence.
+        const bindings = records.filter(record => record.payload.kind === "request" &&
+          record.contents.some(content => content.name === "Accepted request and dispatch state"));
+        const dispatched = [];
         for (const record of bindings) {
-          const content = record.contents.find(value => value.name === "Model activity binding");
+          const content = record.contents.find(value => value.name === "Accepted request and dispatch state");
           assert.equal(content.availability, "present");
-          const value = JSON.parse((await query.query({...selection, kind: "get_content", contentId: content.id})).content.text);
-          assert.equal(value.runId, record.subject.runId);
-          assert.equal(value.id, record.subject.id);
+          let offset = 0, text = "";
+          do {
+            const page = (await query.query({...selection, kind: "get_content", contentId: content.id, offset, length: 65536})).content;
+            text += page.text; offset = page.nextOffset;
+          } while (offset !== null);
+          const value = JSON.parse(text);
+          assert.equal(value.request.requestId, record.subject.id);
+          assert.equal(value.request.metadata.runId, record.subject.runId);
+          if (value.attempt) dispatched.push(value);
         }
-        const step = records.find(record => record.payload.kind === "flow_step" && record.payload.observation.kind === "step_entered" &&
-          record.payload.observation.definition.id === "model-activity-access" && record.payload.observation.stepId === "binding");
-        assert(step);
-        const fact = step.payload.observation;
-        const detail = await query.query({...selection, kind: "get_flow_occurrence", runId: fact.runId,
-          invocationId: fact.invocationId, occurrenceId: fact.stepExecutionId});
-        assert(detail.flow.occurrence.references.some(ref => ref.role === "output" && ref.availability === "present" &&
-          ref.reference.kind === "model_activity"), "Activity material must resolve through the Inspector query path");
+        for (const request of requests) assert(dispatched.some(value => value.request.requestId === request.requestId &&
+          JSON.stringify(value.request.messages) === JSON.stringify(request.messages)), "Actual recovered request and dispatch must be inspectable");
         assert(records.some(record => record.payload.kind === "recording_link" && record.payload.target?.datasetId === "resume"));
-        inspectionEvidence = {...selection, recordCount: records.length, modelActivityBindings: bindings.length, resolvedActivity: true};
+        inspectionEvidence = {...selection, recordCount: records.length, purposeBoundRequests: bindings.length, resolvedActivity: true};
       } finally { await query.close(); }
     }
     await writeFile(join(directory, "resume.json"), JSON.stringify({scenario, status: outcome.runResult.status, effects: 1, modelCalls: calls,

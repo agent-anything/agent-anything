@@ -42,6 +42,18 @@ function fixture() {
 }
 
 describe("Helarc protocol recovery", () => {
+  it("charges an empty accepted turn once across recreation and retains the empty exchange on exhaustion", async () => {
+    const f = fixture();
+    f.next.mockImplementation(async i => ({...decision(i), modelItems: decision(i).modelItems.filter(item => item.kind !== "assistant_text")}));
+    await f.controller.next(input(1), f.context);
+    const restored = new HelarcProtocolRecoveryController(f.inner);
+    await restored.recover(input(1), f.context);
+    expect(f.saved.get(key)).toMatchObject({consecutiveMissing: 1});
+    await restored.next(input(2), f.context);
+    await expect(restored.next(input(3), f.context)).rejects.toMatchObject({failure: {failure: {code: "model_protocol_recovery_exhausted"}},
+      exchange: {modelItems: [expect.objectContaining({kind: "model_turn_finish"}), expect.objectContaining({kind: "model_response_correlation"})]}});
+    expect(f.port.commit).toHaveBeenCalledTimes(3);
+  });
   it("fails on the third missing signal, without another call on recovered exhaustion", async () => {
     const f = fixture();
     for (let n = 1; n < 3; n++) expect((await f.controller.next(input(n), f.context)).kind).toBe("continue_with_feedback");

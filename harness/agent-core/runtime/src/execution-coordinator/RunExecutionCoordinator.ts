@@ -1,4 +1,5 @@
 import type { AgentDefinition } from "@agent-anything/agent-core/agent";
+import {snapshotModelConversationSeed} from "../decision/TaskConversation.js";
 import { snapshotToolResultPresenters } from "./ToolResultPresenter.js";
 import { publishRunObservation } from "./RunObserver.js";
 import { publishRunExecutionObservation } from "./RunExecutionObserver.js";
@@ -160,7 +161,7 @@ export class RunExecutionCoordinator {
       ordinaryConfig.config,
       null,
       Object.freeze([]),
-      null,
+      options.modelInteractionSeed ? snapshotModelConversationSeed(options.modelInteractionSeed) : null,
       tree.rootLineage,
       tree,
       measureInitialRunContextBytes(inputSnapshot),

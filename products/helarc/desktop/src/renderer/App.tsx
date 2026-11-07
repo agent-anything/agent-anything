@@ -28,7 +28,7 @@ import { ExecutionRecovery } from "./conversation/ExecutionRecovery.js";
 import { RequestElapsed } from "./conversation/RequestElapsed.js";
 import { ConversationPlan } from "./plan/PlanView.js";
 import { AttentionPanel } from "./interactions/AttentionPanel.js";
-import { CurrentWorkPanel, displayStatus } from "./work/CurrentWorkPanel.js";
+import { CurrentWorkPanel } from "./work/CurrentWorkPanel.js";
 import { useRead } from "./workbench/useRead.js";
 import { ProjectNavigation } from "./projects/ProjectNavigation.js";
 import { ProjectEditor } from "./projects/ProjectEditor.js";
@@ -106,9 +106,6 @@ export function App() {
   const runActive = snapshot.execution === "active" && !!snapshot.run && !snapshot.run.display.terminal;
   const workInFlight = snapshot.execution !== "idle";
   const activeProject = snapshot.projects.find((project) => project.id === snapshot.selectedProjectId) ?? null;
-  const attentionCount = runActive
-    ? snapshot.run!.host.pendingInteractions.length
-    : 0;
   useEffect(() => {
     if (!window.helarc) return;
     void window.helarc
@@ -472,12 +469,6 @@ export function App() {
                   ? "New conversation"
                   : (snapshot.activeThread?.title ?? "Helarc")}
               </strong>
-              {!newThread && snapshot.run && (attentionCount > 0 || snapshot.run.display.status !== "running") && (
-                <span className={`wb-status ${snapshot.run.display.status}`}
-                  role="status" aria-label="Conversation status">
-                  {attentionCount ? "Needs your input" : displayStatus(snapshot.run.display.status)}
-                </span>
-              )}
               <RequestElapsed snapshot={snapshot} submissionStartedAt={submissionStartedAt}
                 newConversation={newThread} visible={!settings} />
             </div>

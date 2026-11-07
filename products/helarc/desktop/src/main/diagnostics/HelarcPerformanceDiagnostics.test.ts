@@ -57,7 +57,10 @@ it("keeps work counters separate from durations and excludes unknown/sensitive c
   await diagnostics.flush();
   const text = await readFile(path, "utf8"), report = JSON.parse(text);
   expect(report.counters["storage.worker.command:commit_run_tree:encode.reusedBytes"]).toEqual({reports: 1, total: 1000, max: 1000});
-  expect(report.recent[0].counters).toEqual({"encode.nodes": 20, "encode.reusedBytes": 1000});
+  expect(report.recent[0].counters).toMatchObject({"encode.nodes": 20, "encode.reusedBytes": 1000,
+    "loop.activeUs":expect.any(Number),"loop.idleUs":expect.any(Number)});
+  expect(report.recent[0].context.cpuBasis).toMatch(/current_thread|unavailable/);
+  expect(report.recent[0].counters["decode.nodes"]).toBeUndefined();
   expect(report.totals["storage.worker.command:commit_run_tree"].count).toBe(1);
   expect(text).not.toContain("private-prompt");
 });

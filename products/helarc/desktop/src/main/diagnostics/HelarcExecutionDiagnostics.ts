@@ -20,12 +20,15 @@ export class HelarcExecutionDiagnostics implements ExecutionDiagnosticSink {
   private tail: Promise<void> = Promise.resolve();
   private readonly timings: HelarcPerformanceDiagnostics;
 
-  constructor(path: string) {
+  constructor(path: string,private readonly observer?:ExecutionPerformanceSink) {
     this.file = new SerializedAtomicFile(path);
     this.timings = new HelarcPerformanceDiagnostics(join(dirname(path), "execution-performance.json"));
   }
 
-  performance(event: ExecutionPerformanceEvent): void {this.timings.record(event);}
+  performance(event: ExecutionPerformanceEvent): void {
+    this.timings.record(event);
+    try {this.observer?.performance?.(event);}catch{/* Observation cannot change execution. */}
+  }
 
   record(stage: string, context: ExecutionDiagnosticContext, error: unknown): void {
     void this.timings.flush();

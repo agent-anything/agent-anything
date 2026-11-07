@@ -47,8 +47,8 @@ export class ActivityHandoffProcessor {
     private readonly acceptedPurposeIds?:readonly string[],private readonly observeTiming?:(event:ActivityTimingObservation)=>void) {}
 
   /** Bounded discovery/dispatch never waits for a long external execution. */
-  async scan(runId:string,signal:AbortSignal,maximum=64):Promise<ActivityDrainResult> {
-    const result=await this.process(runId,signal,maximum,false);
+  async scan(runId:string,signal:AbortSignal,maximum=64,schedulingReviewed=false):Promise<ActivityDrainResult> {
+    const result=await this.process(runId,signal,maximum,false,schedulingReviewed);
     return this.collect(runId,result);
   }
   /** Explicit completion wait for callers that own no other runnable work. */
@@ -66,11 +66,11 @@ export class ActivityHandoffProcessor {
     const completed=this.completed.get(runId);this.completed.delete(runId);
     return {progressed:[...result.progressed,...(completed?.progressed??[])],pending:[...result.pending,...(completed?.pending??[])],failures:[...result.failures,...(completed?.errors??[])]};
   }
-  private async process(runId: string, signal: AbortSignal, maximum:number,wait:boolean): Promise<ActivityDrainResult> {
+  private async process(runId: string, signal: AbortSignal, maximum:number,wait:boolean,schedulingReviewed=false): Promise<ActivityDrainResult> {
     const progressed: string[] = [], pending: {requestId:string;reason:string}[] = [];
     const failures:{requestId:string;error:unknown}[]=[];
     if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 256) throw new TypeError("activity_drain_bound_invalid");
-    await this.port.command({kind:"review_scheduling"});
+    if(!schedulingReviewed)await this.port.command({kind:"review_scheduling"});
     let items = await this.port.command({kind:"pending",runId,after:this.cursors.get(runId) ?? 0,limit:maximum}) as readonly ActivityHandoffItem[];
     if (!items.length && this.cursors.get(runId)) items = await this.port.command({kind:"pending",runId,after:0,limit:maximum}) as readonly ActivityHandoffItem[];
     this.cursors.set(runId,items.at(-1)?.sequence ?? 0);
@@ -78,13 +78,20 @@ export class ActivityHandoffProcessor {
       signal.throwIfAborted();
       // Capture local ownership before asynchronous reads: completion can remove it during those reads.
       const inFlight=this.executing.get(item.requestId);
+      if(inFlight) {
+        const heads=await this.port.command({kind:"observe_paths",pathIds:[item.pathId]}) as readonly (import("./ActivityObservation.js").ActivityPathObservation|null)[];
+        const head=heads[0];
+        if(!head||head.pathId!==item.pathId||head.runId!==runId)throw new TypeError("activity_handoff_scope_invalid");
+        if(head.cancelled) {
+          const current=await this.port.command({kind:"read_path",pathId:item.pathId}) as ActivityPathState|null;
+          if(!current||current.intent.runId!==runId)throw new TypeError("activity_handoff_scope_invalid");
+          if(current.cancelled)inFlight.controller.abort(new ActivityCancellationError(current));
+        }
+        pending.push({requestId:item.requestId,reason:"execution_in_flight"});continue;
+      }
       let stage = await this.port.command({kind:"read_stage",requestId:item.requestId}) as ActivityStageState | null;
       const path = await this.port.command({kind:"read_path",pathId:item.pathId}) as ActivityPathState | null;
       if (!stage || !path || path.intent.runId !== runId) throw new TypeError("activity_handoff_scope_invalid");
-      if(inFlight) {
-        if(path.cancelled)inFlight.controller.abort(new ActivityCancellationError(path));
-        pending.push({requestId:item.requestId,reason:"execution_in_flight"});continue;
-      }
       if(this.acceptedPurposeIds&&!this.acceptedPurposeIds.includes(path.intent.purpose.contract.ref.id))continue;
       const expectedStatus={admission:"submitted",execution:"admitted",reconciliation:"dispatched",interpretation:"raw_result",settlement:"raw_result"} as const;
       if(stage.status!==expectedStatus[item.kind]) {

@@ -6,6 +6,7 @@ export function activityCommandObservation(command:ActivityHandoffCommand):Perfo
   const result:Record<string,string>={activityCommand:command.kind};
   if("runId" in command)result.runId=command.runId;
   if("pathId" in command&&typeof command.pathId==="string")result.pathId=command.pathId;
+  if(command.kind==="observe_paths"&&command.pathIds.length===1)result.pathId=command.pathIds[0]!;
   if("requestId" in command)result.stageId=command.requestId;
   if(command.kind==="dispatch"){result.attemptId=command.attempt.id;result.stageId=command.attempt.requestId;}
   if(command.kind==="save_raw"){result.attemptId=command.result.attemptId;result.recordId=command.result.id;}

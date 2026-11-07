@@ -309,6 +309,8 @@ export interface RunExecutionCoordinatorDependencies {
 }
 
 export interface RunInvocationOptions {
+  /** Frozen working conversation for a new execution, never authority to replay it. */
+  readonly modelInteractionSeed?: import("../decision/TaskConversation.js").ModelConversationSeed;
   /** Recovery-only control, accepted durably before any restored member activates. */
   readonly recoveryCancellation?: import("../run/index.js").RunCancellationRequestInput;
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;

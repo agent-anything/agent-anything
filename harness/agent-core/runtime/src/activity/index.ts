@@ -10,6 +10,7 @@ export * from "./ActivityReconsideration.js";
 export * from "./ActivityReconsiderationProcessor.js";
 export * from "./SharedAcceptance.js";
 export * from "./ActivityChangeWait.js";
+export * from "./ActivityObservation.js";
 export * from "./ActivityProfessionalStop.js";
 export * from "./ActivityAuthorization.js";
 export * from "./ActivityWorkView.js";

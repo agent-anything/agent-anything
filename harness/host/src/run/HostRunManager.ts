@@ -42,6 +42,7 @@ import { createHostRunProjectionStore } from "../projection/HostRunProjectionRed
 export type HostSessionId = string;
 
 export interface HostRunStartInput<TOutput = unknown> {
+  readonly modelInteractionSeed?: import("@agent-anything/agent-runtime/decision").ModelConversationSeed;
   readonly sessionId: HostSessionId;
   readonly agent: AgentDefinition<TOutput>;
   readonly runInput: RunInput;
@@ -182,7 +183,9 @@ function startHostRun<TOutput>(
   assertStartInput(input);
   const binding = createHostRunBinding({sessionId: input.sessionId, taskId: input.runInput.task.id,
     startedAt: readNow(now), enforcement: input.runConfig.permissions.permissionProfile.enforcement}, now, onListenerFailure);
-  return binding.bind(runner.start(input.agent, input.runInput, input.runConfig, binding.observers));
+  return binding.bind(runner.start(input.agent, input.runInput, input.runConfig, {
+    ...binding.observers, modelInteractionSeed: input.modelInteractionSeed,
+  }));
 }
 
 function createHostRunBinding(

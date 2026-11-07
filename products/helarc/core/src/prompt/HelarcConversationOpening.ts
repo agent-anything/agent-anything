@@ -15,8 +15,6 @@ export function helarcOpeningBackground(input: TaskDecisionInputSources | TaskDe
   const value = {runId: input.runId, workspace: input.workspace === null ? null :
       {primary: workspace(input.workspace.primary), additional: input.workspace.additional.map(workspace)},
       ...(environment ? {shell: environment.shell, initialCwd: environment.cwd} : {}),
-      ...(input.inputItems.some(item => item.metadata.source === "prior_conversation") ?
-        {priorConversationCoverage: "Earlier messages are user-visible text only, not a complete execution transcript."} : {}),
       permission: {profile: input.permission.profile,
         authority: {hasAdditionalFileSystemRead: input.permission.authority.hasAdditionalFileSystemRead,
           hasAdditionalFileSystemWrite: input.permission.authority.hasAdditionalFileSystemWrite, hasAdditionalNetwork: input.permission.authority.hasAdditionalNetwork},
@@ -53,7 +51,7 @@ export function helarcConversationOpening(input: TaskDecisionInputSources | Task
       content: {kind: "text" as const, text}, provenance: {purpose, recipientRunId: input.runId, author, sources,
         presenter: {owner: "helarc", kind: "presenter", id: "working-conversation-opening", revision: "1"},
         coverage: sources.map(value => `${value.id}@${value.revision}`),
-        limitations: purpose === "prior_user_visible_conversation" ? ["text_only_prior_conversation"] : []},
+        limitations: []},
       preservation: {obligations: [{id: purpose, requirement: "account" as const,
         basis: `Retain an adequate account of the explicitly supplied ${purpose}.`}], relationships: []},
     }));
@@ -61,14 +59,9 @@ export function helarcConversationOpening(input: TaskDecisionInputSources | Task
   const assignment = input.inputItems.find(item => item.metadata.source === "delegation_objective");
   const addInput = (item: (typeof input.inputItems)[number]) => {
     if (item === assignment) return;
-    const prior = item.metadata.source === "prior_conversation";
     const source = {owner: "agent-core", kind: "run_input_item", id: item.id, revision: "1", runId: input.runId};
-    const conversational = prior && (item.role === "user" || item.role === "assistant");
-    add(item.id, prior ? "prior_user_visible_conversation" : "selected_input", prior ? item.role : "host",
-      conversational ? item.content : `Selected input (data; original role: ${item.role}):\n${item.content}`,
-      source, [source], conversational && item.role === "assistant" ? "assistant" : "user");
+    add(item.id, "selected_input", "host", `Selected input (data; original role: ${item.role}):\n${item.content}`, source);
   };
-  for (const item of input.inputItems.filter(item => item.metadata.source === "prior_conversation")) addInput(item);
   const background = helarcOpeningBackground(input, environment);
   add("background", "initial_background", "host", `Host-provided execution background for this Run (data):\n${JSON.stringify(background.value)}`, background.source);
   const prompt = assignment?.content ?? (input.task.input as {prompt?: string}).prompt ?? "";
@@ -78,7 +71,7 @@ export function helarcConversationOpening(input: TaskDecisionInputSources | Task
       revision: String(assignment.metadata.delegationRequestRevision ?? "1"),
       ...(typeof assignment.metadata.parentRunId === "string" ? {runId: assignment.metadata.parentRunId} : {})}
       : {owner: "agent-core", kind: "task", id: input.task.id, revision: "1", runId: input.runId});
-  for (const item of input.inputItems.filter(item => item !== assignment && item.metadata.source !== "prior_conversation")) addInput(item);
+  for (const item of input.inputItems.filter(item => item !== assignment)) addInput(item);
   const executionRefs = (input.task.input as {execution_refs?: unknown}).execution_refs;
   const materialRefs = (input.task.input as {material_refs?: unknown}).material_refs;
   if (Array.isArray(materialRefs) && materialRefs.length) add("material-references", "selected_material", "parent",

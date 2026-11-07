@@ -142,7 +142,7 @@ export function ClarificationPromptPanel({
   return (
     <form className="clarification-panel" onSubmit={submit}>
       <MessageSquareText size={24} aria-hidden="true" />
-      <strong>Helarc needs your input</strong>
+      <strong>{submitted ? "Response submitted" : "Helarc needs your input"}</strong>
       {clarification.presentation.questions.map((question) => {
         const answer = answers[question.id] ?? { selected: [], text: "" };
         return (

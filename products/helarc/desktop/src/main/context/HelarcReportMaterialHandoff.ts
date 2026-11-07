@@ -1,7 +1,7 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {snapshotDelegationResult,snapshotRetainedDelegationNarrative,type DelegationResult} from "@agent-anything/agent-runtime/delegation";
 import {RunRecoveryError} from "@agent-anything/agent-runtime/execution-coordinator";
-import {ActivityChangeWait,type ActivityPathState,type ActivityStageState} from "@agent-anything/agent-runtime/activity";
+import {ActivityChangeWait,ActivityObservationCursor,type ActivityChangeInterest,type ActivityPathState,type ActivityStageState} from "@agent-anything/agent-runtime/activity";
 import {type SourceMaterialPublicationWork,type SourceMaterialPublicationRequest,type PublishedSourceMaterial} from "@agent-anything/agent-runtime/context-representation";
 import {CustodyMaterialAccess,type MaterialRecipient,type MaterialHold,type MaterialAccessDescription} from "@agent-anything/context/custody";
 import type {HelarcReportHandoff,HelarcReportHandoffOutcome} from "@agent-anything/helarc/tools";
@@ -35,7 +35,7 @@ export function createHelarcReportMaterialHandoff(input:{
   readonly publications:SourceMaterialPublicationWork;
   readonly binding:(result:DelegationResult)=>Promise<HelarcReportMaterialBinding>;
   readonly authorize:(result:DelegationResult,binding:HelarcReportMaterialBinding,signal:AbortSignal)=>Promise<boolean>;
-  readonly host:{assertAvailable():void;subscribe(listener:()=>void):()=>void;wake():void};
+  readonly host:{assertAvailable():void;subscribe(listener:()=>void,interest?:ActivityChangeInterest):()=>void;wake():void};
   readonly rediscoveryMs:number;
   readonly now?:()=>number;
 }):HelarcReportHandoff {
@@ -105,7 +105,8 @@ export function createHelarcReportMaterialHandoff(input:{
       if(admission?.outcome==="accepted")await input.store.materialCustody.command({kind:"release",holdId:`${accessId}:hold`,basis:`${accessId}:withdrawn`});
       return {status:"unavailable",reason};
     };
-    wake=new ActivityChangeWait(input.host,signal);
+    wake=new ActivityChangeWait(input.host,signal,{pathIds:[pathId]});
+    const cursor=new ActivityObservationCursor(input.store.activityHandoffs,[pathId]);
       if(signal.aborted)return await stop("report_publication_cancelled");
       input.host.assertAvailable();
       const previousStop=await readReportStop(input.store,pathId,stopBasis);
@@ -134,6 +135,9 @@ export function createHelarcReportMaterialHandoff(input:{
         const version=wake.version;
         if(signal.aborted)return await stop("report_publication_cancelled");
         try {input.host.assertAvailable();} catch {throw new RunRecoveryError(binding.parent.runId,"report_publication_host_unavailable",pathId);}
+        if(!await cursor.changed()&&now()<Date.parse(binding.deadlineAt)) {
+          await wake.wait(version,Math.max(0,Math.min(input.rediscoveryMs,Date.parse(binding.deadlineAt)-now())));continue;
+        }
         const path=await input.store.activityHandoffs.command({kind:"read_path",pathId}) as ActivityPathState|null;
         if(!path)throw new RunRecoveryError(binding.parent.runId,"report_publication_unavailable",pathId);
         const published=await input.publications.result(pathId);

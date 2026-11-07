@@ -76,7 +76,7 @@ try {
     await launch(directory, scenario, "resume", 0);
     await launch(directory, scenario, "verify", 0);
     const report = JSON.parse(await readFile(join(directory, "resume.json"), "utf8"));
-    assert.equal(report.status, scenario === "ending_exhausted" ? "failed" : "completed"); assert.equal(report.effects, 1);
+    assert.equal(report.status, scenario.endsWith("_exhausted") ? "failed" : "completed"); assert.equal(report.effects, 1);
     console.log(JSON.stringify(report));
   }
   passed = true;

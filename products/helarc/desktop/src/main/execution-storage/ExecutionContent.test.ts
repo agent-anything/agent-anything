@@ -15,6 +15,21 @@ function roundTrip(value: unknown) {
 }
 
 describe("execution content", () => {
+  it("reuses decoded representations for a new envelope without changing bytes, depth or size validation",()=>{
+    const input={history:Array.from({length:1000},(_,i)=>({i,text:`${i}:`+"retained text ".repeat(80)}))};
+    const packed=packExecutionContent(input),blocks=new Map(packed.blocks.map(b=>[b.id,b]));
+    const scope=new ExecutionContentScope(),stats=new ExecutionContentStatistics(true),encoder=new ExecutionContentEncoder(0,stats);
+    const value=unpackExecutionContent(packed,id=>blocks.get(id)!,undefined,true,scope);
+    expect(scope.verifiedRoots.get(value as object)).toEqual({format:1,root:packed.root});
+    const envelope={result:value,again:value};
+    expect(encoder.pack(envelope,scope)).toEqual(packExecutionContent(envelope));
+    expect(stats.take()["encode.nodes"]).toBeLessThan(10);
+    let deep:unknown=value;for(let i=0;i<64;i++)deep=[deep];
+    expect(()=>encoder.pack(deep,scope)).toThrow("execution_content_depth_exceeded");
+    expect(()=>encoder.pack(Array.from({length:256},()=>value),scope)).toThrow("execution_content_capacity_exceeded");
+    blocks.delete(packed.root);
+    expect(()=>unpackExecutionContent(packed,id=>blocks.get(id)!,undefined,true,scope)).toThrow("execution_content_missing");
+  });
   it("offers only verified retained transport bytes and forgets them on eviction or clear",()=>{
     const cache=new ExecutionContentCache(1024,1),a=packExecutionContent({a:1}).blocks[0]!,b=packExecutionContent({b:2}).blocks[0]!;
     expect(cache.verifiedBlock(a.id)).toBeUndefined();

@@ -200,6 +200,51 @@ function executeReadOnlyTestHostRun(
 // These integrations now execute durable shared activities, not the former in-memory coordinator.
 // A measured exchange takes 2-4 seconds; multi-turn workflows retain their own bounded cleanup.
 describe("Helarc Host Run composition", {timeout:30_000}, () => {
+  it.each([false, true])("hands off committed conversation, effects and detail access without display text (failed: %s)", withExecutionScope(async failed => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-conversation-handoff-"));
+    const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
+    const store = await openIsolatedExecutionStoreFixture();
+    const firstProvider = new ScriptedProvider([
+      {kind: "tool_call", toolName: "Write", input: {file_path: "result.txt", content: "retained result 7/20"}, assistantTexts: ["I will write the initial result."]},
+      {kind: "tool_call", toolName: "Read", input: {file_path: "result.txt"}},
+      ...(failed ? Array.from({length: 3}, () => ({kind: "tool_calls", calls: []})) : [{kind: "completion", summary: "Initial result delivered."}]),
+    ]);
+    const common = {...createTask(workspaceRoot), executionStore: store, sessionId: "continued-work",
+      permissionPreset: "full_access" as const, instructionSettings: createDefaultHelarcInstructionSettings()};
+    const first = await prepareTestHostRun({...common, provider: firstProvider, productRunId: "first"});
+    const firstResult = await first.start().result;
+    expect(firstResult.runResult.status).toBe(failed ? "failed" : "completed");
+    await store.commitProductDelivery(first.rootRunId);
+    const original = (await store.readLatestRun(first.rootRunId))!;
+    const handoff = await store.prepareConversationHandoff(first.rootRunId, common.sessionId);
+    await expect(store.prepareConversationHandoff(first.rootRunId, "unrelated-thread")).rejects.toThrow("conversation_source_unavailable");
+    const nextProvider = new ScriptedProvider([{kind: "completion", summary: "Continued without repeating the write."}]);
+    const next = await prepareTestHostRun({...common, provider: nextProvider, productRunId: "second", conversationSourceRunId: first.rootRunId});
+    expect((await store.readProductRun(next.rootRunId))!.conversationHandoff!.seed).toEqual(handoff.seed);
+    expect((await next.start().result).runResult.status).toBe("completed");
+    expect(nextProvider.requests).toHaveLength(1);
+    const request = nextProvider.requests[0]!, history = JSON.stringify(request.messages);
+    expect(history).toContain("retained result 7/20");
+    expect(history).toContain("I will write the initial result.");
+    expect(history).not.toContain("text only");
+    const writes = request.messages.flatMap(m => m.role === "assistant" ? m.content.filter(b => b.kind === "model_tool_call" && b.call.name.startsWith("Write_")) : []);
+    expect(writes).toHaveLength(1);
+    expect(request.instructions.content).toEqual([]);
+    const status = request.messages.find(m => JSON.stringify(m).includes("Host-reported prior execution outcome"));
+    expect(status?.role).toBe(failed ? "user" : undefined);
+    expect((await store.readLatestRun(first.rootRunId))!).toEqual(original);
+    expect(await readFile(join(workspaceRoot, "result.txt"), "utf8")).toBe("retained result 7/20");
+    const refs = handoff.materialRefs.filter(ref => !ref.id.startsWith("custody:"));
+    expect(refs.length).toBeGreaterThan(0);
+    for (const ref of refs) await store.contextMaterials.validate(next.rootRunId, [ref]);
+    await expect(store.contextMaterials.validate("unrelated", [refs[0]!])).rejects.toThrow();
+    expect(await store.readExecutionReferenceTransfers(next.rootRunId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({sourceRunId: first.rootRunId, recipientRunId: next.rootRunId, scope: {kind: "public_run"}}),
+    ]));
+    const target = resolve(directory);
+    if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-conversation-handoff-")) throw new Error("Unexpected fixture directory");
+    await rm(target, {recursive: true, force: true});
+  }), 90_000);
   it("reconstructs admission before the first command without adopting the new Host environment", withExecutionScope(async () => {
     const directory = await mkdtemp(join(tmpdir(), "helarc-admission-recovery-"));
     const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);

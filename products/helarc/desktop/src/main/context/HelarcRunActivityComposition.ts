@@ -50,7 +50,7 @@ export function createHelarcRunActivityComposition(input:{
     return member;
   }
   const hostPort={assertAvailable:()=>{host.service.assertAvailable();if(!active)throw new TypeError("helarc_activity_binding_not_activated");},
-    subscribe:(listener:()=>void)=>store.onActivityChange(listener),wake:()=>host.service.wake()};
+    subscribe:(listener:()=>void,interest?:import("@agent-anything/agent-runtime/activity").ActivityChangeInterest)=>store.onActivityChange(listener,interest),wake:()=>host.service.wake()};
   const authorize:ActivityPurposeHandler["authorize"]=async(path,_stage,signal,action)=>{
     signal.throwIfAborted();host.service.assertAvailable(action==="interpretation"||action==="settlement"?"settlement":"progression");
     if(!active)throw new TypeError("helarc_activity_binding_not_activated");

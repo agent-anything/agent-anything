@@ -1,4 +1,7 @@
 import Database from "better-sqlite3";
+import {helarcConversationSeed, type HelarcConversationHandoff} from "../run/HelarcConversationHandoff.js";
+import {snapshotModelConversationSeed} from "@agent-anything/agent-runtime/decision";
+import {HELARC_CONTROLLER_CAPABILITY} from "@agent-anything/helarc/controller";
 import {contextDeliveryFactSource,contextDeliveryFact,inputSupplyFactSource} from "@agent-anything/agent-runtime/context-representation";
 import {validHelarcRunCredentialBinding} from "../provider/HelarcRunCredentialBinding.js";
 import {validateHelarcContextRunBinding} from "../context/HelarcContextRunBinding.js";
@@ -44,7 +47,7 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 42;
+const FORMAT = 43;
 const SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -502,36 +505,71 @@ export class ExecutionDatabase {
     return snapshotCompensationAssociation(value);
   }
 
+  prepareConversationHandoff(sourceRunId: string, sessionId: string): HelarcConversationHandoff {
+    this.assertOwner(this.generation);
+    return this.checkpointTransaction(() => {
+      const source = this.readProductRun(sourceRunId);
+      const initial = this.readOwnerCommit(`${sourceRunId}:commit:0`), head = this.readLatestOwner("run", sourceRunId);
+      if (!source || source.sessionId !== sessionId || initial?.kind !== "run" || head?.kind !== "run") {
+        throw new ExecutionStoreError("conversation_source_unavailable");
+      }
+      const scopes = [{sourceRunId, scope: {kind: "public_run" as const}}, ...this.readReferenceTransfers(sourceRunId).map(({sourceRunId, scope}) => ({sourceRunId, scope}))];
+      const executionScopes = [...new Map(scopes.map(scope => [digest(scope), scope])).values()];
+      return {seed: helarcConversationSeed(initial.value, head.value), materialRefs: this.materialTransfers.visibleReferences(sourceRunId), executionScopes};
+    });
+  }
+
   admitProductRun(generation: number, admission: HelarcExecutionAdmission): void {
     this.assertOwner(generation);
     if (admission.version !== 3 || !Number.isFinite(Date.parse(admission.createdAt)) || !admission.commandEnvironment || !validHelarcRunCredentialBinding(admission.providerCredential,admission.providerProfile.id)) throw new ExecutionStoreError("execution_admission_invalid");
     validateHelarcContextRunBinding(admission.contextBinding);
     validateProtectedEnvironment(admission.commandEnvironment.environment);
     token(admission.rootRunId); token(admission.productRunId); token(admission.sessionId);
-    this.data.transaction(() => {
+    this.checkpointTransaction(() => {
       const retained = this.readProductRun(admission.rootRunId);
       if (retained?.commandEnvironment.environment.digest === admission.commandEnvironment.environment.digest)
         admission = {...admission, commandEnvironment: {...admission.commandEnvironment, environment: retained.commandEnvironment.environment}};
-      const encoded = encode(admission);
+      const encoded = this.encodeCheckpoint(admission);
       const previous = this.data.prepare("SELECT digest FROM product_admissions WHERE root_run_id=?").get(admission.rootRunId) as {digest: string} | undefined;
       if (previous) {
         if (previous.digest !== encoded.digest) throw new ExecutionStoreError("execution_admission_conflict");
         return;
       }
+      const handoff = admission.conversationHandoff;
+      if (handoff) {
+        snapshotModelConversationSeed(handoff.seed);
+        if (handoff.seed.sourceRunId === admission.rootRunId) throw new ExecutionStoreError("conversation_source_invalid");
+        token(handoff.recipientAgent.id); token(handoff.recipientAgent.revision);
+        const original = this.prepareConversationHandoff(handoff.seed.sourceRunId, admission.sessionId);
+        if (!equal(original.seed, handoff.seed) || !equal(original.materialRefs, handoff.materialRefs) ||
+            !equal(original.executionScopes, handoff.executionScopes) ||
+            this.readProductRun(handoff.seed.sourceRunId)!.identity.id !== admission.identity.id) {
+          throw new ExecutionStoreError("conversation_handoff_changed");
+        }
+        // New holds and scoped grants are committed with admission, before the
+        // source's lifetime can cease to protect the recipient's required data.
+        for (let n = 0; n < handoff.materialRefs.length; n += 16) {
+          this.materialTransfers.accept({id: `${admission.rootRunId}:conversation-materials:${n}`,
+            sourceRunId: handoff.seed.sourceRunId, recipientRunId: admission.rootRunId,
+            references: handoff.materialRefs.slice(n, n + 16), basis: {kind: "continuation", id: handoff.seed.digest}},
+          {runId: admission.rootRunId, recipient: handoff.recipientAgent.id, purpose: HELARC_CONTROLLER_CAPABILITY});
+        }
+      }
       this.data.prepare("INSERT INTO product_admissions VALUES (?,?,?,0)").run(admission.rootRunId, encoded.digest, encoded.text);
-    })();
+    });
   }
 
   readProductRun(rootRunId: string): HelarcExecutionAdmission | null {
     this.assertOwner(this.generation);
     const row = this.data.prepare("SELECT digest,value FROM product_admissions WHERE root_run_id=?").get(rootRunId) as {digest: string; value: string} | undefined;
     if (!row) return null;
-    const admission = JSON.parse(row.value) as HelarcExecutionAdmission;
+    const admission = this.readCheckpoint(row) as HelarcExecutionAdmission;
     validateHelarcContextRunBinding(admission.contextBinding);
-    if (encode(admission).digest !== row.digest || admission.rootRunId !== rootRunId || admission.version !== 3 || !validHelarcRunCredentialBinding(admission.providerCredential,admission.providerProfile.id)) {
+    if (admission.rootRunId !== rootRunId || admission.version !== 3 || !validHelarcRunCredentialBinding(admission.providerCredential,admission.providerProfile.id)) {
       throw new ExecutionStoreError("execution_admission_corrupt");
     }
     validateProtectedEnvironment(admission.commandEnvironment.environment);
+    if (admission.conversationHandoff) snapshotModelConversationSeed(admission.conversationHandoff.seed);
     return admission;
   }
 
@@ -917,6 +955,13 @@ export class ExecutionDatabase {
         if (expectedRevision === null ? value.value.admission === null : value.value.admission !== null) {
           throw new ExecutionStoreError("execution_run_admission_invalid");
         }
+        if (value.value.admission && !value.value.admission.delegationRequest) {
+          const handoff = this.readProductRun(ownerId)?.conversationHandoff;
+          if (handoff && (!equal(value.value.admission.modelInteractionSeed, handoff.seed) ||
+              !equal(value.value.state.startingAgent, handoff.recipientAgent))) {
+            throw new ExecutionStoreError("conversation_admission_binding_mismatch");
+          }
+        }
         if (value.value.control.activeAgent.id !== value.value.state.activeAgent.id ||
             value.value.control.activeAgent.revision !== value.value.state.activeAgent.revision) invalidReference();
         const {control, state} = value.value;
@@ -952,6 +997,14 @@ export class ExecutionDatabase {
         const before = previous?.kind === "run" ? previous.value.state.items.length : 0;
         for (const material of projectContextMaterials(value.value, before)) this.contextMaterials.publish(material, ownerId);
         const request = value.value.admission?.delegationRequest;
+        if (value.value.admission && !request) {
+          const admission = this.readProductRun(ownerId), handoff = admission?.conversationHandoff;
+          if (handoff) for (const [index, scope] of handoff.executionScopes.entries()) {
+            this.commitReferenceTransfer(generation, {id: `${ownerId}:conversation-execution:${index}`,
+              ...scope, recipientRunId: ownerId, basis: {owner: "helarc", kind: "conversation_handoff", id: ownerId, revision: handoff.seed.digest},
+              acceptedAt: admission!.createdAt});
+          }
+        }
         if (request) {
           const taskInput = request.task.input as {material_refs?: unknown} | null;
           const refs = snapshotContextMaterialRefs(taskInput?.material_refs ?? []);
@@ -1165,6 +1218,8 @@ export class ExecutionDatabase {
   }
 
   retainContent(value: unknown): ExecutionContentRoot {
+    const original=value!==null&&typeof value==="object"?this.contentScope?.verifiedRoots.get(value):undefined;
+    if(original) {this.contentStatistics.add("content.returnRootReuses");return original;}
     const packed = this.timed("content.encode", () => this.contentEncoder.pack(value, this.contentScope));
     let batch: ExecutionContentBlock[] = [], bytes = 0;
     for (const block of packed.blocks) {
@@ -1178,6 +1233,13 @@ export class ExecutionDatabase {
 
   hydrateContent(root: ExecutionContentRoot): unknown {
     return this.timed("content.expand", () => unpackExecutionContent(root, id => this.readContentBlock(id), this.contentCache, true, this.contentScope));
+  }
+
+  verifiedContentRoot(value:unknown,minimumBytes=0):ExecutionContentRoot|null {
+    if(value===null||typeof value!=="object"||(this.contentScope?.verifiedRootBytes.get(value)??0)<minimumBytes)return null;
+    const root=value!==null&&typeof value==="object"?this.contentScope?.verifiedRoots.get(value):undefined;
+    if(root)this.contentStatistics.add("content.returnRootReuses");
+    return root??null;
   }
 
   /** Synchronous command lifetime, independent of SQLite transaction/ACK scope. */

@@ -14,6 +14,17 @@ function fixture(){
       related:[{subject:object("material_custody","retained-hold","parent"),name:"material.access_basis",occurredAt:null,value:{basis:"original grant"}}]}};
   return {records,sink,fact};
 }
+it("projects the recipient key without discarding the complete purpose binding from evidence",()=>{
+  const {records,sink,fact}=fixture();
+  const recipient={runId:"child",recipient:"agent",purpose:"turn",id:"purpose-binding",owner:"context-representation",
+    continuity:"turn",target:"model-target",authorityBasis:"binding"};
+  recordContextProcessEvidence({...fact,evidence:{...fact.evidence!,scope:{purpose:"turn",recipient}}},sink);
+  const item=records.find(record=>record.payload.kind==="process_evidence")!;
+  expect(item.payload).toMatchObject({recipient:{runId:"child",recipient:"agent",purpose:"turn"}});
+  if(item.payload.kind!=="process_evidence")throw new Error("Missing process evidence");
+  expect(Object.keys(item.payload.recipient!).sort()).toEqual(["purpose","recipient","runId"]);
+  expect(item.contents?.[0]?.value).toMatchObject({evidence:{scope:{recipient}}});
+});
 it("records read evidence without overwriting the lifecycle of the material or its observed hold",()=>{
   const {records,sink,fact}=fixture();recordContextProcessEvidence(fact,sink);
   expect(records.every(record=>record.payload.kind!=="execution")).toBe(true);

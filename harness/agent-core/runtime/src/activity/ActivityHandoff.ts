@@ -133,6 +133,7 @@ export interface ActivityStageState {
   readonly retry?:ActivityAttemptRetryReceipt|null;
 }
 export type ActivityHandoffCommand =
+  | {readonly kind:"observe_paths";readonly pathIds:readonly string[]}
   | {readonly kind:"read_work_view";readonly scopeId:string;readonly limit:number}
   | import("./ActivityScheduling.js").ActivitySchedulingCommand
   | import("./ActivityReconsideration.js").ActivityReconsiderationCommand
@@ -187,7 +188,7 @@ export interface ActivityHandoffObserver {
   observeStage?(path:ActivityPathState,stage:ActivityStageState):void;
   observeTiming?(event:import("./ActivityWorkTiming.js").ActivityTimingObservation):void;
 }
-export type ActivityHandoffValue = import("./ActivityWorkView.js").ActivityWorkView | ActivityPathState | ActivityStageState | ActivityRawResult | ActivityDispatchReceipt | ActivityInputNeed | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | readonly ActivityPendingScope[] |
+export type ActivityHandoffValue = readonly (import("./ActivityObservation.js").ActivityPathObservation|null)[] | import("./ActivityWorkView.js").ActivityWorkView | ActivityPathState | ActivityStageState | ActivityRawResult | ActivityDispatchReceipt | ActivityInputNeed | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | readonly ActivityPendingScope[] |
   import("./ActivityScheduling.js").ActivityScheduledPathPage |
   import("./ActivityScheduling.js").ActivityScheduledSettlement |
   readonly import("./ActivityReconsideration.js").ActivityReconsiderationState[] |

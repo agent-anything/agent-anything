@@ -54,6 +54,7 @@ export type FileMaterialStoreCommand =
 export type FileMaterialStoreValue = FileMaterialRecord | readonly FileMaterialRecord[] | FileMaterialReservation | FileMaterialRead | null;
 
 export type ExecutionStoreCommand =
+  | {readonly kind: "prepare_conversation_handoff"; readonly sourceRunId: string; readonly sessionId: string}
   | {readonly kind:"model_input_usage";readonly query:import("@agent-anything/model-interaction/input").InputUsageQuery}
   | {readonly kind:"accept_shared";readonly proposal:import("@agent-anything/agent-runtime/activity").SharedAcceptanceProposal}
   | {readonly kind:"material_custody";readonly command:import("@agent-anything/context/custody").MaterialCustodyCommand}
@@ -114,6 +115,7 @@ export type ExecutionStoreWireCommand = ExecutionStoreCommand
 
 export type FileMaterialFinalizationPage = {readonly records: readonly FileMaterialRecord[]; readonly next: string | null};
 export type ExecutionStoreValue =
+  import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff |
   {custodyValue:import("@agent-anything/context/custody").MaterialCustodyValue} |
   {representationValue:import("@agent-anything/context/representation").RepresentationValue} |
   {selectionValue:import("@agent-anything/context/selection").ContextSelectionValue} |

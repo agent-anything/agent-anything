@@ -91,6 +91,7 @@ async function setup(
         modelItemIds: ["answer"],
       };
       const snapshot: any = {
+        execution: terminal ? "idle" : "active",
         projects: [{ id: "project", revision: 1, name: "Example project", primaryProfileId: "workspace", additionalProfileIds: [], createdAt: "2026-09-18T08:00:00.000Z", updatedAt: "2026-09-18T08:00:00.000Z" }],
         selectedProjectId: "project",
         status: terminal ? "completed" : "running",
@@ -1198,7 +1199,8 @@ test("conversation spinner follows live work, not retained history or waits", as
     snapshot.run.display.status = "waiting_for_approval";
   }));
   await expect(spinner).toHaveCount(0);
-  await expect(status).toHaveText("Approval needed");
+  await expect(status).toHaveCount(0);
+  await expect(page.locator(".project-conversation-attention")).toHaveCount(0);
   await page.evaluate(() => (window as any).emitWorkbench("revision", (snapshot: any) => {
     snapshot.run.display.status = "running";
   }));
@@ -1209,7 +1211,47 @@ test("conversation spinner follows live work, not retained history or waits", as
     snapshot.run.display.terminal = true;
   }));
   await expect(spinner).toHaveCount(0);
-  await expect(status).toHaveText("Completed");
+  await expect(status).toHaveCount(0);
+});
+
+test("conversation attention follows actionable root and Child requests, not submitted or unsupported requests", async ({ page }, info) => {
+  await setup(page, true);
+  const icon = page.locator(".project-conversation-attention");
+  const spinner = page.locator(".project-conversation-spinner");
+  await expect(icon).toBeVisible();
+  await expect(icon).toHaveCSS("animation-name", "project-conversation-attention");
+  await expect(spinner).toHaveCount(0);
+  await expect(page.locator(".wb-header .wb-status")).toHaveCount(0);
+  await page.evaluate(() => (window as any).emitWorkbench("revision", (s: any) => {
+    s.run.host.pendingInteractions[0].phase = "submitted_for_resolution";
+  }));
+  await expect(page.getByRole("heading", { name: "Needs your input 1" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Free-text answer for Question two" })).toBeVisible();
+  await expect(icon).toBeVisible();
+  await page.screenshot({ path: info.outputPath("conversation-attention-wide.png") });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(icon).toHaveCSS("animation-name", "none");
+  await page.setViewportSize({ width: 480, height: 720 });
+  await page.getByRole("button", { name: "Toggle projects" }).click();
+  await expect(icon).toBeVisible();
+  await page.screenshot({ path: info.outputPath("conversation-attention-narrow.png") });
+  await page.evaluate(() => (window as any).emitWorkbench("revision", (s: any) => {
+    s.run.display.status = "waiting_for_approval";
+    s.run.host.pendingInteractions.forEach((r: any) => r.phase = "submitted_for_resolution");
+  }));
+  await expect(icon).toHaveCount(0);
+  await expect(spinner).toBeVisible();
+  await page.getByRole("button", { name: "Close projects", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Processing your response" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Needs your input" })).toHaveCount(0);
+  await page.evaluate(() => (window as any).emitWorkbench("revision", (s: any) => {
+    s.run.host.pendingInteractions = [{ ...s.run.host.pendingInteractions[0], family: "unsupported", phase: "pending", presentation: null }];
+  }));
+  await expect(icon).toHaveCount(0);
+  await expect(spinner).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Interaction unavailable" })).toBeVisible();
+  await page.evaluate(() => (window as any).emitWorkbench("revision", (s: any) => { s.execution = "idle"; }));
+  await expect(page.locator(".wb-attention")).toHaveCount(0);
 });
 test("Child inspection does not retarget steering", async ({ page }) => {
   await setup(page);
@@ -1298,6 +1340,7 @@ test("Child approval is immediately actionable above the composer", async ({
 }, info) => {
   await setup(page, "approval");
   const attention = page.getByRole("region", { name: "Needs your input" });
+  await expect(page.locator(".project-conversation-attention")).toBeVisible();
   await expect(
     attention.getByRole("button", { name: "Allow once" }),
   ).toBeVisible();
@@ -1310,6 +1353,7 @@ test("Child approval is immediately actionable above the composer", async ({
   await page.screenshot({ path: info.outputPath("approval.png") });
   await attention.getByRole("button", { name: "Allow once" }).click();
   await expect(attention).toHaveCount(0);
+  await expect(page.locator(".project-conversation-attention")).toHaveCount(0);
   const submitted = await page.evaluate(
     () => (window as any).calls.find((c: any) => c.method === "submit").query,
   );

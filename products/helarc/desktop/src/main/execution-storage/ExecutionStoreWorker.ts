@@ -1,10 +1,10 @@
 import { parentPort, workerData, threadId } from "node:worker_threads";
 import {randomUUID} from "node:crypto";
-import { ExecutionDatabase } from "./ExecutionDatabase.js";
+import type { ExecutionDatabase as DatabaseType } from "./ExecutionDatabase.js";
 import { ExecutionStoreError, type ExecutionStoreCommand, type ExecutionStoreRequest, type ExecutionStoreReply } from "./ExecutionStoreProtocol.js";
 import {EXECUTION_CONTENT_LIMITS} from "./ExecutionContent.js";
 import { captureExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
-import {beginExecutionTiming, measureExecutionSync, type ExecutionPerformanceSink} from "../diagnostics/ExecutionPerformance.js";
+import {beginExecutionTiming, measureExecutionSync, measureExecutionAsync, executionPerformanceClock, type ExecutionPerformanceSink} from "../diagnostics/ExecutionPerformance.js";
 
 if (!parentPort) throw new Error("Execution storage requires its dedicated Worker.");
 const port = parentPort;
@@ -12,9 +12,16 @@ const timingSink: ExecutionPerformanceSink | undefined = workerData.performanceD
   ? {performance: event => {try {port.postMessage({kind: "performance", event} satisfies ExecutionStoreReply);} catch { /* Best effort only. */ }}}
   : undefined;
 let timingContext: Record<string, string | number> = {};
-let database: ExecutionDatabase;
+let database: DatabaseType;
 try {
-  database = new ExecutionDatabase((workerData as { directory: string }).directory, Boolean(timingSink));
+  const startup=workerData.startup;
+  const sameClock=startup?.processId===process.pid&&startup?.timeOrigin===performance.timeOrigin&&Number.isFinite(startup?.monotonicMs);
+  const startupContext={workerThreadId:threadId,...(typeof startup?.id==="string"?{startupId:startup.id}:{})};
+  timingSink?.performance?.({kind:"finished",id:randomUUID(),stage:"storage.worker.entry",occurredAt:new Date().toISOString(),
+    durationMs:sameClock?Math.max(0,performance.now()-startup.monotonicMs):0,outcome:sameClock?"ok":"unknown",
+    context:{...executionPerformanceClock(),...startupContext,timingBasis:sameClock?"shared_process_clock_create_to_entry":"entry_only"}});
+  const {ExecutionDatabase}=await measureExecutionAsync(timingSink,"storage.worker.load_database",startupContext,()=>import("./ExecutionDatabase.js"));
+  database = measureExecutionSync(timingSink,"storage.worker.open_database",startupContext,()=>new ExecutionDatabase((workerData as { directory: string }).directory, Boolean(timingSink)));
   send({ kind: "ready", generation: database.generation });
   port.on("message", (wire: ExecutionStoreRequest) => {
     database.withContentScope(() => {
@@ -64,6 +71,7 @@ try {
         case "read_execution_evidence": send({kind: "result", id: request.id, value: database.readExecutionEvidence(request.command.reference)}); break;
         case "commit_compensation_association": database.commitCompensationAssociation(request.generation, request.command.association); send({kind: "result", id: request.id, value: null}); break;
         case "read_compensation_association": send({kind: "result", id: request.id, value: database.readCompensationAssociation(request.command.invocationId)}); break;
+        case "prepare_conversation_handoff": send({kind: "result", id: request.id, value: database.prepareConversationHandoff(request.command.sourceRunId, request.command.sessionId)}); break;
         case "admit_product_run": database.admitProductRun(request.generation, request.command.admission); send({kind: "result", id: request.id, value: null}); break;
         case "read_product_run": send({kind: "result", id: request.id, value: database.readProductRun(request.command.rootRunId)}); break;
         case "list_product_runs": send({kind: "result", id: request.id, value: database.listProductRuns()}); break;
@@ -123,8 +131,9 @@ try {
 function send(reply: ExecutionStoreReply): void {
   if (reply.kind === "ready" || reply.kind === "startup_failed") {port.postMessage(reply); return;}
   measureExecutionSync(timingSink, "storage.worker.encode_reply", timingContext, () => {
-    if (reply.kind === "result" && Buffer.byteLength(JSON.stringify(reply.value)) > EXECUTION_CONTENT_LIMITS.blockBytes) {
-      port.postMessage({kind: "content_result", id: reply.id, root: database.retainContent(reply.value)} satisfies ExecutionStoreReply);
+    const original=reply.kind==="result"?database.verifiedContentRoot(reply.value,EXECUTION_CONTENT_LIMITS.blockBytes):null;
+    if (reply.kind === "result" && (original || Buffer.byteLength(JSON.stringify(reply.value)) > EXECUTION_CONTENT_LIMITS.blockBytes)) {
+      port.postMessage({kind: "content_result", id: reply.id, root: original??database.retainContent(reply.value)} satisfies ExecutionStoreReply);
     } else port.postMessage(reply);
   });
 }

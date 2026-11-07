@@ -27,8 +27,8 @@ export async function closeHelarcHost(input:{
     finally{if(timer!==undefined)clearTimeout(timer);}
   };
   if(input.activities)await step("activities",input.activities);
-  if(input.inspection)await step("inspection",input.inspection,1000);
   if(input.storage)await step("storage",input.storage);
+  if(input.inspection)await step("inspection",input.inspection,1000);
   if(input.diagnostics)await step("diagnostics",input.diagnostics);
   return {incomplete,failed};
 }

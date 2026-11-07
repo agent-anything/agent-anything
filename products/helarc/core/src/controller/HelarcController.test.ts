@@ -851,6 +851,14 @@ describe("Helarc native Tool controller", () => {
     });
   });
 
+  it("retains an empty normal response and requests protocol correction without inventing model text", () => {
+    const input = createControllerInput();
+    const decision = parseHelarcProviderResponse(nativeResponse(input, []), input);
+    expect(decision).toMatchObject({kind: "continue_with_feedback", feedback: {code: "helarc_ending_signal_missing"}});
+    expect(decision.modelItems.map(item => item.kind)).toEqual(["model_turn_finish", "model_response_correlation"]);
+    expect(validateTaskDecisionProposal(decision, input)).toEqual(decision);
+  });
+
   it.each([false, true])("rejects competing Plan submissions while retaining the separate update (final first: %s)", finalFirst => {
     const input = createControllerInput();
     const plan: NativeBlock = {kind: "call", name: "update_plan", input: {plan: [{step: "Done", status: "completed"}]}};

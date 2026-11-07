@@ -46,9 +46,9 @@ app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit();});
 
 async function initializeServices(){
   const userDataPath=app.getPath("userData");
-  diagnostics=new HelarcExecutionDiagnostics(join(userDataPath,"execution-diagnostics.json"));
   inspection=HelarcInspection.create(join(userDataPath,"inspection-settings.json"));
   const source=await inspection;
+  diagnostics=new HelarcExecutionDiagnostics(join(userDataPath,"execution-diagnostics.json"),source.performanceObserver);
   if(closing)throw new Error("Application is closing.");
   executionStore=HelarcExecutionStore.open(join(userDataPath,"execution"),undefined,source.evidenceObserver,
     source.fileMaterialObserver,diagnostics,new ElectronSafeStorageCredentialCipher(),source.contextMaterialObserver,

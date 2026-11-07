@@ -1767,7 +1767,7 @@ describe("HelarcMainController", () => {
     );
   });
 
-  it("continues the exact selected Thread with prior Message context", async () => {
+  it("continues the exact selected Thread from committed model exchanges", async () => {
     const provider = new RecordingCompleteProvider();
     const threadStore = new InMemoryHelarcThreadStore();
     const controller = await createTestController({ commandOutputDirectory, provider, threadStore });
@@ -1865,9 +1865,9 @@ describe("HelarcMainController", () => {
       .map(modelMessageText)
       .join("\n") ?? "";
     expect(continuedPrompt).toContain("Inspect the current implementation");
-    expect(continuedPrompt).toContain("No changes needed.");
+    expect(JSON.stringify(provider.requests[1]?.messages)).toContain("No changes needed.");
     expect(provider.requests[1]?.messages).toContainEqual(expect.objectContaining({role: "assistant",
-      content: expect.arrayContaining([expect.objectContaining({kind: "text", text: "No changes needed."})])}));
+      content: expect.arrayContaining([expect.objectContaining({kind: "model_tool_call", call: expect.objectContaining({name:"final_result"})})])}));
     expect(continuedPrompt.match(/Summarize the next step/g)).toHaveLength(1);
   },DURABLE_WORKFLOW_TIMEOUT_MS);
 

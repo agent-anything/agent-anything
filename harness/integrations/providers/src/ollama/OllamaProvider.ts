@@ -677,13 +677,6 @@ function mapOllamaChatResponse(
         call: readOllamaToolCall(candidate, request, turnId, ordinal),
       });
     }
-    if (assistantContent.length === 0 && finish.kind !== "output_limit") {
-      return failed(
-        "response",
-        "provider_response_empty",
-        "Provider returned an empty normal assistant turn.",
-      );
-    }
 
     return succeeded({
       kind: "native_tool_turn",

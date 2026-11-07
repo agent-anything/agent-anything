@@ -8,12 +8,22 @@ import type {ExecutionPerformanceEvent} from "./ExecutionPerformance.js";
 type Finished = Extract<ExecutionPerformanceEvent, {kind: "finished"}>;
 const counterKeys = new Set(["encode.nodes", "encode.reusedNodes", "encode.reusedBytes", "encode.blockBuilds",
   "decode.nodes", "decode.reusedNodes", "decode.reusedBytes", "content.reads", "content.readBytes", "content.readReuses",
-  "content.parses", "content.parseReuses", "content.referenceReuses", "content.closureVisits"]);
+  "content.parses", "content.parseReuses", "content.referenceReuses", "content.closureVisits", "content.returnRootReuses",
+  "thread.cpuUserUs", "thread.cpuSystemUs", "loop.activeUs", "loop.idleUs"]);
 const contextKeys = new Set(["command", "wireKind", "runId", "threadId", "productRunId", "commitId", "treeCommitId",
   "generation", "requestId", "revision", "expectedRevision", "recordId", "controllerTurnId", "controllerStatus",
   "materialOperation", "requestBytes", "contentBlocks", "pendingRequests", "pendingBytes", "workerThreadId",
   "wireSequence", "transferOperation", "count", "totalMs", "maxMs", "bodyMs", "boundaryMs", "timingBasis",
-  "pathId", "stageId", "attemptId", "workId", "purposeDigest", "clockDomain", "monotonicMs", "originalClockDomain", "activityCommand"]);
+  "pathId", "stageId", "attemptId", "workId", "purposeDigest", "clockDomain", "monotonicMs", "originalClockDomain", "activityCommand", "cpuBasis", "startupId", "measuredThreadId"]);
+
+export function safeExecutionPerformanceEvent(input:ExecutionPerformanceEvent):ExecutionPerformanceEvent {
+  const context=Object.fromEntries(Object.entries(input.context).filter(([key])=>contextKeys.has(key))
+    .map(([key,value])=>[key,typeof value==="string"?value.slice(0,256):value]));
+  const event={...input,stage:input.stage.slice(0,96),context};
+  if(event.kind==="finished")event.counters=Object.fromEntries(Object.entries(event.counters??{})
+    .filter(([key,value])=>counterKeys.has(key)&&Number.isSafeInteger(value)&&value>=0));
+  return event;
+}
 
 /** Bounded local timing evidence, independent of authoritative storage and Inspector. */
 export class HelarcPerformanceDiagnostics {
@@ -40,9 +50,7 @@ export class HelarcPerformanceDiagnostics {
 
   record(input: ExecutionPerformanceEvent): void {
     try {
-      const event = {...input, stage: input.stage.slice(0, 96),
-        context: Object.fromEntries(Object.entries(input.context).filter(([key]) => contextKeys.has(key))
-          .map(([key, value]) => [key, typeof value === "string" ? value.slice(0, 256) : value]))};
+      const event = safeExecutionPerformanceEvent(input);
       if (event.kind === "started") {
         if (this.active.size >= 64) {this.active.delete(this.active.keys().next().value!); this.evicted++;}
         this.active.set(event.id, event);
@@ -50,7 +58,6 @@ export class HelarcPerformanceDiagnostics {
         this.active.delete(event.id);
         if (!Number.isFinite(event.durationMs) || event.durationMs < 0) return;
         const values = Object.entries(event.counters ?? {}).filter(([key, value]) => counterKeys.has(key) && Number.isSafeInteger(value) && value >= 0);
-        event.counters = Object.fromEntries(values);
         for (const [name, value] of values) {
           const key = `${event.stage}:${event.context.command ?? ""}:${name}`;
           if (!this.counters.has(key) && this.counters.size >= 256) {this.counters.delete(this.counters.keys().next().value!); this.evicted++;}
@@ -104,7 +111,7 @@ export class HelarcPerformanceDiagnostics {
     this.dirty = false;
     const document = {version: 1, sessionId: this.sessionId, startedAt: this.startedAt, observedAt: new Date().toISOString(),
       processId: process.pid, runtime: {node: process.versions.node, electron: process.versions.electron ?? null, v8: process.versions.v8},
-      semantics: "Inclusive wall durations; overlapping stages are not additive. Totals count reports; database reports include per-command count/maxMs and inherit command outcome. Counters measure representation work/bytes, not durations, unique storage or avoided validation. CPU/RSS are process-wide. Bounded diagnostic retention, not an execution journal.",
+      semantics: "Inclusive wall durations; overlapping stages are not additive. Totals count reports; database reports include per-command count/maxMs and inherit command outcome. Counters measure representation work/bytes, not durations, unique storage or avoided validation. thread.cpu counters measure the named thread over the interval when cpuBasis permits; overlapping intervals are not additive. Resource samples use process-wide CPU/RSS. Event-loop activity is not CPU usage. Bounded diagnostic retention, not an execution journal.",
       evicted: this.evicted, writeFailures: this.writeFailures, active: [...this.active.values()],
       recent: [...this.recent], slowest: [...this.slowest],
       totals: Object.fromEntries([...this.totals].map(([key, value]) => [key, {...value}])),

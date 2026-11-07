@@ -18,6 +18,7 @@ export function* contextProcessInspectionRecords(fact:ContextFoundationFact,r:In
   const ref=(value:ContextProcessObjectRef)=>r.ref(value.owner,"contribution",value.id,value.runId,value.revision);
   const event=r.ref(fact.owner,"event",`${fact.runId}:context-fact:${fact.sequence}`,fact.runId);
   const subject=ref(evidence.subject);
+  const recipient=evidence.scope?.recipient;
   if(evidence.reuse)for(const [field,metric] of [["eligibility","reuse_eligibility"],["content","reuse_content"],["checks","reuse_check"],["input","reuse_input"]] as const){
     const value=evidence.reuse[field];if(value===undefined)continue;
     yield {subject,occurredAt:fact.occurredAt,payload:{kind:"work_measurement",version:"1",
@@ -36,7 +37,8 @@ export function* contextProcessInspectionRecords(fact:ContextFoundationFact,r:In
     relatedLinks.push(inspectionLink("includes",event,observation),inspectionLink("observes",observation,ref(related.subject)));
   }
   yield* processEvidenceRecords(r,{observation:event,occurredAt:fact.occurredAt,evidence:{origin:{owner:`context:${fact.owner}`,id:String(fact.sequence),runId:fact.runId,revision:"1"},digest:modelInputValueDigest(fact),
-    subject,category:evidence.category,name:`${fact.owner}.${fact.kind}`,status:evidence.state?.status??null,purpose:evidence.scope?.purpose??null,recipient:evidence.scope?.recipient??null,
+    subject,category:evidence.category,name:`${fact.owner}.${fact.kind}`,status:evidence.state?.status??null,purpose:evidence.scope?.purpose??null,
+    recipient:recipient?{runId:recipient.runId,recipient:recipient.recipient,purpose:recipient.purpose}:null,
     ...(judgment?{judgment:{foreground:judgment.foreground,investment:judgment.investment,adoption:judgment.adoption,detailsContentOrdinal:1}}:{})},
     contents:[{name:"Context ownership and accepted relationships",class:"agent",stage:fact.kind,mediaType:"application/json",value:JSON.parse(JSON.stringify(fact))},
       ...(judgment?[{name:"Owner-declared context judgment",class:"agent" as const,stage:"context_judgment",mediaType:"application/json" as const,value:judgment}]:[])],links:[

@@ -1,11 +1,12 @@
+import type {ActivityChangeInterest} from "./ActivityObservation.js";
 /** Wake hints never replace the caller's durable state read. */
 export class ActivityChangeWait {
   version=0;
   private release:(()=>void)|null=null;
   private readonly unsubscribe:()=>void;
   private readonly changed=()=>{this.version++;this.release?.();};
-  constructor(host:{subscribe(listener:()=>void):()=>void},private readonly signal:AbortSignal|null) {
-    this.unsubscribe=host.subscribe(this.changed);
+  constructor(host:{subscribe(listener:()=>void,interest?:ActivityChangeInterest):()=>void},private readonly signal:AbortSignal|null,interest?:ActivityChangeInterest) {
+    this.unsubscribe=host.subscribe(this.changed,interest);
     signal?.addEventListener("abort",this.changed);
   }
   async wait(version:number,milliseconds:number):Promise<void> {

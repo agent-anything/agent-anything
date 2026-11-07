@@ -273,7 +273,7 @@ for (const adapter of ADAPTERS) {
       expect(turn.finish).toEqual({ kind: "output_limit" });
     });
 
-    it("rejects malformed arguments and empty normal output", async () => {
+    it("rejects malformed arguments but preserves complete empty normal turns for their consumer", async () => {
       const malformed = adapter.create(adapter.response({
         text: null,
         calls: [{ id: "call-1", name: "Read", input: "not-an-object" }],
@@ -288,8 +288,8 @@ for (const adapter of ADAPTERS) {
       const empty = adapter.create(adapter.response({ text: null, calls: [], finish: "normal" }));
       await expect(empty.send(createNativeProviderRequest(empty), context()))
         .resolves.toMatchObject({
-          kind: "failed",
-          failure: { code: "provider_response_empty" },
+          kind: "succeeded",
+          response: {kind: "native_tool_turn", turn: {assistant: {role: "assistant", content: []}, finish: {kind: "normal"}}},
         });
     });
 
