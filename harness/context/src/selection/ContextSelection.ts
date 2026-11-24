@@ -53,7 +53,8 @@ export interface ContextDeliveryPage {
 export interface ContextInputBinding {
   readonly id:string;
   readonly activityId:string;
-  readonly stageRequestId:string;
+  readonly stageRequestId:string|null;
+  readonly nativeConsumer?:{readonly protocol:{readonly id:string;readonly revision:string};readonly compositionDigest:string};
   readonly scopeId:string;
   readonly selectionId:string;
   readonly exactInput:unknown;
@@ -84,6 +85,20 @@ export interface ContextInputRetirement {
   readonly withdrawals:readonly {readonly scopeId:string;readonly expectedSelectionId:string;readonly expectedControlRevision:number}[];
   readonly basis:string;
 }
+/** Metadata for independent input-use retirement; reading it does not acquire input use. */
+export interface ContextInputUse {
+  readonly acceptanceId:string;
+  readonly input:Omit<ContextInputBinding,"exactInput">&{readonly exactInputDigest:string};
+  readonly scope:ContextUseScope;
+  readonly control:ContextUseControl;
+  readonly currentSelectionId:string|null;
+  readonly retired:string|null;
+  readonly settled:boolean;
+  readonly claimed:boolean|null;
+  readonly liveHoldIds:readonly string[];
+}
+export interface ContextInputUsePage {readonly entries:readonly ContextInputUse[];readonly next:string|null;}
+export interface ContextSelectionHeadPage {readonly entries:readonly ContextUseHead[];readonly next:string|null;}
 export type ContextAcceptancePart =
   | {readonly owner:"context_selection";readonly kind:"input_retirement";readonly proposal:ContextInputRetirement}
   | {readonly owner:"context_selection";readonly kind:"scope";readonly proposal:ContextUseScope}
@@ -106,7 +121,10 @@ export type ContextSelectionCommand =
   | {readonly kind:"current";readonly scopeId:string}
   | {readonly kind:"current_control";readonly scopeId:string}
   | {readonly kind:"binding";readonly inputId:string;readonly checkCurrentControl:boolean}
-  | {readonly kind:"sent";readonly inputId:string;readonly attemptId:string}
+  | {readonly kind:"input_use";readonly inputId:string}
+  | {readonly kind:"native_input_uses";readonly owner:string;readonly after:string|null;readonly limit:number}
+  | {readonly kind:"native_selection_heads";readonly owner:string;readonly after:string|null;readonly limit:number}
+  | {readonly kind:"sent";readonly inputId:string;readonly attemptId:string;readonly acceptedResponseId?:string}
   | {readonly kind:"retire_input";readonly inputId:string;readonly basis:string}
   | {readonly kind:"withdraw";readonly scopeId:string;readonly expectedSelectionId:string;readonly expectedControlRevision:number;readonly basis:string}
   | {readonly kind:"pending_deliveries";readonly recipient:MaterialRecipient;readonly after:number;readonly through:number|null;readonly limit:number}
@@ -117,6 +135,6 @@ export interface ContextUseHead {
   readonly control:ContextUseControl;
   readonly selection:ContextSelectionProposal["selection"];
 }
-export type ContextSelectionValue = ContextSelectionSnapshot | ContextUseHead | ContextUseScope | ContextUseControl | ContextDelivery | ContextDeliveryState | ContextDeliveryPage | null |
+export type ContextSelectionValue = ContextSelectionSnapshot | ContextInputUse | ContextInputUsePage | ContextSelectionHeadPage | ContextUseHead | ContextUseScope | ContextUseControl | ContextDelivery | ContextDeliveryState | ContextDeliveryPage | null |
   {readonly id:string;readonly representations:readonly RepresentationRef[];readonly judgmentIds:readonly string[];readonly holds:readonly MaterialHold[]};
 export interface ContextSelectionPort {command(command:ContextSelectionCommand):Promise<ContextSelectionValue>;}

@@ -37,7 +37,17 @@ interface ControllerModelItemBase {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
+export type TaskModelCallCorrelation = Pick<ModelCallableRequest,"modelCallRef"|"providerCallRef"|"name"|"ordinal">;
+
 export type TaskDecisionModelItem =
+  | ControllerModelItemBase & {
+      readonly kind: "native_purpose_evidence";
+      readonly evidence: import("@agent-anything/model-interaction/protocol").ModelPurposeEvidence;
+    }
+  | ControllerModelItemBase & {
+      readonly kind: "native_rejected_call";
+      readonly call: TaskModelCallCorrelation;
+    }
   | ControllerModelItemBase & {
       readonly kind: "assistant_reasoning";
       readonly turnId: string;
@@ -66,6 +76,7 @@ export type TaskDecisionModelItem =
     };
 
 export interface ModelInteractionProjection {
+  readonly kind?: "turn_messages";
   readonly workingForms?: readonly import("@agent-anything/model-interaction/input").ModelInputOwnerForm[];
   readonly workingAccounts?: readonly import("@agent-anything/model-interaction/input").ModelInputAccount[];
   readonly inputUsageObservations?: readonly import("@agent-anything/model-interaction/context").ModelInputUsageObservation[];
@@ -180,7 +191,7 @@ export interface TaskDecisionInputSources<TOutput = unknown> {
     "id" | "projectionId" | "requestId" | "activeContext" | "profile" |
       "policy" | "estimator" | "budget" | "accounting"
   >;
-  readonly interaction: ModelInteractionProjection;
+  readonly interaction: ModelInteractionProjection | import("./NativeTaskHistory.js").NativeTaskHistory;
   readonly plan: PlanProjection | null;
   readonly planLimits: PlanLimits;
   readonly permission: PermissionContextProjection;
@@ -281,6 +292,7 @@ export type RunCompletionDisposition =
   | { readonly kind: "continue_with_feedback"; readonly feedback: TaskDecisionFeedback };
 
 export interface TaskDecisionActivity<TOutput = unknown> {
+  readonly historyKind?: "turn_messages" | "native_evidence";
   readonly resourceMetering: TaskDecisionResourceMetering;
   next(
     input: TaskDecisionInputSources<TOutput>,

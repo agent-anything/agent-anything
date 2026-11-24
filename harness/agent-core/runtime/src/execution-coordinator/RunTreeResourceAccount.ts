@@ -1,3 +1,5 @@
+import type {RunResourceContribution} from "./RunResourceContributions.js";
+
 export const runTreeResourceDimensions = [
   "controllerTurns",
   "actions",
@@ -120,6 +122,9 @@ interface MutableNodeAccount {
   limitExceeded: boolean;
   revision: number;
   settlement: RunTreeResourceSettlement | null;
+  contributions?:RunResourceContribution[];
+  contributionBaseMeasured?:MutableAmounts;
+  contributionBaseStatus?:MutableMeasurementStatus;
 }
 
 export interface RunTreeResourceCheckpoint {
@@ -174,6 +179,19 @@ export class RunTreeResourceAccount {
       for (const field of ["requestedAllocation", "hardGrant", "hardAvailable", "observationalThresholds", "measured"] as const) {
         snapshotRunTreeResourceAmounts(node[field]);
       }
+      if(node.contributions!==undefined){
+        if(!Array.isArray(node.contributions)||!node.contributionBaseMeasured||!node.contributionBaseStatus||
+          new Set(node.contributions.map(value=>value.source)).size!==node.contributions.length)
+          throw new TypeError("Invalid retained resource contributions.");
+        snapshotRunTreeResourceAmounts(node.contributionBaseMeasured);
+        for(const value of node.contributions)assertContribution(value,node.runId);
+        for(const dimension of runTreeResourceDimensions){
+          assertMeasurement({status:node.contributionBaseStatus[dimension],value:0} as RunTreeResourceMeasurement,dimension);
+          const sum=node.contributions.reduce((total,value)=>safeSum(total,value.usage[dimension]?.knownValue??0,dimension),node.contributionBaseMeasured[dimension]);
+          const status=aggregateStatus([node.contributionBaseStatus[dimension],...node.contributions.flatMap(value=>value.usage[dimension]?[value.usage[dimension]!.status]:[])]);
+          if(sum!==node.measured[dimension]||status!==node.measurementStatus[dimension])throw new TypeError("Retained contribution totals disagree.");
+        }
+      }else if(node.contributionBaseMeasured||node.contributionBaseStatus)throw new TypeError("Retained contribution basis is incomplete.");
       if (account.nodes.has(node.runId) || typeof node.settled !== "boolean" || typeof node.limitExceeded !== "boolean" ||
           (node.settled !== (node.settlement !== null)) ||
           (node.parentRunId === null) !== (node.runId === saved.rootRunId)) throw new TypeError("Invalid resource checkpoint node.");
@@ -303,6 +321,9 @@ export class RunTreeResourceAccount {
       const measurement = usage[dimension];
       if (measurement === undefined) continue;
       assertMeasurement(measurement, dimension);
+      if(node.contributionBaseStatus)node.contributionBaseStatus[dimension]=mergeStatus(node.contributionBaseStatus[dimension],measurement.status);
+      if(node.contributionBaseMeasured&&measurement.status==="measured")
+        node.contributionBaseMeasured[dimension]=safeSum(node.contributionBaseMeasured[dimension],measurement.value,dimension);
       const limit = this.envelope[dimension];
       node.measurementStatus[dimension] = mergeStatus(
         node.measurementStatus[dimension],
@@ -351,6 +372,48 @@ export class RunTreeResourceAccount {
       }
     }
     node.revision += 1;
+    return result;
+  }
+
+  contribution(runId:string,source:string):RunResourceContribution|null {
+    const value=this.requireNode(runId).contributions?.find(value=>value.source===source);
+    return value?structuredClone(value):null;
+  }
+
+  replaceContribution(runId:string,input:RunResourceContribution):RunTreeResourceRecordResult {
+    assertContribution(input,runId);
+    const node=this.requireActiveNode(runId),value=structuredClone(input),prior=node.contributions?.find(item=>item.source===value.source);
+    if(prior){
+      if(value.sequence<prior.sequence)throw new TypeError("Resource contribution moved backwards.");
+      if(value.sequence===prior.sequence){
+        if(JSON.stringify(value)!==JSON.stringify(prior))throw new TypeError("Resource contribution revision conflict.");
+        return {status:"recorded"};
+      }
+      if(Object.keys(value.usage).sort().join()!==Object.keys(prior.usage).sort().join())throw new TypeError("Resource contribution scope changed.");
+    }
+    const base=node.contributionBaseMeasured??{...node.measured},baseStatus=node.contributionBaseStatus??{...node.measurementStatus};
+    const contributions=[...(node.contributions??[]).filter(item=>item.source!==value.source),value];
+    const measured=zeroAmounts(),statuses={...node.measurementStatus},available={...node.hardAvailable};
+    let result:RunTreeResourceRecordResult={status:"recorded"};
+    for(const dimension of runTreeResourceDimensions){
+      measured[dimension]=contributions.reduce((sum,item)=>safeSum(sum,item.usage[dimension]?.knownValue??0,dimension),base[dimension]);
+      statuses[dimension]=aggregateStatus([baseStatus[dimension],...contributions.flatMap(item=>item.usage[dimension]?[item.usage[dimension]!.status]:[])]);
+      if(this.envelope[dimension].enforcement!=="hard")continue;
+      const allocated=[...this.nodes.values()].filter(child=>child.parentRunId===runId)
+        .reduce((sum,child)=>safeSum(sum,child.hardGrant[dimension]-(child.settlement?.released[dimension]??0),dimension),0);
+      const charged=safeSum(measured[dimension],allocated,dimension);
+      available[dimension]=Math.max(0,node.hardGrant[dimension]-charged);
+      if(charged>node.hardGrant[dimension])result={status:"limit_exceeded",dimension};
+      else if(result.status!=="limit_exceeded"&&["unknown","unavailable"].includes(statuses[dimension]))result={status:"measurement_unavailable",dimension};
+    }
+    for(const dimension of runTreeResourceDimensions){
+      const totals=this.envelope[dimension].enforcement==="hard"?this.measuredConsumed:this.observed;
+      totals[dimension]=safeSum(totals[dimension]-node.measured[dimension],measured[dimension],dimension);
+    }
+    node.contributions=contributions;node.contributionBaseMeasured=base;node.contributionBaseStatus=baseStatus;
+    Object.assign(node.measured,measured);Object.assign(node.measurementStatus,statuses);Object.assign(node.hardAvailable,available);
+    if(result.status==="limit_exceeded")node.limitExceeded=true;
+    node.revision++;
     return result;
   }
 
@@ -675,6 +738,21 @@ function assertMeasurement(
     input.status !== "unknown"
   ) {
     throw new TypeError(`${dimension} measurement status is invalid.`);
+  }
+}
+
+function assertContribution(value:RunResourceContribution,runId:string):void {
+  if(!value||value.runId!==runId)throw new TypeError("Resource contribution Run changed.");
+  token(value.source,"contribution.source");token(value.revision,"contribution.revision");
+  nonNegativeInteger(value.sequence,"contribution.sequence");
+  if(value.cursor!==undefined&&(typeof value.cursor!=="string"||!value.cursor.length||value.cursor.length>4096))
+    throw new TypeError("Resource contribution cursor invalid.");
+  if(!value.usage||!Object.keys(value.usage).length)throw new TypeError("Resource contribution is empty.");
+  for(const [key,measurement]of Object.entries(value.usage)){
+    if(!runTreeResourceDimensions.includes(key as RunTreeResourceDimension)||!measurement)throw new TypeError("Resource contribution dimension invalid.");
+    nonNegativeInteger(measurement.knownValue,`${key}.knownValue`);
+    assertMeasurement({status:measurement.status,value:measurement.knownValue} as RunTreeResourceMeasurement,key as RunTreeResourceDimension);
+    if(measurement.status==="not_applicable"&&measurement.knownValue!==0)throw new TypeError("Non-applicable resource has consumption.");
   }
 }
 

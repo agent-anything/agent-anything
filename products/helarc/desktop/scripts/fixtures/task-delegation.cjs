@@ -52,6 +52,14 @@ async function main(){
     prompt:"ROOT_CASE: Delegate independent CHILD_ALPHA and CHILD_BETA investigations together. Alpha delegates LEAF_CASE. Report both results."+
     (continuation?" After both complete, use SendMessage to ask Alpha to add TARGET 9507, then report all findings.":"")});
   const a=command=>store.activityHandoffs.command(command),now=()=>new Date().toISOString(),registry=new ActivityPurposeRegistry();
+  if(phase==="report-probes"){
+    const root=await store.readLatestRun("root"),transfer=root.control.descendantTransfers.find(t=>t.narrative?.source.codeUnits>16000);
+    assert(transfer);assert(!(await store.readRunControl("root")).terminal);
+    const probes=await require("./report-handoff-probes.cjs")({store,createHandoff:createHelarcReportMaterialHandoff,result:transfer.result,
+      binding:{child:{runId:transfer.childRunId,recipient:built.delegatedAgent.id,purpose:built.request.purpose},parent:{runId:"root",recipient:built.agent.id,purpose:built.request.purpose},
+        permissionBasis:"isolated-tree",scopeId:"tree",localPoolId:"local",deadlineAt:"2030-01-01T00:00:00.000Z",maximumSourceBytes:131072}});
+    await writeFile(join(directory,"report-probes.json"),JSON.stringify(probes));await store.close();store=null;app.exit(0);return;
+  }
   if(phase==="inspect") {
     const failed=JSON.parse(await readFile(join(directory,"result-parent-response.json"),"utf8"));
     const paths=[];
@@ -89,7 +97,7 @@ async function main(){
   if(retainedReport&&["report-published","report-admitted"].includes(phase)) {
     const original=acceptance.accept;
     acceptance.accept=async proposal=>{
-      const report=proposal.actor==="helarc.report-handoff";
+      const report=proposal.parts.some(part=>part.owner==="report_recipient"&&part.kind==="require_open");
       if(report&&phase==="report-published")await interruptReport();
       const result=await original.call(acceptance,proposal);
       if(report&&phase==="report-admitted"&&result.outcome==="accepted")await interruptReport();
@@ -322,10 +330,7 @@ async function main(){
   let reportProbes=[];
   if(retainedReport){
     await service.close();service=null;
-    const transfer=tree.members.find(m=>m.head.state.run.id==="root").head.control.descendantTransfers.find(t=>t.narrative?.source.codeUnits>16000);
-    reportProbes=await require("./report-handoff-probes.cjs")({store,createHandoff:createHelarcReportMaterialHandoff,result:transfer.result,
-      binding:{child:{runId:transfer.childRunId,recipient:built.delegatedAgent.id,purpose:built.request.purpose},parent:{runId:"root",recipient:built.agent.id,purpose:built.request.purpose},
-        permissionBasis:"isolated-tree",scopeId:"tree",localPoolId:"local",deadlineAt:"2030-01-01T00:00:00.000Z",maximumSourceBytes:131072}});
+    reportProbes=JSON.parse(await readFile(join(directory,"report-probes.json"),"utf8"));
     for(const runId of runIds){await inspection.activityObserver.replay(runId,store.activityHandoffs);await inspection.contextFoundationObserver.replay(runId,store.contextFoundationFacts.bind(store));}
     await require("./inspection-settlement.cjs").settleInspection(inspection.recorder,queries);
   }

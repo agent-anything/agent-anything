@@ -1,4 +1,8 @@
 import { snapshotProviderFailure } from "@agent-anything/model-interaction";
+import {snapshotTaskModelCallCorrelation} from "./TaskDecisionModelItems.js";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import type {TaskModelCallCorrelation} from "./TaskDecisionActivity.js";
+import { nativeModelSourceKey, sameRevisionRef, snapshotModelPurposeEvidence } from "@agent-anything/model-interaction/protocol";
 import {applySelectedResultPresentations, snapshotSelectedResultPresentationReceipt, validateSelectedResultPresentationResponse} from "./SelectedResultPresentation.js";
 import {snapshotTaskModelResponseRejection} from "./TaskModelResponseRejection.js";
 import type {
@@ -46,12 +50,16 @@ export function validateTaskDecisionProposal<TOutput>(
   const {modelItems, inputDeliveryReceipt = null, openingReceipt = null, resultPresentationReceipt = null, responseRejection = null} = snapshotTaskModelExchange(candidate, input);
   if(responseRejection&&candidate.kind!=="continue_with_feedback")throw decisionContractError("rejected_response_cannot_decide");
   const modelCalls = new Map(modelItems.flatMap((item) =>
-    item.kind === "model_tool_call"
+    item.kind === "model_tool_call" || item.kind === "native_rejected_call"
       ? [[modelCallRefKey(item.call.modelCallRef), item.call] as const]
       : []
   ));
-  if (modelCalls.size !== modelItems.filter(item => item.kind === "model_tool_call").length) {
+  if (modelCalls.size !== modelItems.filter(item => item.kind === "model_tool_call" || item.kind === "native_rejected_call").length) {
     throw decisionContractError("controller_model_call_duplicated");
+  }
+  for(const item of modelItems)if(item.kind==="native_rejected_call") {
+    if(candidate.kind==="continue_with_feedback"||!Array.isArray(candidate.candidates)||candidate.candidates.find(c=>isRecord(c)&&c.modelCallRef&&modelCallRefKey(snapshotModelCallRef(c.modelCallRef as ModelCallRef))===modelCallRefKey(item.call.modelCallRef))?.kind!=="model_call_rejection")
+      throw decisionContractError("rejected_native_call_cannot_execute");
   }
 
   switch (candidate.kind) {
@@ -149,9 +157,18 @@ export function snapshotTaskModelExchange<T>(candidate: TaskModelExchange,
   input: Pick<TaskDecisionInputSources<T>, "runId" | "inputDelivery" | "interaction" | "toolExposure"> & {readonly agent: {readonly id:string}}): TaskModelExchange {
   if (!isRecord(candidate)) throw decisionContractError("controller_exchange_invalid");
   const modelItems = validateModelItems(candidate.modelItems);
+  for (const item of modelItems) if (item.kind === "native_purpose_evidence" && item.evidence.scope.runId !== input.runId)
+    throw decisionContractError("controller_native_evidence_run_mismatch");
+  if (modelItems.some(item => item.kind === "native_purpose_evidence") &&
+      (candidate.openingReceipt || (candidate.inputDeliveryReceipt&&candidate.inputDeliveryReceipt.via.kind!=="protocol") || candidate.resultPresentationReceipt || candidate.responseRejection))
+    throw decisionContractError("controller_native_receipt_contract_required");
   const inputDeliveryReceipt = snapshotInputDeliveryReceipt(candidate.inputDeliveryReceipt, input.inputDelivery);
   const openingReceipt = candidate.openingReceipt == null ? null : snapshotConversationOpeningReceipt(candidate.openingReceipt, input.runId);
-  if (openingReceipt && (input.interaction.opening || input.interaction.latestTurn)) throw decisionContractError("conversation_opening_repeated");
+  if (openingReceipt && (input.interaction.kind==="native_evidence" || input.interaction.opening || input.interaction.latestTurn)) throw decisionContractError("conversation_opening_repeated");
+  if(inputDeliveryReceipt?.via.kind==="protocol") {
+    const evidence=modelItems.find(item=>item.kind==="native_purpose_evidence")?.evidence;
+    if(!evidence||modelInputValueDigest(evidence)!==modelInputValueDigest(inputDeliveryReceipt.via.evidence))throw decisionContractError("controller_native_receipt_evidence_mismatch");
+  }
   if (inputDeliveryReceipt?.via.kind === "controller" && inputDeliveryReceipt.via.controllerRequestId !== input.toolExposure.controllerRequestId)
     throw decisionContractError("controller_input_delivery_request_mismatch");
   const response = modelItems.find(item => item.kind === "model_response_correlation");
@@ -161,6 +178,7 @@ export function snapshotTaskModelExchange<T>(candidate: TaskModelExchange,
   const requestId=response?.response.requestId??responseRejection?.requestId;
   const resultPresentationReceipt = candidate.resultPresentationReceipt == null ? null : snapshotSelectedResultPresentationReceipt(candidate.resultPresentationReceipt);
   if (resultPresentationReceipt) {
+    if(input.interaction.kind==="native_evidence")throw decisionContractError("controller_native_receipt_contract_required");
     if (!requestId || resultPresentationReceipt.recipient !== input.agent.id) throw decisionContractError("controller_result_presentation_binding_invalid");
     validateSelectedResultPresentationResponse(resultPresentationReceipt, modelItems, responseRejection);
     applySelectedResultPresentations(resultPresentationReceipt,
@@ -170,7 +188,7 @@ export function snapshotTaskModelExchange<T>(candidate: TaskModelExchange,
   if (requestId && (openingReceipt && openingReceipt.requestId !== requestId ||
         inputDeliveryReceipt?.via.kind === "provider" && inputDeliveryReceipt.via.requestId !== requestId))
     throw decisionContractError("controller_exchange_request_mismatch");
-  const calls = modelItems.flatMap(item => item.kind === "model_tool_call" ? [modelCallRefKey(item.call.modelCallRef)] : []);
+  const calls = modelItems.flatMap(item => item.kind === "model_tool_call" || item.kind === "native_rejected_call" ? [modelCallRefKey(item.call.modelCallRef)] : []);
   if (new Set(calls).size !== calls.length) throw decisionContractError("controller_model_call_duplicated");
   return Object.freeze({modelItems, ...(inputDeliveryReceipt ? {inputDeliveryReceipt} : {}), ...(openingReceipt ? {openingReceipt} : {}),
     ...(resultPresentationReceipt ? {resultPresentationReceipt} : {}), ...(responseRejection ? {responseRejection} : {})});
@@ -217,6 +235,8 @@ function validateModelItems(candidate: unknown): readonly TaskDecisionModelItem[
 
     const metadata = Object.freeze({ ...item.metadata });
     switch (item.kind) {
+      case "native_purpose_evidence":
+        return Object.freeze({ id, kind: "native_purpose_evidence", evidence: snapshotModelPurposeEvidence(item.evidence), metadata });
       case "assistant_reasoning":
         return Object.freeze({ id, kind: "assistant_reasoning", turnId: nonEmptyDecisionText(item.turnId),
           reasoning: snapshotModelReasoning(item.reasoning as ModelReasoning), metadata });
@@ -232,6 +252,8 @@ function validateModelItems(candidate: unknown): readonly TaskDecisionModelItem[
           text: boundedDecisionText(item.text, 131_072),
           metadata,
         });
+      case "native_rejected_call":
+        return Object.freeze({id,kind:"native_rejected_call",call:snapshotTaskModelCallCorrelation(item.call as TaskModelCallCorrelation),metadata});
       case "model_tool_call":
         return Object.freeze({
           id,
@@ -270,6 +292,24 @@ function validateModelItems(candidate: unknown): readonly TaskDecisionModelItem[
         throw decisionContractError("controller_model_item_kind_invalid");
     }
   });
+  const native = items.filter(item => item.kind === "native_purpose_evidence");
+  if (native.length) {
+    if(native.length!==1)throw decisionContractError("controller_native_purpose_count_invalid");
+    if (items.some(item => item.kind !== "native_purpose_evidence" && item.kind !== "model_tool_call" && item.kind!=="native_rejected_call"))
+      throw decisionContractError("controller_model_evidence_conventions_mixed");
+    const sources = new Set(native.flatMap(item => item.evidence.sources.map(nativeModelSourceKey)));
+    const acceptances = native.map(item => JSON.stringify([item.evidence.scope.runId, item.evidence.acceptance]));
+    if (new Set(acceptances).size !== acceptances.length) throw decisionContractError("controller_native_acceptance_duplicate");
+    for (const item of items) if (item.kind === "model_tool_call" || item.kind === "native_rejected_call") {
+      const call = item.call.modelCallRef;
+      if (call.turnId !== null || !sources.has(nativeModelSourceKey(call.nativeSource)) ||
+          !native.some(entry => sameRevisionRef(entry.evidence.acceptance, call.purposeAcceptance) &&
+            entry.evidence.sources.some(source => nativeModelSourceKey(source) === nativeModelSourceKey(call.nativeSource))))
+        throw decisionContractError("controller_native_call_source_mismatch");
+    }
+    return Object.freeze(items);
+  }
+  if(items.some(item=>item.kind==="native_rejected_call"))throw decisionContractError("controller_model_evidence_conventions_mixed");
   const finishItems = items.filter((item) => item.kind === "model_turn_finish");
   const correlationItems = items.filter((item) =>
     item.kind === "model_response_correlation"
@@ -319,7 +359,7 @@ function validateModelItems(candidate: unknown): readonly TaskDecisionModelItem[
 
 function validateCandidates(
   candidate: unknown,
-  modelCalls: ReadonlyMap<string, ModelCallableRequest>,
+  modelCalls: ReadonlyMap<string, TaskModelCallCorrelation>,
   allowEmpty = false,
 ): readonly ProgressionCandidate[] {
   if (!Array.isArray(candidate) || (!allowEmpty && candidate.length === 0)) {

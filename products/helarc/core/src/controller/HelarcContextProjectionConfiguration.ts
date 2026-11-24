@@ -1,5 +1,5 @@
 import type { DecisionSourceProjection } from "@agent-anything/agent-runtime/execution-coordinator";
-import { selectConversationPresentations } from "@agent-anything/agent-runtime/decision";
+import { selectConversationPresentations,requireTurnTaskInput } from "@agent-anything/agent-runtime/decision";
 import type {
   ContextProjectionEstimationInput,
   ContextProjectionEstimator,
@@ -11,6 +11,19 @@ import {
 } from "../prompt/HelarcPromptAssembly.js";
 
 const HELARC_MAXIMUM_CONTEXT_INPUT_BYTES = 256 * 1_024;
+
+/** Bounds disclosed source payloads, not native tokens or complete wire capacity. */
+export function createHelarcNativeContextProjectionConfiguration():DecisionSourceProjection {
+  const estimator:ContextProjectionEstimator={ref:{id:"helarc.native-source-json",revision:"1",unit:"bytes",accuracy:"exact"},
+    estimate:input=>new TextEncoder().encode(JSON.stringify({source:input.contribution,payload:input.payload})).byteLength};
+  return {purpose:"native_task_sources",profile:{ref:{id:"helarc-native-task-sources",revision:"1"},
+    ordering:"precedence_desc_created_at_asc_id_asc",allowedTransformations:[]},
+    policy:{ref:{id:"helarc-native-source-disclosure",revision:"1"},decide:()=>({kind:"allow"})},audiences:["model"],maxContributionPayloadBytes:128*1024,
+    allocate(input){
+      if(input.interaction.kind!=="native_evidence")throw new TypeError("native_source_projection_requires_native_history");
+      return {budget:{unit:"bytes",maximum:HELARC_MAXIMUM_CONTEXT_INPUT_BYTES},estimator};
+    }};
+}
 
 export function createHelarcContextProjectionConfiguration(): DecisionSourceProjection {
   const estimator: ContextProjectionEstimator = Object.freeze({
@@ -41,6 +54,7 @@ export function createHelarcContextProjectionConfiguration(): DecisionSourceProj
     audiences: Object.freeze(["model"]),
     maxContributionPayloadBytes: 128 * 1_024,
     allocate(input: Parameters<DecisionSourceProjection["allocate"]>[0]) {
+      requireTurnTaskInput(input);
       return Object.freeze({
         budget: Object.freeze({
           unit: "bytes" as const,

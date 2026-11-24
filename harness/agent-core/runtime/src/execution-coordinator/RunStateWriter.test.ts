@@ -8,6 +8,17 @@ function initial(): RunState<unknown> {
 }
 
 describe("Run state commit ordering", () => {
+  it("retains owned immutable history across control-only revisions without trusting a shallow freeze",async()=>{
+    const nested={text:"original"},initialState={...initial(),metadata:Object.freeze({nested})};
+    const persisted:number[]=[];
+    const writer=new RunStateWriter(initialState,()=>"2026-11-09T00:00:00Z",()=>"id",()=>{},async state=>{persisted.push(state.revision);});
+    const before=writer.getSnapshot();nested.text="changed outside owner";
+    const after=await writer.commitState(()=>({status:"waiting"}));
+    expect(after.metadata).toEqual({nested:{text:"original"}});
+    expect(after.metadata).toBe(before.metadata);expect(after.items).toBe(before.items);
+    expect(Object.isFrozen((after.metadata.nested as object))).toBe(true);
+    expect(persisted).toEqual([1]);expect(before.status).toBe("running");
+  });
   it("prepares against the last committed revision and publishes only after acknowledgement", async () => {
     let release!: () => void;
     const ack = new Promise<void>(resolve => {release = resolve;});

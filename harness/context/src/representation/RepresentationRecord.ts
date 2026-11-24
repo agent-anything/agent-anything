@@ -29,7 +29,8 @@ export interface RepresentationRecord {
   readonly requirements:readonly {readonly id:string;readonly revision:string;readonly basis:string;readonly description:string}[];
   readonly losses:readonly RepresentationLoss[];
   readonly restorations:readonly {readonly lossId:string;readonly range:MaterialRange;readonly judgmentId:string}[];
-  readonly method:{readonly id:string;readonly revision:string;readonly activityId:string;readonly rawResultId:string;readonly acceptanceId:string}|null;
+  readonly method:{readonly id:string;readonly revision:string;readonly activityId:string;readonly rawResultId:string;readonly acceptanceId:string;
+    readonly protocolConfirmation?:{readonly rawRevision:string;readonly acceptanceRevision:string}}|null;
 }
 export interface RepresentationJudgment {
   readonly id:string;

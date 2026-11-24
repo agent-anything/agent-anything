@@ -101,6 +101,21 @@ describe("scope-specific capacity evidence",()=>{
     expect(assessment({kind:"exact",value:101},100,{policy:{...policy,allowUnknown:true}})).toMatchObject({allowed:false,decisions:[{conclusion:"violated"}]});
     expect(assessment({kind:"estimate",value:99})).toMatchObject({allowed:true,decisions:[{conclusion:"estimated_fit"}]});
   });
+  it("retains applicable refusal separately from an unknown numerical measurement",()=>{
+    const refusal={id:"refusal",encodedInputId:"encoded",targetRevision:"target",conditionId:"native-admissibility",
+      evidenceId:"native-result",reason:"complete_input_refused",basis:"Original complete native mapping",
+      source:{owner:"protocol_execution",id:"count-activity",revision:"1"}};
+    const options={policy:{...policy,allowUnknown:true},refusals:[refusal]};
+    const result=assessment({kind:"unknown",reason:"no count"},100,options);
+    expect(result.allowed).toBe(false);
+    expect(result.refusals).toEqual([refusal]);
+    expect(result.decisions).toEqual([{limitId:"limit",evidenceId:"measurement",conclusion:"uncertain",reason:"insufficient_or_crossing_evidence"},
+      {limitId:"native-admissibility",evidenceId:"native-result",conclusion:"violated",reason:"complete_input_refused"}]);
+    expect(assessment({kind:"unknown",reason:"no count"},100,{...options,limits:[]}).allowed).toBe(false);
+    expect(()=>assessment({kind:"unknown",reason:"no count"},100,{...options,refusals:[{...refusal,encodedInputId:"other"}]})).toThrow("refusal_scope_invalid");
+    expect(()=>assessment({kind:"unknown",reason:"no count"},100,{...options,refusals:[refusal,refusal]})).toThrow("refusal_duplicate");
+    expect(assessment({kind:"exact",value:5})).not.toHaveProperty("refusals");
+  });
   it("does not treat partial evidence or unknown generation as zero",()=>{
     expect(assessment({kind:"unknown",reason:"template unknown"})).toMatchObject({allowed:false});
     const evidence=[{id:"e",encodedInputId:"encoded",targetRevision:"target",methodRevision:"test",dimension:"input_tokens",coverage:"partial",quantity:{kind:"exact",value:50},basis:"text only",uncovered:["image"]}];

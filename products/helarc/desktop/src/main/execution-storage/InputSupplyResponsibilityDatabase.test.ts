@@ -14,6 +14,8 @@ import {SharedAcceptanceDatabase} from "./SharedAcceptanceDatabase.js";
 import type {ActivityHandoffDatabase} from "./ActivityHandoffDatabase.js";
 import type {InputSupplyResponsibilityDatabase} from "./InputSupplyResponsibilityDatabase.js";
 import Database from "better-sqlite3";
+import {HELARC_NATIVE_ACCOUNT_RECEPTION_PURPOSE,HELARC_RESPONSES_COMPACT_PURPOSE,HELARC_NATIVE_ORIGINAL_INPUT_PURPOSE} from "@agent-anything/helarc/controller";
+import type {InputSupplyReception} from "@agent-anything/agent-runtime/context-representation";
 
 const databases:ExecutionDatabase[]=[],directories:string[]=[];
 afterEach(()=>{for(const db of databases.splice(0))db.close();for(const path of directories.splice(0)){
@@ -55,7 +57,85 @@ function open(directory=mkdtempSync(join(tmpdir(),"helarc-supply-"))) {
   return {db,directory,a,query,need,work,accept};
 }
 
+function nativeReceiver(f:ReturnType<typeof open>,binding:InputSupplyBinding) {
+  const path={...f.work("native-receiver").intent,purpose:new ActivityPurposeRegistry<null>().register(HELARC_NATIVE_ACCOUNT_RECEPTION_PURPOSE,null)};
+  const declaration:InputSupplyReception={kind:"input_supply_reception",revision:"1",inputSupply:binding,
+    scope:{id:"native-input",runId:binding.runId,owner:binding.owner,recipient:"agent",purpose:"task",target:"fixed:1",continuity:"task",authorityBasis:path.permissionBasis},
+    pathId:path.id,firstStageId:`${path.id}:stage:1`,workId:null,subscriptionId:`${path.id}:reception`,closureKind:"native_account_reception_closed",
+    coveredPathIds:[path.id,`${path.id}:check`]};
+  const request={id:declaration.firstStageId,pathId:path.id,stageKind:"realize",input:{inputSupplyReception:declaration,privateNativePlan:{notAGenericRequest:true}},capabilities:[],dependencies:[]};
+  const parts:SharedAcceptancePart[]=[{owner:"activity",kind:"path_opening",proposal:path},{owner:"activity",kind:"stage_submission",proposal:request},
+    {owner:"activity",kind:"reconsideration_subscription",proposal:{id:declaration.subscriptionId,runId:binding.runId,owner:binding.owner,
+      binding:{kind:"activity_path",id:path.id},sources:[`activity-source:control:${path.id}`]}}];
+  return {path,declaration,request,parts,entry:inputSupplyResponsibility("method_reception",path)};
+}
+
 describe("accepted input supply responsibilities",()=>{
+  it.each(["original","need","authority","scope","work","stage","missing"])("validates native owned input preparation (%s)",change=>{
+    const f=open(),binding=f.need(),path={...f.work("native-original",false,"supply-work").intent,
+      purpose:new ActivityPurposeRegistry<null>().register(HELARC_NATIVE_ORIGINAL_INPUT_PURPOSE,null)};
+    f.a({kind:"bind_resource_pool",pool:{id:"local",revision:"1",authority:"host",capacity:1}});
+    const schedule={id:"supply-schedule",workId:"supply-work",runId:"root",scopeId:"tree",owner:binding.owner,decisionId:"original-demand",policyRevision:"1",
+      reason:"necessary" as const,delayImpact:"Original input",timing:{kind:"unknown" as const},resources:[{poolId:"local",capability:"material-read",units:1}],allowedPathIds:[path.id]};
+    const declaration={kind:"input_supply_preparation",revision:"1",inputSupply:change==="need"?{...binding,needId:"another"}:binding,
+      scope:{id:"scope",runId:change==="scope"?"child":"root",owner:binding.owner,recipient:"agent",purpose:"task",target:"fixed:1",continuity:"task",
+        authorityBasis:change==="authority"?"other":"original"},pathId:path.id,workId:change==="work"?"another":"supply-work",
+      firstStageId:change==="stage"?"another":`${path.id}:stage:1`};
+    const parts:SharedAcceptancePart[]=[{owner:"activity",kind:"scheduling_acceptance",proposal:{kind:"schedule_work",intent:schedule,expectedRevision:0}},
+      {owner:"activity",kind:"path_opening",proposal:path},{owner:"activity",kind:"stage_submission",proposal:{id:`${path.id}:stage:1`,pathId:path.id,
+        stageKind:"prepare",input:change==="missing"?{}:{inputSupplyPreparation:declaration},capabilities:["material-read"],dependencies:[]}}];
+    const result=f.accept(`native-original-${change}`,binding,[inputSupplyResponsibility("input_preparation",path)],parts,0,schedule);
+    expect(result.outcome).toBe(change==="original"?"accepted":"rejected");
+    f.db.close();const restored=open(f.directory);
+    if(change==="original")expect(restored.query({kind:"page",needId:binding.needId,revision:1,afterId:null,limit:4})).toMatchObject({entries:[{role:"input_preparation",relation:"owned"}]});
+    else{expect(restored.a({kind:"read_path",pathId:path.id})).toBeNull();expect(restored.a({kind:"read_schedule",workId:"supply-work"})).toBeNull();}
+  });
+  it.each(["original","run","work","subscription","missing"])("validates independent native production lifecycle (%s)",change=>{
+    const f=open(),binding=f.need(),path={...f.work("native-producer").intent,scheduledWorkId:"native-production",
+      purpose:new ActivityPurposeRegistry<null>().register(HELARC_RESPONSES_COMPACT_PURPOSE,null)};
+    f.a({kind:"bind_resource_pool",pool:{id:"native-model",revision:"1",authority:"host",capacity:1}});
+    const schedule={id:"production-schedule",workId:path.scheduledWorkId,runId:"root",scopeId:"tree",owner:binding.owner,decisionId:"original-decision",policyRevision:"1",
+      reason:"necessary" as const,delayImpact:"Original input",timing:{kind:"unknown" as const},resources:[{poolId:"native-model",capability:"model-access",units:1}],allowedPathIds:[path.id]};
+    const declaration={kind:"input_supply_production",revision:"1",pathId:path.id,firstStageId:`${path.id}:stage:1`,runId:change==="run"?"child":"root",owner:binding.owner,
+      workId:change==="work"?"other":path.scheduledWorkId,subscriptionId:change==="subscription"?"missing":`${path.id}:production-lifecycle`};
+    const parts:SharedAcceptancePart[]=[{owner:"activity",kind:"scheduling_acceptance",proposal:{kind:"schedule_work",intent:schedule,expectedRevision:0}},
+      {owner:"activity",kind:"path_opening",proposal:path},{owner:"activity",kind:"stage_submission",proposal:{id:declaration.firstStageId,pathId:path.id,stageKind:"source",
+        input:{inputSupplyProduction:change==="missing"?null:declaration,nativeCompact:{opaque:true}},capabilities:[],dependencies:[]}},
+      {owner:"activity",kind:"reconsideration_subscription",proposal:{id:`${path.id}:production-lifecycle`,owner:binding.owner,runId:"root",binding:{kind:"activity_path",id:path.id},
+        sources:[`activity-source:scheduling:${path.scheduledWorkId}`,`activity-source:control:${path.id}`]}}];
+    const entry=inputSupplyResponsibility("method_production",path),receipt=f.accept("native-production",binding,[entry],parts);
+    expect(receipt.outcome).toBe(change==="original"?"accepted":"rejected");
+    f.db.close();const restored=open(f.directory);
+    if(change==="original"){
+      expect(restored.query({kind:"page",needId:binding.needId,revision:1,afterId:null,limit:4})).toMatchObject({entries:[{role:"method_production",relation:"dependency"}]});
+      expect(restored.a({kind:"read_path",pathId:path.id})).toMatchObject({intent:{purpose:{contract:{recoveryOwner:HELARC_RESPONSES_COMPACT_PURPOSE.recoveryOwner}}}});
+    } else {
+      expect(restored.a({kind:"read_path",pathId:path.id})).toBeNull();expect(restored.a({kind:"read_schedule",workId:path.scheduledWorkId})).toBeNull();
+    }
+  });
+  it("registers a native receiver through its public handoff and restores it unchanged",()=>{
+    const f=open(),binding=f.need(),native=nativeReceiver(f,binding);
+    expect(f.accept("native",binding,[native.entry],native.parts).outcome).toBe("accepted");
+    f.db.close();const restored=open(f.directory);
+    expect(restored.a({kind:"read_stage",requestId:native.request.id})).toMatchObject({request:native.request});
+    expect(restored.query({kind:"page",needId:binding.needId,revision:1,afterId:null,limit:8})).toMatchObject({entries:[{...native.entry,needId:binding.needId}]});
+  });
+  it.each(["run","need","authority","configuration","subscription","foreign-coverage","missing"])("rejects changed native handoff %s jointly",change=>{
+    const f=open(),binding=f.need(),native=nativeReceiver(f,binding),declaration=structuredClone(native.declaration) as any;
+    if(change==="run")declaration.scope.runId="child";
+    if(change==="need")declaration.inputSupply.needId="different";
+    if(change==="authority")declaration.scope.authorityBasis="different";
+    if(change==="configuration")declaration.inputSupply.configuration.revision="changed";
+    if(change==="subscription")declaration.subscriptionId="not-watching";
+    if(change==="foreign-coverage"){
+      const foreign={...f.work("foreign").intent,runId:"child"};f.a({kind:"open_path",intent:foreign});
+      declaration.coveredPathIds.push(foreign.id);
+    }
+    const parts=native.parts.map(p=>p.kind==="stage_submission"?{...p,proposal:{...native.request,input:{inputSupplyReception:change==="missing"?null:declaration}}}:p);
+    expect(f.accept("changed",binding,[native.entry],parts)).toMatchObject({outcome:"rejected",rejection:{code:"input_supply_target_reception_unconfirmed"}});
+    expect(f.a({kind:"read_path",pathId:native.path.id})).toBeNull();
+    expect(f.query({kind:"head",needId:binding.needId})).toBeNull();
+  });
   it.each([false,true])("jointly verifies actual receiver scheduling, not just its declaration (extra path=%s)",extra=>{
     const f=open(),binding=f.need(),producer=f.work("producer");f.a({kind:"open_path",intent:producer.intent});
     f.a({kind:"bind_resource_pool",pool:{id:"model",revision:"1",authority:"host",capacity:1}});
@@ -268,6 +348,31 @@ describe("durable original input supply exit",()=>{
         binding:{kind:"activity_path",id},sources:[producerPathId,id].flatMap(pathId=>[`activity-source:control:${pathId}`,`activity-source:progress:${pathId}`])}}];
     return {paths,parts,entry:inputSupplyResponsibility("method_reception",path)};
   }
+
+  it.each([false,true])("transfers native receiver cleanup without inventing absent check execution (already closed=%s)",alreadyClosed=>{
+    const f=open(),binding=f.need(),native=nativeReceiver(f,binding);
+    expect(f.accept("register-native",binding,[native.entry],native.parts).outcome).toBe("accepted");
+    const basis=cancelNeed(f,binding);
+    expect(accept(f,binding,"begin",[begin(binding,basis,1)]).outcome).toBe("accepted");
+    f.a({kind:"cancel",pathId:native.path.id,expectedControlRevision:0});
+    if(alreadyClosed){
+      const snapshot=f.a({kind:"read_reconsideration",subscriptionId:native.declaration.subscriptionId,limit:256}) as ActivityReconsiderationSnapshot;
+      expect(accept(f,binding,"close-receiver",[{owner:"activity",kind:"reconsideration_acceptance",proposal:{id:"close-receiver",subscriptionId:native.declaration.subscriptionId,
+        expectedRevision:snapshot.state.revision,through:snapshot.through,factIds:snapshot.facts.map(f=>f.id),
+        decision:{owner:binding.owner,kind:native.declaration.closureKind,id:native.path.id,revision:"1"},close:true}}]).outcome).toBe("accepted");
+    }
+    const disposal=inputSupplyExit({kind:"dispose",needId:binding.needId,expectedRevision:1,dispositions:[{responsibilityId:native.entry.id,kind:"reception_transferred"}]});
+    const receipt=accept(f,binding,"dispose",[disposal]);expect(receipt.outcome).toBe("accepted");
+    f.db.close();const restored=open(f.directory);
+    expect(accept(restored,binding,"dispose",[disposal])).toEqual(receipt);
+    expect(pending(restored,binding,2)).toMatchObject({entries:[],more:false});
+    expect(restored.a({kind:"read_path",pathId:`${native.path.id}:check`})).toBeNull();
+    const complete=inputSupplyExit({kind:"complete",needId:binding.needId,expectedRevision:2});
+    expect(accept(restored,binding,"complete",[complete,closeSubscription(restored,binding,"complete")])).toMatchObject({outcome:"accepted"});
+    const facts=restored.db.contextFoundationFacts(binding.runId,0,128).contextFacts;
+    expect(JSON.stringify(facts.filter(f=>f.kind==="reception_transferred"))).toContain(native.declaration.subscriptionId);
+    expect(restored.a({kind:"read_reconsideration_state",subscriptionId:native.declaration.subscriptionId})).toMatchObject({closed:alreadyClosed});
+  });
 
   it("producer unreferenced guard waits for completed need exit, not merely dependency withdrawal",()=>{
     const f=open(),binding=f.need(),producer=readyProducer(f,binding);

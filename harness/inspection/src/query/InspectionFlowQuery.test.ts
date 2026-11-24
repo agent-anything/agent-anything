@@ -230,10 +230,13 @@ describe("Recorded execution flow queries",()=>{
       await expect(query.query({...base,...change,cursor:String(first.next)})).rejects.toThrow("inspection_cursor_invalid");
     }
   });
-  it("does not stop recording when one flow contradicts its captured definition",async()=>{
+  it.each(["step","check"] as const)("does not stop recording when one flow contradicts its captured definition: %s",async(violation)=>{
     const {adapter,query,snapshot,recorder}=await setup();
     const flow=new ExecutionFlowPath(definition,{observer:adapter},"run");
-    flow.advance("work");flow.advance("not-declared");flow.close("returned");
+    const step=flow.advance("work");
+    if(violation==="check")step.check("not-declared","passed");
+    else flow.advance("not-declared");
+    flow.close("returned");
     recorder.offer({id:"after-invalid",subject:recorder.ref("runtime","run","run","run"),occurredAt:null,payload:{kind:"event",name:"still recorded",sequence:1,code:null}});
     const scope=await snapshot();
     const coverage=(await query.query({...scope,kind:"get_snapshot"})).coverage!;

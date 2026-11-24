@@ -1,4 +1,4 @@
-import {describe,expect,it} from "vitest";
+import {describe,expect,it,vi} from "vitest";
 import {ActivityPurposeRegistry,type ActivityHandoffPort,type ActivityPathState,type ActivityStageState} from "../activity/index.js";
 import {CONTEXT_INPUT_PREPARATION_PURPOSE} from "./ContextInputPreparation.js";
 import {readContextInputEvidence} from "./ContextInputEvidence.js";
@@ -16,7 +16,8 @@ function fixture() {
       owner:scope.owner,expectedProgressRevision:1,progress}} as ActivityStageState;
   let reads=0,changeOnRead=false;
   const activities:ActivityHandoffPort={command:async command=>{
-    if(command.kind==="read_path"){reads++;return changeOnRead&&reads>1?{...path,controlRevision:1,cancelled:true}:path;}
+    if(command.kind==="read_snapshot"){reads++;return {path,stages:[first],inputNeeds:[]};}
+    if(command.kind==="observe_state"){reads++;return {path:changeOnRead&&reads>1?{...path,controlRevision:1,cancelled:true}:path,stages:[],inputNeeds:[]};}
     if(command.kind==="read_stage")return command.requestId===first.request.id?first:command.requestId===stage.request.id?stage:null;
     throw new Error("Evidence reading must not mutate accepted work");
   }};
@@ -24,6 +25,15 @@ function fixture() {
   return {input,path,first,stage,progress,read:()=>readContextInputEvidence(input,new AbortController().signal),race:()=>{changeOnRead=true;}};
 }
 describe("accepted input preparation evidence",()=>{
+  it("uses a decision's checked snapshot without rereading its bodies, but still checks current control",async()=>{
+    const f=fixture(),command=vi.spyOn(f.input.activities,"command");
+    const snapshot={path:f.path,stages:[f.first,f.stage],inputNeeds:[]};
+    const result=await readContextInputEvidence({...f.input,snapshot},new AbortController().signal);
+    expect(result.kind).toBe("available");
+    expect(command.mock.calls.map(([command])=>command.kind)).toEqual(["observe_state"]);
+    command.mockResolvedValueOnce({path:{...f.path,controlRevision:1,cancelled:true},stages:[],inputNeeds:[]});
+    expect(await readContextInputEvidence({...f.input,snapshot},new AbortController().signal)).toEqual({kind:"changed"});
+  });
   it("retains assessed gaps, uncertainty and original acceptance across serialization",async()=>{
     const f=fixture(),before=await f.read();
     expect(before).toMatchObject({kind:"available",current:{kind:"gap",gap:{untested:true},evidence:{owner:"activity",id:"prepare:stage:2",revision:"2"}},

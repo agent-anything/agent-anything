@@ -1,6 +1,6 @@
 import {afterEach, expect, it} from "vitest";
 import Database from "better-sqlite3";
-import {mkdtempSync, rmSync, readdirSync} from "node:fs";
+import {mkdtempSync, rmSync, readdirSync,readFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join, relative, resolve} from "node:path";
 import {InspectionRecorder} from "../../dist/recording/InspectionRecorder.js";
@@ -23,6 +23,28 @@ async function setup() {
 }
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+it.each(["count","content"] as const)("reserves live headroom under %s pressure across replay producers",async(dimension)=>{
+  const {recorder,ref,offer}=await setup();
+  const body="x".repeat(1024*1024),count=dimension==="count"?100:24;
+  const input=(i:number)=>({id:"pull-"+i,subject:ref,occurredAt:null,payload:{kind:"event" as const,name:"pull",sequence:i,code:null},
+    ...(dimension==="count"?{}:{contents:[{name:"body",class:"agent" as const,stage:"result",mediaType:"text/plain" as const,value:body}]})});
+  // Until this turn yields to I/O the real worker cannot deliver an acknowledgement.
+  for(let i=0;i<count;i++)expect(await recorder.offerWhenReady(input(i))).toBe(true);
+  const pending=recorder.offerWhenReady(input(count));
+  expect(recorder.health().queued).toBe(count);
+  for(let i=0;i<3;i++)expect(offer("live-"+i,dimension==="content"?body:undefined)).toBe(true);
+  expect(await pending).toBe(true);
+  expect((await recorder.flush()).native).toBe("settled");expect(recorder.health().dropped).toBe(0);
+},30000);
+
+it("does not confirm a replay group when SQLite rejects one of its accepted offers",async()=>{
+  const {recorder,ref,offer}=await setup();
+  await recorder.confirmNativeWork(async()=>{expect(offer("one")).toBe(true);});
+  await expect(recorder.confirmNativeWork(async()=>{expect(await recorder.offerWhenReady({id:"one",subject:ref,occurredAt:null,
+    payload:{kind:"event",name:"conflicting",sequence:2,code:null}})).toBe(true);})).rejects.toThrow("inspection_replay_record_rejected");
+  await recorder.confirmNativeWork(async()=>{expect(offer("unrelated")).toBe(true);});
+});
+
 it("persists rejected-input health with no subsequent data batch", async () => {
   const {recorder, directory} = await setup();
   expect(recorder.offer({} as never)).toBe(false);
@@ -31,6 +53,49 @@ it("persists rejected-input health with no subsequent data batch", async () => {
   try {expect(db.snapshot().recording?.ingress).toMatchObject({accepted: 0, rejected: 1,
     issues: [{reason: "invalid_input", firstSequence: null, samples: [{subject: null}]}]});}
   finally {db.close();}
+});
+
+it("attributes pre-admission rejections without storing bodies, invoking accessors or assigning sequences",async()=>{
+  const {recorder,ref}=await setup();
+  const input={id:"offer-1",subject:ref,occurredAt:null,payload:{kind:"event" as const,name:"fact",sequence:null,code:null}};
+  const privateText="private-marker";
+  expect(recorder.offer({...input,payload:{...input.payload,name:privateText.repeat(5000)}})).toBe(false);
+  expect(recorder.offer({...input,payload:{...input.payload,sequence:-1}})).toBe(false);
+  expect(recorder.offer({...input,subject:{...ref,datasetId:"foreign"}})).toBe(false);
+  let accessed=false;
+  expect(recorder.offer({...input,get subject(){accessed=true;throw Error(privateText);}})).toBe(false);
+  expect(accessed).toBe(false);
+  // JSON encodes each control character as six ASCII bytes in the final descriptors.
+  const wide="\u0001".repeat(256);
+  expect(recorder.offer({...input,contents:Array.from({length:32},()=>({name:wide,stage:wide,class:"agent",mediaType:"text/plain",value:null,unavailableReason:wide}))})).toBe(false);
+  const {barrier}=await recorder.flush(true);
+  expect(barrier.accepted).toBe(0);
+  const issues=recorder.health().coverage!.recording!.ingress.issues;
+  const samples=issues.flatMap(i=>i.samples.map(s=>({reason:i.reason,...s})));
+  const at=(stage:string)=>samples.find(s=>s.validation?.stage===stage);
+  expect(at("structure_snapshot")).toMatchObject({reason:"structure_oversized",subject:ref,validation:{recordId:"offer-1",limitBytes:65536}});
+  expect(at("fields")).toMatchObject({reason:"invalid_input",subject:ref,validation:{recordId:"offer-1"}});
+  for(const s of ["scope","envelope"])expect(at(s)).toMatchObject({subject:null,validation:{recordId:null}});
+  expect(at("encoded_record")).toMatchObject({reason:"record_oversized",subject:ref,validation:{recordId:"offer-1",limitBytes:65536}});
+  expect(samples.every(s=>s.sequence===null)).toBe(true);
+  expect(JSON.stringify(samples)).not.toContain(privateText);
+});
+
+it("closes durable native evidence independently of telemetry catch-up",async()=>{
+  const {recorder,offer,directory}=await setup();
+  for(let i=0;i<1600;i++)offer(`closing-${i}`);
+  const deadline=Date.now()+10000;
+  while(recorder.health().queued>0){expect(Date.now()).toBeLessThan(deadline);await new Promise(resolve=>setTimeout(resolve,5));}
+  const result=await recorder.flush(true);
+  expect(result).toMatchObject({native:"settled",unpersisted:0,unconfirmed:0,code:null});
+  const db=new InspectionDatabase(directory);
+  try{
+    const coverage=db.snapshot(),p=coverage.recording!;
+    expect(coverage.status).toBe("closed");expect(coverage.captured).toBe(1600);
+    expect(result.projection).toBe(p.projection.cursor<p.native.target?"incomplete":"settled");
+    if(result.projection==="incomplete")expect(coverage.limitations).toContain("telemetry_projection_incomplete");
+    expect(JSON.parse(readFileSync(join(directory,"manifest.json"),"utf8")).status).toBe("closed");
+  }finally{db.close();}
 });
 
 it("keeps a nonclosing flush barrier fixed while later offers continue", async () => {

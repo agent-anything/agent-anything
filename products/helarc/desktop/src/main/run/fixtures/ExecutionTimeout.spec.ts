@@ -18,6 +18,7 @@ import {openExecutionStoreFixture} from "../../execution-storage/fixtures/Execut
 const directory = process.env.HELARC_TIMEOUT_FIXTURE_DIRECTORY!;
 if (!directory) throw new Error("An isolated fixture directory is required");
 const stalled = process.env.HELARC_TIMEOUT_FIXTURE_STALLED === "1";
+const cleanupRejects = process.env.HELARC_TIMEOUT_FIXTURE_CLEANUP_REJECTS === "1";
 const nextOnly = process.env.HELARC_TIMEOUT_FIXTURE_NEXT_ONLY === "1";
 const heartbeat = join(directory, "heartbeat.txt");
 const worker = pathToFileURL(join(process.cwd(), "dist/main/execution-storage/ExecutionStoreWorker.js"));
@@ -28,13 +29,17 @@ let body: Promise<void>;
 
 async function executeFixture(): Promise<void> {
   const workspaceRoot = join(directory, "workspace"); await mkdir(workspaceRoot);
-  const store = await scope.open(() => openExecutionStoreFixture(join(directory, "execution"), worker));
+  const store = await scope.open(async () => {
+    const opened=await openExecutionStoreFixture(join(directory,"execution"),worker);
+    if(cleanupRejects)opened.close=async()=>{throw new Error("fixture-store-close-rejected");};
+    return opened;
+  });
   const activityHost = scope.activityHost(store);
-  const context = createFakeProviderContext("timeout-fixture", "fixture-model");
+  const context = createFakeProviderContext("openai-compatible.chat-completions", "fixture-model");
   let calls = 0;
   const provider: Provider = {
     ...context,
-    descriptor: {id: "timeout-fixture", name: "Timeout fixture", metadata: {}, requestRetryScheduler: {kind: "harness"}, capabilities: {
+    descriptor: {id: "openai-compatible.chat-completions", name: "Timeout fixture", metadata: {}, requestRetryScheduler: {kind: "harness"}, capabilities: {
       nativeToolInteraction: {supported: true, callableDefinitions: true, modelCalls: true, resultMessages: true, multipleCalls: true, callCorrelation: "provider_supplied"},
       structuredGeneration: {supported: true}, streaming: {supported: false}, continuation: {supported: false}, compaction: {supported: false},
       modelContext: {capacity: context.modelContext.capacity, requestedOutput: context.modelContext.requestedOutput, inputPreservation: context.modelContext.inputPreservation},

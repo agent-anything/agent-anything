@@ -6,6 +6,7 @@ import {
   composeModelInput,
   createExactModelWorkingView,
   modelInputFromComposition,
+  ModelInputEncodingUnsupportedError,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,30 @@ import {
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 
 describe("OpenAICompatibleProvider", () => {
+  it("exposes the original encoding target without encoding a candidate or including credentials",()=>{
+    const provider=new OpenAICompatibleProvider(config()),encode=vi.spyOn(provider,"encodeInput");
+    const target=provider.inputTargetDigest;
+    expect(encode).not.toHaveBeenCalled();
+    expect(new OpenAICompatibleProvider({...config(),apiKey:"replacement-secret",timeoutMs:12345}).inputTargetDigest).toBe(target);
+    expect(new OpenAICompatibleProvider({...config(),model:"different-model"}).inputTargetDigest).not.toBe(target);
+    expect(provider.encodeInput(createNativeProviderRequest(provider)).targetDigest).toBe(target);
+  });
+  it("preserves ordered assistant text parts using native content parts",()=>{
+    const provider=new OpenAICompatibleProvider(config());
+    const parts=[{kind:"text" as const,text:"First paragraph.\n"},{kind:"text" as const,text:"Second paragraph."}];
+    const input=createNativeProviderRequest(provider,{messages:[...defaultMessages(),{role:"assistant",content:parts}]});
+    const encoded=provider.encodeInput(input);
+    expect(JSON.parse(encoded.body).messages.at(-1)).toEqual({role:"assistant",content:parts.map(p=>({type:"text",text:p.text}))});
+    expect(input.messages.at(-1)?.content).toEqual(parts);
+    expect(()=>provider.verifyEncodedInput(input,encoded)).not.toThrow();
+  });
+  it("does not assume another service accepts OpenAI assistant content parts",()=>{
+    const provider=new OpenAICompatibleProvider({...config(),service:"deepseek"});
+    const input=createNativeProviderRequest(provider,{messages:[...defaultMessages(),{role:"assistant",content:[
+      {kind:"text",text:"First paragraph."},{kind:"text",text:"Second paragraph."}]}]});
+    expect(()=>provider.encodeInput(input)).toThrow(ModelInputEncodingUnsupportedError);
+    expect(()=>provider.encodeInput(input)).toThrow("single assistant text body");
+  });
   it.each([
     {finish: "stop", extra: {}, expected: "succeeded"},
     {finish: "length", extra: {}, expected: "failed"},

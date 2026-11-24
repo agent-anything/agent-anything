@@ -13,7 +13,7 @@ import type {
 import type { DelegationRequestRef } from "@agent-anything/agent-core/delegation";
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type { DescendantRunRelationRef } from "@agent-anything/agent-core/run-tree";
-import type { DelegationResumeReceipt } from "@agent-anything/agent-runtime/delegation";
+import type { DelegationCancelReceipt,DelegationResumeReceipt } from "@agent-anything/agent-runtime/delegation";
 import type {
   RunSteeringAttribution,
   RunSuspensionRef,
@@ -29,6 +29,7 @@ export type HostCommandKind =
   | "run.cancel"
   | "run.steer"
   | "descendant.resume"
+  | "descendant.cancel"
   | "interaction.submit";
 
 export interface HostCommandEnvelope<TKind extends HostCommandKind, TPayload> {
@@ -84,6 +85,7 @@ export type HostDescendantResumeCommand = HostCommandEnvelope<
 >;
 
 export type HostCommand =
+  | HostCommandEnvelope<"descendant.cancel",{readonly parentRunId:string;readonly requestId:string;readonly requestRevision:string;readonly relationId:string;readonly childRunId:string;readonly reason:string|null}>
   | HostRunCancellationCommand
   | HostRunSteeringCommand
   | HostDescendantResumeCommand
@@ -145,6 +147,7 @@ export interface HostCommandRejectedReceipt {
 }
 
 export type HostCommandReceipt =
+  | (HostCommandReceiptBase<"descendant.cancel">&{readonly status:"handled";readonly result:DelegationCancelReceipt;readonly projection:HostRunProjection})
   | HostRunCancellationCommandReceipt
   | HostRunSteeringCommandReceipt
   | HostDescendantResumeCommandReceipt
@@ -242,6 +245,14 @@ export function snapshotHostCommand(candidate: unknown): HostCommand {
       payload: snapshotSteeringPayload(candidate.payload),
     });
   }
+  if(candidate.kind==="descendant.cancel"){
+    const p=candidate.payload;
+    assertRecord(p,"Host delegated cancellation");
+    assertExactKeys(p,["parentRunId","requestId","requestRevision","relationId","childRunId","reason"],"Host delegated cancellation");
+    return Object.freeze({version:HOST_COMMAND_VERSION,commandId,runId,kind:candidate.kind,payload:Object.freeze({
+      parentRunId:identity(p.parentRunId,"parent"),requestId:identity(p.requestId,"request"),requestRevision:identity(p.requestRevision,"request revision"),
+      relationId:identity(p.relationId,"relation"),childRunId:identity(p.childRunId,"child"),reason:nullableReason(p.reason,"reason")})});
+  }
   if (candidate.kind === "descendant.resume") {
     return Object.freeze({
       version: HOST_COMMAND_VERSION,
@@ -304,6 +315,11 @@ async function dispatchValidatedCommand(
         }),
         projection: activeRun.getProjection(),
       });
+    }
+    if(command.kind==="descendant.cancel"){
+      const {reason,...target}=command.payload;
+      const result=await activeRun.cancelDescendant({basis:{scope:"subtree",commandId:command.commandId,...target},reason,attribution:input.cancellationAttribution});
+      return Object.freeze({version:HOST_COMMAND_VERSION,commandId:command.commandId,runId:command.runId,kind:command.kind,status:"handled",result,projection:activeRun.getProjection()});
     }
     if (command.kind === "descendant.resume") {
       return Object.freeze({
@@ -539,6 +555,7 @@ function isHostCommandKind(value: unknown): value is HostCommandKind {
   return value === "run.cancel" ||
     value === "run.steer" ||
     value === "descendant.resume" ||
+    value === "descendant.cancel" ||
     value === "interaction.submit";
 }
 

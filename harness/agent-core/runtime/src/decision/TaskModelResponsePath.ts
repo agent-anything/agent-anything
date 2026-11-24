@@ -207,6 +207,7 @@ export class TaskModelResponsePath<T=unknown> implements ActivityPurposeHandler 
       rawResultId:stage.result.id,responseAcceptanceId:acceptance.id,responseRejection});
     const resultPresentationReceipt=createSelectedResultPresentationReceipt({originalRequest:original.request,binding,response:result.response,
       rawResultId:stage.result.id,responseAcceptanceId:acceptance.id,responseRejection});
+    if(retainedSource.interaction.kind==="native_evidence")throw new TaskResponseBindingError("turn_task_input_participant_mismatch");
     const openingReceipt=retainedSource.interaction.opening?null:createConversationOpeningReceipt(path.intent.runId,prepared.request);
     const receipts={...(inputDeliveryReceipt?{inputDeliveryReceipt}:{}),...(openingReceipt?{openingReceipt}:{}),
       ...(resultPresentationReceipt?{resultPresentationReceipt}:{}),...(responseRejection?{responseRejection}:{})};

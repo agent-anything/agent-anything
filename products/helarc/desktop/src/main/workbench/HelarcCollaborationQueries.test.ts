@@ -4,6 +4,8 @@ import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
 import type { HelarcHostActiveRun } from "../run/HelarcHostRunComposition.js";
 import { HelarcWorkbenchQueries } from "./HelarcWorkbenchQueries.js";
 import { CommandOutputRegistry } from "./CommandOutputRegistry.js";
+import {helarcNativePresentationId,helarcNativeResponseGroupId} from "@agent-anything/helarc/run";
+import {OPENAI_RESPONSES,type NativeModelSourceRef} from "@agent-anything/model-interaction/protocol";
 
 const scope = { threadId: "thread", productRunId: "work", runId: "root" };
 function fixture() {
@@ -173,8 +175,8 @@ describe("collaboration reads", () => {
     const page = await api.readConversation(query);
     if (page.status !== "page") throw Error(page.code);
     expect(page.entries.map(e => [e.kind, e.title])).toEqual([
-      ["received_input", "Received task from Main task"], ["turn", null],
-      ["received_input", "Agent message"], ["received_input", "Host message"], ["turn", null],
+      ["received_input", "Received task from Main task"], ["response_group", null],
+      ["received_input", "Agent message"], ["received_input", "Host message"], ["response_group", null],
       ["received_input", "Result from Subtask 1.1"],
       ["notice", "Unattributed work"],
     ]);
@@ -806,7 +808,7 @@ function commandRecord() {
 describe("conversation-local activity reads", () => {
   const latest = {threadId: "thread", position: {kind: "latest" as const}};
   const blocks = async (api: HelarcWorkbenchQueries, runId = "root", turnId = "turn") => {
-    const page = await api.readConversationTurn({...scope, runId, turnId, cursor: null});
+    const page = await api.readConversationResponseGroup({...scope, runId, groupId:turnId, cursor: null});
     if (page.status !== "page") throw Error(page.code);
     return page;
   };
@@ -841,8 +843,8 @@ describe("conversation-local activity reads", () => {
     Object.assign(p.product.presentation, {records: [textRecord(20)], omittedRecords: 10});
     const page = await api.readConversation(latest);
     if (page.status !== "page") throw Error(page.code);
-    const turn = page.entries.find(e => e.kind === "turn" && e.turnId === "turn")!;
-    expect(turn).toMatchObject({kind: "turn", position: [1, 1], partial: true});
+    const turn = page.entries.find(e => e.kind === "response_group" && e.groupId === "turn")!;
+    expect(turn).toMatchObject({kind: "response_group", position: [1, 1], partial: true});
     Object.assign(p.product.commands[0]!, {revision: 2, phase: "settled", outcome: "succeeded", exitCode: 0});
     Object.assign(p.product, {sequence: 20});
     const window = await api.readConversation({...latest, position: {kind: "window", first: turn.id, last: turn.id}});
@@ -923,9 +925,9 @@ describe("conversation-local activity reads", () => {
     expect(streamed?.kind === "activity" && streamed.item.child?.textRevision)
       .not.toBe(initialChild?.kind === "activity" && initialChild.item.child?.textRevision);
     const root = await api.readConversation(latest);
-    expect(root.status === "page" && root.entries.filter(e => e.kind === "turn").flatMap(e => e.blocks)
+    expect(root.status === "page" && root.entries.filter(e => e.kind === "response_group").flatMap(e => e.blocks)
       .some(b => b.kind !== "activity" && b.text.includes("Child findings"))).toBe(false);
-    expect(root.status === "page" && root.entries.filter(e => e.kind === "turn").flatMap(e => e.blocks)
+    expect(root.status === "page" && root.entries.filter(e => e.kind === "response_group").flatMap(e => e.blocks)
       .some(b => b.kind === "activity" && b.item.child?.textPreview?.text === "New child text")).toBe(true);
     expect(JSON.stringify(root)).not.toContain("PRIVATE");
     const child = await api.readConversation({...latest,scope:{...scope,runId:"child"}});
@@ -973,7 +975,7 @@ describe("conversation-local activity reads", () => {
     const check = async () => {
       expect((await blocks(api, "root", "report")).blocks).toMatchObject([{text: "First section"}, {kind: "activity"}, {text: "Second section"}]);
       const page = await api.readConversation(latest);
-      expect(page.status === "page" && page.entries.filter(entry => entry.kind === "turn").map(entry => entry.sourceId)).toEqual(["report"]);
+      expect(page.status === "page" && page.entries.filter(entry => entry.kind === "response_group").map(entry => entry.sourceId)).toEqual(["report"]);
       expect(page.status === "page" && page.entries.filter(entry => entry.kind === "message")).toHaveLength(1);
       expect(await api.readWorkbenchItem({...scope, itemId: "message:adopted", section: "model-2"})).toMatchObject({status: "page", text: "Second section"});
     };
@@ -984,6 +986,28 @@ describe("conversation-local activity reads", () => {
     await check();
   });
 
+  it("retains multipart native adoption at original positions after eviction and reload without text deduplication",async()=>{
+    const {p,thread,api,retain}=fixture();
+    const source=(i:number):NativeModelSourceRef=>({scope:{runId:"root",activityId:"activity",recipientId:"root",purpose:{id:"task",revision:"1"},compositionDigest:`sha256:${"1".repeat(64)}`},
+      protocol:OPENAI_RESPONSES,interpretation:{id:"openai.responses.adapter",revision:"1"},record:{id:"response",revision:"1"},operationId:"op",
+      position:{format:"json-pointer",value:`/output/0/content/${i}`},nativeIdentity:{kind:"message",id:"message"}});
+    const sources=[source(0),source(1)],groupId=helarcNativeResponseGroupId(sources[0]!);
+    const records=sources.map((s,i)=>{const r=textRecord(i+1,"root","Same text");return {...r,id:helarcNativePresentationId(s),
+      origin:{...r.origin,turnId:null,nativeSource:s,modelItemId:helarcNativePresentationId(s),ordinal:i,source:{id:"original-item",sequence:1}},
+      content:{...r.content,turnId:null,modelItemId:helarcNativePresentationId(s)}};});
+    Object.assign(p.product.presentation,{records});
+    thread.messages.push({...thread.messages[0]!,id:"native-final",sequence:2,role:"assistant",content:"Same text\n\nSame text",
+      source:{kind:"agent_run",owner:"helarc",refId:"work"},metadata:{outputSource:{kind:"native_response",sources,disposition:"adopted_previous",
+        adopted:sources.map((source,ordinal)=>({source,ordinal,text:"Same text",runItem:{id:"original-item",sequence:1}}))}}});
+    const check=async()=>{
+      const reply=await blocks(api,"root",groupId);
+      expect(reply.blocks.map(b=>b.kind==="text"?b.text:null)).toEqual(["Same text","Same text"]);
+      expect(reply.blocks.map(b=>b.id)).toEqual(sources.map(helarcNativePresentationId));
+      expect(await api.readWorkbenchItem({...scope,itemId:"message:native-final",section:helarcNativePresentationId(sources[1]!)})).toMatchObject({status:"page",text:"Same text"});
+      const page=await api.readConversation(latest);expect(page.status==="page"&&page.entries.map(e=>e.kind)).toEqual(["message","response_group"]);
+    };
+    await check();Object.assign(p.product.presentation,{records:[],omittedRecords:2});await check();retain();await check();
+  });
   it("keeps before cursors across status changes, pages large Turns and refreshes loaded windows", async () => {
     const {p, api} = fixture();
     const records = Array.from({length:230},(_,i)=>textRecord(i+1));
@@ -1003,14 +1027,14 @@ describe("conversation-local activity reads", () => {
     Object.assign(p.product.presentation,{records:[...calls,textRecord(999)],activeCalls:[]});
     const firstTurn = await blocks(api);
     expect(firstTurn.blocks).toHaveLength(100);
-    const second = await api.readConversationTurn({...scope,turnId:"turn",cursor:firstTurn.nextCursor});
+    const second = await api.readConversationResponseGroup({...scope,groupId:"turn",cursor:firstTurn.nextCursor});
     if(second.status!=="page") throw Error(second.code);
     expect(second.blocks[0]?.modelItemId).toBe("call-100");
-    const third = await api.readConversationTurn({...scope,turnId:"turn",cursor:second.nextCursor});
+    const third = await api.readConversationResponseGroup({...scope,groupId:"turn",cursor:second.nextCursor});
     expect(third).toMatchObject({blockCount:240,nextCursor:null});
     const tail = await api.readConversation(latest);
     expect(JSON.stringify(tail)).toContain("message-999");
     for (const result of [firstTurn,second,third,tail]) expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(256*1024);
-    expect(await api.readConversationTurn({...scope,runId:"child",turnId:"turn",cursor:firstTurn.nextCursor})).toMatchObject({code:"not_found"});
+    expect(await api.readConversationResponseGroup({...scope,runId:"child",groupId:"turn",cursor:firstTurn.nextCursor})).toMatchObject({code:"not_found"});
   });
 });

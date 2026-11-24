@@ -2,17 +2,20 @@ import { parentPort, workerData, threadId } from "node:worker_threads";
 import {randomUUID} from "node:crypto";
 import type { ExecutionDatabase as DatabaseType } from "./ExecutionDatabase.js";
 import { ExecutionStoreError, type ExecutionStoreCommand, type ExecutionStoreRequest, type ExecutionStoreReply } from "./ExecutionStoreProtocol.js";
-import {EXECUTION_CONTENT_LIMITS} from "./ExecutionContent.js";
+import {EXECUTION_CONTENT_LIMITS,type ExecutionContentBlock} from "./ExecutionContent.js";
 import { captureExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
 import {beginExecutionTiming, measureExecutionSync, measureExecutionAsync, executionPerformanceClock, type ExecutionPerformanceSink} from "../diagnostics/ExecutionPerformance.js";
+import {safeExecutionPerformanceEvent} from "../diagnostics/HelarcPerformanceDiagnostics.js";
 
 if (!parentPort) throw new Error("Execution storage requires its dedicated Worker.");
 const port = parentPort;
 const timingSink: ExecutionPerformanceSink | undefined = workerData.performanceDiagnostics
   ? {performance: event => {try {port.postMessage({kind: "performance", event} satisfies ExecutionStoreReply);} catch { /* Best effort only. */ }}}
   : undefined;
-let timingContext: Record<string, string | number> = {};
+let timingContext: Record<string, string | number | boolean | null> = {};
 let database: DatabaseType;
+// The Host serializes logical commands; transfer state is not a recovery record.
+let responseTransfer:{id:number;blocks:ReadonlyMap<string,ExecutionContentBlock>|null}|null=null;
 try {
   const startup=workerData.startup;
   const sameClock=startup?.processId===process.pid&&startup?.timeOrigin===performance.timeOrigin&&Number.isFinite(startup?.monotonicMs);
@@ -25,11 +28,13 @@ try {
   send({ kind: "ready", generation: database.generation });
   port.on("message", (wire: ExecutionStoreRequest) => {
     database.withContentScope(() => {
-    timingContext = {requestId: wire.id, generation: wire.generation, wireKind: wire.command.kind, workerThreadId: threadId};
+    const supplied=wire.diagnosticContext?safeExecutionPerformanceEvent({id:"wire",stage:"wire",kind:"started",occurredAt:"",context:wire.diagnosticContext}).context:{};
+    timingContext = {...supplied,requestId: wire.id, generation: wire.generation, wireKind: wire.command.kind, workerThreadId: threadId};
     const end = beginExecutionTiming(timingSink, "storage.worker.command", timingContext);
     let failed = false, close = false;
     try {
       if (wire.generation !== database.generation) throw new ExecutionStoreError("execution_owner_stale");
+      if(responseTransfer?.id!==wire.id)responseTransfer=null;
       if (wire.command.kind === "stage_content") {
         const blocks = wire.command.blocks;
         measureExecutionSync(timingSink, "storage.worker.stage_content", timingContext, () => database.stageContent(wire.generation, blocks));
@@ -37,7 +42,15 @@ try {
       }
       if (wire.command.kind === "read_content") {
         if (wire.command.ids.length > 16) throw new ExecutionStoreError("execution_content_transfer_too_large");
-        send({kind: "content_blocks", id: wire.id, blocks: wire.command.ids.map(id => database.readContentBlock(id))}); return;
+        if(!responseTransfer||responseTransfer.id!==wire.id)throw new ExecutionStoreError("execution_storage_protocol_invalid");
+        database.confirmTransferOwner(wire.generation);
+        const blocks=wire.command.ids.map(id=>{
+          if(!responseTransfer!.blocks)return database.readContentBlock(id);
+          const block=responseTransfer!.blocks.get(id);
+          if(!block)throw new ExecutionStoreError("execution_content_missing");
+          return block;
+        });
+        send({kind: "content_blocks", id: wire.id, blocks}); return;
       }
       const wireCommand = wire.command;
       const command = wireCommand.kind === "invoke_content"
@@ -49,6 +62,9 @@ try {
       try {
       switch (request.command.kind) {
         case "accept_shared": send({kind:"result",id:request.id,value:database.acceptShared(request.generation,request.command.proposal)});break;
+        case "protocol_journal":send({kind:"result",id:request.id,value:database.protocolJournalCommand(request.generation,request.command.command)});break;
+        case "material_delivery":send({kind:"result",id:request.id,value:database.materialDeliveryQuery(request.generation,request.command.query)});break;
+        case "material_delivery_facts":send({kind:"result",id:request.id,value:database.materialDeliveryFacts(request.generation,request.command.runId,request.command.after,request.command.limit)});break;
         case "material_custody": send({kind:"result",id:request.id,value:database.materialCustodyCommand(request.generation,request.command.command)});break;
         case "representation": send({kind:"result",id:request.id,value:database.representationCommand(request.generation,request.command.command)});break;
         case "context_selection": send({kind:"result",id:request.id,value:database.selectionCommand(request.generation,request.command.command)});break;
@@ -58,8 +74,9 @@ try {
         case "context_policy_investments": send({kind:"result",id:request.id,value:database.contextPolicyInvestments(request.generation,request.command.input)});break;
         case "context_foundation_facts": send({kind:"result",id:request.id,value:database.contextFoundationFacts(request.command.runId,request.command.after,request.command.limit)});break;
         case "query_acceptance": send({kind:"result",id:request.id,value:{acceptanceValue:database.querySharedAcceptance(request.generation,request.command.id)}}); break;
-        case "activity_handoff": send({kind: "result", id: request.id, value: database.activityHandoffCommand(request.generation, request.command.command)}); break;
+        case "activity_handoff": send({kind: "result", id: request.id, value: database.activityHandoffCommand(request.generation, request.command.command,request.command.returnKind)}); break;
         case "register_recording": send({kind: "result", id: request.id, value: database.registerRecording(request.generation, request.command.recording)}); break;
+        case "recording_replay_bounds": send({kind:"result",id:request.id,value:database.recordingReplayBounds(request.generation,request.command.rootRunId)});break;
         case "context_preparation": send({kind: "result", id: request.id, value: database.contextPreparationCommand(request.generation, request.command.command)}); break;
         case "context_material": send({kind: "result", id: request.id, value: database.contextMaterialCommand(request.generation, request.command.command)}); break;
         case "file_material": send({kind: "result", id: request.id, value: database.fileMaterialCommand(request.generation, request.command.command)}); break;
@@ -73,8 +90,13 @@ try {
         case "read_compensation_association": send({kind: "result", id: request.id, value: database.readCompensationAssociation(request.command.invocationId)}); break;
         case "prepare_conversation_handoff": send({kind: "result", id: request.id, value: database.prepareConversationHandoff(request.command.sourceRunId, request.command.sessionId)}); break;
         case "admit_product_run": database.admitProductRun(request.generation, request.command.admission); send({kind: "result", id: request.id, value: null}); break;
+        case "resolve_admission": send({kind:"result",id:request.id,value:database.resolveAdmission(request.command.rootRunId,request.command.intentId)}); break;
+        case "read_run_control": send({kind:"result",id:request.id,value:database.readRunControl(request.command.runId)}); break;
+        case "read_tree_control": send({kind:"result",id:request.id,value:database.readTreeControl(request.command.rootRunId)}); break;
+        case "close_admission": send({kind:"result",id:request.id,value:database.closeAdmission(request.generation,request.command.rootRunId,request.command.intentId)}); break;
         case "read_product_run": send({kind: "result", id: request.id, value: database.readProductRun(request.command.rootRunId)}); break;
-        case "list_product_runs": send({kind: "result", id: request.id, value: database.listProductRuns()}); break;
+        case "list_product_runs": send({kind: "result", id: request.id, value: database.listProductRuns(request.command.rootRunId===undefined?undefined:{rootRunId:request.command.rootRunId})}); break;
+        case "discover_product_work": send({kind:"result",id:request.id,value:database.discoverProductWork(request.command.delivery)});break;
         case "list_retention_pins": send({kind: "result", id: request.id, value: database.listRetentionPins()}); break;
         case "commit_product_delivery": database.commitProductDelivery(request.generation, request.command.rootRunId); send({kind: "result", id: request.id, value: null}); break;
         case "commit_shell_session": database.commitShellSession(request.generation, request.command.commit); send({kind: "result", id: request.id, value: null}); break;
@@ -88,6 +110,7 @@ try {
         case "read_run_tree_commit": send({kind: "result", id: request.id, value: database.readRunTreeCommit(request.command.recordId)}); break;
         case "read_run_tree_latest": send({kind: "result", id: request.id, value: database.readLatestRunTree(request.command.rootRunId)}); break;
         case "read_run_tree": send({kind: "result", id: request.id, value: database.readRunTree(request.command.rootRunId)}); break;
+        case "read_run_tree_members": send({kind: "result", id: request.id, value: database.readRunTreeMembers(request.command.rootRunId, request.command.cursor, request.command.limit)}); break;
         case "commit_owner": send({kind: "result", id: request.id, value: database.commitOwner(request.generation, request.command.commit)}); break;
         case "read_owner_commit": send({kind: "result", id: request.id, value: database.readOwnerCommit(request.command.recordId)}); break;
         case "read_owner_latest": send({kind: "result", id: request.id, value: database.readLatestOwner(request.command.owner, request.command.ownerId)}); break;
@@ -108,6 +131,8 @@ try {
       } catch { /* Independent export; durable facts remain queryable. */ }
       try {
         for(const fact of database.takeContextFoundationObservations())port.postMessage({kind:"context_foundation_observation",fact} satisfies ExecutionStoreReply);
+        for(const fact of database.takeProtocolObservations())port.postMessage({kind:"protocol_journal_observation",fact} satisfies ExecutionStoreReply);
+        for(const fact of database.takeMaterialDeliveryObservations())port.postMessage({kind:"material_delivery_observation",fact} satisfies ExecutionStoreReply);
       } catch { /* Independent export; recovery can replay committed domain facts. */ }
       for (const observation of database.takeContextMaterialObservations()) if (!failed) {
         try {port.postMessage({kind: "context_material_observation", observation} satisfies ExecutionStoreReply);} catch { /* Independent observation. */ }
@@ -118,11 +143,11 @@ try {
           outcome: failed ? "failed" : "ok", context: {...timingContext, count: sample.count, totalMs: sample.totalMs, maxMs: sample.maxMs}});
       }
       end(failed ? "failed" : "ok", database.takeContentStatistics());
-      if (close) port.close();
+      if (close) {responseTransfer=null;port.close();}
     }
     });
   });
-  port.on("close", () => database.close());
+  port.on("close", () => {responseTransfer=null;database.close();});
 } catch (error) {
   send({ kind: "startup_failed", code: code(error), error: captureExecutionError(error) });
   port.close();
@@ -133,7 +158,9 @@ function send(reply: ExecutionStoreReply): void {
   measureExecutionSync(timingSink, "storage.worker.encode_reply", timingContext, () => {
     const original=reply.kind==="result"?database.verifiedContentRoot(reply.value,EXECUTION_CONTENT_LIMITS.blockBytes):null;
     if (reply.kind === "result" && (original || Buffer.byteLength(JSON.stringify(reply.value)) > EXECUTION_CONTENT_LIMITS.blockBytes)) {
-      port.postMessage({kind: "content_result", id: reply.id, root: original??database.retainContent(reply.value)} satisfies ExecutionStoreReply);
+      const packed=original?null:database.encodeResponseContent(reply.value);
+      responseTransfer={id:reply.id,blocks:packed?new Map(packed.blocks.map(block=>[block.id,block])):null};
+      port.postMessage({kind: "content_result", id: reply.id, root: original??{format:1,root:packed!.root}} satisfies ExecutionStoreReply);
     } else port.postMessage(reply);
   });
 }

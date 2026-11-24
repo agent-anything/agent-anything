@@ -893,7 +893,7 @@ describe("ModelTaskDecisionCoordinator", () => {
     });
   });
 
-  it("retries a safe transport failure with one stable operation and fresh requests", async () => {
+  it("retries a safe transport failure with fresh attempts and the unchanged immutable input", async () => {
     const requests: ProviderRequest[] = [];
     const events: Array<Record<string, unknown>> = [];
     const buildRequest = vi.fn(() => request("original request"));
@@ -926,7 +926,10 @@ describe("ModelTaskDecisionCoordinator", () => {
     expect(result).toMatchObject({ kind: "propose_completion", output: { summary: "Recovered" } });
     expect(buildRequest).toHaveBeenCalledTimes(1);
     expect(requests).toHaveLength(2);
-    expect(requests[0]).not.toBe(requests[1]);
+    expect(requests[0]).toEqual(requests[1]);
+    expect(Object.isFrozen(requests[1])).toBe(true);
+    expect(Reflect.set(requests[1],"requestId","changed")).toBe(false);
+    expect(requests[1].requestId).toBe(requests[0].requestId);
     expect(requests[1].messages[0]?.content).toEqual([
       { kind: "text", text: "original request" },
     ]);

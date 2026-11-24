@@ -85,7 +85,7 @@ export function SettingsPanel({
         <button type="button" role="tab" aria-selected={tab==="context"} onClick={()=>setTab("context")}>Context</button>
       </div>
       <div hidden={tab !== "provider"}>
-        <ProviderSettingsPanel snapshot={snapshot} onSaved={onSaved} />
+        <ProviderSettingsPanel host={getHelarcApi()} snapshot={snapshot} onSaved={onSaved} />
       </div>
       <div hidden={tab !== "instructions"}>
         {instructionsOpened && (
@@ -101,5 +101,5 @@ export function SettingsPanel({
 
 
 function getHelarcApi() {
-  return typeof window === "undefined" ? null : window.helarc;
+  return globalThis.window?.helarc ?? null;
 }

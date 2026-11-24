@@ -1,6 +1,10 @@
 import {createHash} from "node:crypto";
 import type {RunSettlementCauseRef} from "../run/index.js";
 import {strictRecord,token,nonNegativeInteger} from "./DelegationContract.js";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+
+export interface DelegationNarrativeOrigin {readonly owner:string;readonly kind:string;readonly id:string;readonly revision:string;}
+export interface DelegationNarrativeSelection {readonly text:string;readonly origins:readonly DelegationNarrativeOrigin[];}
 
 /** A locator for attributed output, not a grant or proof of semantic correctness. */
 export interface DelegationNarrativeSource {
@@ -10,24 +14,28 @@ export interface DelegationNarrativeSource {
   readonly digest:string;
   readonly bytes:number;
   readonly codeUnits:number;
+  readonly origins?:readonly DelegationNarrativeOrigin[];
 }
 export interface RetainedDelegationNarrative {readonly source:DelegationNarrativeSource;readonly text:string;}
 
-export function createDelegationNarrativeSource(recordId:string,runId:string,cause:RunSettlementCauseRef,text:string):DelegationNarrativeSource {
+export function createDelegationNarrativeSource(recordId:string,runId:string,cause:RunSettlementCauseRef,text:string,origins?:readonly DelegationNarrativeOrigin[]):DelegationNarrativeSource {
   if(typeof text!=="string"||Buffer.from(text,"utf8").toString("utf8")!==text)throw new TypeError("delegation_narrative_encoding_invalid");
   return snapshotDelegationNarrativeSource({recordId,runId,cause,digest:`sha256:${createHash("sha256").update(text,"utf8").digest("hex")}`,
-    bytes:Buffer.byteLength(text,"utf8"),codeUnits:text.length});
+    bytes:Buffer.byteLength(text,"utf8"),codeUnits:text.length,...(origins?{origins}:{})});
 }
 
 export function snapshotDelegationNarrativeSource(source:DelegationNarrativeSource):DelegationNarrativeSource {
-  strictRecord(source,"DelegationNarrativeSource",["recordId","runId","cause","digest","bytes","codeUnits"]);
+  strictRecord(source,"DelegationNarrativeSource",["recordId","runId","cause","digest","bytes","codeUnits","origins"]);
   strictRecord(source.cause,"DelegationNarrativeSource.cause",["run","id","revision"]);
   strictRecord(source.cause.run,"DelegationNarrativeSource.cause.run",["id"]);
   if(source.cause.run.id!==source.runId)throw new TypeError("delegation_narrative_source_mismatch");
   if(typeof source.digest!=="string"||!/^sha256:[a-f0-9]{64}$/.test(source.digest))throw new TypeError("delegation_narrative_digest_invalid");
+  if(source.origins!==undefined&&(!Array.isArray(source.origins)||!source.origins.length||source.origins.length>128))throw new TypeError("delegation_narrative_origins_invalid");
+  const origins=source.origins?.map(origin=>{strictRecord(origin,"DelegationNarrativeOrigin",["owner","kind","id","revision"]);
+    return Object.freeze({owner:token(origin.owner,"origin.owner"),kind:token(origin.kind,"origin.kind"),id:token(origin.id,"origin.id"),revision:token(origin.revision,"origin.revision")});});
   return Object.freeze({recordId:token(source.recordId,"source.recordId"),runId:token(source.runId,"source.runId"),cause:Object.freeze({run:Object.freeze({id:source.runId}),id:token(source.cause.id,"source.cause.id"),
     revision:token(source.cause.revision,"source.cause.revision")}),digest:source.digest,
-    bytes:nonNegativeInteger(source.bytes,"source.bytes"),codeUnits:nonNegativeInteger(source.codeUnits,"source.codeUnits")});
+    bytes:nonNegativeInteger(source.bytes,"source.bytes"),codeUnits:nonNegativeInteger(source.codeUnits,"source.codeUnits"),...(origins?{origins:Object.freeze(origins)}:{})});
 }
 
 export function verifyDelegationNarrativeSource(source:DelegationNarrativeSource,runId:string,cause:RunSettlementCauseRef,text:string):void {
@@ -41,7 +49,7 @@ export function snapshotRetainedDelegationNarrative(record:RetainedDelegationNar
   strictRecord(record,"RetainedDelegationNarrative",["source","text"]);
   const source=snapshotDelegationNarrativeSource(record.source);
   if(source.recordId!==expected.recordId||source.digest!==expected.digest||source.bytes!==expected.bytes||source.codeUnits!==expected.codeUnits||
-    source.runId!==expected.runId||source.cause.id!==expected.cause.id||source.cause.revision!==expected.cause.revision)
+    source.runId!==expected.runId||source.cause.id!==expected.cause.id||source.cause.revision!==expected.cause.revision||modelInputValueDigest(source.origins??null)!==modelInputValueDigest(expected.origins??null))
     throw new TypeError("delegation_narrative_source_mismatch");
   verifyDelegationNarrativeSource(source,expected.runId,expected.cause,record.text);
   return Object.freeze({source,text:record.text});

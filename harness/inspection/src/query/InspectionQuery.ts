@@ -3,13 +3,13 @@ import type { InspectionSource, InspectionDatasetManifest } from "../sources/ind
 import type { ExecutionFlowDefinition, ExecutionFlowSubjectRef } from "@agent-anything/observability/execution-flow";
 
 export interface InspectionSelection { readonly sourceId: string; readonly datasetId: string; readonly watermark: number }
-export type InspectionViewQuery = "list_definitions" | "list_runs" | "list_records" | "get_hierarchy" | "get_lifecycle" | "get_data_flow" | "get_dependencies" | "get_scheduling" | "get_model_request" | "get_conversation_delivery" | "get_context_evidence" | "get_execution" | "get_timeline" | "get_telemetry";
+export type InspectionViewQuery = "list_definitions" | "list_runs" | "list_records" | "get_hierarchy" | "get_lifecycle" | "get_data_flow" | "get_dependencies" | "get_scheduling" | "get_model_request" | "list_native_interactions" | "get_native_interaction" | "get_conversation_delivery" | "get_context_evidence" | "get_execution" | "get_timeline" | "get_telemetry";
 export type InspectionQuery =
   | import("./InspectionMetricQuery.js").InspectionMetricQuery
   | { readonly kind: "list_sources" }
   | { readonly kind: "list_datasets"; readonly sourceId: string; readonly after?: string }
   | { readonly kind: "get_snapshot"; readonly sourceId: string; readonly datasetId: string; readonly watermark?: number }
-  | ({ readonly kind: InspectionViewQuery; readonly subject?: InspectionSubjectRef; readonly runId?: string; readonly includeDescendants?: boolean; readonly recordKind?: string; readonly after?: string; readonly limit?: number; readonly from?: string; readonly to?: string } & InspectionSelection)
+  | ({ readonly kind: InspectionViewQuery; readonly subject?: InspectionSubjectRef; readonly runId?: string; readonly includeDescendants?: boolean; readonly recordKind?: string; readonly nativeCategories?: readonly string[]; readonly after?: string; readonly limit?: number; readonly from?: string; readonly to?: string } & InspectionSelection)
   | ({ readonly kind: "get_record"; readonly recordId: string } & InspectionSelection)
   | ({ readonly kind: "get_subject"; readonly subject: InspectionSubjectRef } & InspectionSelection)
   | ({ readonly kind: "get_content"; readonly contentId: string; readonly offset?: number; readonly length?: number } & InspectionSelection)
@@ -66,6 +66,7 @@ export interface InspectionTimelineInterval { readonly id: string; readonly subj
   readonly markers:readonly {readonly label:string;readonly occurredAt:string;readonly recordId:string}[];
 }
 export interface InspectionReadResult {
+  readonly readWork?: {readonly bodyReads:number; readonly loadedBodyBytes:number; readonly returnedBodyBytes:number};
   readonly measurement?:import("./InspectionMetricQuery.js").InspectionMetricRead;
   readonly process?: import("./InspectionProcessQuery.js").InspectionProcessRead;
   readonly kind: InspectionQuery["kind"];

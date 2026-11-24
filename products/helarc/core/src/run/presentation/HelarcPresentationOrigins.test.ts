@@ -54,7 +54,8 @@ const turn = record(1, {
       call: {
         name: "Shell",
         input: { command: "echo test" },
-        modelCallRef: { id: "call", turnId: "turn", contentBlockOrdinal: 1 },
+        modelCallRef: { id: "call", turnId: "turn", contentBlockOrdinal: 1,
+          providerRequestId: "request", controllerRequestId: "decision", branchId: "main" },
       },
     },
   ],

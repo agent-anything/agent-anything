@@ -1,4 +1,5 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import {requireTurnTaskInput} from "../decision/NativeTaskHistory.js";
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/model-interaction";
 import { assessModelContext, createProviderSemanticRequestDigest, snapshotProviderFailure, snapshotProviderRequest, type ModelContextAssessment } from "@agent-anything/model-interaction";
 import { planModelInput, type ModelInputUsageObservation } from "@agent-anything/model-interaction/context";
@@ -48,6 +49,7 @@ export class ContextRepresentationManager<TOutput = unknown> {
     readonly sourceRequest: ProviderRequest;
     readonly request: ProviderRequest;
   }> {
+    requireTurnTaskInput(controllerInput);
     if (!controllerInput.interaction.opening)
       request = await freezeConversationOpening(request, controllerInput.runId, callContext.runCheckpoints);
     const sourceRequest = request;
@@ -82,7 +84,7 @@ export class ContextRepresentationManager<TOutput = unknown> {
         },
       } : {}),
     }) : snapshotProviderRequest(await new ModelActivityCheckpoint(callContext.checkpoints)
-      .once(`assessed-request:${request.requestId}:${modelInputRecoveryAttempt}`, () => this.prepareModelContextRequest(request, callContext, modelInputRecoveryAttempt, controllerInput.runId, controllerInput.interaction.inputUsageObservations?.find(value => value.purpose === request.purpose) ?? null)));
+      .once(`assessed-request:${request.requestId}:${modelInputRecoveryAttempt}`, () => this.prepareModelContextRequest(request, callContext, modelInputRecoveryAttempt, controllerInput.runId, previousUsage)));
     return { sourceRequest, request: assessedRequest };
   }
   async buildRequest(input: TaskDecisionInputSources<TOutput>, context: ProviderRequestBuildContext): Promise<ProviderRequest> {

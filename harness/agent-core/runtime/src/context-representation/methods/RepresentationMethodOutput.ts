@@ -26,7 +26,8 @@ const missing={...strings,description:"Unresolved necessary information or prese
 const object=(properties:Record<string,ModelJsonValue>)=>({type:"object",properties,required:Object.keys(properties),additionalProperties:false});
 const reference=(allowed:readonly string[]):ModelJsonValue=>allowed.length?{type:"string",enum:[...allowed]}:string;
 const references=(allowed:readonly string[]):ModelJsonValue=>({type:"array",items:reference(allowed),maxItems:allowed.length});
-export function representationMethodOutputFormat(request:RepresentationMethodRequest,job:MethodJob):StructuredOutputFormat {
+export type RepresentationMethodOutputScope=Pick<RepresentationMethodRequest,"sources"|"requirements"|"restorations">;
+export function representationMethodOutputFormat(request:RepresentationMethodOutputScope,job:MethodJob):StructuredOutputFormat {
   const check=["check","relation","combination"].includes(job.kind),sources=job.sources,candidates=job.candidates;
   const background=request.sources.filter(s=>s.role==="background").map(s=>s.alias);
   const all=[...new Set([...sources,...background,...candidates])];
@@ -45,7 +46,10 @@ export class RepresentationMethodResultError extends Error {
 export function parseRepresentationMethodOutput(result:ProviderCallResult,request:RepresentationMethodRequest,job:MethodJob):GeneratedRepresentation|AssessedRepresentation {
   if(result.kind!=="succeeded")throw new RepresentationMethodResultError(result.kind==="failed"?result.failure.code:result.kind,result);
   if(result.response.kind!=="structured_generation")throw new RepresentationMethodResultError("representation_output_protocol_invalid",result.response.kind);
-  const value=result.response.output;
+  return parseRepresentationMethodValue(result.response.output,request,job);
+}
+/** A professional result contract, independent of the model's native response envelope. */
+export function parseRepresentationMethodValue(value:unknown,request:RepresentationMethodOutputScope,job:MethodJob):GeneratedRepresentation|AssessedRepresentation {
   const check=["check","relation","combination"].includes(job.kind);
   strict(value,check?["kind","findings","requirements","missing"]:["kind","parts","covered","background","losses","relationships","unknowns","missing"]);
   const sources=new Set(job.sources),background=new Set(request.sources.filter(s=>s.role==="background").map(s=>s.alias)),candidates=new Set(job.candidates);

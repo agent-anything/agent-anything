@@ -2,46 +2,13 @@ import type { ModelResponseObservation } from "@agent-anything/agent-runtime/mod
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import { boundedPresentationText } from "./HelarcRunPresentation.js";
 import { HelarcFinalResponsePreview } from "./HelarcFinalResponsePreview.js";
-import type { HelarcModelCallableCatalog } from "../../controller/HelarcModelCallableCatalog.js";
+import type { HelarcModelCallableCatalog } from "../../controller/HelarcModelCallableContracts.js";
+import {nativePreviewParts,type HelarcNativePreviewObservation,type HelarcNativePreviewCalls} from "./HelarcNativePreview.js";
+import {nativeModelSourceKey} from "@agent-anything/model-interaction/protocol";
+import {helarcNativePresentationId} from "./HelarcNativePresentation.js";
 
-export interface HelarcResponsePreviewPart {
-  readonly id: string;
-  readonly kind: "text" | "tool_call" | "final_response" | "reasoning";
-  readonly text: string;
-  readonly receivedLength: number;
-  readonly omittedBytes: number;
-  readonly name: string | null;
-  readonly modelItemId: string | null;
-  readonly turnId: string | null;
-  readonly committedRecordId: string | null;
-}
-export interface HelarcResponsePreview {
-  readonly runId: string;
-  readonly requestId: string;
-  readonly controllerRequestId: string;
-  readonly invocationId: string;
-  readonly revision: number;
-  readonly observedAt: string;
-  readonly deliverySequence: number;
-  readonly mode: "buffered" | "streaming";
-  readonly state:
-    | "receiving"
-    | "received"
-    | "validated"
-    | "committed"
-    | "interrupted"
-    | "cancelled"
-    | "failed"
-    | "rejected";
-  readonly code: string | null;
-  readonly parts: readonly HelarcResponsePreviewPart[];
-}
-export interface HelarcResponsePreviews {
-  readonly revision: number;
-  readonly omittedAttempts: number;
-  readonly retainedBytes: number;
-  readonly attempts: readonly HelarcResponsePreview[];
-}
+import type {HelarcResponsePreviewPart,HelarcResponsePreview,HelarcResponsePreviews} from "./HelarcResponsePreviewContracts.js";
+export type {HelarcResponsePreviewPart,HelarcResponsePreview,HelarcResponsePreviews} from "./HelarcResponsePreviewContracts.js";
 export function createHelarcResponsePreviews(): HelarcResponsePreviews {
   return { revision: 0, omittedAttempts: 0, retainedBytes: 0, attempts: [] };
 }
@@ -54,6 +21,8 @@ export class HelarcResponsePreviewStore {
   private closed = false;
   private readonly finalBindings = new Map<string, ReadonlySet<string>>();
   private readonly parsers = new Map<string, HelarcFinalResponsePreview>();
+  private readonly nativeCursors=new Map<string,number>();
+  private readonly nativeCalls=new Map<string,HelarcNativePreviewCalls>();
   private readonly listeners = new Set<
     (value: HelarcResponsePreviews, attempt: HelarcResponsePreview) => void
   >();
@@ -63,6 +32,34 @@ export class HelarcResponsePreviewStore {
   ) {}
   snapshot(): HelarcResponsePreviews {
     return this.state;
+  }
+  observeNative(event:HelarcNativePreviewObservation):void {
+    if(this.closed)return;
+    const b=event.binding,old=this.state.attempts.find(a=>a.runId===b.scope.runId&&a.invocationId===b.scope.activityId);
+    if(old&&(event.sequence<=old.deliverySequence||old.state!=="receiving"))return;
+    if(b.protocol.id==="openai.responses"&&Number.isSafeInteger(event.value.sequence_number)){
+      const key=JSON.stringify([b.scope,b.operationId,b.record]),cursor=Number(event.value.sequence_number);
+      if(cursor<=(this.nativeCursors.get(key)??-1))return;
+      this.nativeCursors.set(key,cursor);
+      while(this.nativeCursors.size>256)this.nativeCursors.delete(this.nativeCursors.keys().next().value!);
+    }
+    let calls=this.nativeCalls.get(b.scope.activityId);
+    if(!calls){calls=new Map();this.nativeCalls.set(b.scope.activityId,calls);while(this.nativeCalls.size>256)this.nativeCalls.delete(this.nativeCalls.keys().next().value!);}
+    this.update({runId:b.scope.runId,requestId:b.requestId,controllerRequestId:b.controllerRequestId,invocationId:b.scope.activityId,
+      revision:old?.revision??0,observedAt:this.now(),deliverySequence:event.sequence,mode:"streaming",state:event.disposition??"receiving",code:event.code??null,
+      parts:nativePreviewParts(event,old?.parts??[],calls)},false);
+  }
+  commitNative(proposal:import("./HelarcNativePresentation.js").HelarcNativePresentation):void {
+    for(const old of this.state.attempts){
+      if(old.runId!==proposal.evidence.scope.runId||old.invocationId!==proposal.evidence.scope.activityId)continue;
+      this.update({...old,state:"committed",parts:old.parts.map(part=>{
+        const blocks=part.kind==="final_response"?proposal.ending?.text??[]:part.kind==="reasoning"?proposal.reasoning??[]:[...proposal.text,...proposal.refusals];
+        const block=part.nativeSource&&blocks.find(t=>nativeModelSourceKey(t.source)===nativeModelSourceKey(part.nativeSource!));
+        return block?{...part,...boundedPresentationText(block.text),modelItemId:helarcNativePresentationId(block.source),committedRecordId:helarcNativePresentationId(block.source)}:
+          {...part,text:"",committedRecordId:null};
+      })},true);
+    }
+    this.nativeCalls.delete(proposal.evidence.scope.activityId);
   }
   bindRequest(runId: string, requestId: string, catalog: HelarcModelCallableCatalog): void {
     this.finalBindings.set(JSON.stringify([runId, requestId]), new Set(catalog.bindings.flatMap(binding =>
@@ -265,6 +262,8 @@ export class HelarcResponsePreviewStore {
     }
     this.closed = true;
     this.parsers.clear();
+    this.nativeCalls.clear();
+    this.nativeCursors.clear();
     this.finalBindings.clear();
     this.flush();
   }

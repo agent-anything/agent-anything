@@ -13,10 +13,18 @@ import {ContextMaterialInspectionAdapter} from "./ContextMaterialInspectionAdapt
 import {ActivityHandoffInspectionAdapter} from "./ActivityHandoffInspectionAdapter.js";
 import {ContextFoundationInspectionAdapter} from "./ContextFoundationInspectionAdapter.js";
 import {ExecutionPerformanceInspectionAdapter} from "./ExecutionPerformanceInspectionAdapter.js";
+import {ProtocolJournalInspectionAdapter} from "./ProtocolJournalInspectionAdapter.js";
+import {throughSequence} from "./InspectionReplay.js";
+import type {HelarcExecutionStore} from "../execution-storage/HelarcExecutionStore.js";
+import type {RecordingReplayBounds} from "../execution-storage/ExecutionRecording.js";
+
+type RecordingStore=Pick<HelarcExecutionStore,"registerRecording">&Partial<Pick<HelarcExecutionStore,
+  "recordingReplayBounds"|"activityHandoffs"|"contextFoundationFacts"|"readRunTreeMembers"|"protocolJournal"|"materialDeliveryFacts"|"contextSelections">>;
 
 const defaults: HelarcInspectionSettings = Object.freeze({ enabled: true, definition: true, agent: true, provider: true, execution: true });
 
 export class HelarcInspection {
+  private historyTail:Promise<void>=Promise.resolve();
   readonly runObserver: RunInspectionAdapter | undefined;
   readonly transcriptObserver: import("@agent-anything/agent-runtime/transcript").RunTranscriptObserver | undefined;
   readonly providerObserver: ProviderInspectionAdapter | undefined;
@@ -30,6 +38,7 @@ export class HelarcInspection {
   readonly activityObserver: ActivityHandoffInspectionAdapter | undefined;
   readonly performanceObserver:ExecutionPerformanceInspectionAdapter|undefined;
   readonly contextFoundationObserver:ContextFoundationInspectionAdapter|undefined;
+  readonly protocolObserver:ProtocolJournalInspectionAdapter|undefined;
   readonly traceObserver: RunTraceInspectionAdapter | undefined;
   readonly processObserver: import("@agent-anything/helarc-local-environment/command").ProcessExecutionObserver | undefined;
   readonly commandConstraintObserver: import("@agent-anything/helarc-local-environment/command").CommandConstraintObserver | undefined;
@@ -52,6 +61,7 @@ export class HelarcInspection {
     this.activityObserver = recorder ? new ActivityHandoffInspectionAdapter(recorder) : undefined;
     this.performanceObserver=recorder?new ExecutionPerformanceInspectionAdapter(recorder):undefined;
     this.contextFoundationObserver=recorder?new ContextFoundationInspectionAdapter(recorder):undefined;
+    this.protocolObserver=recorder?new ProtocolJournalInspectionAdapter(recorder):undefined;
     this.traceObserver = recorder ? new RunTraceInspectionAdapter(recorder) : undefined;
     this.executionFlow = recorder ? {observer: new ExecutionFlowInspectionAdapter(recorder)} : undefined;
     this.processObserver = recorder ? new ProcessInspectionAdapter(recorder,this.executionFlow!).observe : undefined;
@@ -112,18 +122,21 @@ export class HelarcInspection {
     await this.recorder?.flush();
     return this.snapshot();
   }
-  recordRecoveryBindingCheck(input: {runId: string; outcome: "accepted" | "rejected"; code: string | null; component: string; changedVariableNames: readonly string[]}): void {
+  recordRecoveryBindingCheck(input: {runId: string; outcome: "accepted" | "rejected"; code: string | null; component: string; changedVariableNames: readonly string[];
+    action?:"restore_activity_scope"|"restore_task_composition";bindingId?:string;checkpoint?:{id:string;revision:number};
+    limitation?:import("../../shared/HelarcExecutionRecovery.js").RecoveryBindingLimitation}): void {
     const r = this.recorder;
     if (!r) return;
     try {
       const subject = r.ref("helarc", "contribution", `${input.runId}:recovery-binding:${randomUUID()}`, input.runId);
       r.offer({subject, occurredAt: new Date().toISOString(),
         payload: {kind: "event", name: "execution.recovery.binding_checked", sequence: null, code: input.code},
-        links: [inspectionLink("includes", r.ref("runtime", "run", input.runId, input.runId), subject)],
+        links: [inspectionLink("includes", r.ref("runtime", "run", input.runId, input.runId), subject),
+          ...(input.checkpoint?[inspectionLink("includes",r.ref("execution-store","contribution",input.checkpoint.id,input.runId,String(input.checkpoint.revision)),subject)]:[])],
         contents: [{name: "Recovery binding check", class: "execution", stage: "checked", mediaType: "application/json", value: input}]});
     } catch { /* Observation is not recovery authority. */ }
   }
-  async registerExecutionRecording(runId: string, recovery: boolean, store: Pick<import("../execution-storage/HelarcExecutionStore.js").HelarcExecutionStore, "registerRecording"> & Partial<Pick<import("../execution-storage/HelarcExecutionStore.js").HelarcExecutionStore,"activityHandoffs"|"contextFoundationFacts"|"readRunTree">>): Promise<void> {
+  async registerExecutionRecording(runId: string, recovery: boolean, store: RecordingStore): Promise<void> {
     const r = this.recorder;
     if (!r || !this.settings.enabled || !r.health().available) return;
     let target: import("../execution-storage/ExecutionRecording.js").ExecutionRecording | null = null;
@@ -133,29 +146,67 @@ export class HelarcInspection {
       if (!target) limitation = "previous_recording_not_registered";
     } catch { limitation = "recording_registration_unavailable"; }
     if (!recovery) return;
-    const runIds=new Set([runId]);
-    if(store.readRunTree) {
-      try{for(const member of (await store.readRunTree(runId))?.members??[])runIds.add(member.head.state.run.id);}
-      catch{limitation="activity_tree_replay_incomplete";}
-    }
-    for(const memberRunId of runIds) {
-    if (store.activityHandoffs) {
-      try {await this.activityObserver?.replay(memberRunId,store.activityHandoffs);}
-      catch {limitation = "activity_fact_replay_incomplete";}
-    }
-    if(store.contextFoundationFacts) {
-      try{await this.contextFoundationObserver?.replay(memberRunId,store.contextFoundationFacts.bind(store));}
-      catch{limitation="context_fact_replay_incomplete";}
-    }
-    }
+    let bounds:RecordingReplayBounds|undefined;
+    try {
+      if(store.protocolJournal)this.protocolObserver?.bindContentReader(store.protocolJournal,store.contextSelections);
+      bounds=await store.recordingReplayBounds?.(runId);
+    }catch{limitation="history_boundary_unavailable";}
     const subject = r.ref("helarc", "contribution", `${runId}:recording-recovery`, runId);
     r.offer({subject, occurredAt: new Date().toISOString(),
       payload: {kind: "recording_link", stage: "recovery_prepared", target, limitation},
       links: [inspectionLink("includes", r.ref("runtime", "run", runId, runId), subject)]});
+    if(!store.activityHandoffs&&!store.contextFoundationFacts&&!store.protocolJournal&&!store.materialDeliveryFacts)return;
+    r.historyProgress("started");
+    const fence=bounds;
+    this.historyTail=this.historyTail.then(async()=>{
+      if(!fence)throw new Error("history_boundary_unavailable");
+      await this.catchUp(runId,store,fence,r);
+    }).then(()=>r.historyProgress("confirmed"),()=>r.historyProgress("incomplete"));
+  }
+  private async catchUp(root:string,store:RecordingStore,bounds:RecordingReplayBounds,r:InspectionRecorder):Promise<void>{
+    let incomplete=false;
+    const member=async(runId:string)=>{
+      const importRange=async(source:keyof Omit<RecordingReplayBounds,"members">,work:()=>Promise<void>)=>{
+        let limitation:string|null=null;
+        try{await r.confirmNativeWork(work);}
+        catch(error){incomplete=true;limitation=error instanceof InspectionRecorderError?error.code:`${source}_replay_incomplete`;}
+        const ref=r.ref("inspection","event",`${root}:history:${source}:${runId}`,runId);
+        await r.confirmNativeWork(async()=>{
+          if(!await r.offerWhenReady({subject:ref,occurredAt:new Date().toISOString(),
+            payload:{kind:"event",name:"inspection.history_range",sequence:bounds[source],code:limitation},
+            contents:[{name:"Historical coverage",class:"execution",stage:"history_range",mediaType:"application/json",
+              value:{root,runId,source,through:bounds[source],status:limitation?"incomplete":"confirmed",limitation}}]}))throw new Error("history_range_not_recorded");
+        });
+      };
+      if(store.activityHandoffs)await importRange("activity",()=>this.activityObserver!.replay(runId,store.activityHandoffs!,bounds.activity));
+      if(store.contextFoundationFacts)await importRange("context",()=>this.contextFoundationObserver!.replay(runId,(_run,after,limit)=>
+        throughSequence((a,n)=>store.contextFoundationFacts!(runId,a,n),bounds.context)(after,limit)));
+      if(store.protocolJournal)await importRange("protocol",()=>this.protocolObserver!.replay(throughSequence(async(after,limit)=>
+        await store.protocolJournal!.command({kind:"facts",runId,after,limit}) as readonly import("@agent-anything/agent-runtime/model-access").ProtocolJournalFact[],bounds.protocol)));
+      if(store.materialDeliveryFacts)await importRange("material",()=>this.protocolObserver!.replay(throughSequence((a,n)=>store.materialDeliveryFacts!(runId,a,n),bounds.material)));
+    };
+    await member(root);
+    if(store.readRunTreeMembers&&bounds.members){
+      let cursor:import("../execution-storage/RunTreeMembership.js").RunTreeMembershipCursor|null={rootRunId:root,after:0,through:bounds.members};
+      do{const page:import("../execution-storage/RunTreeMembership.js").RunTreeMembershipPage=await store.readRunTreeMembers(root,cursor);
+        for(const id of page.runIds)if(id!==root)await member(id);
+        cursor=page.next;
+      }while(cursor);
+    }
+    if(incomplete)throw new Error("history_replay_incomplete");
+  }
+  async drainSources():Promise<void>{
+    await this.historyTail;
+    await this.protocolObserver?.flush();
+  }
+  async flushRecording(close=false) {
+    await this.drainSources();
+    this.performanceObserver?.flush();
+    return this.recorder?.flush(close);
   }
   async close(): Promise<void> {
     this.performanceObserver?.close();
-    const result = await this.recorder?.flush(true);
+    const result = await this.flushRecording(true);
     if (result && (result.native !== "settled" || result.projection !== "settled"))
       console.warn("Helarc inspection closure is incomplete.", result);
   }

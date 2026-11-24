@@ -20,6 +20,27 @@ const STARTED_AT = "2026-08-13T00:00:00.000Z";
 const COMPLETED_AT = "2026-08-13T00:00:01.000Z";
 
 describe("HelarcProductResult", () => {
+  it.each(["model_request_input_preparation_failed","context_input_unavailable"])("projects input evidence without rewriting a retained failure: %s",code=>{
+    const task=createHelarcTask({taskId:"task-1",prompt:"Continue."});
+    if(!task.ok)throw Error(task.error.message);
+    const run={id:"run-1"},agent={id:"agent",revision:"1"},ref={run,id:"cause",revision:"1"};
+    const cause={ref,kind:"failure",failure:{kind:"input_preparation",failure:{code,retryable:false,message:"private diagnostic",
+      metadata:{limitation:{reason:"original_path_requires_bounded_revision",...(code==="context_input_unavailable"?{}:{
+        workInputBudget:{measuredTokens:20147,maximumTokens:16384},preservationUnconfirmed:true})}}}},
+      source:{owner:"runtime",kind:"judgment",id:"judgment",revision:"1",run},underlying:[],omittedUnderlyingCount:0,
+      recordedAt:COMPLETED_AT} as const;
+    const result=createRunResult<HelarcAgentOutput>({runId:run.id,taskId:task.task.id,startingAgent:agent,finalActiveAgent:agent,
+      startingInstructionBinding:testInstructionBinding(run.id),finalInstructionBinding:testInstructionBinding(run.id),
+      startedAt:STARTED_AT,settlement:{status:"failed",completedAt:COMPLETED_AT,cause:ref},cause,settlementCauses:[cause],items:[]});
+    const projected=projectHelarcProductResult(task.task,{primary:{id:"w",name:"w",rootRef:"D:/w",trustState:"trusted",
+      source:"test",policyRefs:[],metadata:{}},additional:[]},result,"disabled");
+    const [error]=projected.output.safeErrors;
+    expect(error?.code).toBe(code);
+    expect(error?.message).toContain("no supported replacement");
+    expect(error?.message).not.toContain("private diagnostic");
+    if(code==="context_input_unavailable")expect(error?.message).not.toMatch(/tokens|compaction/i);
+    else expect(error?.message).toMatch(/20147.*16384.*compaction assessment/);
+  });
   it("uses the current Controller decision kind in activity details", () => {
     const event = Object.freeze({
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,

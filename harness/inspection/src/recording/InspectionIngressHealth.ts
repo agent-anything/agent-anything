@@ -10,12 +10,17 @@ export class InspectionIngressAccounting {
       highWater: {records: Math.max(previous.highWater.records, records), structureBytes: Math.max(previous.highWater.structureBytes, structureBytes), contentBytes: Math.max(previous.highWater.contentBytes, contentBytes)},
       timings: {...previous.timings, admissionMaxMs: Math.max(previous.timings.admissionMaxMs, durationMs)}};
   }
-  rejected(reason: InspectionAdmissionReason, sequence: number | null, subject: InspectionSubjectRef | null): void {
+  history(state: "started" | "confirmed" | "incomplete"): void {
+    const history=this.current.history??{started:0,confirmed:0,incomplete:0};
+    this.current={...this.current,revision:this.current.revision+1,history:{...history,[state]:history[state]+1}};
+  }
+  rejected(reason: InspectionAdmissionReason, sequence: number | null, subject: InspectionSubjectRef | null,
+    sample: Omit<InspectionIngressHealth["issues"][number]["samples"][number],"sequence"|"subject"> = {}): void {
     const previous = this.current;
     const at = new Date().toISOString();
     const issue = previous.issues.find(value => value.reason === reason);
     const samples = [...(issue?.samples ?? [])];
-    if (samples.length < 8) samples.push({sequence, subject});
+    if (samples.length < 8) samples.push({sequence, subject,...sample});
     const next = {reason, count: (issue?.count ?? 0) + 1, firstSequence: issue?.firstSequence ?? sequence, lastSequence: sequence,
       firstAt: issue?.firstAt ?? at, lastAt: at, samples, coalesced: (issue?.count ?? 0) >= 8};
     const dropped = reason === "record_capacity" || reason === "structure_capacity" || reason === "content_capacity";

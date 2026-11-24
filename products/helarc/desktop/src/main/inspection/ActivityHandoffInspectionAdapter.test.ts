@@ -10,6 +10,25 @@ import {HelarcInspection} from "./HelarcInspection.js";
 import {ActivityHandoffInspectionAdapter} from "./ActivityHandoffInspectionAdapter.js";
 import {TASK_MODEL_RESPONSE_PURPOSE} from "@agent-anything/agent-runtime/decision";
 import {SOURCE_MATERIAL_PUBLICATION_PURPOSE} from "@agent-anything/agent-runtime/context-representation";
+import {PROTOCOL_OBSERVATION_PURPOSE} from "@agent-anything/agent-runtime/model-access";
+
+it("links shared observation to original native custody without manufacturing a model Turn",()=>{
+  const records:import("@agent-anything/inspection/records").InspectionRecordInput[]=[];
+  const recorder={ref:(owner:string,kind:string,id:string,runId:string|null,revision:string|null=null)=>
+    ({sourceId:"source",datasetId:"dataset",owner,kind,id,runId,revision}),offer:(record:typeof records[number])=>{records.push(record);return true;}};
+  const observer=new ActivityHandoffInspectionAdapter(recorder as unknown as import("@agent-anything/inspection/recording").InspectionRecorder);
+  observeStage(observer,"child",{request:{id:"work:observe",pathId:"work",stageKind:"observe",input:{kind:"protocol_observation_source",
+    activityId:"native-activity",compositionDigest:"original",input:{id:"native-input",digest:"input-digest"}}},status:"accepted",
+    result:{id:"raw",recordedAt:"2026-11-16T00:00:00Z",outcome:"returned",value:{kind:"protocol_observation_result",activityId:"native-activity",observation:{id:"received",revision:"1"}}},
+    receipt:null} as unknown as ActivityStageState,PROTOCOL_OBSERVATION_PURPOSE);
+  const links=records.flatMap(record=>record.links??[]);
+  expect(links).toEqual(expect.arrayContaining([
+    expect.objectContaining({from:expect.objectContaining({id:"work:observe"}),to:expect.objectContaining({owner:"protocol-execution",kind:"model-activity",id:"native-activity",runId:"child"})}),
+    expect.objectContaining({from:expect.objectContaining({owner:"protocol-content",id:"native-input",revision:"input-digest"}),to:expect.objectContaining({id:"work:observe"})}),
+    expect.objectContaining({kind:"observes",to:expect.objectContaining({owner:"protocol-execution",id:"received",revision:"1"})}),
+  ]));
+  expect(records.some(record=>record.subject.kind==="turn"||record.subject.owner==="model-interaction")).toBe(false);
+});
 
 it("replays every original fact but reads a current stage only once per bounded page",async()=>{
   const records:import("@agent-anything/inspection/records").InspectionRecordInput[]=[];
@@ -179,6 +198,23 @@ it("links actual native result presentation separately from its original executi
     expect(links.some(link=>link.to.id==='["short-report","1"]')).toBe(true);
     const execution=await queries.query({kind:"get_execution",...selection,subject:r.ref("task-result-presentation","contribution","presentation","parent")});
     expect(execution.graph!.links.filter(link=>link.kind==="settles")).toEqual([expect.objectContaining({from:expect.objectContaining({id:"response-accepted"})})]);
+  }finally{await inspection.close();await queries.close();await rm(directory,{recursive:true,force:true});}
+},30000);
+
+it("links report capture authority to the Parent transfer and Child capture, not an input receipt",async()=>{
+  const directory=await mkdtemp(join(tmpdir(),"helarc-report-inspection-")),root=join(directory,"inspection");
+  const inspection=await HelarcInspection.create(join(directory,"settings.json"),root),queries=new InspectionQueryService(root);
+  try {
+    const r=inspection.recorder!,observer=new ActivityHandoffInspectionAdapter(r);
+    observer.observe({sequence:1,runId:"child",pathId:"source",requestId:null,kind:"fact_published",occurredAt:"2026-10-31T00:00:00.000Z",
+      details:{fact:{id:"authority",sourceId:"source",ref:{owner:"helarc.report-handoff",kind:"accepted_report_capture",id:"access",revision:"proof"},
+        handoff:{parent:{runId:"parent"},result:{id:"transfer",revision:"2"},pathId:"capture"}}}});
+    await r.flush();const selection=(await queries.query({kind:"get_snapshot",sourceId:r.source.sourceId,datasetId:r.manifest.datasetId})).selection!;
+    const flow=await queries.query({kind:"get_data_flow",...selection,subject:r.ref("activity-publication","contribution","authority","child")});
+    const execution=await queries.query({kind:"get_execution",...selection,subject:r.ref("activity-publication","contribution","authority","child")});
+    expect(execution.graph?.links).toContainEqual(expect.objectContaining({kind:"binding",to:r.ref("activity","contribution","capture","child")}));
+    expect(flow.graph?.links).toContainEqual(expect.objectContaining({kind:"observes",to:r.ref("agent-runtime","contribution","transfer","parent","2")}));
+    expect(flow.graph?.links.some(link=>link.kind==="delivers")).toBe(false);
   }finally{await inspection.close();await queries.close();await rm(directory,{recursive:true,force:true});}
 },30000);
 

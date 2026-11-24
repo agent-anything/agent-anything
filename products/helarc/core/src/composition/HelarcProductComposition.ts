@@ -1,10 +1,12 @@
 import { HelarcProtocolRecoveryController } from "../controller/HelarcProtocolRecoveryController.js";
-import { createHelarcTaskModelBinding, type HelarcTaskExecutionFactory } from "./HelarcTaskModelBinding.js";
+import { createHelarcTaskModelBinding, type HelarcTaskExecutionFactory, type HelarcNativeTaskExecutionFactory } from "./HelarcTaskModelBinding.js";
+import {snapshotModelProtocolConfiguration,snapshotModelAgentCompositionBinding,assertChildModelComposition,type ModelProtocolConfigurationBinding} from "@agent-anything/model-interaction/protocol";
+import {modelInputValueDigest as digest} from "@agent-anything/model-interaction/input";
 import type { TaskDecisionActivity } from "@agent-anything/agent-runtime/decision";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
-import { appendHelarcRunPresentation, associateHelarcOperationPresentation, labelHelarcRunPresentation, receiveHelarcRunInputPresentation } from "../run/presentation/HelarcRunPresentation.js";
+import { appendHelarcRunPresentation, appendHelarcPresentationGap, associateHelarcOperationPresentation, labelHelarcRunPresentation, receiveHelarcRunInputPresentation } from "../run/presentation/HelarcRunPresentation.js";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import { HelarcResponsePreviewStore, type HelarcResponsePreview, type HelarcResponsePreviews } from "../run/presentation/HelarcResponsePreviews.js";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/execution-coordinator";
@@ -85,11 +87,14 @@ type HelarcProductProjectionUpdatePayload =
     : never;
 
 export interface CreateHelarcProductCompositionInput {
+  readonly resourceContributions?:import("@agent-anything/agent-runtime/execution-coordinator").RunResourceContributionSource;
   readonly taskExecution: HelarcTaskExecutionFactory;
   readonly stopExecution?: import("../task-fulfillment/index.js").HelarcStopExecution;
   readonly contextMaterials?: import("@agent-anything/context/material").ContextMaterialAccessPort;
   readonly materialHandoff?: HelarcMaterialHandoff;
   readonly reportHandoff?: import("../tools/HelarcReportHandoff.js").HelarcReportHandoff;
+  readonly nativeNarratives?:import("../controller/native/HelarcNativeNarrative.js").HelarcNativeNarrativeReader;
+  readonly nativePresentation?:import("../run/presentation/HelarcNativePresentation.js").HelarcNativePresentationReader;
   readonly executionEvidenceAccess?: import("@agent-anything/operation-catalog/evidence").ExecutionEvidenceAccessPort;
   readonly executionHandoff?: import("../tools/HelarcExecutionHandoff.js").HelarcExecutionHandoff;
   readonly executionMaterials?: import("../tools/HelarcExecutionDetails.js").HelarcExecutionMaterialReader;
@@ -112,6 +117,7 @@ export interface CreateHelarcProductCompositionInput {
 }
 
 export interface HelarcProductComposition {
+  readonly resourceContributions?:import("@agent-anything/agent-runtime/execution-coordinator").RunResourceContributionSource;
   readonly agent: AgentDefinition<HelarcAgentOutput>;
   readonly delegatedAgent: AgentDefinition<HelarcAgentOutput>;
   readonly taskDecisions: TaskDecisionActivity<HelarcAgentOutput>;
@@ -129,6 +135,7 @@ export interface HelarcProductComposition {
   getResponsePreviews(): HelarcResponsePreviews;
   subscribeResponsePreviews(listener: (value: HelarcResponsePreviews, attempt: HelarcResponsePreview) => void): () => void;
   recordTranscript(record: RunTranscriptRecord): void;
+  flushPresentation():Promise<void>;
   recordRunLineage(runId: string, lineage: RunLineage): void;
   recordRunInput(runId: string, input: RunInput, receivedAt: string): void;
   recordCommandProgress(command:Omit<import("../run/HelarcRunProjection.js").HelarcCommandProgress, "origin">):void;
@@ -143,17 +150,35 @@ export interface HelarcProductComposition {
   ): HelarcProductResult;
 }
 
+export type CreateHelarcNativeProductCompositionInput = Omit<CreateHelarcProductCompositionInput,
+  "provider"|"providerProfile"|"taskExecution"|"stopExecution"|"nativeNarratives"> & {
+  readonly nativeModel: ModelProtocolConfigurationBinding;
+  readonly taskExecution: HelarcNativeTaskExecutionFactory;
+  readonly stopEvaluation: import("../task-fulfillment/index.js").HelarcStopEvaluation;
+  readonly nativeNarratives: import("../controller/native/HelarcNativeNarrative.js").HelarcNativeNarrativeReader;
+  readonly nativePresentation: import("../run/presentation/HelarcNativePresentation.js").HelarcNativePresentationReader;
+};
+
+export function createHelarcNativeProductComposition(input: CreateHelarcNativeProductCompositionInput): Promise<HelarcProductComposition> {
+  return composeProduct(input);
+}
+
 export async function createHelarcProductComposition(
   input: CreateHelarcProductCompositionInput,
 ): Promise<HelarcProductComposition> {
+  return composeProduct(input);
+}
+
+async function composeProduct(input: CreateHelarcProductCompositionInput | CreateHelarcNativeProductCompositionInput): Promise<HelarcProductComposition> {
   if(typeof input.taskExecution!=="function")throw new TypeError("helarc_task_execution_required");
   const instructionSettings = input.instructionSettings === undefined
     ? undefined : snapshotHelarcInstructionSettings(input.instructionSettings);
   const now = input.now ?? (() => new Date().toISOString());
   const admittedAt = now();
-  const providerId = input.provider.descriptor.id;
-  const modelId = input.provider.modelContext.target.model;
-  if (providerId !== input.provider.modelContext.target.providerId) {
+  const nativeModel = "nativeModel" in input ? snapshotModelProtocolConfiguration(input.nativeModel) : null;
+  const providerId = "nativeModel" in input ? nativeModel!.protocol.providerId : input.provider.descriptor.id;
+  const modelId = "nativeModel" in input ? nativeModel!.model : input.provider.modelContext.target.model;
+  if (!("nativeModel" in input) && providerId !== input.provider.modelContext.target.providerId) {
     throw new TypeError("Helarc Provider descriptor and Model Input Accounting identities differ.");
   }
   const agent = createHelarcAgent({
@@ -164,11 +189,11 @@ export async function createHelarcProductComposition(
   });
   const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId, instructionSettings });
   const clarification = createHelarcClarificationContribution(admittedAt);
-  const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt, input.executionHandoff, input.contextMaterials, input.materialHandoff,input.reportHandoff);
+  const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt, input.executionHandoff, input.contextMaterials, input.materialHandoff,input.reportHandoff,input.nativeNarratives);
   const taskFulfillment = createHelarcTaskFulfillmentHookComposition(
-    input.provider,
+    "nativeModel" in input ? input.stopEvaluation : input.provider,
     (instructionSettings ?? createDefaultHelarcInstructionSettings()).stop,
-    input.stopExecution,
+    "nativeModel" in input ? undefined : input.stopExecution,
   );
   const executionCallables = new Map<string, import("../controller/HelarcModelCallableCatalog.js").HelarcModelCallableCatalog>();
   const actions = createHelarcActionComposition({
@@ -198,7 +223,7 @@ export async function createHelarcProductComposition(
     shellRuntime: input.commandActions.shellRuntime,
   });
   const rootToolGuidanceBinding = controllerProtocol.bindRun(input.runId);
-  assertHelarcProviderCompatibility(input.provider, input.providerProfile);
+  if (!("nativeModel" in input)) assertHelarcProviderCompatibility(input.provider, input.providerProfile);
   const interactions = createInteractionProtocolRegistrySnapshot(
     "helarc.interactions.v3",
     [clarification.protocol],
@@ -235,21 +260,44 @@ export async function createHelarcProductComposition(
       }
     }
   };
+  let presentationPending:Promise<void>=Promise.resolve();
+  let presentationQueued=0;
+  let presentationDropped:{record:RunTranscriptRecord;count:number}|null=null;
+  const projectTranscript=(record:RunTranscriptRecord,native?:import("../run/presentation/HelarcNativePresentation.js").HelarcNativePresentation)=>{
+    const presentation=appendHelarcRunPresentation(productProjection.presentation,record,native);
+    if(presentation!==productProjection.presentation)publishProductUpdate({kind:"presentation_observed",presentation});
+    if(native)previews.commitNative(native);
+    previews.committed(record);
+  };
   const previews = new HelarcResponsePreviewStore(responses => {
     if (!productProjection.result) publishProductUpdate({kind:"responses_observed", responses});
   });
-  const taskBinding = createHelarcTaskModelBinding({
+  const taskRules = {
     agents: [agent, delegatedAgent], protocol: controllerProtocol, materials: input.contextMaterials,
-    environment: runId => ({shell: input.commandActions.shellRuntime, cwd: input.commandActions.shellSession?.(runId).canonicalPath ?? null}),
-    delivery: {mode: input.responseDelivery ?? "buffered", observer: {observe: event => previews.observe(event)}},
-    requestBound(runId, requestId, catalog) {
+    environment: (runId: string) => ({shell: input.commandActions.shellRuntime, cwd: input.commandActions.shellSession?.(runId).canonicalPath ?? null}),
+    requestBound(runId: string, requestId: string, catalog: import("../controller/HelarcModelCallableCatalog.js").HelarcModelCallableCatalog) {
       executionCallables.set(runId, catalog);
       previews.bindRequest(runId, requestId, catalog);
     },
-  });
-  const taskExecution = await input.taskExecution(taskBinding);
+  };
+  const taskExecution = "nativeModel" in input
+    ? await input.taskExecution({model:nativeModel!,agents:taskRules.agents,controller:controllerProtocol,
+        environment:taskRules.environment,materials:input.contextMaterials,requestBound:taskRules.requestBound,preview:event=>previews.observeNative(event)})
+    : await input.taskExecution(createHelarcTaskModelBinding({...taskRules,
+        delivery:{mode:input.responseDelivery??"buffered",observer:{observe:event=>previews.observe(event)}}}));
+  if (nativeModel) {
+    if (!("compositions" in taskExecution) || !Array.isArray(taskExecution.compositions) || taskExecution.compositions.length!==2 ||
+      taskExecution.taskDecisions.historyKind!=="native_evidence") throw new TypeError("helarc_native_product_participants_required");
+    const compositions=taskExecution.compositions.map(snapshotModelAgentCompositionBinding);
+    for (const expected of taskRules.agents) {
+      const selected=compositions.filter(c=>c.composition.agent.id===expected.id&&c.composition.agent.revision===expected.revision);
+      if(selected.length!==1||digest(selected[0]!.composition.configuration)!==digest(nativeModel))
+        throw new TypeError("helarc_native_product_original_binding_changed");
+    }
+    assertChildModelComposition(compositions[0]!,compositions[1]!);
+  }
   const tracedController = new HelarcTracingController(
-    new HelarcProtocolRecoveryController(taskExecution.taskDecisions),
+    nativeModel ? taskExecution.taskDecisions : new HelarcProtocolRecoveryController(taskExecution.taskDecisions),
     controllerTraceByOperationId,
   );
   const providerController = new AgentHookExtensions<HelarcAgentOutput>({
@@ -275,6 +323,7 @@ export async function createHelarcProductComposition(
     agent,
     delegatedAgent,
     taskDecisions: tracedController,
+    resourceContributions:input.resourceContributions,
     extensions: providerController,
     preparations: taskExecution.preparations,
     controllerProtocol,
@@ -292,10 +341,34 @@ export async function createHelarcProductComposition(
     subscribeResponsePreviews: (listener: (value: HelarcResponsePreviews, attempt: HelarcResponsePreview) => void) => previews.subscribe(listener),
     recordTranscript(record: RunTranscriptRecord): void {
       if (productProjection.result) return;
-      const presentation = appendHelarcRunPresentation(productProjection.presentation, record);
-      if (presentation !== productProjection.presentation) publishProductUpdate({ kind: "presentation_observed", presentation });
-      previews.committed(record);
+      const payload=record.item.payload;
+      const native=payload.kind==="controller_turn"?payload.modelItems.find(i=>i.kind==="native_purpose_evidence"):undefined;
+      if(!native&&presentationQueued===0){projectTranscript(record);return;}
+      if(presentationDropped||presentationQueued>=256){
+        if(presentationDropped)presentationDropped.count++;
+        else presentationDropped={record,count:1};
+        return;
+      }
+      presentationQueued++;
+      presentationPending=presentationPending.then(async()=>{
+        if(native?.kind==="native_purpose_evidence"){
+          if(!input.nativePresentation)throw new TypeError("native_presentation_reader_unavailable");
+          projectTranscript(record,await input.nativePresentation.read(native.evidence));
+        }else projectTranscript(record);
+      }).catch(error=>{
+        // A display gap cannot invalidate accepted work, and must not silently disappear.
+        publishProductUpdate({kind:"presentation_observed",presentation:appendHelarcPresentationGap(productProjection.presentation,record,
+          error instanceof TypeError?error.message:"native_presentation_read_failed")});
+      }).finally(()=>{
+        presentationQueued--;
+        if(presentationQueued===0&&presentationDropped){
+          const dropped=presentationDropped;presentationDropped=null;
+          publishProductUpdate({kind:"presentation_observed",presentation:appendHelarcPresentationGap(productProjection.presentation,dropped.record,
+            "native_presentation_queue_full",dropped.count)});
+        }
+      });
     },
+    async flushPresentation(){await presentationPending;},
     recordRunLineage(runId: string, lineage: RunLineage): void {
       if (productProjection.result) return;
       const presentation = labelHelarcRunPresentation(productProjection.presentation, runId, lineage, input.task.input.prompt);

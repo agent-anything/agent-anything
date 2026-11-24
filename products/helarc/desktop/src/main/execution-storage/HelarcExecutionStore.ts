@@ -1,11 +1,13 @@
 import { Worker } from "node:worker_threads";
-import {isActivityDispatchWaitCode} from "@agent-anything/agent-runtime/activity";
+import {activityCommandReceipt,isActivityDispatchWaitCode} from "@agent-anything/agent-runtime/activity";
 import {CustodyMaterialAccess,type MaterialRecipient} from "@agent-anything/context/custody";
 import {randomUUID} from "node:crypto";
 import {CONTEXT_MATERIAL_LIMITS, ContextMaterialError, type ContextMaterialAccessPort, type ContextMaterialPage, type ContextMaterialSearchPage} from "@agent-anything/context/material";
 import { restoreExecutionError } from "../diagnostics/ExecutionErrorDetails.js";
 import { reportExecutionFailure, type ExecutionDiagnosticSink, type ExecutionDiagnosticContext } from "../diagnostics/HelarcExecutionDiagnostics.js";
 import {beginExecutionTiming, measureExecutionSync,executionPerformanceClock, type ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
+import {safeExecutionPerformanceEvent} from "../diagnostics/HelarcPerformanceDiagnostics.js";
+import {diagnosticInvocation} from "../diagnostics/IdentifiedWorkTiming.js";
 import { FILE_MATERIAL_POLICY, snapshotFileMaterialPreparation, type FileMaterialRecordPort, type FileMaterialPreparation, type FileMaterialReservation,
   type FileMaterialRecord, type FileMaterialRead, type FileMaterialObserver, type FileMaterialObservation } from "@agent-anything/helarc-local-environment/filesystem";
 import { snapshotExecutionEvidence, snapshotCompensationAssociation, type ExecutionEvidenceRecordPort, type ExecutionEvidenceRecord,
@@ -78,6 +80,9 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   async registerRecording(recording: import("./ExecutionRecording.js").ExecutionRecording): Promise<import("./ExecutionRecording.js").ExecutionRecordingRegistration> {
     return await this.request({kind: "register_recording", recording}) as import("./ExecutionRecording.js").ExecutionRecordingRegistration;
   }
+  async recordingReplayBounds(rootRunId:string):Promise<import("./ExecutionRecording.js").RecordingReplayBounds>{
+    return await this.request({kind:"recording_replay_bounds",rootRunId}) as import("./ExecutionRecording.js").RecordingReplayBounds;
+  }
   private readonly queue: PendingRequest[] = [];
   private flight: PendingRequest | null = null;
   private bytes = 0;
@@ -99,7 +104,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     private readonly fileMaterialObserver?: FileMaterialObserver, private readonly diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher,
     private readonly contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver,
     private readonly activityObserver?: import("@agent-anything/agent-runtime/activity").ActivityHandoffObserver,
-    private readonly contextFoundationObserver?:import("./ContextFoundationRecords.js").ContextFoundationObserver) {
+    private readonly contextFoundationObserver?:import("./ContextFoundationRecords.js").ContextFoundationObserver,
+    private readonly protocolObserver?:import("@agent-anything/agent-runtime/model-access").ProtocolJournalObserver) {
     this.contentEncoder = new ExecutionContentEncoder(undefined, new ExecutionContentStatistics(Boolean(diagnostics?.performance)));
     this.environments = new ExecutionEnvironmentProtection(environmentCipher);
     this.exited = new Promise(resolve => worker.once("exit", code => {
@@ -111,6 +117,10 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     worker.on("message", (reply: ExecutionStoreReply) => {
       if(reply.kind==="context_foundation_observation") {
         try{this.contextFoundationObserver?.observe(reply.fact);}catch{ /* Observation does not change execution acknowledgement. */ }
+        return;
+      }
+      if(reply.kind==="protocol_journal_observation"||reply.kind==="material_delivery_observation"){
+        try{this.protocolObserver?.observe(reply.fact);}catch{ /* Inspection is not recovery authority. */ }
         return;
       }
       if (reply.kind === "activity_observation") {
@@ -190,7 +200,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     fileMaterialObserver?: FileMaterialObserver, diagnostics?: ExecutionDiagnosticSink, environmentCipher?: ExecutionEnvironmentCipher,
     contextMaterialObserver?: import("./ContextMaterialObservation.js").ContextMaterialObserver,
     activityObserver?: import("@agent-anything/agent-runtime/activity").ActivityHandoffObserver,
-    contextFoundationObserver?:import("./ContextFoundationRecords.js").ContextFoundationObserver): Promise<HelarcExecutionStore> {
+    contextFoundationObserver?:import("./ContextFoundationRecords.js").ContextFoundationObserver,
+    protocolObserver?:import("@agent-anything/agent-runtime/model-access").ProtocolJournalObserver): Promise<HelarcExecutionStore> {
     const startupId=randomUUID();
     const endStartup = beginExecutionTiming(diagnostics, "storage.host.startup",{startupId});
     let worker: Worker;
@@ -211,7 +222,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
         if (reply.kind === "performance") {try {diagnostics?.performance?.(reply.event);} catch {} return;}
         if (reply.kind === "startup_failed") { failed(new ExecutionStoreError(reply.code, {cause: restoreExecutionError(reply.error)})); return; }
         if (reply.kind !== "ready") { failed(new ExecutionStoreError("execution_storage_protocol_invalid")); return; }
-        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher, contextMaterialObserver,activityObserver,contextFoundationObserver);
+        const store = new HelarcExecutionStore(worker, reply.generation, evidenceObserver, fileMaterialObserver, diagnostics, environmentCipher, contextMaterialObserver,activityObserver,contextFoundationObserver,protocolObserver);
         endStartup();
         cleanup();
         resolve(store);
@@ -222,8 +233,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     });
     try {
       // Product delivery and bounded material release can be interrupted separately.
-      for (const entry of await store.listProductRuns()) {
-        if (entry.terminal && entry.delivered) await store.finalizeFileMaterials(entry.admission.rootRunId);
+      for (const entry of await store.discoverProductWork("file_cleanup")) {
+        await store.finalizeFileMaterials(entry.rootRunId);
       }
       return store;
     } catch (error) {
@@ -278,8 +289,15 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     }catch{/* Diagnostics remain optional. */}
   };
   readonly activityHandoffs: import("@agent-anything/agent-runtime/activity").ActivityHandoffPort = {
-    command: async command => {
-      const result = await this.request({kind: "activity_handoff", command});
+    command: async (command,options) => {
+      if(options?.returnKind&&!["admit","save_raw","claim_processing","accept","settle"].includes(command.kind))throw new TypeError("activity_command_receipt_unsupported");
+      const observation=options?.observation;
+      // Inspection is an explicit full-content consumer, not an automatic read after every ACK.
+      const inspect=Boolean(this.activityObserver?.observeStage&&["submit","save_raw","accept","settle","stop_professional_path","record_authorization_restriction"].includes(command.kind));
+      const returnKind=inspect?undefined:options?.returnKind;
+      const result = await this.request({kind: "activity_handoff", command,...(returnKind?{returnKind}:{})},false,observation?{
+        callerOwner:observation.owner,callerPurpose:observation.purpose,operationId:observation.operationId??null,
+      }:{});
       if (!result || typeof result !== "object" || !("activityValue" in result)) throw new ExecutionStoreError("activity_handoff_reply_invalid");
       const state=result.activityValue;
       if(this.activityObserver?.observeStage && ["submit","save_raw","accept","settle","stop_professional_path","record_authorization_restriction"].includes(command.kind) && state && "request" in state) {
@@ -289,7 +307,7 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
             this.activityObserver.observeStage(pathReply.activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState,state);
         } catch { /* Durable facts permit replay; observation cannot alter acceptance. */ }
       }
-      return result.activityValue;
+      return options?.returnKind&&inspect?activityCommandReceipt(command,state as import("@agent-anything/agent-runtime/activity").ActivityStageState):result.activityValue;
     },
   };
   async querySharedAcceptance(id: string): Promise<import("@agent-anything/agent-runtime/activity").SharedAcceptanceReceipt | null> {
@@ -305,6 +323,21 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     },
     query:id=>this.querySharedAcceptance(id),
   };
+  readonly protocolJournal:import("@agent-anything/agent-runtime/model-access").ProtocolExecutionJournal={command:async command=>{
+    const result=await this.request({kind:"protocol_journal",command});
+    if(!result||!("protocolJournalValue" in result))throw new ExecutionStoreError("execution_storage_protocol_invalid");
+    return result.protocolJournalValue;
+  }};
+  readonly materialDeliveries:import("@agent-anything/context/custody").MaterialDeliveryJournal={query:async query=>{
+    const result=await this.request({kind:"material_delivery",query});
+    if(!result||!("materialDeliveryValue" in result))throw new ExecutionStoreError("execution_storage_protocol_invalid");
+    return result.materialDeliveryValue;
+  }};
+  async materialDeliveryFacts(runId:string,after:number,limit:number){
+    const result=await this.request({kind:"material_delivery_facts",runId,after,limit});
+    if(!result||!("materialDeliveryFacts" in result))throw new ExecutionStoreError("execution_storage_protocol_invalid");
+    return result.materialDeliveryFacts;
+  }
   readonly materialCustody:import("@agent-anything/context/custody").MaterialCustodyPort={command:async command=>{
     const result=await this.request({kind:"material_custody",command});
     if(!result || !("custodyValue" in result))throw new ExecutionStoreError("custody_reply_invalid");return result.custodyValue;
@@ -450,11 +483,26 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   async admitProductRun(admission: HelarcExecutionAdmission): Promise<void> {
     await this.request({kind: "admit_product_run", admission});
   }
+  async resolveAdmission(rootRunId:string,intentId:string):Promise<import("./ExecutionAdmissionResolution.js").ExecutionAdmissionResolution> {
+    return await this.request({kind:"resolve_admission",rootRunId,intentId}) as import("./ExecutionAdmissionResolution.js").ExecutionAdmissionResolution;
+  }
+  async readRunControl(runId:string):Promise<import("./RunExecutionControl.js").RunExecutionControl|null> {
+    return await this.request({kind:"read_run_control",runId}) as import("./RunExecutionControl.js").RunExecutionControl|null;
+  }
+  async readTreeControl(rootRunId:string):Promise<readonly import("./RunExecutionControl.js").RunExecutionControl[]> {
+    return await this.request({kind:"read_tree_control",rootRunId}) as readonly import("./RunExecutionControl.js").RunExecutionControl[];
+  }
+  async closeAdmission(rootRunId:string,intentId:string):Promise<import("./ExecutionAdmissionResolution.js").ExecutionAdmissionResolution> {
+    return await this.request({kind:"close_admission",rootRunId,intentId}) as import("./ExecutionAdmissionResolution.js").ExecutionAdmissionResolution;
+  }
   async readProductRun(rootRunId: string): Promise<HelarcExecutionAdmission | null> {
     return await this.request({kind: "read_product_run", rootRunId}) as HelarcExecutionAdmission | null;
   }
-  async listProductRuns(): Promise<readonly HelarcExecutionDiscovery[]> {
-    return await this.request({kind: "list_product_runs"}) as readonly HelarcExecutionDiscovery[];
+  async listProductRuns(rootRunId?:string): Promise<readonly HelarcExecutionDiscovery[]> {
+    return await this.request({kind: "list_product_runs",...(rootRunId===undefined?{}:{rootRunId})}) as readonly HelarcExecutionDiscovery[];
+  }
+  async discoverProductWork(delivery:"file_cleanup"|"undelivered") {
+    return await this.request({kind:"discover_product_work",delivery}) as readonly import("./HelarcExecutionAdmission.js").ProductWorkSummary[];
   }
   async listRetentionPins(): Promise<readonly import("./ExecutionStoreProtocol.js").ExecutionRetentionPin[]> {
     return await this.request({kind: "list_retention_pins"}) as readonly import("./ExecutionStoreProtocol.js").ExecutionRetentionPin[];
@@ -529,6 +577,10 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   async readRunTree(rootRunId: string): Promise<RunTreeRecoveryRecords | null> {
     return await this.request({kind: "read_run_tree", rootRunId}) as RunTreeRecoveryRecords | null;
   }
+  async readRunTreeMembers(rootRunId: string, cursor: import("./RunTreeMembership.js").RunTreeMembershipCursor | null = null,
+    limit = 128): Promise<import("./RunTreeMembership.js").RunTreeMembershipPage> {
+    return await this.request({kind: "read_run_tree_members", rootRunId, cursor, limit}) as import("./RunTreeMembership.js").RunTreeMembershipPage;
+  }
   async prepareConversationHandoff(sourceRunId: string, sessionId: string): Promise<import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff> {
     return await this.request({kind: "prepare_conversation_handoff", sourceRunId, sessionId}) as import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff;
   }
@@ -575,11 +627,13 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
   private async record(record: ActionOwnerRecord): Promise<ExecutionRecordReceipt> {
     return await this.request({ kind: "record_action", record }) as ExecutionRecordReceipt;
   }
-  private request(command: ExecutionStoreCommand, closing = false): Promise<ExecutionStoreValue> {
+  get workTiming(){return this.diagnostics?.workTiming;}
+  private request(command: ExecutionStoreCommand, closing = false, observation:ExecutionDiagnosticContext={}): Promise<ExecutionStoreValue> {
     if (this.failure || this.closed || this.closing) return Promise.reject(new ExecutionStoreError(this.failure ?? "execution_store_closed", {cause: this.failureCause}));
     let packed: ReturnType<ExecutionContentEncoder["pack"]>;
     const id = ++this.nextId;
-    const context = {...commandContext(command), generation: this.generation, requestId: id, workerThreadId: this.worker.threadId};
+    const context = {callerOwner:"unknown",callerPurpose:"unknown",...observation,...commandContext(command),workInvocation:diagnosticInvocation()??null,storageInstanceId:this.hostSession,
+      generation: this.generation, requestId: id, workerThreadId: this.worker.threadId,queuedBehindRequestId:this.queue.at(-1)?.id??this.flight?.id??null};
     const endRequest = beginExecutionTiming(this.diagnostics, "storage.host.request", context);
     const endEncoding = beginExecutionTiming(this.diagnostics, "storage.host.encode", context);
     try { packed = this.contentEncoder.pack(command); endEncoding("ok", this.contentEncoder.statistics.take()); }
@@ -667,7 +721,8 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
     request.endWorkerWait = beginExecutionTiming(this.diagnostics, "storage.host.worker_start_wait", context);
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.fail("execution_storage_acknowledgement_unknown", undefined, "storage_acknowledgement_timeout"), EXECUTION_STORE_LIMITS.acknowledgementMs);
-    try { this.worker.postMessage({ id: request.id, generation: this.generation, command }); }
+    const diagnosticContext=this.diagnostics?.performance?safeExecutionPerformanceEvent({id:"wire",stage:"wire",kind:"started",occurredAt:"",context}).context:undefined;
+    try { this.worker.postMessage({ id: request.id, generation: this.generation, command, diagnosticContext }); }
     catch (error) { this.fail("execution_storage_acknowledgement_unknown", error, "storage_dispatch"); }
   }
   private fail(code: string, cause?: unknown, stage = "storage_protocol"): void {
@@ -715,7 +770,9 @@ export class HelarcExecutionStore implements ActionRecordPort, ActionRecoveryRec
 function commandContext(command?: ExecutionStoreCommand): ExecutionDiagnosticContext {
   if (!command) return {};
   const base = {command: command.kind};
-  if(command.kind==="activity_handoff")return {...base,...activityCommandObservation(command.command)};
+  if(command.kind==="accept_shared")return {...base,runId:command.proposal.scope,recordId:command.proposal.id,
+    callerOwner:command.proposal.actor,callerPurpose:"shared-acceptance",operationId:command.proposal.id};
+  if(command.kind==="activity_handoff")return {...base,...activityCommandObservation(command.command),returnKind:command.returnKind??"content"};
   const run = command.kind === "commit_run_tree" ? command.commit.runs[0]
     : command.kind === "commit_owner" && command.commit.kind === "run" ? command.commit.value : null;
   if (run) return {...base, runId: run.state.run.id, commitId: run.id, revision: run.state.revision,
@@ -724,7 +781,7 @@ function commandContext(command?: ExecutionStoreCommand): ExecutionDiagnosticCon
     treeCommitId: command.kind === "commit_run_tree" ? command.commit.id : null};
   if (command.kind === "commit_run_tree") return {...base, treeCommitId: command.commit.id, runId: command.commit.checkpoint.input.rootRunId};
   if ("runId" in command) return {...base, runId: command.runId};
-  if ("rootRunId" in command) return {...base, runId: command.rootRunId};
+  if ("rootRunId" in command && command.rootRunId!==undefined) return {...base, runId: command.rootRunId};
   if ("recordId" in command) return {...base, recordId: command.recordId};
   if (command.kind === "file_material") return {...base, materialOperation: command.command.kind};
   return base;

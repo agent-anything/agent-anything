@@ -1,6 +1,6 @@
 import {createHelarcTaskInputSources} from "@agent-anything/helarc/prompt";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {TASK_MODEL_RESPONSE_PURPOSE,validateTaskDecisionSource,type TaskModelSource} from "@agent-anything/agent-runtime/decision";
+import {TASK_MODEL_RESPONSE_PURPOSE,validateTaskDecisionSource,requireTurnTaskInput,type TaskModelSource} from "@agent-anything/agent-runtime/decision";
 import {acceptedConversationRepresentationContinuity} from "@agent-anything/agent-runtime/context-representation";
 import {createHelarcOriginalInputSupply,type HelarcOriginalInputSupplyPorts} from "./HelarcOriginalInputSupply.js";
 
@@ -20,11 +20,11 @@ export function helarcTaskInputSourceRules():Pick<HelarcOriginalInputSupplyPorts
         throw new TypeError("helarc_task_original_source_changed");
       validateTaskDecisionSource(source.record);
     },
-  },describe:basis=>({
+  },describe:basis=>{requireTurnTaskInput(basis.source.record.source);return {
     sources:createHelarcTaskInputSources(basis.source.record,basis.source.request),
     recipient:{runId:basis.consumer.intent.runId,recipient:basis.source.record.source.agent.id,purpose:basis.source.request.purpose},
     observation:{sequence:basis.source.record.source.iteration,representationContinuity:acceptedConversationRepresentationContinuity(basis.source.record.source.interaction)},
-  })};
+  };}};
 }
 export function createHelarcTaskInputSupply(ports:HelarcTaskInputSupplyPorts) {
   return createHelarcOriginalInputSupply({...ports,...helarcTaskInputSourceRules()});

@@ -53,7 +53,7 @@ import { decodeStructuredGenerationOutput } from "../structured-generation/Struc
 
 const PROVIDER_ID = "openai-compatible.chat-completions";
 import { nativeInputAccounting, normalizedUsageMetadata, isOfficialDeepSeek, deepSeekGenerationRoom, DEEPSEEK_ACCOUNTING_REVISION } from "../accounting/ProviderInputAccounting.js";
-import {createEncodedModelInput, verifyEncodedModelInput, type EncodedModelInput} from "@agent-anything/model-interaction/input";
+import {createEncodedModelInput, verifyEncodedModelInput, modelInputValueDigest, ModelInputEncodingUnsupportedError, type EncodedModelInput} from "@agent-anything/model-interaction/input";
 const MAX_RESPONSE_TEXT_LENGTH = 64_000;
 
 interface OpenAICompatibleHttpErrorDiagnostic {
@@ -192,6 +192,8 @@ export class OpenAICompatibleProvider implements Provider {
   }
 
   private readonly config: Readonly<OpenAICompatibleProviderConfig>;
+
+  get inputTargetDigest():string {return modelInputValueDigest(encodedTarget(this.config));}
 
   verifyEncodedInput(request:ProviderRequest,input:EncodedModelInput):void {
     verifyEncodedModelInput(input,{request,target:encodedTarget(this.config),adapterRevision:"openai-compatible.encoded.v1",endpoint:this.endpointUrl(),mode:input.mode});
@@ -545,19 +547,17 @@ function encodeOpenAINativeMessages(
       continue;
     }
 
-    let text = "";
-    let textBlockCount = 0;
+    const textParts:{type:"text";text:string}[]=[];
     let sawCall = false;
     const calls: unknown[] = [];
     for (const block of message.content) {
       if (block.kind === "text") {
-        if (sawCall || textBlockCount > 0) {
-          throw new TypeError(
-            "OpenAI-compatible assistant history must use at most one text block before Tool calls.",
+        if (sawCall) {
+          throw new ModelInputEncodingUnsupportedError("assistant_content_order_unsupported",
+            "OpenAI-compatible assistant history cannot move text across Tool calls.",
           );
         }
-        textBlockCount += 1;
-        text += block.text;
+        textParts.push({type:"text",text:block.text});
       } else {
         sawCall = true;
         if (
@@ -576,9 +576,11 @@ function encodeOpenAINativeMessages(
         });
       }
     }
+    if(textParts.length>1&&config.service==="deepseek")throw new ModelInputEncodingUnsupportedError("assistant_content_shape_unsupported",
+      "This configured service requires a single assistant text body.");
     encoded.push({
       role: "assistant",
-      content: text.length === 0 ? null : text,
+      content: textParts.length>1?textParts:textParts[0]?.text||null,
       ...encodeReasoningHistory(message, config),
       ...(calls.length === 0 ? {} : { tool_calls: calls }),
     });

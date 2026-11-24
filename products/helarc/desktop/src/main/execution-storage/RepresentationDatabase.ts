@@ -82,9 +82,11 @@ export class RepresentationDatabase {
         if(!inherited)throw new TypeError("representation_inherited_loss_missing");requireSame(inherited,loss);
       }
     }
-    if(record.method)relationships.push(relation("produces",object("activity",record.method.activityId,record.runId),subject),
-      relation("transforms",object("activity",record.method.rawResultId,record.runId),subject),
-      relation("settles",object("shared_acceptance",record.method.acceptanceId,record.runId),subject));
+    if(record.method){const owner=record.method.protocolConfirmation?"protocol-execution":"activity";
+      relationships.push(relation("produces",object(owner,record.method.activityId,record.runId),subject),
+        relation("transforms",object(owner,record.method.rawResultId,record.runId,record.method.protocolConfirmation?.rawRevision??null),subject),
+        relation("settles",object(record.method.protocolConfirmation?"protocol-execution":"shared_acceptance",record.method.acceptanceId,record.runId,
+          record.method.protocolConfirmation?.acceptanceRevision??null),subject));}
     for(const range of [record.body,...record.details])relationships.push(relation("observes",subject,object("material_custody",range.materialId,null,range.version)));
     for(const restoration of record.restorations) {
       const loss=record.losses.find(value=>value.id===restoration.lossId),judgment=this.judgment(restoration.judgmentId);

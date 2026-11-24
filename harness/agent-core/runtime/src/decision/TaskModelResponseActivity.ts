@@ -9,6 +9,7 @@ import {TaskResponseBindingError} from "./TaskResponseBindingError.js";
 import {createTaskModelResponseHandoff, readTaskModelResponseHandoff, type TaskModelResponseHandoff, type TaskModelResponseObservation} from "./TaskModelResponseHandoff.js";
 import {TaskModelResponseWork, type TaskModelSource} from "./TaskModelResponsePath.js";
 import {TaskDecisionActivityError} from "./TaskDecisionActivityError.js";
+import {modelRequestInputFailure} from "./ModelRequestInputFailure.js";
 import {RetryInvocationInvalidatedError} from "../retry/RetryWaitControl.js";
 import {ActivityChangeWait as ResultWake} from "../activity/ActivityChangeWait.js";
 import {ActivityObservationCursor,type ActivityChangeInterest} from "../activity/ActivityObservation.js";
@@ -83,9 +84,11 @@ export class TaskModelResponseActivity<T = unknown> implements TaskDecisionActiv
     if (!receipt) return null;
     if (receipt.digest !== retained.digest || receipt.scope !== input.runId) throw new TaskResponseBindingError("task_response_submission_changed");
     if (receipt.outcome === "rejected") return null;
-    await readTaskModelResponseHandoff(this.ports.activities, retained.handoff);
-    const path = await this.ports.activities.command({kind: "read_path", pathId: retained.handoff.pathId}) as ActivityPathState | null;
-    if (!path || path.intent.runId !== input.runId) throw new TaskResponseBindingError("task_response_original_path_unavailable");
+    const snapshot=await this.ports.activities.command({kind:"observe_state",pathId:retained.handoff.pathId,requestIds:[],inputNeedIds:[]}) as import("../activity/ActivityObservation.js").ActivityStateObservation;
+    const path=snapshot.path;
+    if (!path || path.intent.id!==retained.handoff.pathId||path.intent.runId !== input.runId||
+      path.intent.owner!==this.ports.work.purpose.contract.acceptanceOwner||path.intent.purpose.digest!==retained.handoff.purposeDigest||
+      modelInputValueDigest(path.intent.purpose.contract)!==retained.handoff.purposeDigest) throw new TaskResponseBindingError("task_response_original_path_unavailable");
     if (!path.cancelled) {
       // Compare-and-set failure is not success; the caller can recover the original handoff again.
       await this.ports.activities.command({kind: "cancel", pathId: path.intent.id, expectedControlRevision: path.controlRevision});
@@ -124,14 +127,20 @@ export class TaskModelResponseActivity<T = unknown> implements TaskDecisionActiv
     try {
       while (true) {
         const version = wake.version;
-        if(await cursor.changed())observed = await readTaskModelResponseHandoff<T>(this.ports.activities, retained.handoff);
+        if(await cursor.changed()) {
+          const state=await this.ports.activities.command({kind:"observe_state",pathId:retained.handoff.pathId,requestIds:[],
+            inputNeedIds:[`${retained.handoff.pathId}:input-need`]}) as import("../activity/ActivityObservation.js").ActivityStateObservation;
+          if(!state.path||state.path.intent.runId!==retained.handoff.runId||state.path.intent.purpose.digest!==retained.handoff.purposeDigest)
+            throw new TaskResponseBindingError("task_response_original_path_unavailable");
+          observed=state.path.cancelled||state.stages.some(stage=>stage?.status==="accepted"||stage?.status==="settled")?
+            await readTaskModelResponseHandoff<T>(this.ports.activities,retained.handoff):
+            {kind:"pending",control:{revision:state.path.controlRevision,cancelled:false},stage:null};
+        }
         if(!observed)throw new TaskResponseBindingError("task_response_observation_missing");
         if(observed.kind==="input_unavailable") {
           if(interrupting)return null;
-          throw new TaskDecisionActivityError({kind:"input_preparation",failure:{code:"context_input_unavailable",
-            message:`The original input need could not be supplied: ${observed.progress.limitation.reason}.`,retryable:false,
-            metadata:{pathId:retained.handoff.pathId,stageId:observed.stage.request.id,rawResultId:observed.progress.rawResultId,
-              acceptanceId:observed.stage.receipt!.id,limitation:observed.progress.limitation}}},"settled_failure");
+          throw new TaskDecisionActivityError(modelRequestInputFailure({pathId:retained.handoff.pathId,stageId:observed.stage.request.id,
+            rawResultId:observed.progress.rawResultId,acceptanceId:observed.stage.receipt!.id,limitation:observed.progress.limitation}),"settled_failure");
         }
         if (observed.kind === "accepted" || observed.kind === "settled_response") {
           if (interrupting && observed.progress.state !== "interpreted" && !observed.progress.exchange) return null;

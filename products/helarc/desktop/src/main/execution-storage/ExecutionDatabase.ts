@@ -1,16 +1,23 @@
 import Database from "better-sqlite3";
-import {helarcConversationSeed, type HelarcConversationHandoff} from "../run/HelarcConversationHandoff.js";
-import {snapshotModelConversationSeed} from "@agent-anything/agent-runtime/decision";
+import {RESPONSES_COMPACT_METHOD} from "@agent-anything/provider-integrations/native";
+import {EXECUTION_ADMISSION_RESOLUTION_SCHEMA, type ExecutionAdmissionResolution} from "./ExecutionAdmissionResolution.js";
+import {activityCommandReceipt} from "@agent-anything/agent-runtime/activity";
+import {ProtocolExecutionDatabase,PROTOCOL_EXECUTION_SCHEMA,PROTOCOL_RECONCILIATION_SCHEMA,PROTOCOL_ADMISSION_SCHEMA} from "./ProtocolExecutionDatabase.js";
+import {PROTOCOL_EVIDENCE_SCHEMA,PROTOCOL_USAGE_ACCESS_SCHEMA} from "./ProtocolEvidenceDatabase.js";
+import {ACTIVITY_RECONSIDERATION_ACCESS_SCHEMA} from "./ActivityReconsiderationDatabase.js";
+import {MaterialDeliveryDatabase,MATERIAL_DELIVERY_SCHEMA,MATERIAL_DELIVERY_ACCESS_SCHEMA} from "./MaterialDeliveryDatabase.js";
+import {helarcConversationSeed,helarcNativeConversationSeed, type HelarcConversationHandoff} from "../run/HelarcConversationHandoff.js";
+import {snapshotTaskInteractionSeed,isNativeTaskSeed} from "@agent-anything/agent-runtime/decision";
 import {HELARC_CONTROLLER_CAPABILITY} from "@agent-anything/helarc/controller";
 import {contextDeliveryFactSource,contextDeliveryFact,inputSupplyFactSource} from "@agent-anything/agent-runtime/context-representation";
-import {validHelarcRunCredentialBinding} from "../provider/HelarcRunCredentialBinding.js";
-import {validateHelarcContextRunBinding} from "../context/HelarcContextRunBinding.js";
+import {validateRetainedExecutionAdmission,originalPreparationLimitation} from "./HelarcExecutionAdmissionValidation.js";
 import {ActivityHandoffDatabase, ACTIVITY_HANDOFF_SCHEMA} from "./ActivityHandoffDatabase.js";
 import {SharedAcceptanceDatabase, SHARED_ACCEPTANCE_SCHEMA} from "./SharedAcceptanceDatabase.js";
+import {reportRecipientAdmission} from "./ReportRecipientAdmission.js";
 import {ContextFoundationRecords,CONTEXT_FOUNDATION_FACT_SCHEMA} from "./ContextFoundationRecords.js";
 import {MaterialCustodyDatabase,MATERIAL_CUSTODY_SCHEMA} from "./MaterialCustodyDatabase.js";
 import {RepresentationDatabase,REPRESENTATION_SCHEMA} from "./RepresentationDatabase.js";
-import {ContextSelectionDatabase,CONTEXT_SELECTION_SCHEMA} from "./ContextSelectionDatabase.js";
+import {ContextSelectionDatabase,CONTEXT_SELECTION_SCHEMA,CONTEXT_SELECTION_ACCESS_SCHEMA} from "./ContextSelectionDatabase.js";
 import {ContextPreparationDecisionDatabase,CONTEXT_PREPARATION_DECISION_SCHEMA} from "./ContextPreparationDecisionDatabase.js";
 import {ModelInputUsageDatabase,MODEL_INPUT_USAGE_SCHEMA} from "./ModelInputUsageDatabase.js";
 import {InputSupplyResponsibilityDatabase,INPUT_SUPPLY_RESPONSIBILITY_SCHEMA} from "./InputSupplyResponsibilityDatabase.js";
@@ -28,6 +35,7 @@ import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
 import {snapshotExecutionReferenceTransfer, type ExecutionReferenceTransfer, type ExecutionReferencePage} from "@agent-anything/operation-catalog/evidence";
 import type { HelarcExecutionAdmission, HelarcExecutionDiscovery } from "./HelarcExecutionAdmission.js";
 import { createHash } from "node:crypto";
+import {helarcAcceptedObservation} from "../context/HelarcAcceptedObservation.js";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalEncode } from "@agent-anything/canonical-action/subject";
@@ -47,8 +55,9 @@ import {
   type FileMaterialStoreCommand, type FileMaterialStoreValue,
 } from "./ExecutionStoreProtocol.js";
 
-const FORMAT = 43;
-const SCHEMA = `
+const FORMAT = 50;
+const ADDITIONS=PROTOCOL_EXECUTION_SCHEMA+MATERIAL_DELIVERY_SCHEMA;
+const FORMAT_43_SCHEMA = `
 CREATE TABLE store (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, generation INTEGER NOT NULL);
 CREATE TABLE execution_content (id TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE action_records (
@@ -106,6 +115,27 @@ ${CONTEXT_PREPARATION_DECISION_SCHEMA}
 ${MODEL_INPUT_USAGE_SCHEMA}
 ${INPUT_SUPPLY_RESPONSIBILITY_SCHEMA}
 `;
+const FORMAT_44_SCHEMA=FORMAT_43_SCHEMA+ADDITIONS;
+const FORMAT_45_SCHEMA=FORMAT_44_SCHEMA+PROTOCOL_EVIDENCE_SCHEMA;
+const FORMAT_46_SCHEMA=FORMAT_45_SCHEMA+PROTOCOL_RECONCILIATION_SCHEMA;
+const MEMBERSHIP_INDEX="CREATE INDEX run_tree_members_root ON run_tree_members(root_run_id);";
+const FORMAT_47_SCHEMA=FORMAT_46_SCHEMA+MEMBERSHIP_INDEX;
+const RETENTION_INDEXES="CREATE INDEX protocol_effects_activity ON protocol_effects(activity_id);CREATE INDEX protocol_deliveries_activity ON protocol_deliveries(activity_id);";
+const FORMAT_48_SCHEMA=FORMAT_47_SCHEMA+EXECUTION_ADMISSION_RESOLUTION_SCHEMA+RETENTION_INDEXES;
+const FORMAT_49_SCHEMA=FORMAT_48_SCHEMA+PROTOCOL_ADMISSION_SCHEMA;
+const FORMAT_50_ADDITIONS=PROTOCOL_USAGE_ACCESS_SCHEMA+ACTIVITY_RECONSIDERATION_ACCESS_SCHEMA+MATERIAL_DELIVERY_ACCESS_SCHEMA+CONTEXT_SELECTION_ACCESS_SCHEMA;
+const SCHEMA=FORMAT_49_SCHEMA+FORMAT_50_ADDITIONS;
+const schemaManifests=new Map<number,unknown>();
+function supportedSchema(format:number):unknown {
+  if(![43,44,45,46,47,48,49,50].includes(format))throw new ExecutionStoreError("execution_store_format_invalid");
+  let manifest=schemaManifests.get(format);
+  if(!manifest){
+    const reference=new Database(":memory:");
+    try{reference.exec(format===43?FORMAT_43_SCHEMA:format===44?FORMAT_44_SCHEMA:format===45?FORMAT_45_SCHEMA:format===46?FORMAT_46_SCHEMA:format===47?FORMAT_47_SCHEMA:format===48?FORMAT_48_SCHEMA:format===49?FORMAT_49_SCHEMA:SCHEMA);manifest=reference.prepare("SELECT name,type,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all();schemaManifests.set(format,manifest);}
+    finally{reference.close();}
+  }
+  return manifest;
+}
 interface ProcessRow { execution_id: string; run_id: string; revision: number; digest: string; value: string; }
 interface StoredActionRow {
   sequence: number; record_id: string; generation: number; run_id: string;
@@ -130,8 +160,11 @@ export class ExecutionDatabase {
   private readonly contextPolicy:ContextPreparationDecisionDatabase;
   private readonly inputUsage:ModelInputUsageDatabase;
   private readonly inputSupplies:InputSupplyResponsibilityDatabase;
+  private readonly protocolExecution:ProtocolExecutionDatabase;
+  private readonly materialDeliveries:MaterialDeliveryDatabase;
   private closed = false;
   private readonly statements = new Map<string, Database.Statement>();
+  private readonly runControls = new Map<string, import("./RunExecutionControl.js").RunExecutionControl>();
   private readonly contentStatistics: ExecutionContentStatistics;
   private readonly contentCache: ExecutionContentCache;
   private readonly contentEncoder: ExecutionContentEncoder;
@@ -172,11 +205,21 @@ export class ExecutionDatabase {
       this.fileMaterials = new FileMaterialDatabase(data);
       this.contextMaterials = new ContextMaterialDatabase(data);
       this.contextPreparations = new ContextPreparationDatabase(data, value => this.retainContent(value), root => this.hydrateContent(root));
-      this.activityHandoffs = new ActivityHandoffDatabase(data, value => this.retainContent(value), root => this.hydrateContent(root),()=>this.generation);
+      this.activityHandoffs = new ActivityHandoffDatabase(data, value => this.retainContent(value), root => this.hydrateContent(root),()=>this.generation,
+        work=>this.checkpointTransaction(work),(phase,work)=>this.timed(`activity.${phase}`,work));
       this.contextFoundationRecords=new ContextFoundationRecords(data);
-      this.materialCustody=new MaterialCustodyDatabase(data,this.contextFoundationRecords,undefined,hold=>this.contextSelections.mayRelease(hold));
+      this.materialCustody=new MaterialCustodyDatabase(data,this.contextFoundationRecords,undefined,hold=>this.contextSelections.mayRelease(hold)&&this.materialDeliveries.mayRelease(hold),
+        (name,value)=>this.contentStatistics.add(name,value));
+      this.protocolExecution=new ProtocolExecutionDatabase(data,()=>this.generation,(activity,input,existing)=>this.contextSelections.claimNativeInput(activity,input,existing),
+        runId=>this.readRunControl(runId),state=>helarcAcceptedObservation(state,(pathId,stageId)=>
+          this.activityHandoffs.command({kind:"read_snapshot",pathId,requestIds:[stageId],inputNeedIds:[]}).activityValue as import("@agent-anything/agent-runtime/activity").ActivitySnapshot));
+      this.materialDeliveries=new MaterialDeliveryDatabase(data,this.materialCustody,hold=>this.contextSelections.deliveryGuard(hold));
       this.representations=new RepresentationDatabase(data,this.contextFoundationRecords,this.materialCustody,record=>!record.method||
-        this.activityHandoffs.confirmProfessionalResult(record.runId,record.owner,record.method.activityId,record.method.rawResultId,record.method.acceptanceId));
+        (record.method.protocolConfirmation?record.method.id===RESPONSES_COMPACT_METHOD.id&&record.method.revision===RESPONSES_COMPACT_METHOD.revision&&
+          this.protocolExecution.confirmProfessionalResult(record.runId,record.owner,record.target,record.method.activityId,{protocol:"openai.responses",nativeKind:"response.compaction"},
+          {id:record.method.rawResultId,revision:record.method.protocolConfirmation.rawRevision},
+          {id:record.method.acceptanceId,revision:record.method.protocolConfirmation.acceptanceRevision}):
+        this.activityHandoffs.confirmProfessionalResult(record.runId,record.owner,record.method.activityId,record.method.rawResultId,record.method.acceptanceId)));
       this.contextSelections=new ContextSelectionDatabase(data,this.contextFoundationRecords,this.materialCustody,this.representations,
         value=>this.retainContent(value),root=>this.hydrateContent(root),(...args)=>this.activityHandoffs.confirmInputResult(...args),
         (...args)=>this.activityHandoffs.confirmInputAttempt(...args),path=>this.activityHandoffs.pathSettled(path),
@@ -191,13 +234,20 @@ export class ExecutionDatabase {
           readFact:id=>this.activityHandoffs.command({kind:"read_fact",id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPublishedFact|null,
           subscription:id=>this.activityHandoffs.command({kind:"read_reconsideration_state",subscriptionId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityReconsiderationState|null,
           stage:id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null,
-        });
+        },this.protocolExecution.contextConsumer());
       this.contextPolicy=new ContextPreparationDecisionDatabase(this.contextFoundationRecords,value=>this.retainContent(value),root=>this.hydrateContent(root),
         id=>this.contextSelections.registeredScope(id),id=>this.activityHandoffs.command({kind:"read_path",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState|null,
         id=>this.activityHandoffs.pathSettled(id),
         id=>this.activityHandoffs.command({kind:"resource_allowance",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityResourceAllowance,
         (runId,input)=>this.confirmPreparedInput(runId,input),id=>this.sharedAcceptance.query(id),
-        id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null);
+        id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null,
+        input=>{const judgment=this.representations.judgment(input.judgmentId);
+          return Boolean(judgment&&judgment.kind==="combination"&&judgment.owner===input.scope.owner&&judgment.runId===input.scope.runId&&
+            judgment.purpose===input.scope.purpose&&judgment.target===input.scope.target&&judgment.dependencies.inputDigest===input.exactInputDigest&&
+            judgment.dependencies.bodyDigest===input.bodyDigest&&(!input.allowed||judgment.conclusion==="supported")&&
+            (!input.capacity||judgment.dependencies.capacityDigest===modelInputValueDigest(input.capacity)));},
+        input=>this.contextSelections.confirmsRecipientReadiness(input),
+        (input,scope)=>this.protocolExecution.confirmInputRejection(input,scope)&&this.contextSelections.confirmsRecipientRejection(input,scope));
       this.inputSupplies=new InputSupplyResponsibilityDatabase(this.contextFoundationRecords,{
         settled:id=>this.activityHandoffs.pathSettled(id),
         closure:id=>this.activityHandoffs.reconsiderationClosure(id),
@@ -211,11 +261,14 @@ export class ExecutionDatabase {
         this.activityHandoffs.command({kind:"register_fact_source",source});
         this.activityHandoffs.command({kind:"publish_fact",fact:{id:`${source.id}:${kind}:${revision}`,sourceId:source.id,
           ref:{owner:binding.owner,kind:`input_supply_${kind}`,id:binding.needId,revision:String(revision)}}});
-      });
+      },id=>this.contextSelections.inputSupplySelection(id));
       this.inputUsage=new ModelInputUsageDatabase(this.contextFoundationRecords,
         id=>this.activityHandoffs.command({kind:"read_stage",requestId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState|null,
         id=>this.activityHandoffs.command({kind:"read_path",pathId:id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState|null);
-      this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants(),this.contextPolicy.participant(),this.inputSupplies.participant(),this.inputUsage.participant()]);
+      this.sharedAcceptance = new SharedAcceptanceDatabase(data,[this.activityHandoffs.acceptanceParticipant(),this.materialCustody.participant(),this.representations.participant(),...this.contextSelections.participants(),this.contextPolicy.participant(),this.inputSupplies.participant(),this.inputUsage.participant(),this.protocolExecution.participant(),this.materialDeliveries.participant(),
+        reportRecipientAdmission(id=>this.readRunControl(id),id=>this.activityHandoffs.command({kind:"read_fact",id}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPublishedFact|null,
+          (...args)=>this.materialCustody.withdrawGrant(...args))],
+        (phase,work)=>this.timed(`shared_acceptance.${phase}`,work));
       this.materialTransfers=new RunMaterialTransfers(this.contextMaterials,this.materialCustody,this.sharedAcceptance,runId=>{
         const head=this.readLatestOwner("run",runId);return head?.kind==="run"?head.value:null;
       });
@@ -230,6 +283,13 @@ export class ExecutionDatabase {
         data!.exec(SCHEMA);
         data!.prepare("INSERT INTO store VALUES (1, ?, 0)").run(FORMAT);
       })();
+      if(!fresh){
+        const version=data.prepare("SELECT version FROM store WHERE id=1").get() as {version:number}|undefined;
+        if(version?.version===43||version?.version===44||version?.version===45||version?.version===46||version?.version===47||version?.version===48||version?.version===49){
+          this.validateSchema(version.version);
+          data.transaction(()=>{data!.exec((version.version===43?ADDITIONS:"")+(version.version<45?PROTOCOL_EVIDENCE_SCHEMA:"")+(version.version<46?PROTOCOL_RECONCILIATION_SCHEMA:"")+(version.version<47?MEMBERSHIP_INDEX:"")+(version.version<48?EXECUTION_ADMISSION_RESOLUTION_SCHEMA+RETENTION_INDEXES:"")+(version.version<49?PROTOCOL_ADMISSION_SCHEMA:"")+FORMAT_50_ADDITIONS);data!.prepare("UPDATE store SET version=? WHERE id=1").run(FORMAT);this.validateSchema();})();
+        }
+      }
       this.validateSchema();
       this.generation = data.transaction(() => {
         const row = data!.prepare("SELECT generation FROM store WHERE id=1").get() as { generation: number };
@@ -247,6 +307,15 @@ export class ExecutionDatabase {
     }
   }
 
+  recordingReplayBounds(generation:number,rootRunId:string):import("./ExecutionRecording.js").RecordingReplayBounds {
+    this.assertOwner(generation);token(rootRunId);
+    return this.statement(`SELECT
+      (SELECT COALESCE(MAX(rowid),0) FROM run_tree_members WHERE root_run_id=?) AS members,
+      (SELECT COALESCE(MAX(sequence),0) FROM activity_facts) AS activity,
+      (SELECT COALESCE(MAX(sequence),0) FROM context_foundation_facts) AS context,
+      (SELECT COALESCE(MAX(sequence),0) FROM protocol_facts) AS protocol,
+      (SELECT COALESCE(MAX(sequence),0) FROM material_delivery_facts) AS material`).get(rootRunId) as import("./ExecutionRecording.js").RecordingReplayBounds;
+  }
   registerRecording(generation: number, current: ExecutionRecording): ExecutionRecordingRegistration {
     this.assertOwner(generation);
     assertExecutionRecording(current);
@@ -317,13 +386,26 @@ export class ExecutionDatabase {
   }
   takeContextMaterialObservations() {return this.contextMaterials.takeObservations();}
 
+  protocolJournalCommand(generation:number,command:import("@agent-anything/agent-runtime/model-access").ProtocolJournalCommand) {
+    this.assertOwner(generation);return this.timed(`protocol_journal.${command.kind}`,()=>({protocolJournalValue:this.protocolExecution.command(command)}));
+  }
+  materialDeliveryQuery(generation:number,query:import("@agent-anything/context/custody").MaterialDeliveryQuery){
+    this.assertOwner(generation);return this.timed(`material_delivery.${query.kind}`,()=>({materialDeliveryValue:this.materialDeliveries.query(query)}));
+  }
+  materialDeliveryFacts(generation:number,runId:string,after:number,limit:number){
+    this.assertOwner(generation);return {materialDeliveryFacts:this.materialDeliveries.facts(runId,after,limit)};
+  }
+  takeProtocolObservations(){return this.closed?[]:this.protocolExecution.takeObservations();}
+  takeMaterialDeliveryObservations(){return this.closed?[]:this.materialDeliveries.takeObservations();}
+
   contextPreparationCommand(generation: number, command: ContextPreparationCommand): {preparationValue: unknown} {
     this.assertOwner(generation);
     return this.timed(`context_preparation.${command.kind}`, () => this.contextPreparations.command(command));
   }
 
-  activityHandoffCommand(generation: number, command: import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand) {
+  activityHandoffCommand(generation: number, command: import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand,returnKind?:"receipt") {
     this.assertOwner(generation);
+    if(returnKind&&!["admit","save_raw","claim_processing","accept","settle"].includes(command.kind))throw new TypeError("activity_command_receipt_unsupported");
     if (command.kind === "claim_processing" && command.claim.executor.generation !== generation ||
         (command.kind === "accept" || command.kind === "settle") && command.executor.generation !== generation) throw new ExecutionStoreError("activity_processing_owner_stale");
     return this.timed(`activity_handoff.${command.kind}`, () => {
@@ -335,16 +417,17 @@ export class ExecutionDatabase {
         return {activityValue:this.activityHandoffs.command({kind:"read_reconsideration",subscriptionId:command.receipt.subscriptionId,limit:1}).activityValue};
       }
       if (command.kind === "accept" || command.kind === "settle" || command.kind === "stop_professional_path") {
-        const stage = this.activityHandoffs.command({kind:"read_stage",requestId:command.receipt.requestId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState | null;
-        const path = stage ? this.activityHandoffs.command({kind:"read_path",pathId:stage.request.pathId}).activityValue as import("@agent-anything/agent-runtime/activity").ActivityPathState : null;
+        const path = this.activityHandoffs.stageScope(command.receipt.requestId);
         if (!path) throw new ExecutionStoreError("activity_stage_missing");
         const receipt = this.sharedAcceptance.accept({id:command.receipt.id,scope:path.intent.runId,actor:command.receipt.owner,
           parts:[{owner:"activity",kind:command.kind==="stop_professional_path"?"professional_stop":command.kind==="settle"?"result_settlement":"professional_acceptance",proposal:command},
             ...("participants" in command?command.participants??[]:[])]});
         if (receipt.outcome === "rejected") throw new ExecutionStoreError(receipt.rejection!.code);
+        if(returnKind&&command.kind!=="stop_professional_path")return {activityValue:this.activityHandoffs.stageReceipt(command.receipt.requestId,command.kind)};
         return this.activityHandoffs.command({kind:"read_stage",requestId:command.receipt.requestId});
       }
-      return this.activityHandoffs.command(command);
+      const result=this.activityHandoffs.command(command);
+      return returnKind?{activityValue:activityCommandReceipt(command,result.activityValue as import("@agent-anything/agent-runtime/activity").ActivityStageState)}:result;
     });
   }
 
@@ -515,17 +598,19 @@ export class ExecutionDatabase {
       }
       const scopes = [{sourceRunId, scope: {kind: "public_run" as const}}, ...this.readReferenceTransfers(sourceRunId).map(({sourceRunId, scope}) => ({sourceRunId, scope}))];
       const executionScopes = [...new Map(scopes.map(scope => [digest(scope), scope])).values()];
-      return {seed: helarcConversationSeed(initial.value, head.value), materialRefs: this.materialTransfers.visibleReferences(sourceRunId), executionScopes};
+      return {seed: source.version===4?helarcNativeConversationSeed(initial.value,head.value):helarcConversationSeed(initial.value, head.value),
+        materialRefs: this.materialTransfers.visibleReferences(sourceRunId), executionScopes};
     });
   }
 
   admitProductRun(generation: number, admission: HelarcExecutionAdmission): void {
     this.assertOwner(generation);
-    if (admission.version !== 3 || !Number.isFinite(Date.parse(admission.createdAt)) || !admission.commandEnvironment || !validHelarcRunCredentialBinding(admission.providerCredential,admission.providerProfile.id)) throw new ExecutionStoreError("execution_admission_invalid");
-    validateHelarcContextRunBinding(admission.contextBinding);
+    validateRetainedExecutionAdmission(admission);
     validateProtectedEnvironment(admission.commandEnvironment.environment);
     token(admission.rootRunId); token(admission.productRunId); token(admission.sessionId);
     this.checkpointTransaction(() => {
+      const resolution = this.resolveAdmission(admission.rootRunId, admission.productRunId);
+      if (resolution.status === "closed") throw new ExecutionStoreError("execution_admission_closed");
       const retained = this.readProductRun(admission.rootRunId);
       if (retained?.commandEnvironment.environment.digest === admission.commandEnvironment.environment.digest)
         admission = {...admission, commandEnvironment: {...admission.commandEnvironment, environment: retained.commandEnvironment.environment}};
@@ -535,9 +620,12 @@ export class ExecutionDatabase {
         if (previous.digest !== encoded.digest) throw new ExecutionStoreError("execution_admission_conflict");
         return;
       }
+      const unavailable=originalPreparationLimitation(admission);
+      if(unavailable)throw new TypeError(unavailable.code);
       const handoff = admission.conversationHandoff;
       if (handoff) {
-        snapshotModelConversationSeed(handoff.seed);
+        snapshotTaskInteractionSeed(handoff.seed);
+        if((admission.version===4)!==isNativeTaskSeed(handoff.seed))throw new ExecutionStoreError("conversation_protocol_import_unavailable");
         if (handoff.seed.sourceRunId === admission.rootRunId) throw new ExecutionStoreError("conversation_source_invalid");
         token(handoff.recipientAgent.id); token(handoff.recipientAgent.revision);
         const original = this.prepareConversationHandoff(handoff.seed.sourceRunId, admission.sessionId);
@@ -556,7 +644,95 @@ export class ExecutionDatabase {
         }
       }
       this.data.prepare("INSERT INTO product_admissions VALUES (?,?,?,0)").run(admission.rootRunId, encoded.digest, encoded.text);
+      this.writeAdmissionFence(admission.rootRunId, admission.productRunId, false);
     });
+  }
+
+  resolveAdmission(rootRunId: string, intentId: string): ExecutionAdmissionResolution {
+    this.assertOwner(this.generation);
+    token(rootRunId); token(intentId);
+    return this.resolveOriginalAdmission(rootRunId,intentId,this.readProductRun(rootRunId));
+  }
+
+  private resolveOriginalAdmission(rootRunId:string,intentId:string,basis:HelarcExecutionAdmission|null):ExecutionAdmissionResolution {
+    const row = this.statement("SELECT root_run_id,intent_id,closed,digest,value FROM execution_admission_fences WHERE root_run_id=? OR intent_id=?")
+      .get(rootRunId, intentId) as {root_run_id:string;intent_id:string;closed:number;digest:string;value:string} | undefined;
+    if (row) {
+      const value = JSON.parse(row.value);
+      if (digest(value) !== row.digest || value.rootRunId !== row.root_run_id || value.intentId !== row.intent_id ||
+          value.closed !== (row.closed === 1)) throw new ExecutionStoreError("execution_admission_corrupt");
+      if (row.root_run_id !== rootRunId || row.intent_id !== intentId) throw new ExecutionStoreError("execution_admission_identity_conflict");
+    }
+    if (basis && basis.productRunId !== intentId) throw new ExecutionStoreError("execution_admission_identity_conflict");
+    const initial = this.readOwnerCommit(`${rootRunId}:commit:0`);
+    const accepted = initial?.kind === "run" && initial.value.admission !== null;
+    if (accepted && (initial.value.state.run.id!==rootRunId||initial.value.admission!.lineage.root.id!==rootRunId))
+      throw new ExecutionStoreError("execution_admission_identity_conflict");
+    if (accepted && row?.closed === 1) throw new ExecutionStoreError("execution_admission_corrupt");
+    return {rootRunId, intentId, status: accepted ? "accepted" : row?.closed === 1 ? "closed" : basis ? "prepared" : "unknown",
+      acceptanceId: accepted ? initial.value.id : null};
+  }
+
+  readRunControl(runId:string):import("./RunExecutionControl.js").RunExecutionControl|null {
+    this.assertOwner(this.generation);token(runId);
+    return this.timed("run.control",()=>{
+      const row=this.statement("SELECT record_id FROM execution_commits WHERE owner='run' AND owner_id=? ORDER BY revision DESC LIMIT 1")
+        .get(runId) as {record_id:string}|undefined;
+      if(!row)return null;
+      const known=this.runControls.get(row.record_id);
+      if(known)return known;
+      const original=this.readOwnerCommit(row.record_id);
+      if(original?.kind!=="run"||original.value.state.run.id!==runId)throw new ExecutionStoreError("execution_records_corrupt");
+      const {state,control}=original.value;
+      const value=Object.freeze({runId,commitId:row.record_id,revision:state.revision,
+        cancelled:control.cancellation!==null||state.cancellationRequest!==null,terminal:state.settlement!==null});
+      this.runControls.set(row.record_id,value);
+      if(this.runControls.size>256)this.runControls.delete(this.runControls.keys().next().value!);
+      return value;
+    });
+  }
+
+  closeAdmission(generation: number, rootRunId: string, intentId: string): ExecutionAdmissionResolution {
+    this.assertOwner(generation);
+    return this.checkpointTransaction(() => {
+      const result = this.resolveAdmission(rootRunId, intentId);
+      if (result.status === "accepted" || result.status === "closed") return result;
+      this.writeAdmissionFence(rootRunId, intentId, true);
+      return {...result, status: "closed", acceptanceId: null};
+    });
+  }
+
+  readTreeControl(rootRunId:string):readonly import("./RunExecutionControl.js").RunExecutionControl[] {
+    this.assertOwner(this.generation);token(rootRunId);
+    return this.timed("run.tree-control",()=>this.data.transaction(()=>{
+      const membership=this.statement("SELECT root_run_id FROM run_tree_members WHERE run_id=?").get(rootRunId) as {root_run_id:string}|undefined;
+      if(membership&&membership.root_run_id!==rootRunId)throw new ExecutionStoreError("execution_admission_identity_conflict");
+      const root=this.readRunControl(rootRunId);
+      if(!root)return [];
+      const rows=this.statement("SELECT run_id FROM run_tree_members WHERE root_run_id=? AND run_id<>? ORDER BY run_id")
+        .all(rootRunId,rootRunId) as {run_id:string}[];
+      return [root,...rows.map(row=>{
+        const value=this.readRunControl(row.run_id);
+        if(!value)throw new ExecutionStoreError("execution_records_corrupt");
+        return value;
+      })];
+    })());
+  }
+
+  private writeAdmissionFence(rootRunId: string, intentId: string, closed: boolean): void {
+    const value = {rootRunId, intentId, closed};
+    this.statement("INSERT INTO execution_admission_fences VALUES (?,?,?,?,?) ON CONFLICT(root_run_id) DO UPDATE SET closed=excluded.closed,digest=excluded.digest,value=excluded.value")
+      .run(rootRunId, intentId, closed ? 1 : 0, digest(value), JSON.stringify(value));
+  }
+
+  private admissionClosed(rootRunId:string):boolean {
+    const row=this.statement("SELECT root_run_id,intent_id,closed,digest,value FROM execution_admission_fences WHERE root_run_id=?")
+      .get(rootRunId) as {root_run_id:string;intent_id:string;closed:number;digest:string;value:string}|undefined;
+    if(!row)return false;
+    const value=JSON.parse(row.value);
+    if(digest(value)!==row.digest||value.rootRunId!==rootRunId||value.intentId!==row.intent_id||value.closed!==(row.closed===1))
+      throw new ExecutionStoreError("execution_admission_corrupt");
+    return value.closed;
   }
 
   readProductRun(rootRunId: string): HelarcExecutionAdmission | null {
@@ -564,38 +740,55 @@ export class ExecutionDatabase {
     const row = this.data.prepare("SELECT digest,value FROM product_admissions WHERE root_run_id=?").get(rootRunId) as {digest: string; value: string} | undefined;
     if (!row) return null;
     const admission = this.readCheckpoint(row) as HelarcExecutionAdmission;
-    validateHelarcContextRunBinding(admission.contextBinding);
-    if (admission.rootRunId !== rootRunId || admission.version !== 3 || !validHelarcRunCredentialBinding(admission.providerCredential,admission.providerProfile.id)) {
+    validateRetainedExecutionAdmission(admission);
+    if (admission.rootRunId !== rootRunId) {
       throw new ExecutionStoreError("execution_admission_corrupt");
     }
     validateProtectedEnvironment(admission.commandEnvironment.environment);
-    if (admission.conversationHandoff) snapshotModelConversationSeed(admission.conversationHandoff.seed);
+    if (admission.conversationHandoff) snapshotTaskInteractionSeed(admission.conversationHandoff.seed);
     return admission;
   }
 
-  listProductRuns(): readonly HelarcExecutionDiscovery[] {
+  listProductRuns(filter?:"file_cleanup"|"undelivered"|{rootRunId:string}): readonly HelarcExecutionDiscovery[] {
     this.assertOwner(this.generation);
     return this.data.transaction(() => {
-      const rows = this.data.prepare("SELECT root_run_id,delivered FROM product_admissions").all() as {root_run_id: string; delivered: number}[];
+      const select="SELECT root_run_id,delivered FROM product_admissions";
+      const rows=(typeof filter==="object"?this.statement(select+" WHERE root_run_id=?").all(filter.rootRunId):
+        filter==="file_cleanup"?this.statement(select+` WHERE delivered=1 AND root_run_id IN (
+          SELECT COALESCE(m.root_run_id,p.value) FROM file_materials f JOIN json_each(f.value,'$.pins') p
+          LEFT JOIN run_tree_members m ON m.run_id=p.value)`).all():
+        filter==="undelivered"?this.statement(select+" WHERE delivered=0").all():this.statement(select).all()) as {root_run_id:string;delivered:number}[];
       return rows.flatMap(row => {
         const admission = this.readProductRun(row.root_run_id)!;
-        const head = this.readLatestOwner("run", row.root_run_id);
-        if (head?.kind !== "run") return [];
-        return [{admission, terminal: head.value.state.settlement !== null, delivered: row.delivered === 1, revision: head.value.state.revision}];
+        const head = this.readRunControl(row.root_run_id);
+        const resolution = this.resolveOriginalAdmission(admission.rootRunId, admission.productRunId,admission);
+        if(row.delivered!==0 && (row.delivered!==1||!head?.terminal||resolution.status!=="accepted"))
+          throw new ExecutionStoreError("execution_admission_corrupt");
+        if (resolution.status === "closed") return [];
+        return [{admission, admitted: resolution.status === "accepted", terminal: head?.terminal??false,
+          delivered: row.delivered === 1, revision: head?.revision??-1}];
       });
     })();
+  }
+
+  discoverProductWork(delivery:"file_cleanup"|"undelivered"):readonly import("./HelarcExecutionAdmission.js").ProductWorkSummary[] {
+    return this.listProductRuns(delivery).map(({admission,...state})=>({...state,rootRunId:admission.rootRunId,
+      productRunId:admission.productRunId,sessionId:admission.sessionId,title:admission.task.input.prompt.slice(0,160),
+      resumeLimitation:state.terminal?null:originalPreparationLimitation(admission)}));
   }
 
   commitProductDelivery(generation: number, rootRunId: string): void {
     this.assertOwner(generation);
     this.data.transaction(() => {
-      const head = this.readLatestOwner("run", rootRunId);
-      if (!this.readProductRun(rootRunId) || head?.kind !== "run" || head.value.state.settlement === null) {
+      const [original]=this.listProductRuns({rootRunId});
+      if (!original?.admitted || !original.terminal) {
         throw new ExecutionStoreError("execution_delivery_not_terminal");
       }
+      if(original.delivered)return;
+      const tree=this.readRunTree(rootRunId);
+      if(!tree)throw new ExecutionStoreError("execution_records_corrupt");
       this.data.prepare("UPDATE product_admissions SET delivered=1 WHERE root_run_id=?").run(rootRunId);
-      const members = this.data.prepare("SELECT run_id FROM run_tree_members WHERE root_run_id=?").all(rootRunId) as {run_id: string}[];
-      for (const runId of new Set([rootRunId, ...members.map(member => member.run_id)])) this.contextMaterials.releaseRun(runId);
+      for(const member of tree.members)this.contextMaterials.releaseRun(member.head.state.run.id);
     })();
   }
 
@@ -634,6 +827,7 @@ export class ExecutionDatabase {
       const pins: import("./ExecutionStoreProtocol.js").ExecutionRetentionPin[] = [];
       for (const ownerId of this.activityHandoffs.retainedRuns()) pins.push({ownerId,reason:"activity_handoff"});
       for (const ownerId of this.materialCustody.retainedRuns()) pins.push({ownerId,reason:"context_material"});
+      for (const ownerId of this.protocolExecution.retainedRuns()) pins.push({ownerId,reason:"protocol_evidence"});
       for (const ownerId of this.contextMaterials.retainedOwners()) pins.push({ownerId, reason: "context_material"});
         for (const ownerId of this.fileMaterials.pinnedOwners()) pins.push({ownerId, reason: "file_material"});
       const owners = this.data.prepare("SELECT DISTINCT owner_id FROM execution_commits WHERE owner='run'").all() as {owner_id: string}[];
@@ -643,7 +837,7 @@ export class ExecutionDatabase {
           pins.push({ownerId: owner_id, reason: "unfinished_run"});
         }
       }
-      for (const item of this.listProductRuns()) {
+      for (const item of this.listProductRuns("undelivered")) {
         if (item.terminal && !item.delivered) pins.push({ownerId: item.admission.rootRunId, reason: "undelivered_result"});
       }
       const runs = this.data.prepare("SELECT DISTINCT run_id FROM process_records").all() as {run_id: string}[];
@@ -855,6 +1049,7 @@ export class ExecutionDatabase {
         return treeReceipt(recorded);
       }
       const previous = this.readLatestRunTree(rootRunId);
+      if (!previous && this.admissionClosed(rootRunId)) throw new ExecutionStoreError("execution_admission_closed");
       if ((previous?.revision ?? null) !== commit.expectedRevision) throw new ExecutionStoreError("execution_commit_revision_stale");
       const memberIds = new Set((this.statement("SELECT run_id FROM run_tree_members WHERE root_run_id=?").all(rootRunId) as {run_id: string}[]).map(row => row.run_id));
       for (const run of commit.runs) {
@@ -905,6 +1100,26 @@ export class ExecutionDatabase {
     return row ? this.readRunTreeCommit(row.record_id) : null;
   }
 
+  readRunTreeMembers(rootRunId: string, cursor: import("./RunTreeMembership.js").RunTreeMembershipCursor | null,
+    limit: number): import("./RunTreeMembership.js").RunTreeMembershipPage {
+    this.assertOwner(this.generation);
+    token(rootRunId);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128 || cursor &&
+        (cursor.rootRunId !== rootRunId || !Number.isSafeInteger(cursor.after) || cursor.after < 0 ||
+         !Number.isSafeInteger(cursor.through) || cursor.through < cursor.after)) {
+      throw new ExecutionStoreError("execution_membership_cursor_invalid");
+    }
+    return this.checkpointTransaction(() => {
+      const through = cursor?.through ?? (this.statement("SELECT COALESCE(MAX(rowid),0) AS last FROM run_tree_members WHERE root_run_id=?")
+        .get(rootRunId) as {last: number}).last;
+      const rows = this.statement("SELECT rowid AS sequence,run_id FROM run_tree_members WHERE root_run_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?")
+        .all(rootRunId, cursor?.after ?? 0, through, limit + 1) as {sequence: number; run_id: string}[];
+      const page = rows.slice(0, limit);
+      return {runIds: page.map(row => row.run_id), next: rows.length > limit
+        ? {rootRunId, through, after: page.at(-1)!.sequence} : null};
+    });
+  }
+
   readRunTree(rootRunId: string): RunTreeRecoveryRecords | null {
     this.assertOwner(this.generation);
     return this.checkpointTransaction(() => {
@@ -946,6 +1161,7 @@ export class ExecutionDatabase {
         return {recordId: id, revision: state.revision};
       }
       const previous = this.readLatestOwner(value.kind, ownerId);
+      if(value.kind==="run"&&!previous&&this.admissionClosed(ownerId))throw new ExecutionStoreError("execution_admission_closed");
       if ((previous?.value.state.revision ?? null) !== expectedRevision) throw new ExecutionStoreError("execution_commit_revision_stale");
       if (previous?.kind === "run" && ["completed", "failed", "cancelled"].includes(previous.value.state.status) ||
           previous?.kind === "composite" && previous.value.state.terminal !== null) {
@@ -965,6 +1181,7 @@ export class ExecutionDatabase {
         if (value.value.control.activeAgent.id !== value.value.state.activeAgent.id ||
             value.value.control.activeAgent.revision !== value.value.state.activeAgent.revision) invalidReference();
         const {control, state} = value.value;
+        this.protocolExecution.assertRunItems(ownerId,state.items);
         if (!equal(control.instructionBinding.ref, state.activeInstructionBinding) ||
             !equal(control.instructionBinding.agent, state.activeAgent) ||
             !equal(control.instructionBinding.instructions, control.instructions.ref)) invalidReference();
@@ -974,6 +1191,7 @@ export class ExecutionDatabase {
               !equal(state.items.slice(0, before.items.length), before.items) ||
               state.taskId !== before.taskId || state.startedAt !== before.startedAt || state.deadlineAt !== before.deadlineAt) invalidReference();
         }
+        this.protocolExecution.acceptRunItems(ownerId,state.items.slice(previous?.kind==="run"?previous.value.state.items.length:0));
       } else if (previous?.kind === "composite") {
         if (value.value.runId !== previous.value.runId || !equal(value.value.definition, previous.value.definition) ||
             !equal(value.value.input, previous.value.input) || value.value.startedAt !== previous.value.startedAt) invalidReference();
@@ -1036,6 +1254,7 @@ export class ExecutionDatabase {
     if (!row) return null;
     const value = this.readCheckpoint(row) as ExecutionOwnerCommit;
     if (value.value.id !== id) throw new ExecutionStoreError("execution_records_corrupt");
+    if(value.kind==="run")this.protocolExecution.assertRunItems(value.value.state.run.id,value.value.state.items);
     this.readContext?.owners.set(id, value);
     return value;
   }
@@ -1175,7 +1394,8 @@ export class ExecutionDatabase {
   private assertOwner(generation: number): void {
     if (this.closed) throw new ExecutionStoreError("execution_store_closed");
     if (generation !== this.generation) throw new ExecutionStoreError("execution_owner_stale");
-    if (this.readContext?.ownerConfirmed) return;
+    if (this.readContext?.ownerConfirmed) {this.contentStatistics.add("owner.readReuses"); return;}
+    this.contentStatistics.add("owner.reads");
     const row = this.statement("SELECT generation FROM store WHERE id=1").get() as { generation: number };
     if (generation !== this.generation || row.generation !== generation) throw new ExecutionStoreError("execution_owner_stale");
     if (this.readContext) this.readContext.ownerConfirmed = true;
@@ -1232,7 +1452,14 @@ export class ExecutionDatabase {
   }
 
   hydrateContent(root: ExecutionContentRoot): unknown {
-    return this.timed("content.expand", () => unpackExecutionContent(root, id => this.readContentBlock(id), this.contentCache, true, this.contentScope));
+    // Activity reads also need a consistent closure and transaction-local owner proof.
+    if (!this.readContext) return this.checkpointTransaction(() => this.hydrateContent(root));
+    const key=JSON.stringify(root);
+    this.contentStatistics.add("content.rootReads");
+    if(this.readContext.checkpoints.has(key)) {this.contentStatistics.add("content.rootReuses");return this.readContext.checkpoints.get(key);}
+    const value=this.timed("content.expand", () => unpackExecutionContent(root, id => this.readContentBlock(id), this.contentCache, true, this.contentScope));
+    this.readContext.checkpoints.set(key,value);
+    return value;
   }
 
   verifiedContentRoot(value:unknown,minimumBytes=0):ExecutionContentRoot|null {
@@ -1241,6 +1468,13 @@ export class ExecutionDatabase {
     if(root)this.contentStatistics.add("content.returnRootReuses");
     return root??null;
   }
+
+  encodeResponseContent(value:unknown) {
+    this.assertOwner(this.generation);
+    return this.timed("content.encode_response",()=>this.contentEncoder.pack(value,this.contentScope));
+  }
+
+  confirmTransferOwner(generation:number):void {this.assertOwner(generation);}
 
   /** Synchronous command lifetime, independent of SQLite transaction/ACK scope. */
   withContentScope<T>(body: () => T): T {
@@ -1321,41 +1555,12 @@ export class ExecutionDatabase {
     this.timings.set(stage, value);
   }
 
-  private validateSchema(): void {
-    const objects = this.data.prepare("SELECT name,type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all() as { name: string; type: string }[];
-if (objects.length !== 109 || !["model_input_usage","activity_attempt_retries","context_input_supply_exit_coverage","context_input_supply_exits","context_input_supply_dispositions","context_input_supply_schedules","activity_stop_receipts","context_input_supplies","context_input_supply_responsibilities","activity_reconsideration_sources","activity_input_needs","activity_settlement_receipts","context_policy_investment_history","activity_resource_allowances","activity_resource_reservations","context_policy_decisions","context_policy_heads","context_policy_observation_heads","context_policy_investments","activity_fact_sources","activity_published_facts","activity_reconsiderations","activity_reconsideration_receipts","activity_resource_pools","activity_scheduled_work","activity_schedule_acceptances","activity_schedule_rounds","activity_schedule_tickets","activity_schedule_scope_rounds","activity_schedule_scope_tickets","activity_schedule_dispatches","material_custodies","material_custody_chunks","material_versions","material_holds","material_grants","context_foundation_facts","context_representations","context_judgments","context_reuse_checks","context_use_scopes","context_selection_versions","context_input_bindings","context_recipient_deliveries","context_input_sends","activity_facts", "shared_acceptances", "activity_paths", "activity_stages", "activity_attempts", "activity_raw_results", "activity_processing_receipts", "activity_handoffs", "execution_recordings", "context_preparations", "context_preparation_stages", "context_materials", "context_material_chunks", "context_material_members", "context_material_consumers", "context_material_holds", "context_material_fences", "context_material_releases", "context_material_reads", "context_material_searches"].every(name => objects.some(row => row.name === name && row.type === "table")) ||
-        !["activity_attempt_request","activity_retry_request","material_holds_reference"].every(name=>objects.some(row=>row.name===name&&row.type==="index")) ||
-        !objects.some(row => row.name === "activity_reconsideration_receipt_revision" && row.type === "index") ||
-        !objects.some(row => row.name === "activity_input_need_path" && row.type === "index") ||
-        !["model_input_usage_scope","activity_scheduled_open_scope","activity_paths_scheduled_work","activity_handoff_path_pending","activity_schedule_occupancy"].every(name => objects.some(row => row.name === name && row.type === "index")) ||
-        !objects.some(row => row.name === "context_input_supply_owned_path" && row.type === "index") ||
-        !objects.some(row => row.name === "context_input_supply_users" && row.type === "index") ||
-        !objects.some(row => row.name === "activity_facts_path" && row.type === "index") ||
-        !objects.some(row => row.name === "activity_resource_scope" && row.type === "index") ||
-        !objects.some(row => row.name === "context_recipient_delivery_lookup" && row.type === "index") ||
-        !objects.some(row => row.name === "activity_publication_source" && row.type === "index") ||
-        !objects.some(row => row.name === "activity_schedule_remaining" && row.type === "index") ||
-        !objects.some(row => row.name === "execution_content" && row.type === "table") ||
-        !objects.some(row => row.name === "run_tree_commits" && row.type === "table") ||
-        !objects.some(row => row.name === "file_materials" && row.type === "table") ||
-        !objects.some(row => row.name === "file_material_chunks" && row.type === "table") ||
-        !objects.some(row => row.name === "execution_evidence" && row.type === "table") ||
-        !objects.some(row => row.name === "execution_evidence_members" && row.type === "table") ||
-        !objects.some(row => row.name === "execution_reference_transfers" && row.type === "table") ||
-        !objects.some(row => row.name === "execution_transfer_recipient" && row.type === "index") ||
-        !objects.some(row => row.name === "compensation_associations" && row.type === "table") ||
-        !objects.some(row => row.name === "product_admissions" && row.type === "table") ||
-        !objects.some(row => row.name === "shell_sessions" && row.type === "table") ||
-        !objects.some(row => row.name === "process_records" && row.type === "table") ||
-        !objects.some(row => row.name === "hook_records" && row.type === "table") ||
-        !objects.some(row => row.name === "run_tree_members" && row.type === "table") ||
-        !objects.some(row => row.name === "execution_commits" && row.type === "table") || !objects.some(row => row.name === "store" && row.type === "table") ||
-        !objects.some(row => row.name === "action_records" && row.type === "table") ||
-        !objects.some(row => row.name === "action_records_owner" && row.type === "index")) {
-      throw new ExecutionStoreError("execution_store_format_invalid");
-    }
+  private validateSchema(format=FORMAT): void {
+    // The complete versioned manifest checks names, types and definitions;
+    // a second hand-maintained table/index list can contradict the schema.
     const row = this.data.prepare("SELECT version FROM store WHERE id=1").get() as { version: number } | undefined;
-    if (row?.version !== FORMAT || this.data.pragma("quick_check", { simple: true }) !== "ok") {
+    const manifest=this.data.prepare("SELECT name,type,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    if (row?.version !== format || !isDeepStrictEqual(manifest,supportedSchema(format)) || this.data.pragma("quick_check", { simple: true }) !== "ok") {
       throw new ExecutionStoreError("execution_store_format_invalid");
     }
   }

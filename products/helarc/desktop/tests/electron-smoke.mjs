@@ -66,4 +66,10 @@ if(endpoint){
   delete process.env.HELARC_PROVIDER_MODEL;
 }
 // Use the actual application composition, including shared activity/recovery ownership.
+if (process.env.HELARC_SMOKE_PARALLEL_STREAMS === "1") {
+  // This isolated UI scenario needs two admitted streams; production stays bounded to one.
+  const { HELARC_RUN_ACTIVITY_COMPOSITION } = await import("../dist/main/context/HelarcRunActivityComposition.js");
+  HELARC_RUN_ACTIVITY_COMPOSITION.modelPoolCapacity = 2;
+  Object.freeze(HELARC_RUN_ACTIVITY_COMPOSITION);
+}
 await import("../dist/main/main.js");

@@ -1,5 +1,6 @@
 import {
   TaskDecisionActivityError,
+  requireTurnTaskInput,
   createControllerModelItems,
   createModelOutputRecoverySection,
   type TaskDecisionProposal,
@@ -60,6 +61,7 @@ export function buildHelarcProviderRequest(
   protocol: HelarcControllerProtocolComposition,
   executionBackground?: HelarcExecutionBackground,
 ): ProviderRequest {
+  requireTurnTaskInput(input);
   const flow = new ExecutionFlowPath(HELARC_REQUEST_EXECUTION_FLOW, context.executionFlow ?? {}, input.runId);
   try {
     const step = flow.advance("compose", {agentId:input.agent.id, instructionBlocks:input.agent.instructions.blocks.length, unsettledCalls:input.interaction.unsettledCalls.length},
@@ -90,6 +92,7 @@ function buildRequest(
   protocol: HelarcControllerProtocolComposition,
   executionBackground?: HelarcExecutionBackground,
 ): ProviderRequest {
+  requireTurnTaskInput(input);
   assertInstructionModelIdentity(input, context);
   if (context.correction !== null) {
     throw new TypeError("Native Helarc Tool turns do not accept structured-output correction.");
@@ -249,6 +252,7 @@ function interpretResponse(
   catalog: HelarcModelCallableCatalog,
   materialReferenceError: string | null,
 ): TaskDecisionProposal<HelarcAgentOutput> {
+  requireTurnTaskInput(input);
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
   }

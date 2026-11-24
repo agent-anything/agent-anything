@@ -109,6 +109,25 @@ it("retains exact reference transfers and stable bounded public-execution pages 
 
 // Real Worker restarts and FULL durable commits are not five-second unit tests.
 describe("execution owner persistence", {timeout: 20_000}, () => {
+  it("transfers assembled large query results without publishing query envelopes and survives Worker replacement",async()=>{
+    const root=directory(),value={rows:Array.from({length:6000},(_,i)=>`${i}: ${"retained evidence ".repeat(12)}`)};
+    let store=await HelarcExecutionStore.open(root,compiledWorker);stores.push(store);
+    await store.contextPreparations.open({id:"original",runId:"run",basis:"source",predecessor:null,deadlineAt:"2099-01-01T00:00:00Z",stages:["source"]});
+    await store.contextPreparations.write("original","source",value);
+    const raw=new Database(join(root,"execution.sqlite"),{readonly:true});
+    try {
+      const count=()=>raw.prepare("SELECT count(*) AS n FROM execution_content").get();
+      const before=count();
+      expect(await store.contextPreparations.read("original","source")).toEqual(value);
+      expect(count()).toEqual(before);
+      expect(await store.contextPreparations.read("original","source")).toEqual(value);
+      expect(count()).toEqual(before);
+      await store.close();
+      store=await HelarcExecutionStore.open(root,compiledWorker);stores.push(store);
+      expect(await store.contextPreparations.read("original","source")).toEqual(value);
+      expect(count()).toEqual(before);
+    }finally{raw.close();}
+  });
   it("returns verified large content without rewriting it and still rejects corruption after warm reads",async()=>{
     const root=directory(),base=treeCommit(0),commit={...base,runs:base.runs.map(run=>({...run,control:{...run.control,
       controllerCheckpoints:[["large",{text:"immutable evidence ".repeat(10000)}]]}}))} as unknown as RunTreeCommit;
@@ -232,7 +251,8 @@ describe("execution owner persistence", {timeout: 20_000}, () => {
 
   it("discards command-local representations after failure without publishing staged content", () => {
     const database = open(directory());
-    const root = database.retainContent({text: "large history ".repeat(60000)});
+    // Exceed the unchanged aggregate decoded-cache budget, not a per-entry heuristic.
+    const root = database.retainContent({text: "large history ".repeat(700000)});
     let first: unknown;
     expect(() => database.withContentScope(() => {
       first = database.hydrateContent(root);
@@ -260,6 +280,24 @@ describe("execution owner persistence", {timeout: 20_000}, () => {
       expect(() => database.readRunTree("run-1")).toThrow("execution_records_corrupt");
       if (mode === "replace") expect(() => database.commitRunTree(database.generation, treeCommit(1))).toThrow();
       expect(raw.prepare("SELECT 1 FROM run_tree_commits WHERE revision=1").get()).toBeUndefined();
+    } finally {raw.close();}
+  });
+
+  it("rechecks stored bytes and ownership for each standalone content transaction", () => {
+    const path=directory(),database=open(path),root=database.retainContent({text:"retained ".repeat(20000)});
+    expect(database.hydrateContent(root)).toEqual({text:"retained ".repeat(20000)});
+    const raw=new Database(join(path,"execution.sqlite"));
+    try {
+      const original=raw.prepare("SELECT value FROM execution_content WHERE id=?").get(root.root) as {value:string};
+      raw.prepare("UPDATE execution_content SET value=? WHERE id=?").run('["value",null]',root.root);
+      expect(()=>database.hydrateContent(root)).toThrow("execution_content_corrupt");
+      raw.prepare("UPDATE execution_content SET value=? WHERE id=?").run(original.value,root.root);
+      expect(database.hydrateContent(root)).toEqual({text:"retained ".repeat(20000)});
+      raw.prepare("UPDATE store SET generation=generation+1 WHERE id=1").run();
+      expect(()=>database.hydrateContent(root)).toThrow("execution_owner_stale");
+      database.close();
+      const next=open(path);
+      expect(next.hydrateContent(root)).toEqual({text:"retained ".repeat(20000)});
     } finally {raw.close();}
   });
 
@@ -508,6 +546,27 @@ describe("execution owner persistence", {timeout: 20_000}, () => {
       {admission: withChild.runs[1]!.admission, head: withChild.runs[1]},
     ]});
     expect(database.readRunTree("not-recorded")).toBeNull();
+  });
+
+  it("discovers fixed-watermark members without hydrating recovery content, across reopening", () => {
+    const path = directory(), database = new ExecutionDatabase(path, true);
+    databases.push(database);
+    database.commitRunTree(database.generation, treeCommit(0));
+    const rootOnly = database.readRunTreeMembers("run-1", null, 1);
+    expect(rootOnly).toEqual({runIds: ["run-1"], next: null});
+    database.commitRunTree(database.generation, treeCommit(1, true));
+    database.takeContentStatistics();
+    const first = database.readRunTreeMembers("run-1", null, 1);
+    expect(first.runIds).toEqual(["run-1"]);
+    expect(first.next).not.toBeNull();
+    expect(database.takeContentStatistics()["content.reads"] ?? 0).toBe(0);
+    database.close();
+    const reopened = open(path);
+    expect(reopened.readRunTreeMembers("run-1", first.next, 1)).toEqual({runIds: ["run-2"], next: null});
+    expect(reopened.readRunTreeMembers("run-1", {rootRunId:"run-1",through:1,after:0}, 2)).toEqual(rootOnly);
+    expect(() => reopened.readRunTreeMembers("other", first.next, 1)).toThrow("cursor_invalid");
+    expect(() => reopened.readRunTreeMembers("run-1", null, 129)).toThrow("cursor_invalid");
+    expect(reopened.readRunTree("run-1")?.members).toHaveLength(2);
   });
 
   it("rejects partial pre-recording instead of pretending it was an atomic tree admission", () => {

@@ -399,11 +399,16 @@ export class ExecutionContentCache {
     return entry;
   }
   rememberDecoded(key: string, entry: DecodedSubtree): void {
-    if (entry.bytes < 4096 || entry.bytes > 512 * 1024 || this.decoded.has(key) || entry.bytes > this.maxBytes) return;
+    if (entry.bytes < 4096 || this.decoded.has(key)) return;
+    if (entry.bytes > this.maxBytes || this.maxEntries === 0) {
+      this.statistics.add("decode.retentionRejected");
+      return;
+    }
     this.decoded.set(key, Object.freeze(entry)); this.decodedBytes += entry.bytes;
     while (this.decodedBytes > this.maxBytes || this.decoded.size > this.maxEntries) {
       const oldest = this.decoded.keys().next().value!;
       this.decodedBytes -= this.decoded.get(oldest)!.bytes; this.decoded.delete(oldest);
+      this.statistics.add("decode.retentionEvictions");
     }
   }
   clear(): void {this.entries.clear(); this.bytes = 0; this.decoded.clear(); this.decodedBytes = 0;}
@@ -445,6 +450,7 @@ interface DecodedSubtree {
   readonly height: number;
   readonly traversals: number;
   readonly pathHeight: number;
+  readonly reusableContainerBytes: number;
 }
 
 export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: string) => ExecutionContentBlock, verified?: ExecutionContentCache, immutable = false, scope?: ExecutionContentScope): unknown {
@@ -467,7 +473,7 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
   let bytes = 0;
   let traversals = 0;
   let retainedBytes = 0;
-  const frames: {depth: number; basePath: number; height: number; pathHeight: number}[] = [];
+  const frames: {depth: number; basePath: number; height: number; pathHeight: number; reusableChildBytes: number}[] = [];
   const charge = (size: number) => { bytes += size; if (bytes > EXECUTION_CONTENT_LIMITS.hydratedBytes) fail("execution_content_capacity_exceeded"); };
   const load = (id: string): Block => {
     let value = cache.get(id);
@@ -548,12 +554,13 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
       for (const frame of frames) {
         frame.height = Math.max(frame.height, depth + retained.height - frame.depth);
         frame.pathHeight = Math.max(frame.pathHeight, path.size + retained.pathHeight - frame.basePath);
+        frame.reusableChildBytes = Math.max(frame.reusableChildBytes, retained.reusableContainerBytes);
       }
       rememberRepresentation(retained.value,node as Node,retained.bytes,retained.height);
       return retained.value;
     }
     for (const frame of frames) frame.height = Math.max(frame.height, depth - frame.depth);
-    const frame = {depth, basePath: path.size, height: 0, pathHeight: 0};
+    const frame = {depth, basePath: path.size, height: 0, pathHeight: 0, reusableChildBytes: 0};
     verified?.statistics.add("decode.nodes");
     const before = bytes, traversed = traversals;
     frames.push(frame);
@@ -563,11 +570,16 @@ export function unpackExecutionContent(root: ExecutionContentRoot, read: (id: st
         Object.freeze(value); immutableValues.add(value); validatedImmutableShapes.add(value);
       }
       if (immutable && key) {
-        const entry = {value, bytes: bytes - before, height: frame.height,
-          traversals: traversals - traversed, pathHeight: frame.pathHeight};
+        const size = bytes - before;
+        const promote = size >= 4096 && size >= frame.reusableChildBytes * 2;
+        const entry = {value, bytes: size, height: frame.height,
+          traversals: traversals - traversed, pathHeight: frame.pathHeight,
+          // Reusing a string alone does not preserve its containing object structure.
+          reusableContainerBytes: promote && value !== null && typeof value === "object" ? size : frame.reusableChildBytes};
         if ((reference || entry.bytes >= 4096) && decodedSubtrees.size < EXECUTION_CONTENT_LIMITS.blocks) decodedSubtrees.set(key, entry);
         if (reference || entry.bytes >= 4096) scope?.rememberDecoded(key, entry);
-        verified?.rememberDecoded(key, entry);
+        if (promote) verified?.rememberDecoded(key, entry);
+        for (const ancestor of frames) ancestor.reusableChildBytes = Math.max(ancestor.reusableChildBytes, entry.reusableContainerBytes);
         rememberRepresentation(value,node as Node,entry.bytes,entry.height);
       }
       return value;

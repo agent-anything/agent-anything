@@ -1,6 +1,6 @@
 import {describe,expect,it} from "vitest";
 import {createModelCallRef} from "../ModelCall.js";
-import {declareModelResultTextSlot,fillModelResultTextSlot,fillModelResultTextSlots,readModelResultTextSlot,type ModelToolMessage} from "./ModelResultTextSlot.js";
+import {declareModelResultTextSlot,fillModelResultTextSlot,fillModelResultTextSlots,readModelResultTextSlot,declareModelResultContentTextSlot,fillModelResultContentTextSlots,readModelResultContentTextSlot,type ModelToolMessage} from "./ModelResultTextSlot.js";
 
 function message():ModelToolMessage {
   return {role:"tool",content:["first","second"].map((name,index)=>({kind:"model_tool_result",result:{
@@ -12,6 +12,14 @@ function message():ModelToolMessage {
   }}))};
 }
 describe("source-declared result text position",()=>{
+  it("supports a result directly without inventing a tool message",()=>{
+    const result=message().content[0]!.result,slot=declareModelResultContentTextSlot(result,["summary"]);
+    expect(readModelResultContentTextSlot(result,slot)).toBe("Original long report");
+    const changed=fillModelResultContentTextSlots(result,[{slot,text:"Short report"}]);
+    expect(changed).toEqual({...result,content:{...result.content as object,summary:"Short report"}});
+    expect(()=>readModelResultContentTextSlot(changed,slot)).toThrow("source_changed");
+    expect(()=>fillModelResultContentTextSlots(result,[{slot,text:"a"},{slot,text:"b"}])).toThrow("replacement_invalid");
+  });
   it("validates multiple positions against one original before an atomic replacement",()=>{
     const original=message(),first=original.content[0]!.result.modelCallRef.id,second=original.content[1]!.result.modelCallRef.id;
     const replacements=[{slot:declareModelResultTextSlot(original,first,["summary"]),text:"First report"},

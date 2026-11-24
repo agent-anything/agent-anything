@@ -8,4 +8,4 @@ export interface HelarcReportHandoff {
 
 export type HelarcReportHandoffOutcome =
   | {readonly status:"published";readonly reference:ContextMaterialRef}
-  | {readonly status:"unavailable";readonly reason:"report_publication_cancelled"|"report_publication_deadline"|"report_access_denied"};
+  | {readonly status:"unavailable";readonly reason:"report_publication_cancelled"|"report_publication_deadline"|"report_access_denied"|"report_recipient_closed"};

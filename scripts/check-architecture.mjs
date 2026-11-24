@@ -192,6 +192,7 @@ const focusedPublicSubpaths = new Map([
     "@agent-anything/provider-integrations",
     new Set([
       "@agent-anything/provider-integrations/http",
+      "@agent-anything/provider-integrations/native",
       "@agent-anything/provider-integrations/ollama",
       "@agent-anything/provider-integrations/openai-compatible",
     ]),
@@ -1052,6 +1053,7 @@ function checkExecutionSourceTopology() {
         "discovery",
         "http",
         "native-tool-conformance",
+        "native",
         "ollama",
         "openai-compatible",
         "reasoning",

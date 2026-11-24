@@ -23,6 +23,7 @@ const channels = Object.freeze({
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
   resumeDescendant: "helarc:resume-descendant",
+  cancelDescendant: "helarc:cancel-descendant",
   saveProviderConfig: "helarc:save-provider-config",
   discoverModels: "helarc:discover-models",
   getProviderCredentialSettings: "helarc:get-provider-credential-settings",
@@ -36,6 +37,9 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
+  providerConfigurations: Object.freeze(Object.fromEntries([
+    "list", "save", "receipt", "previewPolicy", "credentialSettings", "discover", "eligibility", "activate", "archive", "dependencies", "revoke", "repair", "destroyCredential",
+  ].map(operation => [operation, input => ipcRenderer.invoke("helarc:provider-configurations", { operation, input })]))),
   saveProject: (input) => ipcRenderer.invoke(channels.saveProject, productCommand("project.save", input?.commandId, {
     id: input?.id, expectedRevision: input?.expectedRevision, name: input?.name,
     primaryProfileId: input?.primaryProfileId, additionalProfileIds: input?.additionalProfileIds,
@@ -47,7 +51,7 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
     position:input?.position?.kind === "before" ? {kind:"before",cursor:input.position.cursor}
       : input?.position?.kind === "window" ? {kind:"window",first:input.position.first,last:input.position.last,cursor:input.position.cursor}
         : {kind:input?.position?.kind}}),
-  readConversationTurn: (input) => ipcRenderer.invoke("helarc:read-conversation-turn", {...taskScope(input),turnId:input?.turnId,cursor:input?.cursor}),
+  readConversationResponseGroup: (input) => ipcRenderer.invoke("helarc:read-conversation-response-group", {...taskScope(input),turnId:input?.turnId,cursor:input?.cursor}),
   readCurrentWork: (input) => ipcRenderer.invoke("helarc:read-current-work", {...workScope(input),collection:input?.collection,cursor:input?.cursor}),
   readExecutionActivities: (input) => ipcRenderer.invoke("helarc:read-execution-activities", {...taskScope(input),includeDescendants:input?.includeDescendants}),
   readTaskDetails: (input) => ipcRenderer.invoke("helarc:read-task-details", taskScope(input)),
@@ -143,6 +147,7 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   startRun: (input) => ipcRenderer.invoke(
     channels.startRun,
     productCommand("run.start", input?.commandId, {
+      ...(input?.providerConfiguration === undefined ? {} : { providerConfiguration: input.providerConfiguration }),
       ...(input?.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       taskText: input?.taskText,
       target: input?.target?.kind === "continue_thread"
@@ -175,6 +180,11 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
       expectedRunRevision: input?.expectedRunRevision,
       instruction: input?.instruction,
     },
+  }),
+  cancelDescendant: (input) => ipcRenderer.invoke(channels.cancelDescendant,{
+    version:COMMAND_VERSION,kind:"descendant.cancel",commandId:input?.commandId,runId:input?.runId,
+    payload:{parentRunId:input?.parentRunId,requestId:input?.requestId,requestRevision:input?.requestRevision,
+      relationId:input?.relationId,childRunId:input?.childRunId,reason:input?.reason}
   }),
   resumeDescendant: (input) => ipcRenderer.invoke(channels.resumeDescendant, {
     version: COMMAND_VERSION,

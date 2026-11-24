@@ -2,6 +2,8 @@ import type { RunExecutionObserver, RunExecutionObservation } from "@agent-anyth
 import type { InspectionContentInput, InspectionJson, InspectionRecordInput } from "../records/index.js";
 import type { InspectionRecorder } from "../recording/index.js";
 import { inspectionContentId, inspectionLink } from "./ProviderInspectionAdapter.js";
+import { ProtocolEvidenceInspectionAdapter } from "./ProtocolEvidenceInspectionAdapter.js";
+import { nativeModelSourceKey } from "@agent-anything/model-interaction/protocol";
 
 export class RunExecutionInspectionAdapter implements RunExecutionObserver {
   constructor(private readonly recorder: InspectionRecorder) {}
@@ -73,6 +75,16 @@ export class RunExecutionInspectionAdapter implements RunExecutionObserver {
         contents: content("Operation result validation", value.validation, "validated")});
     } else if (value.kind === "scheduling") {
       const call = ref("runtime", "call", value.call.id);
+      if (value.call.turnId === null) {
+        const source = value.call.nativeSource;
+        new ProtocolEvidenceInspectionAdapter(r).source(source);
+        r.offer({ subject: call, occurredAt: value.occurredAt,
+          payload: { kind: "scheduling", position: value.position, disposition: value.disposition, rule: value.rule, groupId: value.groupId, reason: value.reason },
+          links: [inspectionLink("binding", r.ref(source.protocol.id, "event", nativeModelSourceKey(source), source.scope.runId, source.record.revision), call),
+            inspectionLink("produces", ref("runtime", "event", value.call.purposeAcceptance.id, value.call.purposeAcceptance.revision), call)],
+          contents: content("Candidate admission", value, "admission") });
+        return;
+      }
       const turn = ref("runtime", "turn", value.call.turnId);
       r.offer({ subject: turn, occurredAt: value.occurredAt,
         payload: { kind: "event", name: "model_turn.observed", sequence: null, code: null },

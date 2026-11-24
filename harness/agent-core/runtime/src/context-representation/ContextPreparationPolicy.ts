@@ -3,10 +3,14 @@ import type {ContextUseScope} from "@agent-anything/context/selection";
 import {validatePreparedContextInput,type PreparedContextInput,type ContextInputPreparationGap} from "./ContextInputPreparation.js";
 import {quoteRepresentationMethod,type RepresentationMethodQuotation} from "./methods/RepresentationMethodQuotation.js";
 import type {RepresentationMethodRequest} from "./methods/RepresentationMethod.js";
+import {validateProtocolMethodQuotation,type ContextPreparationMethodRequest} from "./ProtocolRepresentationMethod.js";
+import type {ProtocolInputRejectionEvidence} from "../model-access/ProtocolInputRejection.js";
+import {validateContextRecipientInputCapacity,type ContextRecipientInputCapacity} from "./ContextRecipientInputCapacity.js";
+import {comparePreparationOffers,type ContextPreparationComparison} from "./ContextPreparationComparison.js";
 
-export const INITIAL_CONTEXT_PREPARATION_POLICY={id:"context.normal-preparation",revision:"8",maximumOptions:16,maximumReceptionInspections:256,
+export const INITIAL_CONTEXT_PREPARATION_POLICY={id:"context.normal-preparation",revision:"10",maximumOptions:16,maximumReceptionInspections:256,
   observations:8,minimumObservations:3,maximumExplorations:1,maximumOptionalPerRecipient:1,
-  input:{maximumCombinations:32,maximumExternalMeasurements:8},
+  input:{maximumCombinations:32,maximumExternalMeasurements:8,maximumProviderReplacements:2},
   method:{maximumStages:2048,maximumAttempts:4096,maximumConcurrent:1,deadlineMs:60*60*1000,
     bounds:{readBytes:64*1024*1024,storedBytes:32*1024*1024,modelCalls:32,repairs:1,levels:4,pageBytes:64*1024,ranges:64}},
   maximumTransportAttempts:3} as const;
@@ -28,10 +32,25 @@ export interface ContextCostComparison {
 export type ContextCurrentInput =
   | {readonly kind:"prepared";readonly prepared:PreparedContextInput;readonly evidence:ContextPolicyEvidence}
   | {readonly kind:"gap";readonly gap:ContextInputPreparationGap;readonly evidence:ContextPolicyEvidence};
+/** Readiness belongs to the recipient input organizer; the policy never decodes its native body. */
+export interface ContextRecipientInputReadiness {
+  readonly kind:"recipient_prepared";
+  readonly scope:ContextUseScope;
+  readonly inputId:string;
+  readonly bodyDigest:string;
+  /** Complete immutable selection value, distinct from its provider wire body. */
+  readonly exactInputDigest:string;
+  readonly judgmentId:string;
+  readonly allowed:boolean;
+  readonly risks:readonly string[];
+  readonly capacity?:ContextRecipientInputCapacity;
+  readonly evidence:ContextPolicyEvidence;
+}
+type PolicyInput=ContextCurrentInput|ContextRecipientInputReadiness;
 export type ContextPreparationPressure =
-  | {readonly kind:"input_capacity_risk";readonly evidence:ContextPolicyEvidence}
+  | {readonly kind:"input_capacity_risk";readonly inputId:string;readonly evidence:ContextPolicyEvidence}
   | {readonly kind:"successor_gap";readonly input:ContextInputPreparationGap;readonly evidence:ContextPolicyEvidence}
-  | {readonly kind:"growth_scenario";readonly evidence:ContextPolicyEvidence;readonly timing:ContextTimingComparison|null}
+  | {readonly kind:"growth_scenario";readonly inputId?:string;readonly evidence:ContextPolicyEvidence;readonly timing:ContextTimingComparison|null}
   | {readonly kind:"method_entry_loss";readonly evidence:ContextPolicyEvidence;readonly changedBackground:readonly string[]}
   | {readonly kind:"optional_improvement";readonly evidence:ContextPolicyEvidence;readonly comparisons:readonly ContextCostComparison[]};
 export interface ContextTimingComparison {
@@ -41,9 +60,10 @@ export interface ContextTimingComparison {
   readonly includesQueue:boolean;
   readonly arrangement:"serial"|"critical_path";
 }
-export interface ContextPreparationOption {
+export interface ContextPreparationOption<R extends ContextPreparationMethodRequest=RepresentationMethodRequest> {
   readonly id:string;
-  readonly request:RepresentationMethodRequest;
+  readonly request:R;
+  readonly quotation?:RepresentationMethodQuotation;
   readonly stableScope:ContextPolicyEvidence|null;
   /** The proposal's owner declares relevance; the policy does not infer it from natural language. */
   readonly addresses:readonly string[];
@@ -57,9 +77,12 @@ export interface ContextPreparationOption {
   readonly sourceExtent?:{readonly utf8Bytes:number;readonly evidence:ContextPolicyEvidence};
   readonly admissionConditions?:readonly ContextPolicyEvidence[];
   /** An explicit CRM revision of settled original work, not permission to restart unknown execution. */
-  readonly replaces?:{readonly workId:string;readonly pathId:string;readonly evidence:ContextPolicyEvidence};
+  readonly replaces?:{readonly workId:string;readonly pathId:string;readonly evidence:ContextPolicyEvidence;
+    readonly observedLimitation?:ContextPolicyEvidence};
   /** A new disjoint source, not a retry of the receiver or any of its original producers. */
   readonly extendsReception?:{readonly optionId:string;readonly evidence:ContextPolicyEvidence};
+  /** A complete receiving path from the original input, not a composition with a failed candidate. */
+  readonly independentReception?:{readonly boundary:string;readonly requirementsDigest:string;readonly evidence:ContextPolicyEvidence};
 }
 export interface ContextPreparationAdmissionLimitation {
   readonly optionId:string;
@@ -71,6 +94,9 @@ export interface ContextPreparationAdmissionLimitation {
 export interface ContextInputReceptionOption {
   readonly id:string;
   readonly members:readonly {readonly workId:string;readonly pathId:string;readonly requestDigest:string}[];
+  readonly sourceInput?:ContextRecipientInputReadiness;
+  /** A selected arrangement must finish reception before this source input is used. */
+  readonly beforeUse?:true;
   readonly addresses:readonly string[];
   readonly comparisons:readonly ContextCostComparison[];
   readonly evidence:ContextPolicyEvidence;
@@ -85,21 +111,26 @@ export interface ContextMethodSupplyReport {
     readonly sources:readonly {readonly role:"source"|"background";readonly materialId:string;readonly version:string}[]}[];
   readonly originalWork?:readonly {readonly workId:string;readonly pathId:string;readonly optionId:string;
     readonly available:boolean;readonly reason:string}[];
+  /** Source-owned admission evidence, retained even when no method is offered. */
+  readonly admissionEvidence?:readonly {readonly id:string;readonly owner:string;readonly method:string;readonly revision:string;
+    readonly accepted:boolean;readonly value:unknown}[];
 }
-export interface ContextPreparationPolicyInput {
+export interface ContextPreparationPolicyInput<R extends ContextPreparationMethodRequest=RepresentationMethodRequest,C extends PolicyInput=PolicyInput> {
   readonly scope:ContextUseScope;
   readonly boundary:string;
   readonly requirementsDigest:string;
-  readonly current:ContextCurrentInput;
+  readonly current:C;
   readonly currentRejectedInputId:string|null;
-  readonly rejectedInputs?:readonly {readonly stageId:string;readonly targetRevision:string;readonly bodyDigest:string;readonly evidence:ContextPolicyEvidence}[];
-  readonly alternatives:readonly {readonly input:ContextCurrentInput;readonly comparisons:readonly ContextCostComparison[]}[];
+  readonly rejectedInputs?:readonly ({readonly stageId:string;readonly targetRevision:string;readonly bodyDigest:string;readonly evidence:ContextPolicyEvidence}|ProtocolInputRejectionEvidence)[];
+  readonly alternatives:readonly {readonly input:C;readonly comparisons:readonly ContextCostComparison[]}[];
   readonly pressure:readonly ContextPreparationPressure[];
-  readonly options:readonly ContextPreparationOption[];
+  readonly options:readonly ContextPreparationOption<R>[];
   /** Revalidated original work, not additional opportunities for new investment. */
-  readonly reuseOptions?:readonly {readonly workId:string;readonly pathId:string;readonly option:ContextPreparationOption}[];
-  readonly inFlight:readonly {readonly workId:string;readonly pathId:string;readonly preparationKey:string;
-    readonly producerState:"accepted"|"active"|"ready"|"unknown"|"failed"|"cancelled";readonly evidence:ContextPolicyEvidence}[];
+  readonly reuseOptions?:readonly {readonly workId:string;readonly pathId:string;readonly option:ContextPreparationOption<R>}[];
+  readonly inFlight:readonly {readonly workId:string;readonly pathId:string;readonly preparationKey:string;readonly originalNeedKey?:string;
+    readonly producerState:"accepted"|"active"|"ready"|"unknown"|"failed"|"cancelled";readonly evidence:ContextPolicyEvidence;
+    readonly remaining?:import("./ContextPreparationWorkEvidence.js").ContextPreparationWorkEvidence["remaining"];
+    readonly limitationEvidence?:ContextPolicyEvidence}[];
   readonly explorationHistory:readonly {readonly key:string;readonly decisionId:string}[];
   readonly optionalInFlight:number;
   readonly autoPrepare:boolean;
@@ -110,6 +141,8 @@ export interface ContextPreparationPolicyInput {
   /** Accepted work for this exact recipient input, distinct from the method that produced its material. */
   readonly inputReceptions?:readonly {readonly optionId:string;readonly workId:string;readonly pathId:string;
     readonly state:"active"|"checked"|"unavailable"|"unknown";readonly reason:string|null;readonly evidence:ContextPolicyEvidence;
+    readonly outcomeEvidence?:ContextPolicyEvidence;
+    readonly checkedInput?:{readonly inputId:string;readonly exactInputDigest:string};
     readonly inputGap?:Extract<ContextCurrentInput,{kind:"gap"}>;
     readonly providerRejection?:NonNullable<ContextPreparationPolicyInput["rejectedInputs"]>[number]}[];
   readonly admissionLimitations?:readonly ContextPreparationAdmissionLimitation[];
@@ -121,7 +154,8 @@ export interface ContextPreparationPolicyInput {
 }
 export interface ContextPreparationDecision {
   readonly id:string;
-  readonly policy:typeof INITIAL_CONTEXT_PREPARATION_POLICY;
+  readonly policy:Omit<typeof INITIAL_CONTEXT_PREPARATION_POLICY,"revision">&{readonly revision:"10"|"11"|"12"|"13"|"14"|"15"};
+  readonly comparison?:ContextPreparationComparison;
   readonly scope:ContextUseScope;
   readonly boundary:string;
   readonly applicabilityKey:string;
@@ -146,10 +180,10 @@ export function contextPreparationApplicabilityKey(input:Pick<ContextPreparation
   return modelInputValueDigest({scope:input.scope,boundary:input.boundary,requirements:input.requirementsDigest});
 }
 /** Original delegated work, not the moving boundary of a recipient's next complete input. */
-export function contextPreparationWorkKey(scope:ContextUseScope,request:RepresentationMethodRequest):string {
+export function contextPreparationWorkKey(scope:ContextUseScope,request:ContextPreparationMethodRequest):string {
   return modelInputValueDigest({scope,request});
 }
-export function contextPreparationAdmissionKey(input:Pick<ContextPreparationPolicyInput,"scope"|"boundary"|"requirementsDigest">,option:ContextPreparationOption):string {
+export function contextPreparationAdmissionKey(input:Pick<ContextPreparationPolicyInput,"scope"|"boundary"|"requirementsDigest">,option:ContextPreparationOption<ContextPreparationMethodRequest>):string {
   return modelInputValueDigest({work:contextPreparationWorkKey(input.scope,option.request),entries:option.entries,capability:option.capability,
     limits:option.limits,conditions:option.admissionConditions??[],replaces:option.replaces??null});
 }
@@ -158,28 +192,47 @@ export function contextReceptionAdmissionKey(input:Pick<ContextPreparationPolicy
 }
 
 /** Pure professional policy. Scheduling, accepting a selection and executing are separate owners. */
-export function decideContextPreparation(input:ContextPreparationPolicyInput):ContextPreparationDecision {
+export function decideContextPreparation<R extends ContextPreparationMethodRequest>(input:ContextPreparationPolicyInput<R,PolicyInput>,
+  revision:ContextPreparationDecision["policy"]["revision"]|"legacy"="14"):ContextPreparationDecision {
   validateInput(input);
   const availableOptions=[...input.options,...(input.reuseOptions??[]).map(work=>work.option)];
   const key=contextPreparationApplicabilityKey(input),evidence:ContextPolicyEvidence[]=[input.current.evidence],excluded:ContextPreparationDecision["excluded"][number][]=[];
-  const limitations:string[]=[],policy=INITIAL_CONTEXT_PREPARATION_POLICY;
+  const legacyRevision=input.receptionOptions?.some(o=>o.beforeUse)?"12":input.receptionOptions?.some(o=>o.sourceInput)?"11":"10";
+  const compared=revision==="13"||revision==="14"||revision==="15";
+  const proofRequired=revision==="14"||revision==="15";
+  if(!compared&&revision!=="legacy"&&revision!==legacyRevision)throw new TypeError("context_policy_revision_not_applicable");
+  const limitations:string[]=[],policy:ContextPreparationDecision["policy"]={...INITIAL_CONTEXT_PREPARATION_POLICY,revision:compared?revision:legacyRevision};
+  let comparison:ContextPreparationComparison|undefined;
   evidence.push(...(input.unusedProducers??[]).map(p=>p.evidence));
-  const rejected=(prepared:PreparedContextInput)=>prepared.encoded.id===input.currentRejectedInputId||
-    input.rejectedInputs?.some(r=>r.targetRevision===prepared.encoded.targetDigest&&r.bodyDigest===prepared.encoded.bodyDigest)===true;
+  const ready=(value:PolicyInput)=>value.kind==="gap"?null:value.kind==="prepared"?{
+    id:value.prepared.encoded.id,body:value.prepared.encoded.bodyDigest,target:value.prepared.encoded.targetDigest,
+    allowed:true,risks:value.prepared.capacity.decisions.filter(d=>d.conclusion!=="within").map(d=>`${d.limitId}:${d.reason}`)
+  }:{id:value.inputId,body:value.bodyDigest,target:value.scope.target,allowed:value.allowed,risks:value.risks};
+  const usable=(value:PolicyInput)=>{const p=ready(value);return Boolean(p?.allowed&&p.id!==input.currentRejectedInputId&&
+    !input.rejectedInputs?.some(r=>r.targetRevision===p.target&&r.bodyDigest===p.body));};
   evidence.push(...(input.rejectedInputs??[]).map(r=>r.evidence));
-  let selected=input.current.kind==="prepared"&&!rejected(input.current.prepared)?input.current:null;
+  let selected:PolicyInput|null=usable(input.current)?input.current:null;
   let adoption:"keep"|"propose"="keep";
   for(const alternative of input.alternatives.slice(0,policy.maximumOptions)) {
-    if(alternative.input.kind!=="prepared"||rejected(alternative.input.prepared))continue;
-    if(!selected||netImprovement(alternative.comparisons)) {
+    if(!usable(alternative.input))continue;
+    const arrangement=input.receptionOptions?.find(o=>o.beforeUse&&o.sourceInput&&
+      modelInputValueDigest(o.sourceInput)===modelInputValueDigest(input.current)&&input.inputReceptions?.some(r=>r.optionId===o.id&&r.state==="checked"&&
+      alternative.input.kind==="recipient_prepared"&&r.checkedInput?.inputId===alternative.input.inputId&&r.checkedInput.exactInputDigest===alternative.input.exactInputDigest));
+    const addressed=arrangement?input.pressure.filter(p=>p.kind!=="optional_improvement"&&supportsInvestment(p)&&
+      (!("inputId" in p)||!p.inputId||p.inputId===arrangement.sourceInput!.inputId)&&arrangement.addresses.includes(p.evidence.id)):[];
+    if(!selected||netImprovement(alternative.comparisons)||addressed.length) {
+      if(arrangement&&addressed.length)evidence.push(arrangement.evidence,...addressed.map(p=>p.evidence));
       selected=alternative.input;adoption="propose";evidence.push(alternative.input.evidence,...alternative.comparisons.map(c=>c.basis));break;
     }
   }
   if(input.alternatives.length>policy.maximumOptions)limitations.push("alternatives_search_incomplete");
-  const foreground:ContextPreparationDecision["foreground"]=selected?{kind:"continue",preparedInputId:selected.prepared.encoded.id,adoption,
-    risks:selected.prepared.capacity.decisions.filter(d=>d.conclusion!=="within").map(d=>`${d.limitId}:${d.reason}`)}:{kind:"limited",reason:"no_accepted_producer_or_usable_input"};
+  const selectedReady=selected?ready(selected):null;
+  const applicablePressure=input.pressure.filter(p=>!selectedReady||!("inputId" in p)||!p.inputId||p.inputId===selectedReady.id);
+  const foreground:ContextPreparationDecision["foreground"]=selectedReady?{kind:"continue",preparedInputId:selectedReady.id,adoption,
+    risks:selectedReady.risks}:{kind:"limited",reason:"no_accepted_producer_or_usable_input"};
   const finish=(investment:ContextPreparationDecision["investment"],front:ContextPreparationDecision["foreground"]=foreground):ContextPreparationDecision=>{
-    const value={policy,scope:input.scope,boundary:input.boundary,applicabilityKey:key,evidence:uniqueEvidence(evidence),foreground:front,investment,excluded,limitations};
+    const value={policy,scope:input.scope,boundary:input.boundary,applicabilityKey:key,evidence:uniqueEvidence(evidence),foreground:front,investment,excluded,limitations,
+      ...(comparison?{comparison}:{})};
     return {id:`context-decision:${modelInputValueDigest({input,value})}`,...value};
   };
   if(!input.consumerActive)return finish({kind:"none",reason:"no_active_consumer"},{kind:"limited",reason:"no_active_consumer"});
@@ -187,7 +240,7 @@ export function decideContextPreparation(input:ContextPreparationPolicyInput):Co
     const limitation=input.admissionLimitations?.find(l=>l.acceptanceId===input.admissionResponse);
     if(!limitation)throw new TypeError("context_policy_admission_response_missing");
     evidence.push({owner:"activity",kind:"fact",id:limitation.acceptanceId,revision:"1"});
-    return finish({kind:"defer",reason:`admission_rejected:${limitation.code}`,reconsiderOn:["admission_conditions_changed","alternative_path_available","current_control_changed"]});
+    if(revision!=="15"||selected)return finish({kind:"defer",reason:`admission_rejected:${limitation.code}`,reconsiderOn:["admission_conditions_changed","alternative_path_available","current_control_changed"]});
   }
   const applicable=input.inFlight.filter(work=>availableOptions.some(option=>contextPreparationWorkKey(input.scope,option.request)===work.preparationKey||
     option.replaces?.workId===work.workId&&option.replaces.pathId===work.pathId)&&
@@ -197,35 +250,42 @@ export function decideContextPreparation(input:ContextPreparationPolicyInput):Co
   const receiving=receptions.find(r=>r.state==="active")??receptions.find(r=>r.state==="unknown");
   if(receiving) {
     const option=receptionOptions.find(o=>o.id===receiving.optionId)!;
-    evidence.push(receiving.evidence,option.evidence,...option.members.map(m=>input.inFlight.find(w=>w.pathId===m.pathId)!.evidence));
+    evidence.push(receiving.evidence,option.evidence,...option.sourceInput?[option.sourceInput.evidence]:[],
+      ...option.members.map(m=>input.inFlight.find(w=>w.pathId===m.pathId)!.evidence));
     if(receiving.state==="unknown")return finish({kind:"defer",reason:"input_reception_outcome_unknown",reconsiderOn:["original_reception_resolved"]},
-      selected?foreground:{kind:"needs_result",pathId:receiving.pathId,workId:receiving.workId});
-    const pressure=input.pressure.filter(p=>p.kind!=="optional_improvement"&&supportsInvestment(p)&&option.addresses.includes(p.evidence.id));
+      selected&&!option.beforeUse?foreground:{kind:"needs_result",pathId:receiving.pathId,workId:receiving.workId});
+    const pressure=applicablePressure.filter(p=>p.kind!=="optional_improvement"&&supportsInvestment(p)&&option.addresses.includes(p.evidence.id));
     evidence.push(...pressure.map(p=>p.evidence));
     return finish({kind:"reuse_input",workId:receiving.workId,pathId:receiving.pathId,requiredService:!selected?"necessary":pressure.length?"opportunity":null},
-      selected?foreground:{kind:"needs_result",workId:receiving.workId,pathId:receiving.pathId});
+      selected&&!option.beforeUse?foreground:{kind:"needs_result",workId:receiving.workId,pathId:receiving.pathId});
   }
   if(input.receptionSupplyReport?.complete===false)limitations.push("reception_option_search_incomplete");
   for(const option of receptionOptions) {
     if(receptions.some(r=>r.optionId===option.id)||!option.members.every(m=>applicable.some(w=>w.pathId===m.pathId&&w.workId===m.workId&&w.producerState==="ready")))continue;
-    evidence.push(option.evidence,...option.members.map(m=>applicable.find(w=>w.pathId===m.pathId)!.evidence));
+    if(option.sourceInput&&!usable(option.sourceInput))continue;
+    evidence.push(option.evidence,...option.sourceInput?[option.sourceInput.evidence]:[],
+      ...option.members.map(m=>applicable.find(w=>w.pathId===m.pathId)!.evidence));
     if(!input.autoPrepare)return finish({kind:"none",reason:"automatic_preparation_disabled"});
     const limitation=input.admissionLimitations?.find(l=>l.optionId===option.id&&l.conditionsDigest===contextReceptionAdmissionKey(input,option));
     if(limitation) {
       evidence.push({owner:"activity",kind:"fact",id:limitation.acceptanceId,revision:"1"});
       excluded.push({optionId:option.id,reasons:[`admission_rejected:${limitation.code}`]});continue;
     }
-    const pressure=input.pressure.filter(p=>supportsInvestment(p)&&option.addresses.includes(p.evidence.id));
+    const pressure=applicablePressure.filter(p=>supportsInvestment(p)&&option.addresses.includes(p.evidence.id));
     const reason=!selected?"necessary":pressure.some(p=>p.kind!=="optional_improvement")?"opportunity":
       pressure.length&&netImprovement(option.comparisons)&&input.optionalInFlight<policy.maximumOptionalPerRecipient?"optional":null;
-    if(reason){evidence.push(...pressure.map(p=>p.evidence));return finish({kind:"prepare_input",optionId:option.id,reason});}
+    if(reason){evidence.push(...pressure.map(p=>p.evidence));return finish({kind:"prepare_input",optionId:option.id,reason},
+      option.beforeUse?{kind:"limited",reason:"selected_arrangement_requires_input_reception"}:foreground);}
   }
-  const extensions=new Set(input.options.filter(o=>o.extendsReception).map(o=>o.id));
-  const residualGap=!selected&&extensions.size>0;
+  const unavailable=receptions.filter(r=>r.state==="unavailable");
+  const capacityOnly=unavailable.length>0&&unavailable.every(r=>r.inputGap&&r.inputGap.gap.information.length===0&&
+    r.inputGap.gap.capacity.some(c=>!c.allowed));
+  const revisions=new Set(input.options.filter(o=>o.extendsReception||capacityOnly&&o.independentReception).map(o=>o.id));
+  const residualGap=!selected&&revisions.size>0;
   const existing=applicable.find(work=>["accepted","active"].includes(work.producerState));
   if(existing) {
     evidence.push(existing.evidence);
-    const opportunity=input.pressure.filter(p=>p.kind!=="optional_improvement"&&supportsInvestment(p));
+    const opportunity=applicablePressure.filter(p=>p.kind!=="optional_improvement"&&supportsInvestment(p));
     evidence.push(...opportunity.map(p=>p.evidence));
     return finish({kind:"reuse",workId:existing.workId,pathId:existing.pathId,requiredService:!selected?"necessary":opportunity.length?"opportunity":null},selected?foreground:{kind:"needs_result",workId:existing.workId,pathId:existing.pathId});
   }
@@ -237,26 +297,52 @@ export function decideContextPreparation(input:ContextPreparationPolicyInput):Co
     return finish({kind:"defer",reason:"input_reception_requires_bounded_revision",reconsiderOn:["reception_path_changed","relevant_evidence_changed"]});
   }
   if(adoption!=="propose"&&!residualGap&&applicable.some(w=>w.producerState==="ready"))return finish({kind:"defer",reason:"retained_result_requires_recipient_input_organization",reconsiderOn:["complete_input_prepared","result_applicability_changed","admission_conditions_changed"]});
-  const settled=applicable.filter(work=>["failed","cancelled"].includes(work.producerState));
-  if(settled.length&&!input.options.some(option=>option.replaces&&settled.some(work=>work.workId===option.replaces!.workId&&work.pathId===option.replaces!.pathId)))
+  const settled=input.inFlight.filter(w=>(applicable.includes(w)||proofRequired&&w.originalNeedKey===key)&&["failed","cancelled"].includes(w.producerState));
+  if(proofRequired)for(const w of settled)evidence.push(w.evidence,...w.limitationEvidence?[w.limitationEvidence]:[]);
+  const missing=compared?input.inFlight.find(w=>w.originalNeedKey===key&&!applicable.includes(w)&&
+    !input.unusedProducers?.some(p=>p.workId===w.workId&&p.pathId===w.pathId)&&
+    ["accepted","active","unknown","ready"].includes(w.producerState)):null;
+  if(missing){
+    evidence.push(missing.evidence);
+    return finish({kind:"defer",reason:"original_work_binding_unavailable",reconsiderOn:["original_work_resolved","responsibility_disposition"]},
+      selected?foreground:{kind:"needs_result",workId:missing.workId,pathId:missing.pathId});
+  }
+  if(settled.length&&!input.options.some(option=>option.replaces&&settled.some(work=>work.workId===option.replaces!.workId&&work.pathId===option.replaces!.pathId))){
+    if(proofRequired)for(const option of input.options.slice(0,policy.maximumOptions))excluded.push({optionId:option.id,reasons:["no_explicit_revision_of_failed_work"]});
     return finish({kind:"defer",reason:"original_path_requires_bounded_revision",reconsiderOn:["replacement_path_accepted","relevant_evidence_changed"]});
+  }
   if(!input.autoPrepare)return finish({kind:"none",reason:"automatic_preparation_disabled"});
-  const pressure=input.pressure.filter(p=>supportsInvestment(p));
+  const pressure=applicablePressure.filter(p=>supportsInvestment(p));
   const reason=!selected?"necessary":pressure.some(p=>p.kind!=="optional_improvement")?"opportunity":pressure.length?"optional":null;
   if(!reason)return finish({kind:"none",reason:adoption==="propose"?"qualified_recipient_input_available":"no_current_gap_or_supported_opportunity"});
   if(reason==="optional"&&input.optionalInFlight>=policy.maximumOptionalPerRecipient)return finish({kind:"defer",reason:"optional_work_already_active",reconsiderOn:["optional_work_settled"]});
   const relevant=reason==="necessary"?[input.current.evidence.id]:pressure.filter(p=>reason==="opportunity"?p.kind!=="optional_improvement":true).map(p=>p.evidence.id);
   evidence.push(...pressure.filter(p=>relevant.includes(p.evidence.id)).map(p=>p.evidence));
   evidence.push(...pressure.filter(p=>p.kind==="optional_improvement"&&relevant.includes(p.evidence.id)).flatMap(p=>p.kind==="optional_improvement"?p.comparisons.map(c=>c.basis):[]));
-  const eligible:{option:ContextPreparationOption;quote:RepresentationMethodQuotation;unknown:string[];explorationKey:string|null}[]=[];
+  const eligible:{option:ContextPreparationOption<R>;quote:RepresentationMethodQuotation;unknown:string[];explorationKey:string|null}[]=[];
   for(const option of input.options.slice(0,policy.maximumOptions)) {
-    const quote=quoteRepresentationMethod(option.request),reasons=[...quote.gaps],unknown=[...quote.unknowns];
-    if(residualGap&&!extensions.has(option.id))reasons.push("residual_capacity_extension_unconfirmed");
+    if(compared)for(const c of option.comparisons){interval(c.baseline);interval(c.alternative);uniqueEvidence([c.basis]);}
+    const quote=option.request.method==="protocol"
+      ?validateProtocolMethodQuotation(option.request,option.quotation??(()=>{throw new TypeError("protocol_method_quotation_missing");})())
+      :quoteRepresentationMethod(option.request),reasons=[...quote.gaps],unknown=[...quote.unknowns];
+    if(residualGap&&!revisions.has(option.id))reasons.push("residual_capacity_reception_unconfirmed");
     if(!option.replaces&&applicable.some(work=>work.preparationKey===contextPreparationWorkKey(input.scope,option.request)))reasons.push("original_work_already_accepted");
     if(settled.length&&!option.replaces)reasons.push("original_work_revision_required");
     if(option.replaces) {
       uniqueEvidence([option.replaces.evidence]);
-      if(!settled.some(work=>work.workId===option.replaces!.workId&&work.pathId===option.replaces!.pathId))reasons.push("original_work_not_settled");
+      const original=settled.find(work=>work.workId===option.replaces!.workId&&work.pathId===option.replaces!.pathId);
+      if(!original)reasons.push("original_work_not_settled");
+      else if(proofRequired){
+        const proof=option.replaces,limit=original.limitationEvidence,remaining=original.remaining;
+        if(!limit||!proof.observedLimitation||modelInputValueDigest(limit)!==modelInputValueDigest(proof.observedLimitation))
+          reasons.push("original_limitation_unconfirmed");
+        if(original.preparationKey===contextPreparationWorkKey(input.scope,option.request)||proof.evidence.id===limit?.id||
+          !option.admissionConditions?.some(e=>modelInputValueDigest(e)===modelInputValueDigest(proof.evidence)))reasons.push("changed_method_basis_unconfirmed");
+        if(!remaining||!(["stages","attempts","readBytes","storedBytes","modelCalls"] as const).every(k=>Number.isSafeInteger(remaining[k])&&remaining[k]>=0)||
+          quote.minimum.stages>remaining.stages||quote.minimum.attempts>remaining.attempts||
+          quote.minimum.readBytes>remaining.readBytes||quote.costs.storedBytes.minimum>remaining.storedBytes||
+          quote.minimum.modelCalls>remaining.modelCalls)reasons.push("original_remaining_allowance_unconfirmed");
+      }
     }
     for(const limited of input.admissionLimitations??[])if(limited.optionId===option.id&&limited.conditionsDigest===contextPreparationAdmissionKey(input,option)) {
       reasons.push(`admission_rejected:${limited.code}`);
@@ -289,25 +375,35 @@ export function decideContextPreparation(input:ContextPreparationPolicyInput):Co
     if(reasons.length)excluded.push({optionId:option.id,reasons});else eligible.push({option,quote,unknown,explorationKey});
   }
   if(input.options.length>policy.maximumOptions)limitations.push("method_option_search_incomplete");
+  if(!eligible.length&&input.admissionResponse&&revision==="15"){
+    const refusal=input.admissionLimitations!.find(l=>l.acceptanceId===input.admissionResponse)!;
+    return finish({kind:"defer",reason:`admission_rejected:${refusal.code}`,reconsiderOn:["admission_conditions_changed","alternative_path_available","current_control_changed"]});
+  }
   if(!eligible.length)return finish(adoption==="propose"?{kind:"none",reason:"qualified_recipient_input_available"}:
     {kind:"defer",reason:"no_supported_complete_path",reconsiderOn:["relevant_evidence_changed","method_path_changed","current_control_changed"]});
-  const capacityGap=reason==="necessary"&&input.current.kind==="gap"&&input.current.gap.capacity.some(c=>!c.allowed);
+  const capacityGap=reason==="necessary"&&(input.current.kind==="gap"?input.current.gap.capacity.some(c=>!c.allowed):
+    input.current.kind==="recipient_prepared"?input.current.capacity?.assessment.allowed===false:!input.current.prepared.capacity.allowed);
   const comparableExtents=capacityGap&&eligible.every(value=>value.option.sourceExtent!==undefined);
   // Text extent orders bounded exploration of a known capacity gap; actual savings remain unknown.
-  const extent=(a:ContextPreparationOption,b:ContextPreparationOption)=>comparableExtents&&a.sourceExtent&&b.sourceExtent?
+  const extent=(a:ContextPreparationOption<R>,b:ContextPreparationOption<R>)=>comparableExtents&&a.sourceExtent&&b.sourceExtent?
     b.sourceExtent.utf8Bytes-a.sourceExtent.utf8Bytes:0;
-  eligible.sort((a,b)=>a.unknown.filter(v=>v.startsWith("entry_")).length-b.unknown.filter(v=>v.startsWith("entry_")).length||
+  if(compared)comparison=comparePreparationOffers(eligible,input.methodSupplyReport,capacityGap);
+  else eligible.sort((a,b)=>a.unknown.filter(v=>v.startsWith("entry_")).length-b.unknown.filter(v=>v.startsWith("entry_")).length||
     Number(a.quote.phases.some(p=>p.kind==="generate"))-Number(b.quote.phases.some(p=>p.kind==="generate"))||a.option.request.method.localeCompare(b.option.request.method)||extent(a.option,b.option)||a.option.id.localeCompare(b.option.id));
-  const choice=eligible[0]!;
-  if(comparableExtents&&choice.option.sourceExtent){evidence.push(...eligible.map(value=>value.option.sourceExtent!.evidence));limitations.push("transformable_source_extent_is_not_predicted_savings_or_fit");}
+  const choice=comparison?eligible.find(e=>e.option.id===comparison.chosenId)!:eligible[0]!;
+  if(comparison?.basis==="bounded_exploration")limitations.push("complete_cost_or_successor_fit_not_established");
+  if(comparison?comparison.extentComparable:comparableExtents&&choice.option.sourceExtent){
+    evidence.push(...eligible.flatMap(value=>value.option.sourceExtent?[value.option.sourceExtent.evidence]:[]));limitations.push("transformable_source_extent_is_not_predicted_savings_or_fit");}
   evidence.push(...choice.option.comparisons.map(c=>c.basis));
   evidence.push(...choice.option.entries.map(e=>e.evidence),...choice.option.capability
     .filter(c=>c.targetRevision===choice.option.request.targetRevision&&c.methodRevision===choice.option.request.methodRevision)
     .flatMap(c=>c.response?[c.evidence,c.response]:[c.evidence]));
   if(choice.option.stableScope)evidence.push(choice.option.stableScope);
-  if(choice.option.replaces)evidence.push(choice.option.replaces.evidence);
+  if(choice.option.replaces)evidence.push(choice.option.replaces.evidence,...proofRequired&&choice.option.replaces.observedLimitation?[choice.option.replaces.observedLimitation]:[]);
   if(choice.option.extendsReception)evidence.push(choice.option.extendsReception.evidence,
     receptions.find(r=>r.optionId===choice.option.extendsReception!.optionId)!.evidence);
+  if(choice.option.independentReception)evidence.push(choice.option.independentReception.evidence,
+    ...unavailable.flatMap(r=>r.inputGap?[r.inputGap.evidence]:[]));
   return finish({kind:"propose",optionId:choice.option.id,quotation:choice.quote,reason,explorationKey:choice.explorationKey,uncertainty:choice.unknown,
     ...(choice.option.replaces?{replaces:choice.option.replaces}:{})});
 }
@@ -348,20 +444,34 @@ function uniqueEvidence(values:readonly ContextPolicyEvidence[]):ContextPolicyEv
   }
   return [...result.values()];
 }
-function validateInput(input:ContextPreparationPolicyInput):void {
+function validateInput<R extends ContextPreparationMethodRequest,C extends PolicyInput>(input:ContextPreparationPolicyInput<R,C>):void {
   if(!input.boundary||!input.requirementsDigest||!input.scope.id||!input.scope.runId||!input.scope.target||
     !Number.isSafeInteger(input.optionalInFlight)||input.optionalInFlight<0)throw new TypeError("context_policy_scope_invalid");
-  for(const current of [input.current,...input.alternatives.map(a=>a.input)]) {
+  for(const current of [input.current,...input.alternatives.map(a=>a.input),...(input.receptionOptions??[]).flatMap(o=>o.sourceInput?[o.sourceInput]:[])]) {
     uniqueEvidence([current.evidence]);
     if(current.kind==="prepared") {
       validatePreparedContextInput(current.prepared);const demand=current.prepared.demand;
       if(demand.runId!==input.scope.runId||demand.recipient!==input.scope.recipient||demand.purpose!==input.scope.purpose||demand.targetRevision!==input.scope.target)throw new TypeError("context_policy_input_scope_mismatch");
+    } else if(current.kind==="recipient_prepared") {
+      if(modelInputValueDigest(current.scope)!==modelInputValueDigest(input.scope)||!current.inputId||!current.bodyDigest||!current.exactInputDigest||!current.judgmentId||
+        typeof current.allowed!=="boolean"||!Array.isArray(current.risks))throw new TypeError("context_policy_readiness_invalid");
+      if(current.capacity){
+        validateContextRecipientInputCapacity(current.capacity,input.scope);
+        if(current.capacity.inputId!==current.inputId||current.capacity.assessment.allowed!==current.allowed)
+          throw new TypeError("context_policy_readiness_capacity_mismatch");
+      }
     } else if(current.gap.targetRevision!==input.scope.target)throw new TypeError("context_policy_gap_target_mismatch");
   }
-  for(const pressure of input.pressure)uniqueEvidence([pressure.evidence]);
+  for(const pressure of input.pressure){
+    uniqueEvidence([pressure.evidence]);
+    if(pressure.kind==="input_capacity_risk"&&!pressure.inputId||"inputId" in pressure&&(!pressure.inputId||typeof pressure.inputId!=="string"))
+      throw new TypeError("context_policy_pressure_input_missing");
+  }
   for(const rejection of input.rejectedInputs??[]) {
     uniqueEvidence([rejection.evidence]);
-    if(!rejection.stageId||rejection.targetRevision!==input.scope.target||!rejection.bodyDigest||rejection.evidence.kind!=="fact")
+    const identity="stageId" in rejection?Boolean(rejection.stageId):rejection.kind==="recipient"&&Boolean(rejection.activityId&&rejection.inputId&&rejection.exactInputDigest)&&
+      rejection.scopeId===input.scope.id&&rejection.boundary===input.boundary;
+    if(!identity||rejection.targetRevision!==input.scope.target||!rejection.bodyDigest||rejection.evidence.kind!=="fact")
       throw new TypeError("context_policy_input_rejection_invalid");
   }
   const receptions=input.inputReceptions??[];
@@ -369,8 +479,12 @@ function validateInput(input:ContextPreparationPolicyInput):void {
   if(new Set(receptionOptions.map(o=>o.id)).size!==receptionOptions.length)throw new TypeError("context_policy_reception_ambiguous");
   for(const option of receptionOptions) {
     uniqueEvidence([option.evidence]);
-    if(!option.id||!option.members.length||new Set(option.members.map(m=>m.pathId)).size!==option.members.length||new Set(option.members.map(m=>m.workId)).size!==option.members.length)
+    if(option.beforeUse!==undefined&&(option.beforeUse!==true||!option.sourceInput))throw new TypeError("context_policy_before_use_source_missing");
+    if(!option.id||!option.members.length&&!option.sourceInput||new Set(option.members.map(m=>m.pathId)).size!==option.members.length||new Set(option.members.map(m=>m.workId)).size!==option.members.length)
       throw new TypeError("context_policy_reception_binding_invalid");
+    if(option.sourceInput&&(option.sourceInput.kind!=="recipient_prepared"||
+      ![input.current,...input.alternatives.map(a=>a.input)].some(current=>modelInputValueDigest(current)===modelInputValueDigest(option.sourceInput))))
+      throw new TypeError("context_policy_reception_source_invalid");
     for(const member of option.members)if(!input.inFlight.some(work=>work.pathId===member.pathId&&work.workId===member.workId&&
       [...input.options,...(input.reuseOptions??[]).map(r=>r.option)].some(o=>modelInputValueDigest(o.request)===member.requestDigest&&contextPreparationWorkKey(input.scope,o.request)===work.preparationKey)))
       throw new TypeError("context_policy_reception_binding_invalid");
@@ -379,6 +493,14 @@ function validateInput(input:ContextPreparationPolicyInput):void {
     throw new TypeError("context_policy_reception_ambiguous");
   for(const reception of receptions) {
     uniqueEvidence([reception.evidence]);
+    if(reception.outcomeEvidence){
+      uniqueEvidence([reception.outcomeEvidence]);
+      if(reception.outcomeEvidence.owner!=="activity"||reception.outcomeEvidence.kind!=="fact")
+        throw new TypeError("context_policy_reception_outcome_invalid");
+    }
+    if(reception.checkedInput&&(reception.state!=="checked"||!reception.outcomeEvidence||!input.alternatives.some(a=>
+      a.input.kind==="recipient_prepared"&&a.input.inputId===reception.checkedInput!.inputId&&a.input.exactInputDigest===reception.checkedInput!.exactInputDigest)))
+      throw new TypeError("context_policy_checked_reception_input_invalid");
     const option=receptionOptions.find(o=>o.id===reception.optionId);
     if(!reception.pathId||!reception.workId||!option||option.members.some(m=>m.pathId===reception.pathId)||
       !["active","checked","unavailable","unknown"].includes(reception.state))
@@ -394,9 +516,11 @@ function validateInput(input:ContextPreparationPolicyInput):void {
   }
   if(input.observationReport) {
     const report=input.observationReport,window=report.window,last=window.inputs.at(-1);
+    const capacity=input.current.kind==="prepared"?{inputId:input.current.prepared.encoded.id,measurements:input.current.prepared.measurement}:
+      input.current.kind==="recipient_prepared"?input.current.capacity:null;
     if(modelInputValueDigest(window.scope)!==modelInputValueDigest(input.scope)||!window.settingsRevision||
-      window.inputs.length>INITIAL_CONTEXT_PREPARATION_POLICY.observations||!last||input.current.kind!=="prepared"||
-      last.inputId!==input.current.prepared.encoded.id||modelInputValueDigest(last.measurements)!==modelInputValueDigest(input.current.prepared.measurement))
+      window.inputs.length>INITIAL_CONTEXT_PREPARATION_POLICY.observations||!last||!capacity||
+      last.inputId!==capacity.inputId||modelInputValueDigest(last.measurements)!==modelInputValueDigest(capacity.measurements))
       throw new TypeError("context_policy_observation_scope_invalid");
     for(let i=0;i<window.inputs.length;i++) {
       const value=window.inputs[i]!;uniqueEvidence([value.evidence]);
@@ -414,6 +538,12 @@ function validateInput(input:ContextPreparationPolicyInput):void {
   for(const reuse of reuseOptions)if(!input.inFlight.some(work=>work.workId===reuse.workId&&work.pathId===reuse.pathId&&
     work.preparationKey===contextPreparationWorkKey(input.scope,reuse.option.request)))throw new TypeError("context_policy_reuse_binding_invalid");
   for(const option of [...input.options,...reuseOptions.map(r=>r.option)]) {
+    if(option.independentReception){
+      const independent=option.independentReception;
+      if(independent.boundary!==input.boundary||independent.requirementsDigest!==input.requirementsDigest)
+        throw new TypeError("context_policy_independent_reception_invalid");
+      uniqueEvidence([independent.evidence]);
+    }
     if(option.extendsReception){
       const original=receptions.find(r=>r.optionId===option.extendsReception!.optionId),gap=original?.inputGap;
       const evidence=original?.state==="unavailable"&&gap?.gap.capacity.some(c=>!c.allowed)?gap.evidence:original?.providerRejection?.evidence;

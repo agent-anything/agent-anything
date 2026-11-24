@@ -71,8 +71,10 @@ export class ActivityHandoffDatabase {
   constructor(private readonly db: Database.Database,
     private readonly retain: (value: unknown) => ExecutionContentRoot,
     private readonly hydrate: (root: ExecutionContentRoot) => unknown,
-    private readonly generation:()=>number) {
-    this.resources=new ActivityResourceDatabase(db);
+    private readonly generation:()=>number,
+    private readonly readScope:<T>(work:()=>T)=>T=work=>db.transaction(work)(),
+    private readonly measure:<T>(phase:string,work:()=>T)=>T=(_phase,work)=>work()) {
+    this.resources=new ActivityResourceDatabase(db,id=>this.pathIntent(id));
     this.reconsideration=new ActivityReconsiderationDatabase(db,(runId,subject,kind,details)=>this.recordFact(runId,subject,null,kind,details));
     this.scheduling=new ActivitySchedulingDatabase(db,(runId,workId,kind,details)=>{
       this.recordFact(runId,workId,null,kind,details);
@@ -84,10 +86,16 @@ export class ActivityHandoffDatabase {
 
   command(command: ActivityHandoffCommand): {activityValue: ActivityHandoffValue} {
     this.beginObservations();
-    const prepared = this.prepare(command);
-    try {return {activityValue:this.withPrepared(prepared,()=>this.db.transaction(() => this.execute(command, prepared))())};}
+    if(command.kind.startsWith("read_")||command.kind.startsWith("observe_")||command.kind==="facts"||command.kind==="pending") {
+      return this.readScope(()=>{
+        const prepared=this.measure("prepare",()=>this.prepare(command));
+        return {activityValue:this.withPrepared(prepared,()=>this.measure("read",()=>this.execute(command,prepared)))};
+      });
+    }
+    const prepared = this.measure("prepare",()=>this.prepare(command));
+    try {return {activityValue:this.withPrepared(prepared,()=>this.measure("acceptance",()=>this.db.transaction(() => this.execute(command, prepared))()))};}
     catch(error) {
-      if(command.kind==="schedule_work"&&error&&typeof error==="object"&&"code" in error&&["activity_schedule_pool_missing","activity_schedule_resource_unavailable"].includes(String(error.code))) {
+      if(command.kind==="schedule_work"&&error&&typeof error==="object"&&"code" in error&&["activity_schedule_pool_missing","activity_schedule_claim_exceeds_pool_capacity"].includes(String(error.code))) {
         this.db.transaction(()=>this.scheduling.recordLimitation(command.intent,String(error.code)))();
       }
       if(command.kind==="dispatch"&&error&&typeof error==="object"&&"code" in error&&["activity_schedule_not_ready","activity_schedule_turn_waiting"].includes(String(error.code))) {
@@ -95,6 +103,23 @@ export class ActivityHandoffDatabase {
       }
       throw error;
     }
+  }
+
+  /** Scope lookup only. Professional acceptance still checks full stage evidence. */
+  stageScope(requestId:string):ActivityPathState|null {
+    activityToken(requestId);
+    const row=this.sql("SELECT path_id FROM activity_stages WHERE id=?").get(requestId) as {path_id:string}|undefined;
+    return row?this.path(row.path_id,false):null;
+  }
+  stageReceipt(requestId:string,command:import("@agent-anything/agent-runtime/activity").ActivityCommandReceipt["command"]):import("@agent-anything/agent-runtime/activity").ActivityCommandReceipt {
+    activityToken(requestId);
+    const row=this.sql("SELECT path_id,status,result_id,receipt_id,processing FROM activity_stages WHERE id=?").get(requestId) as
+      Pick<StageRow,"path_id"|"status"|"result_id"|"receipt_id"|"processing">|undefined;
+    if(!row)fail("stage_missing");
+    const settlement=this.sql("SELECT id FROM activity_settlement_receipts WHERE request_id=?").get(requestId) as {id:string}|undefined;
+    return {kind:"activity_command_receipt",command,requestId,pathId:row.path_id,status:row.status,
+      resultId:row.result_id,receiptId:row.receipt_id,settlementId:settlement?.id??null,
+      processingId:row.processing?(JSON.parse(row.processing) as ActivityProcessingClaim).id:null};
   }
 
   acceptanceParticipant(): SharedAcceptanceParticipant {
@@ -151,7 +176,8 @@ export class ActivityHandoffDatabase {
       }
       if(part.kind==="path_cancellation") {
         const command=part.proposal as Extract<ActivityHandoffCommand,{kind:"cancel"}>;
-        const path=this.requirePath(command.pathId);
+        const path=this.path(command.pathId,false);
+        if(!path)throw new SharedAcceptanceRejection("activity","activity_cancellation_scope_invalid");
         if(command.kind!=="cancel"||path.intent.runId!==proposal.scope||path.intent.owner!==proposal.actor)
           throw new SharedAcceptanceRejection("activity","activity_cancellation_scope_invalid");
         return {command,prepared:this.sharePrepared(proposal,this.prepare(command))};
@@ -232,7 +258,8 @@ export class ActivityHandoffDatabase {
         if(!work||work.intent.owner!==proposal.actor||work.intent.runId!==proposal.scope)throw new SharedAcceptanceRejection("activity","activity_closure_scope_invalid");
       }
       try {this.withPrepared(prepared,()=>this.execute(command,prepared));} catch (error) {
-        if (error instanceof Error && "code" in error && typeof error.code === "string" && error.code.startsWith("activity_") && error.code !== "activity_corrupt") throw new SharedAcceptanceRejection("activity",error.code);
+        if (error instanceof Error && "code" in error && typeof error.code === "string" && error.code.startsWith("activity_") &&
+          error.code !== "activity_corrupt" && error.code !== "activity_content_not_prepared") throw new SharedAcceptanceRejection("activity",error.code);
         throw error;
       }
     },validate:(value,proposal)=>{
@@ -305,7 +332,19 @@ export class ActivityHandoffDatabase {
       const stop=this.sql("SELECT value FROM activity_stop_receipts WHERE request_id=?").get(id) as ValueRow|undefined;
       if(stop)warm(stop.value);
     };
-    if(command.kind!=="facts"&&"pathId" in command&&command.pathId!==undefined)path(command.pathId);
+    const warmSubmission=(request:ActivityStageRequest)=>{stage(request.id);path(request.pathId);for(const dependency of request.dependencies)stage(dependency.requestId);};
+    this.readScope(()=>{
+    if(command.kind==="read_snapshot"||command.kind==="observe_state") {
+      activityToken(command.pathId);
+      for(const ids of [command.requestIds,command.inputNeedIds]) {
+        if(!Array.isArray(ids)||ids.length>64||new Set(ids).size!==ids.length)fail("observation_scope_invalid");
+        ids.forEach(activityToken);
+      }
+      for(const id of this.snapshotStageIds(command)) {
+        if(command.kind==="read_snapshot")stage(id,true);
+      }
+    }
+    if(command.kind!=="facts"&&command.kind!=="observe_state"&&command.kind!=="cancel"&&"pathId" in command&&command.pathId!==undefined)path(command.pathId);
     if(command.kind==="register_input_need") {path(command.need.stage.pathId);if(command.need.origin)stage(command.need.origin.requestId);}
     if(command.kind==="subscribe_reconsideration"&&command.subscription.binding){
       if(command.subscription.binding.kind==="activity_path")path(command.subscription.binding.id);
@@ -329,15 +368,17 @@ export class ActivityHandoffDatabase {
       const attempt=this.requireAttempt(command.result.attemptId);stage(attempt.requestId);
       const old=this.sql("SELECT value FROM activity_raw_results WHERE id=?").get(command.result.id) as {value:string}|undefined;if(old)warm(old.value);
     }
-    const warmSubmission=(request:ActivityStageRequest)=>{stage(request.id);path(request.pathId);for(const dependency of request.dependencies)stage(dependency.requestId);};
     if(command.kind==="submit")warmSubmission(command.request);
+    if(command.kind==="accept") {stage(command.receipt.requestId);command.receipt.next.forEach(warmSubmission);}
+    if(command.kind==="settle"||command.kind==="stop_professional_path")stage(command.receipt.requestId);
+    });
     if (command.kind === "open_path") validateActivityPath(command.intent);
     if (command.kind === "submit") prepare(command.request);
     if (command.kind === "save_raw") prepare(command.result);
     if (command.kind === "accept") {
       stage(command.receipt.requestId);
       prepare(command.receipt); prepare(command.receipt.progress);
-      for (const request of command.receipt.next) {warmSubmission(request);prepare(request);digests.set(request.input,modelInputValueDigest(request.input));}
+      for (const request of command.receipt.next) {prepare(request);digests.set(request.input,modelInputValueDigest(request.input));}
     }
     if(command.kind==="settle") {stage(command.receipt.requestId);prepare(command.receipt);}
     if(command.kind==="stop_professional_path") {stage(command.receipt.requestId);prepare(command.receipt);prepare(command.receipt.progress);}
@@ -445,20 +486,32 @@ export class ActivityHandoffDatabase {
         if (old) {this.same(old.intent, command.intent); return old;}
         const intent = command.intent;
         this.scheduling.validatePath(intent,true);
+        this.resources.validate(intent);
         const peers=this.sql("SELECT intent,digest FROM activity_paths WHERE run_id=? AND json_extract(intent,'$.resourceScope')=?").all(intent.runId,intent.resourceScope) as {intent:string;digest:string}[];
         for(const peer of peers){
           const established=JSON.parse(peer.intent) as ActivityPathIntent;
           if(modelInputValueDigest(established)!==peer.digest)fail("corrupt");
-          if(established.maximumStages!==intent.maximumStages || established.maximumAttempts!==intent.maximumAttempts || established.maximumConcurrent!==intent.maximumConcurrent || established.permissionBasis!==intent.permissionBasis||established.deadlineAt!==intent.deadlineAt||modelInputValueDigest(established.resourceLimits??{})!==modelInputValueDigest(intent.resourceLimits??{}))fail("resource_scope_conflict");
+          if(established.maximumStages!==intent.maximumStages || established.maximumAttempts!==intent.maximumAttempts || established.maximumConcurrent!==intent.maximumConcurrent || established.permissionBasis!==intent.permissionBasis||established.deadlineAt!==intent.deadlineAt||modelInputValueDigest(established.resourceLimits??{})!==modelInputValueDigest(intent.resourceLimits??{})||modelInputValueDigest(established.resourceBudgetSources??{})!==modelInputValueDigest(intent.resourceBudgetSources??{}))fail("resource_scope_conflict");
         }
         this.sql("INSERT INTO activity_paths VALUES (?,?,?,?,0,0,0,NULL,0,0)")
           .run(intent.id, intent.runId, JSON.stringify(intent), modelInputValueDigest(intent));
-        this.fact(intent,null,"path_opened",{purpose:intent.purpose,resourceScope:intent.resourceScope});
+        this.fact(intent,null,"path_opened",{purpose:intent.purpose,resourceScope:intent.resourceScope,
+          resourceLimits:intent.resourceLimits??{},resourceBudgetSources:intent.resourceBudgetSources??{}});
         this.reconsideration.source({id:activityFactSourceId("progress",intent.id),runId:intent.runId,owner:intent.owner});
         this.reconsideration.source({id:activityFactSourceId("control",intent.id),runId:intent.runId,owner:"activity-control"});
         return this.path(intent.id);
       }
       case "read_path": return this.path(command.pathId);
+      case "read_snapshot": return {path:this.path(command.pathId),stages:this.snapshotStageIds(command).map(id=>this.stage(id)),
+        inputNeeds:command.inputNeedIds.map(id=>this.inputNeed(id))};
+      case "observe_state": {
+        const path=this.path(command.pathId,false);
+        const head=path?(({progress:_,...rest})=>rest)(path):null;
+        return {path:head,stages:this.snapshotStageIds(command).map(requestId=>{
+          const row=this.sql("SELECT path_id,digest,status FROM activity_stages WHERE id=?").get(requestId) as Pick<StageRow,"path_id"|"digest"|"status">|undefined;
+          return row?{requestId,pathId:row.path_id,requestDigest:row.digest,status:row.status}:null;
+        }),inputNeeds:command.inputNeedIds.map(id=>this.inputNeed(id))};
+      }
       case "observe_paths": {
         if(!Array.isArray(command.pathIds)||!command.pathIds.length||command.pathIds.length>64||new Set(command.pathIds).size!==command.pathIds.length)fail("observation_scope_invalid");
         return command.pathIds.map(pathId=>{
@@ -693,8 +746,10 @@ export class ActivityHandoffDatabase {
         return this.stage(stage.request.id);
       }
       case "cancel": {
-        const path = this.requirePath(command.pathId);
-        if (path.cancelled) return path;
+        const path = this.path(command.pathId,false);
+        if(!path)fail("path_missing");
+        const receipt=(revision:number)=>({kind:"activity_control" as const,pathId:path.intent.id,runId:path.intent.runId,controlRevision:revision,cancelled:true});
+        if (path.cancelled) return receipt(path.controlRevision);
         if (path.controlRevision !== command.expectedControlRevision) fail("control_conflict");
         this.sql("UPDATE activity_paths SET cancelled=1,control_revision=control_revision+1 WHERE id=?").run(command.pathId);
         this.sql("UPDATE activity_handoffs SET pending=0 WHERE path_id=? AND kind<>'reconciliation'").run(command.pathId);
@@ -702,7 +757,7 @@ export class ActivityHandoffDatabase {
         this.fact(path.intent,null,"cancelled",{controlRevision:path.controlRevision+1});
         this.reconsideration.publish({id:`${path.intent.id}:cancelled:${path.controlRevision+1}`,sourceId:activityFactSourceId("control",path.intent.id),
           ref:{owner:"activity-control",kind:"cancelled",id:path.intent.id,revision:String(path.controlRevision+1)}});
-        return this.path(command.pathId);
+        return receipt(path.controlRevision+1);
       }
       case "pending_scopes": {
         activityCount(command.limit);
@@ -713,6 +768,12 @@ export class ActivityHandoffDatabase {
           UNION SELECT r.run_id FROM activity_reconsiderations r WHERE ${PENDING_RECONSIDERATION_FACTS_SQL}
           ) WHERE (? IS NULL OR run_id>?) ORDER BY run_id LIMIT ?`)
           .all(command.afterRunId,command.afterRunId,command.limit) as {run_id:string}[]).map(row=>({runId:row.run_id}));
+      }
+      case "scope_obligations":{
+        activityToken(command.runId);
+        const pendingHandoffs=(this.sql("SELECT COUNT(*) AS n FROM activity_handoffs WHERE run_id=? AND pending=1").get(command.runId) as {n:number}).n;
+        const openSubscriptions=(this.sql("SELECT COUNT(*) AS n FROM activity_reconsiderations WHERE run_id=? AND closed=0").get(command.runId) as {n:number}).n;
+        return {runId:command.runId,pendingHandoffs,openSubscriptions};
       }
       case "pending": {
         activityToken(command.runId); activityCount(command.after, true); activityCount(command.limit);
@@ -770,16 +831,39 @@ export class ActivityHandoffDatabase {
     const row=this.sql("SELECT id FROM activity_input_needs WHERE request_id=? OR unavailable_request_id=?").get(requestId,requestId) as {id:string}|undefined;
     return row?this.inputNeed(row.id):null;
   }
-  private path(id: string): ActivityPathState | null {
+  private snapshotStageIds(command:import("@agent-anything/agent-runtime/activity").ActivityReadScope):string[] {
+    const ids=new Set(command.requestIds);
+    for(const id of command.inputNeedIds) {
+      const need=this.inputNeed(id);
+      if(need){
+        if(need.stage.pathId!==command.pathId||need.unavailableStage.pathId!==command.pathId)fail("observation_scope_invalid");
+        ids.add(need.stage.id);ids.add(need.unavailableStage.id);
+      }
+    }
+    for(const id of ids) {
+      const row=this.sql("SELECT path_id FROM activity_stages WHERE id=?").get(id) as {path_id:string}|undefined;
+      if(row&&row.path_id!==command.pathId)fail("observation_scope_invalid");
+    }
+    return [...ids];
+  }
+  private path(id: string,includeProgress=true): ActivityPathState | null {
     const row = this.sql("SELECT * FROM activity_paths WHERE id=?").get(id) as PathRow | undefined;
     if (!row) return null;
-    const intent = JSON.parse(row.intent) as ActivityPathIntent;
-    validateActivityPath(intent);
-    if (row.digest !== modelInputValueDigest(intent) || intent.id !== row.id || intent.runId !== row.run_id) fail("corrupt");
+    const intent = this.checkedPathIntent(row);
     const resources=this.resourceUse(intent);
     return {intent, controlRevision: row.control_revision, cancelled: row.cancelled === 1, progressRevision: row.progress_revision,
-      progress: row.progress ? this.body(row.progress) : null, admittedStages: row.admitted, dispatchedAttempts: row.attempts,
+      progress: includeProgress&&row.progress ? this.body(row.progress) : null, admittedStages: row.admitted, dispatchedAttempts: row.attempts,
       resourceUse:{admittedStages:resources.admitted,dispatchedAttempts:resources.attempts}};
+  }
+  private pathIntent(id:string):ActivityPathIntent|null {
+    const row=this.sql("SELECT id,run_id,intent,digest FROM activity_paths WHERE id=?").get(id) as Pick<PathRow,"id"|"run_id"|"intent"|"digest">|undefined;
+    return row?this.checkedPathIntent(row):null;
+  }
+  private checkedPathIntent(row:Pick<PathRow,"id"|"run_id"|"intent"|"digest">):ActivityPathIntent {
+    const intent=JSON.parse(row.intent) as ActivityPathIntent;
+    validateActivityPath(intent);
+    if(row.digest!==modelInputValueDigest(intent)||intent.id!==row.id||intent.runId!==row.run_id)fail("corrupt");
+    return intent;
   }
   private stage(id: string): ActivityStageState | null {
     const row = this.sql("SELECT * FROM activity_stages WHERE id=?").get(id) as StageRow | undefined;

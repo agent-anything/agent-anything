@@ -29,6 +29,11 @@ export class HelarcActivityBindings implements ActivityPurposeResolver<ActivityP
     return root?this.scopes.get(root):undefined;
   }
   async available(runId:string):Promise<boolean> {return Boolean(await this.scope(runId));}
+  unbind(runId:string,originalBindingId:string):void {
+    const scope=this.scopes.get(runId);if(!scope)return;
+    if(scope.originalBindingId!==originalBindingId)throw new TypeError("activity_scope_retirement_binding_changed");
+    this.scopes.delete(runId);
+  }
   async resolve(binding:ActivityPurposeBinding,scope:{runId:string;pathId:string}) {
     const original=await this.scope(scope.runId);
     if(!original)throw new TypeError("activity_original_scope_binding_unavailable");

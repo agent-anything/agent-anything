@@ -1,6 +1,7 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {ContextUseScope} from "@agent-anything/context/selection";
-import type {ActivityHandoffPort,ActivityPathState,ActivityStageState} from "../activity/index.js";
+import type {ActivityHandoffPort,ActivityStageState} from "../activity/index.js";
+import type {ActivitySnapshot,ActivityStateObservation} from "../activity/ActivityObservation.js";
 import {CONTEXT_INPUT_PREPARATION_PURPOSE,validatePreparedContextInput,type ContextInputPreparationRequest,
   type PreparedContextInput,type ContextInputPreparationGap} from "./ContextInputPreparation.js";
 import type {ContextCurrentInput} from "./ContextPreparationPolicy.js";
@@ -28,13 +29,17 @@ export async function readContextInputEvidence(input:{
   readonly boundary:string;
   /** Historical evidence only; cancellation still prevents treating this as a usable current input. */
   readonly includeCancelledOutcome?:boolean;
+  /** Evidence already read by this decision; scope and current revisions are still checked. */
+  readonly snapshot?:ActivitySnapshot;
 },signal:AbortSignal):Promise<ContextInputEvidence> {
   signal.throwIfAborted();
-  const read=()=>input.activities.command({kind:"read_path",pathId:input.pathId}) as Promise<ActivityPathState|null>;
-  const path=await read();
+  const snapshot=input.snapshot??await input.activities.command({kind:"read_snapshot",pathId:input.pathId,
+    requestIds:[`${input.pathId}:stage:1`],inputNeedIds:[]},
+    {observation:{owner:"context-representation",purpose:"input-evidence",operationId:input.demandId}}) as ActivitySnapshot;
+  const path=snapshot.path;
   if(!path||path.intent.id!==input.pathId||path.intent.runId!==input.scope.runId||path.intent.owner!==input.scope.owner||
     path.intent.purpose.digest!==modelInputValueDigest(CONTEXT_INPUT_PREPARATION_PURPOSE))throw new TypeError("context_input_evidence_path_mismatch");
-  const first=await input.activities.command({kind:"read_stage",requestId:`${input.pathId}:stage:1`}) as ActivityStageState|null;
+  const first=snapshot.stages.find(stage=>stage?.request.id===`${input.pathId}:stage:1`);
   const original=(first?.request.input as {request?:ContextInputPreparationRequest}|undefined)?.request;
   const demand=original?.demand;
   if(!first||first.request.pathId!==input.pathId||original?.kind!=="context_input_preparation"||!demand||
@@ -42,7 +47,9 @@ export async function readContextInputEvidence(input:{
     demand.purpose!==input.scope.purpose||demand.targetRevision!==input.scope.target||demand.historyBoundary!==input.boundary)
     throw new TypeError("context_input_evidence_scope_mismatch");
   const unchanged=async()=>{
-    signal.throwIfAborted();const latest=await read();signal.throwIfAborted();
+    signal.throwIfAborted();
+    const latest=(await input.activities.command({kind:"observe_state",pathId:input.pathId,requestIds:[],inputNeedIds:[]}) as ActivityStateObservation).path;
+    signal.throwIfAborted();
     if(!latest)throw new TypeError("context_input_evidence_path_missing");
     return latest.controlRevision===path.controlRevision&&latest.progressRevision===path.progressRevision;
   };
@@ -50,7 +57,9 @@ export async function readContextInputEvidence(input:{
   const progress=path.progress as {state?:string;stageRequestId?:string;rawResultId?:string;prepared?:PreparedContextInput;gap?:ContextInputPreparationGap;reason?:string}|null;
   if(!progress)return await unchanged()?{kind:path.cancelled?"cancelled":"pending"}:{kind:"changed"};
   if(!progress.stageRequestId||!progress.rawResultId)throw new TypeError("context_input_evidence_origin_missing");
-  const stage=await input.activities.command({kind:"read_stage",requestId:progress.stageRequestId}) as ActivityStageState|null;
+  const stage=snapshot.stages.find(stage=>stage?.request.id===progress.stageRequestId)??
+    await input.activities.command({kind:"read_stage",requestId:progress.stageRequestId},
+      {observation:{owner:"context-representation",purpose:"input-evidence",operationId:input.demandId}}) as ActivityStageState|null;
   if(!stage||stage.request.pathId!==input.pathId||stage.status!=="accepted"||!stage.receipt||!stage.result||
     stage.result.completeness!=="complete"||stage.result.outcome!=="returned"||stage.result.id!==progress.rawResultId||
     stage.receipt.resultId!==stage.result.id||stage.receipt.requestId!==stage.request.id||stage.receipt.owner!==input.scope.owner||

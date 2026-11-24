@@ -7,3 +7,5 @@ export { ExecutionEvidenceInspectionAdapter } from "./ExecutionEvidenceInspectio
 export * from "./RuntimeEventInspectionAdapter.js";
 export * from "./RunTraceInspectionAdapter.js";
 export { ExecutionFlowInspectionAdapter } from "./ExecutionFlowInspectionAdapter.js";
+export { ProtocolEvidenceInspectionAdapter } from "./ProtocolEvidenceInspectionAdapter.js";
+export * from "./NativeProtocolInspection.js";

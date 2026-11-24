@@ -1,34 +1,46 @@
 
 import type { HelarcPermissionPreset } from "../configuration/HelarcPermissionPreset.js";
 import type { HelarcProviderKind } from "../configuration/HelarcProviderProfile.js";
+import {snapshotModelInteractionProtocol,snapshotProtocolRevisionRef,type ModelInteractionProtocolRef,type ProtocolRevisionRef} from "@agent-anything/model-interaction/protocol";
 
 export type HelarcRunPermissionPreset = HelarcPermissionPreset;
 
-export interface CreateHelarcRunInput {
+export interface HelarcNativeRunModelRef {
+  readonly protocol:ModelInteractionProtocolRef;
+  readonly configuration:ProtocolRevisionRef;
+  readonly model:string;
+}
+type RunModelSelection={readonly nativeModel:HelarcNativeRunModelRef}|{readonly providerProfileId:string};
+
+export type CreateHelarcRunInput = RunModelSelection & {
   runId: string;
   taskText: string;
   workspaceProfileId: string;
   additionalWorkspaceProfileIds?: readonly string[];
-  providerProfileId: string;
   permissionPreset?: HelarcRunPermissionPreset;
   createdAt: string;
   metadata?: Readonly<Record<string, unknown>>;
 }
 
-export interface HelarcRunInput {
+export type HelarcRunInput = RunModelSelection & {
   runId: string;
   taskText: string;
   workspaceProfileId: string;
   additionalWorkspaceProfileIds: readonly string[];
-  providerProfileId: string;
   permissionPreset: HelarcRunPermissionPreset;
   createdAt: string;
   metadata: Readonly<Record<string, unknown>>;
 }
 
-export interface HelarcRunProviderRef {
+export type HelarcRunProviderRef = ({
   profileId: string;
   providerKind: HelarcProviderKind;
+  nativeModel?:never;
+} | {
+  profileId:null;
+  providerKind:null;
+  nativeModel:HelarcNativeRunModelRef;
+}) & {
   displayName: string;
   endpointLabel: string;
   model: string;
@@ -40,6 +52,7 @@ export type HelarcRunContractErrorCode =
   | "run_workspace_profile_id_required"
   | "run_workspace_profile_ids_invalid"
   | "run_provider_profile_id_required"
+  | "run_model_configuration_invalid"
   | "run_created_at_invalid"
   | "run_permission_preset_invalid";
 
@@ -84,12 +97,14 @@ export function createHelarcRunInput(
     );
   }
 
-  const providerProfileId = input.providerProfileId.trim();
-  if (providerProfileId.length === 0) {
-    return reject(
-      "run_provider_profile_id_required",
-      "Run provider profile id is required.",
-    );
+  let model:RunModelSelection;
+  if("nativeModel" in input){
+    try{model={nativeModel:snapshotHelarcNativeRunModelRef(input.nativeModel)};}
+    catch{return reject("run_model_configuration_invalid","Run model configuration is invalid.");}
+  }else{
+    const providerProfileId=input.providerProfileId.trim();
+    if(!providerProfileId)return reject("run_provider_profile_id_required","Run provider profile id is required.");
+    model={providerProfileId};
   }
 
   if (!isIsoDateTime(input.createdAt)) {
@@ -111,12 +126,17 @@ export function createHelarcRunInput(
       taskText,
       workspaceProfileId,
       additionalWorkspaceProfileIds,
-      providerProfileId,
+      ...model,
       permissionPreset,
       createdAt: input.createdAt,
       metadata: input.metadata ?? {},
     },
   };
+}
+
+export function snapshotHelarcNativeRunModelRef(value:HelarcNativeRunModelRef):HelarcNativeRunModelRef {
+  if(!value||typeof value.model!=="string"||!value.model.trim()||value.model!==value.model.trim())throw new TypeError("run_model_configuration_invalid");
+  return Object.freeze({protocol:snapshotModelInteractionProtocol(value.protocol),configuration:snapshotProtocolRevisionRef(value.configuration),model:value.model});
 }
 
 function normalizeAdditionalWorkspaceProfileIds(

@@ -26,6 +26,8 @@ function fixture() {
   const changed = () => {for (const listener of listeners) listener();};
   const activities: ActivityHandoffPort = {command: vi.fn(async command => {
     order.push(command.kind);
+    if(command.kind==="observe_state")return {path:structuredClone(path),stages:[stage,unavailable].filter(value=>value!==null).map(value=>({
+      requestId:value!.request.id,pathId:"task",requestDigest:"fixture",status:value!.status})),inputNeeds:[]};
     if(command.kind==="observe_paths")return command.pathIds.map(pathId=>({pathId,runId:"root",changeRevision:observationRevision,
       controlRevision:path.controlRevision,progressRevision:0,cancelled:path.cancelled}));
     if (command.kind === "read_path") return structuredClone(path);
@@ -68,7 +70,7 @@ describe("TaskModelResponseActivity", () => {
       result:{id:"limitation-raw",completeness:"complete",outcome:"returned",value:{kind:"input_limitation_recorded",digest:modelInputValueDigest(limitation)}},
       receipt:{id:"limitation-accepted",owner:"task-decision",requestId:"task:input-unavailable",resultId:"limitation-raw",
         progress:{kind:"task_input_unavailable",sourceStageId:"task:source",rawResultId:"limitation-raw",limitation}}} as unknown as ActivityStageState);
-    const expected={operationSettlement:"settled_failure",failure:{kind:"input_preparation",failure:{code:"context_input_unavailable",retryable:false,
+    const expected={operationSettlement:"settled_failure",failure:{kind:"input_preparation",failure:{code:"model_request_input_preparation_failed",retryable:false,
       metadata:{rawResultId:"limitation-raw",acceptanceId:"limitation-accepted",limitation}}}};
     await expect(f.activity.next(f.input,f.context)).rejects.toMatchObject(expected);
     f.ports.prepare.mockRejectedValue(new Error("Source must not be rebuilt"));
@@ -81,7 +83,7 @@ describe("TaskModelResponseActivity", () => {
     const f = fixture();
     expect(await f.activity.next(f.input, f.context)).toEqual(f.proposal);
     expect(f.order.indexOf("checkpoint")).toBeLessThan(f.order.indexOf("accept"));
-    expect(f.order.indexOf("subscribe")).toBeLessThan(f.order.indexOf("read_path"));
+    expect(f.order.indexOf("subscribe")).toBeLessThan(f.order.indexOf("observe_state"));
     f.ports.prepare.mockRejectedValue(new Error("Current source construction is forbidden"));
     expect(await new TaskModelResponseActivity(f.ports).recover(f.input, f.context)).toEqual(f.proposal);
     expect(f.ports.prepare).toHaveBeenCalledTimes(1);
@@ -120,7 +122,10 @@ describe("TaskModelResponseActivity", () => {
   });
   it("closes original work but still delivers the response accepted before cancellation", async () => {
     const f = fixture(); await f.activity.next(f.input, f.context);
+    f.order.length=0;
     expect(await f.activity.interrupt(f.input, f.context)).toEqual(f.proposal);
+    expect(f.order.indexOf("cancel")).toBeLessThan(f.order.indexOf("read_path"));
+    expect(f.order.indexOf("cancel")).toBeLessThan(f.order.indexOf("read_stage"));
     expect(f.path.cancelled).toBe(true); expect(f.acceptance.accept).toHaveBeenCalledTimes(1);
   });
   it("waits only for known local settlement and receives it without professional advancement", async () => {
@@ -148,6 +153,9 @@ describe("TaskModelResponseActivity", () => {
     await expect(f.activity.next(f.input, {...f.context, retry: {...f.context.retry, deadlineAt: new Date(Date.now() + 40).toISOString()}}))
       .rejects.toMatchObject({failure: {failure: {code: "model_operation_deadline_exceeded"}}});
     expect(f.listeners.size).toBe(0); expect(f.acceptance.accept).toHaveBeenCalledTimes(1);
+    expect(f.order).toContain("observe_state");
+    expect(f.order).not.toContain("read_path");
+    expect(f.order).not.toContain("read_stage");
   });
   it.each([
     ["provider_context_window_exceeded", "invalid_request", "provider_context_window_exceeded"],

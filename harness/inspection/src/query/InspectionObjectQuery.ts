@@ -1,7 +1,7 @@
 import { inspectionSubjectKey, type InspectionRecord, type InspectionSubjectRef } from "../records/index.js";
 import type { InspectionDatabase } from "../storage/index.js";
 import type { InspectionObjectSummary, InspectionTimelineInterval } from "./InspectionQuery.js";
-import { captureClassEnabled, type InspectionCapturePolicy } from "../content/index.js";
+import type { InspectionCapturePolicy } from "../content/index.js";
 
 export function resolveRunScope(db: InspectionDatabase, watermark: number, runId?: string, descendants = false): {runIds?: string[]; limitations: string[]} {
   if (!runId) return {limitations: []};
@@ -37,6 +37,7 @@ export function objectLabel(record: InspectionRecord): string {
   if (payload.kind === "definition") return payload.name;
   if (payload.kind === "snapshot") return payload.agentId ?? record.subject.kind;
   if (payload.kind === "request") return `${payload.purpose} / ${payload.model ?? payload.providerId}`;
+  if (payload.kind === "call") return payload.name;
   if (payload.kind === "flow_definition") return payload.definition.label;
   if (payload.kind === "flow_invocation") return payload.observation.definition.id;
   if (payload.kind === "flow_step") return payload.observation.stepId;
@@ -90,11 +91,8 @@ export function summarizeObjects(db: InspectionDatabase, records: readonly Inspe
     const definition = relatedRecords.find(item => item.payload.kind === "definition");
     const request = owned.find(item => item.payload.kind === "request");
     let label = objectLabel(request ?? definition ?? record);
-    const call = owned.find(fact=>fact.payload.kind === "event" && fact.payload.name === "model.call");
-    const body = call?.contents.find(content=>content.stage === "decoded" && content.mediaType === "application/json");
-    if (body?.availability === "present" && !body.truncated && body.retainedBytes <= 128*1024 && policy && captureClassEnabled(policy,body.class)) {
-      try {const value=JSON.parse(db.readContent(body.id,watermark,0,128*1024)!.text); if(typeof value.name === "string" && value.modelCallRef?.id===record.subject.id) label=value.name.slice(0,256);} catch { /* A missing diagnostic body is not a fabricated label. */ }
-    }
+    const call = owned.find(fact=>fact.payload.kind === "call");
+    if(call?.payload.kind === "call")label=call.payload.name;
     const summary: InspectionObjectSummary = {subject: record.subject, record, label, facts: owned.length > 64 ? [...owned.slice(0, 32), ...owned.slice(-32)] : owned, links: links.slice(0, 64), relatedRecords, limited: expansionLimited || owned.length > 64 || links.length > 64 || targets.size > 64};
     // Bound each summary independently so one dense object cannot consume a page.
     let bytes=Buffer.byteLength(JSON.stringify({subject:record.subject,record,label}));

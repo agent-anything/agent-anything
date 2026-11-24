@@ -1,0 +1,46 @@
+{
+  "revision": "1",
+  "target": "[\"[\\\"openai.responses\\\",\\\"https://api.openai.com/v1\\\",\\\"gpt-6.2-sol\\\",null,null]\",[null,\"http\",\"replay\",false,false,true]]",
+  "origin": "provider_documentation",
+  "reviewedAt": "2026-11-24",
+  "basis": "Responses-in-request-compaction synthetic evaluation only. https://developers.openai.com/api/docs/guides/compaction describes native semantic continuation. https://developers.openai.com/api/docs/models/gpt-6.2-sol identifies the model and its window. Neither establishes that this task will pass. Not an external evaluation or production endorsement.",
+  "support": "accepted",
+  "profiles": [
+    {
+      "id": "responses-in-request-compaction-semantic-http-replay",
+      "content": [
+        "text",
+        "function_calls",
+        "reasoning",
+        "compaction"
+      ],
+      "transports": [
+        "http"
+      ],
+      "continuities": [
+        "replay"
+      ],
+      "background": false,
+      "preservation": {
+        "goals_and_constraints": "accepted",
+        "sources_and_authority": "accepted",
+        "execution_and_pending_work": "accepted",
+        "references_and_changes": "accepted",
+        "uncertainty_and_disagreement": "accepted",
+        "details_and_discoverability": "accepted"
+      },
+      "repeated": "accepted",
+      "specialRequirements": [],
+      "limitations": [
+        "Only for the isolated in-request-compaction synthetic case; semantic method assurance, not guaranteed exact retention or proof that a conversion occurred.",
+        "No image, file, hosted tool, stored response, background or WebSocket scope. No special preservation requirement is covered.",
+        "Repeated native compaction is permitted for this replay scenario; its quality is not certified. No authorization to retry a paid request."
+      ]
+    }
+  ],
+  "trigger": {
+    "windowTokens": 1050000,
+    "thresholdTokens": 13500,
+    "basis": "Published gpt-6.2-sol shared context window; 13500 is the chosen in-request-compaction test threshold, not a model default, not a change to the model window and not the separate work input budget."
+  }
+}

@@ -126,13 +126,26 @@ describe("Investigation read projections",()=>{
     const read=await query.query({...scope,kind:"get_execution_flow",runId:"child",invocationId:child.ref.invocationId});
     expect(read.flow?.ancestry?.[0]?.subject.id).toBe(first.ref.stepExecutionId);
   });
-  it("uses recorded call names only under current content-class authorization",async()=>{
+  it("seeks native categories before paging and returns the original binding independently",async()=>{
+    const {recorder:r,query,snapshot}=await fixture();
+    const subject=r.ref("protocol-execution","model-activity","native","root");
+    r.offer({subject,occurredAt:null,payload:{kind:"native_interaction",protocol:"openai.responses",protocolRevision:"1",interpretation:"openai.responses.adapter",interpretationRevision:"1",purpose:"task",recipientId:"root",compositionDigest:"digest",model:"model"}});
+    for(let i=0;i<130;i++)r.offer({subject,occurredAt:null,payload:{kind:"native_fact",category:i<128?"event":"purpose_accepted",nativeType:"fact",nativeId:null,operationId:null,position:null,status:null,origin:"import",limitation:null,details:[]}});
+    const scope=await snapshot();
+    const page=await query.query({...scope,kind:"get_native_interaction",subject,nativeCategories:["purpose_accepted"],limit:1});
+    expect(page.records).toHaveLength(1);expect(page.records[0]?.payload).toMatchObject({category:"purpose_accepted"});
+    expect(page.relatedRecords?.[0]?.payload.kind).toBe("native_interaction");expect(page.readWork?.bodyReads).toBe(0);expect(page.next).not.toBeNull();
+    const second=await query.query({...scope,kind:"get_native_interaction",subject,nativeCategories:["purpose_accepted"],limit:1,after:String(page.next)});
+    expect(second.records).toHaveLength(1);expect(second.next).toBeNull();
+    await expect(query.query({...scope,kind:"get_native_interaction",subject,nativeCategories:["event"],after:String(page.next)})).rejects.toThrow("inspection_cursor_invalid");
+  });
+  it("uses structural call labels without reading protected bodies",async()=>{
     const {recorder:r,query,snapshot}=await fixture();
     const call=r.ref("runtime","call","call","root");
-    r.offer({subject:call,occurredAt:null,payload:{kind:"event",name:"model.call",sequence:null,code:null},contents:[{name:"Model call",stage:"decoded",class:"provider",mediaType:"application/json",value:{name:"Read",modelCallRef:{id:"call"}}}]});
+    r.offer({subject:call,occurredAt:null,payload:{kind:"call",name:"Read",ordinal:0,origin:"model"},contents:[{name:"Model call",stage:"decoded",class:"provider",mediaType:"application/json",value:{name:"Read",modelCallRef:{id:"call"}}}]});
     const scope=await snapshot();
     expect((await query.query({...scope,kind:"get_execution",runId:"root"})).summaries?.[0]?.label).toBe("Read");
     r.setPolicy({revision:"off",enabled:true,definition:true,agent:true,provider:false,execution:true});await r.flush();
-    expect((await query.query({...scope,kind:"get_execution",runId:"root"})).summaries?.[0]?.label).toBe("call");
+    expect((await query.query({...scope,kind:"get_execution",runId:"root"})).summaries?.[0]?.label).toBe("Read");
   });
 });

@@ -13,6 +13,16 @@ import {
   type RunSteeringSubmissionReceipt,
 } from "../run/index.js";
 import { deepFreeze, strictRecord, token } from "./DelegationContract.js";
+import type {DelegatedCancellationBasis,RunCancellationReceipt} from "../run/RunCancellation.js";
+
+export interface DelegationCancelRoute {
+  readonly basis: DelegatedCancellationBasis;
+  readonly attribution: {readonly origin:"user";readonly reasonCode:"user_requested"} | {readonly origin:"host";readonly reasonCode:"host_requested"};
+  readonly reason: string|null;
+}
+export type DelegationCancelReceipt =
+  | {readonly status:"routed";readonly cancellation:RunCancellationReceipt}
+  | {readonly status:"rejected";readonly code:DelegationSteeringRejectionCode};
 
 export interface DelegationSteeringRoute {
   readonly request: DelegationRequestRef;

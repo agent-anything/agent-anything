@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { evaluateSourceOwnershipRules } from "./SourceOwnershipRules.mjs";
 
+test("native protocol cooperation does not inherit common carriers or a generic retry owner", () => {
+  for (const name of ["ProviderRequest", "ProviderResponse", "ModelTurn", "RetryExecutor", "RetryPolicy"]) {
+    const violations = evaluateSourceOwnershipRules({ sourcePath: "harness/model-interaction/src/protocol/Boundary.ts",
+      text: `import type { ${name} } from '../${name}.js';` });
+    assert.ok(violations.some(value => value.rule === "native_protocol_cooperation_not_common_execution"));
+  }
+  assert.deepEqual(evaluateSourceOwnershipRules({ sourcePath: "harness/model-interaction/src/protocol/Boundary.ts",
+    text: 'export interface Source { readonly record: RevisionRef; readonly position: NativePosition; }' }), []);
+});
+
 test("accepts current owner-directed source forms", () => {
   const fixtures = [
     {

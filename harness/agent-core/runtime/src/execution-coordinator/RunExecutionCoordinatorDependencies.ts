@@ -212,7 +212,8 @@ export interface DelegationNarrativeProjectionPort {
   project(input: {
     readonly request: DelegationRequest;
     readonly childResult: import("../run/index.js").RunResult;
-  }): string | null;
+  }): string | import("../delegation/index.js").DelegationNarrativeSelection | null |
+    Promise<string | import("../delegation/index.js").DelegationNarrativeSelection | null>;
 }
 
 export interface RunnerDelegationComposition {
@@ -285,6 +286,7 @@ export interface RunExecutionCoordinatorDependencies {
     readLatestComposite(compositeId: string): Promise<import("@agent-anything/operation-composition/execution").CompositeCommit | null>;
   };
   readonly taskDecisions: import("../decision/index.js").TaskDecisionActivity<unknown>;
+  readonly resourceContributions?:import("./RunResourceContributions.js").RunResourceContributionSource;
   readonly preparations?: import("../context-representation/ContextPreparationLifecycle.js").ContextPreparationLifecycle;
   readonly extensions?: import("../decision/AgentExecutionExtensions.js").AgentExecutionExtensions;
   readonly contextProjection: DecisionSourceProjection;
@@ -310,7 +312,7 @@ export interface RunExecutionCoordinatorDependencies {
 
 export interface RunInvocationOptions {
   /** Frozen working conversation for a new execution, never authority to replay it. */
-  readonly modelInteractionSeed?: import("../decision/TaskConversation.js").ModelConversationSeed;
+  readonly modelInteractionSeed?: import("../decision/TaskInteractionSeed.js").TaskInteractionSeed;
   /** Recovery-only control, accepted durably before any restored member activates. */
   readonly recoveryCancellation?: import("../run/index.js").RunCancellationRequestInput;
   readonly executionFlow?: import("@agent-anything/observability/execution-flow").ExecutionFlowContext;

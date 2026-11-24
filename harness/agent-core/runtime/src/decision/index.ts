@@ -7,6 +7,7 @@ export type { RetainedInputPresentation } from "./DecisionInputDelivery.js";
 export type { CompletionSource, RunCompletionCandidate, RunCompletionDisposition } from "./TaskDecisionActivity.js";
 export type {TaskDecisionActivityFailure, TaskDecisionActivityFailureCode, DecisionActivityDeadline} from "./TaskDecisionActivityError.js";
 export {TaskDecisionActivityError} from "./TaskDecisionActivityError.js";
+export {MODEL_REQUEST_INPUT_FAILURE,describeModelRequestInputFailure,modelRequestInputFailure} from "./ModelRequestInputFailure.js";
 export {validateTaskDecisionProposal, snapshotTaskDecisionFeedback, snapshotTaskModelExchange} from "./TaskDecisionValidation.js";
 export type {TaskModelExchange} from "./TaskDecisionActivity.js";
 export type {
@@ -25,11 +26,16 @@ export {
   ModelInteractionProjectionError,
   projectModelInteraction,
 } from "./ModelInteractionProjection.js";
-export { createControllerModelItems } from "./TaskDecisionModelItems.js";
+export { createControllerModelItems, createNativeTaskModelItems } from "./TaskDecisionModelItems.js";
+export {projectNativeTaskHistory,projectTaskInteraction,requireTurnTaskInput} from "./NativeTaskHistory.js";
+export type {NativeTaskHistory,NativeTaskHistoryEntry} from "./NativeTaskHistory.js";
+export type {TaskModelCallCorrelation} from "./TaskDecisionActivity.js";
+export {snapshotTaskModelCallCorrelation} from "./TaskDecisionModelItems.js";
 export {createTaskModelResponseHandoff, readTaskModelResponseHandoff} from "./TaskModelResponseHandoff.js";
 export type {TaskModelResponseHandoff, TaskModelResponseObservation} from "./TaskModelResponseHandoff.js";
 export type { ControllerInputDeliveryBatch, ControllerInputDeliveryReceipt } from "./DecisionInputDelivery.js";
 export { createInputDeliverySections, createControllerInputDeliveryReceipt, inputNotificationDigest } from "./DecisionInputDelivery.js";
+export {createNativeInputDeliveryReceipt,inputNotificationMessage} from "./DecisionInputDelivery.js";
 export {createSelectedInputDeliveryReceipt,inputNotificationDeliveryId,type SelectedInputDeliveryBasis} from "./SelectedInputDelivery.js";
 export {createSelectedResultPresentationReceipt, snapshotSelectedResultPresentationReceipt, applySelectedResultPresentations,
   type SelectedResultPresentationReceipt} from "./SelectedResultPresentation.js";
@@ -46,3 +52,5 @@ export type {TaskModelSource,TaskModelResponseProgress,TaskModelResponseSettleme
 export {TaskModelResponseActivity} from "./TaskModelResponseActivity.js";
 export type {TaskModelResponseActivityPorts,TaskModelResponseSubmission} from "./TaskModelResponseActivity.js";
 export {taskModelStageObservation,type TaskModelStageObservation} from "./TaskModelStageObservation.js";
+export {isNativeTaskSeed,createNativeTaskHistorySeed,snapshotTaskInteractionSeed} from "./TaskInteractionSeed.js";
+export type {NativeTaskHistorySeed,NativeTaskHistoryBoundary,TaskInteractionSeed} from "./TaskInteractionSeed.js";

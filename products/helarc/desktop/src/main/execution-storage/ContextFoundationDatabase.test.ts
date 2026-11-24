@@ -5,12 +5,15 @@ import {tmpdir} from "node:os";
 import {createHash} from "node:crypto";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {ActivityPurposeRegistry,type ActivityHandoffCommand,type SharedAcceptanceProposal} from "@agent-anything/agent-runtime/activity";
-import {contextDeliveryFactSource} from "@agent-anything/agent-runtime/context-representation";
+import {contextDeliveryFactSource,nativeInputReady,nativeInputSupplyReturnPart,type NativeInputNeedDeclaration} from "@agent-anything/agent-runtime/context-representation";
 import type {MaterialCustodyCommand,MaterialCustodyIntent,MaterialHold,MaterialRange,MaterialSearchPage,MaterialReadPage,MaterialGrant} from "@agent-anything/context/custody";
 import {CustodyMaterialAccess} from "@agent-anything/context/custody";
 import type {RepresentationRecord,RepresentationJudgment} from "@agent-anything/context/representation";
 import type {ContextAcceptancePart,ContextDeliveryPage,ContextSelectionProposal,ContextSelectionSnapshot,ContextUseScope} from "@agent-anything/context/selection";
 import {ExecutionDatabase} from "./ExecutionDatabase.js";
+import {bindProtocolModelActivity,type ProtocolJournalCommand,type ProtocolExecutionState,type ProtocolJournalPart} from "@agent-anything/agent-runtime/model-access";
+import {bindModelAgentComposition,OPENAI_RESPONSES} from "@agent-anything/model-interaction/protocol";
+import {admitComponentRun} from "../../../scripts/fixtures/admit-component-run.cjs";
 
 const databases:ExecutionDatabase[]=[],directories:string[]=[];
 afterEach(()=>{
@@ -29,6 +32,18 @@ function open(directory=mkdtempSync(join(tmpdir(),"helarc-context-foundation-"))
 }
 const recipient={runId:"root",recipient:"root-agent",purpose:"task"};
 const scope:ContextUseScope={...recipient,id:"scope",continuity:"conversation",owner:"root-agent",target:"test-model",authorityBasis:"host-grant:1"};
+async function admitNativeOwner(f:ReturnType<typeof open>){
+  await admitComponentRun({
+    commitRunTree:async commit=>f.db.commitRunTree(f.db.generation,commit),
+    readRunTreeCommit:async id=>f.db.readRunTreeCommit(id),
+    readRunTree:async id=>f.db.readRunTree(id),
+    readLatestRun:async id=>{
+      const commit=f.db.readLatestOwner("run",id);
+      if(commit&&commit.kind!=="run")throw new Error("Unexpected component Run owner");
+      return commit?.value??null;
+    },
+  },f.directory);
+}
 function material(f:ReturnType<typeof open>,text="alpha beta gamma",suffix="one",parts?:readonly number[],format:MaterialCustodyIntent["version"]["format"]="utf8") {
   const bytes=Buffer.from(text),digest=`sha256:${createHash("sha256").update(bytes).digest("hex")}`;
   const range:MaterialRange={materialId:`material:${suffix}`,version:"1",start:0,end:bytes.length,coordinate:"bytes"};
@@ -58,7 +73,7 @@ function selection(f:ReturnType<typeof open>,m:ReturnType<typeof material>,r:Rep
   if(!inlineFoundation)f.db.representationCommand(f.db.generation,{kind:"judge",judgment});
   const inputHold:MaterialHold={...m.hold,id:`input-hold:${id}`,responsibility:"input",basis:inputId};
   const selectionHold:MaterialHold={...m.hold,id:`selection-hold:${id}`,responsibility:"selection",basis:selectionId};
-  const proposal:ContextSelectionProposal={id:`accept:${id}`,scopeId:scope.id,expectedSelectionId:previous,expectedControlRevision:0,
+  const proposal:ContextSelectionProposal&{input:ContextSelectionProposal["input"]&{stageRequestId:string}}={id:`accept:${id}`,scopeId:scope.id,expectedSelectionId:previous,expectedControlRevision:0,
     selection:keep?null:{id:selectionId,representations:[r.ref],judgmentIds:[judgment.id],holds:[selectionHold]},
     input:{id:inputId,activityId:`model-path:${id}`,stageRequestId:`request:${id}`,scopeId:scope.id,selectionId,exactInput,target:scope.target,deliveries:deliveryIds.map(id=>({id,position:"user:0"})),holds:[inputHold],combinationJudgmentId:judgment.id},releaseHolds:[]};
   const purpose=new ActivityPurposeRegistry<null>().register({ref:{id:"task",revision:"1"},inputOwner:"root-agent",executionOwner:"model",interpretationOwner:consumer,acceptanceOwner:consumer,recoveryOwner:consumer,stageKinds:["model"],capabilities:[],continuationKinds:[]},null);
@@ -78,7 +93,120 @@ function selection(f:ReturnType<typeof open>,m:ReturnType<typeof material>,r:Rep
   ];
   return {proposal,parts,judgment,inputHold,selectionHold,accept:()=>f.accept(proposal.id,parts)};
 }
+
+function nativeSelection(f:ReturnType<typeof open>,defer=false){
+  const ref=(id:string)=>({id,revision:"1"}),participant=(id:string)=>({implementation:ref(id),protocol:OPENAI_RESPONSES});
+  const composition=bindModelAgentComposition({agent:ref("agent"),protocol:OPENAI_RESPONSES,
+    configuration:{configuration:ref("original"),protocol:OPENAI_RESPONSES,model:"model",connectionBinding:ref("connection")},
+    adapter:participant("native-adapter"),task:{purpose:ref(scope.purpose),input:participant("native-input"),interpreter:participant("native-task")},auxiliary:[]});
+  const activity=bindProtocolModelActivity({composition,scope:{runId:scope.runId,activityId:"native-task",recipientId:scope.recipient,purpose:ref(scope.purpose),compositionDigest:composition.digest},
+    conditions:{input:ref("original"),authority:ref("authority"),resources:ref("bounded"),control:ref("active")}});
+  const m=material(f,"original result"),r=representation(f,m),exactInput={native:"unchanged selected input"};
+  const inputHold={...m.hold,id:"native-input-hold",responsibility:"input" as const,basis:"native-input"},selectionHold={...m.hold,id:"native-selection-hold",responsibility:"selection" as const,basis:"native-selection"};
+  const judgment:RepresentationJudgment={id:"native-judgment",runId:scope.runId,owner:scope.owner,kind:"combination",subjects:[r.ref],inputs:[m.range],purpose:scope.purpose,target:scope.target,
+    methodRevision:"fixture:1",dependencies:{inputDigest:modelInputValueDigest(exactInput)},evidenceSources:[],coverage:[m.range],conclusion:"supported",limitations:[],basis:"controlled exact input"};
+  f.db.selectionCommand(f.db.generation,{kind:"scope",scope});f.db.representationCommand(f.db.generation,{kind:"judge",judgment});
+  const proposal:ContextSelectionProposal={id:"native-offer",scopeId:scope.id,expectedSelectionId:null,expectedControlRevision:0,
+    selection:{id:"native-selection",representations:[r.ref],judgmentIds:[judgment.id],holds:[selectionHold]},releaseHolds:[],
+    input:{id:"native-input",activityId:activity.scope.activityId,stageRequestId:null,nativeConsumer:{protocol:OPENAI_RESPONSES,compositionDigest:composition.digest},
+      scopeId:scope.id,selectionId:"native-selection",exactInput,target:scope.target,deliveries:[],holds:[inputHold],combinationJudgmentId:judgment.id}};
+  const selectionParts:SharedAcceptanceProposal["parts"]=[{owner:"material_custody",kind:"holds",proposal:{acquire:[selectionHold,inputHold],release:[],basis:proposal.id}},
+    {owner:"context_selection",kind:"selection_input",proposal},{owner:"context_delivery",kind:"select",proposal:{inputId:proposal.input.id,scopeId:scope.id,deliveryIds:[]}}];
+  if(!defer)expect(f.accept(proposal.id,selectionParts).outcome).toBe("accepted");
+  const j=(command:ProtocolJournalCommand)=>f.db.protocolJournalCommand(f.db.generation,command).protocolJournalValue;
+  const retain=(id:string,value:unknown)=>{
+    const bytes=Buffer.from(JSON.stringify(value)),content={id,activityId:activity.scope.activityId,bytes:bytes.length,digest:`sha256:${createHash("sha256").update(bytes).digest("hex")}`};
+    j({kind:"content_begin",content});j({kind:"content_append",content,offset:0,bytesBase64:bytes.toString("base64")});j({kind:"content_complete",content});return content;
+  };
+  const original=retain("native-original",{selectedInputId:proposal.input.id,value:exactInput}),claim={id:proposal.input.id,digest:modelInputValueDigest(exactInput)};
+  return {activity,original,claim,j,retain,proposal,ref,m,inputHold,selectionHold,selectionParts,
+    accept:(id:string,parts:readonly ProtocolJournalPart[],actor="native-adapter")=>f.accept(id,parts,scope.runId,actor)};
+}
 describe("material custody and consistent selection",()=>{
+  it.each(["valid","composition","child","receipt","body","cancelled","missing-return-entry"])("jointly returns native readiness and preserves or rolls back all custody: %s",change=>{
+    const f=open(),n=nativeSelection(f,true),pathId="native-input-organizer";
+    const purpose=new ActivityPurposeRegistry<null>().register({ref:{id:"native-input-organizing",revision:"1"},inputOwner:scope.owner,executionOwner:scope.owner,
+      interpretationOwner:scope.owner,acceptanceOwner:scope.owner,recoveryOwner:scope.owner,stageKinds:["source","ready","unavailable"],capabilities:[],continuationKinds:[]},null);
+    f.a({kind:"open_path",intent:{id:pathId,runId:scope.runId,owner:scope.owner,purpose,permissionBasis:scope.authorityBasis,resourceScope:pathId,
+      maximumStages:3,maximumAttempts:3,maximumConcurrent:1,deadlineAt:"2099-01-01T00:00:00Z"}});
+    const request={id:`${pathId}:source`,pathId,stageKind:"source",input:{original:true},capabilities:[],dependencies:[]};
+    const declaration:NativeInputNeedDeclaration={kind:"native_input_need",revision:"1",needId:"native-need",scope,
+      consumer:{activityId:n.activity.scope.activityId,protocol:n.activity.composition.composition.protocol,compositionDigest:n.activity.composition.digest}};
+    const executor={hostSession:"test",worker:"test",generation:f.db.generation};
+    f.a({kind:"submit",request});f.a({kind:"admit",requestId:request.id,expectedControlRevision:0});
+    f.a({kind:"dispatch",attempt:{id:"source-attempt",requestId:request.id,executor,inputDigest:modelInputValueDigest(request.input),startedAt:new Date().toISOString()},expectedControlRevision:0});
+    f.a({kind:"save_raw",result:{id:"source-raw",attemptId:"source-attempt",outcome:"returned",completeness:"complete",value:declaration,usage:{},recordedAt:new Date().toISOString()}});
+    f.a({kind:"claim_processing",claim:{id:"source-claim",requestId:request.id,executor,previousClaimId:null},expectedControlRevision:0});
+    f.a({kind:"accept",receipt:{id:"source-accepted",requestId:request.id,resultId:"source-raw",owner:scope.owner,expectedProgressRevision:0,progress:{contextInputNeed:declaration},next:[]},executor,expectedControlRevision:0});
+    const need={id:declaration.needId,supplier:scope.owner,origin:{requestId:request.id,receiptId:"source-accepted"},
+      stage:{id:"native-ready",pathId,stageKind:"ready",capabilities:[],dependencies:[]},
+      unavailableStage:{id:"native-unavailable",pathId,stageKind:"unavailable",capabilities:[],dependencies:[]}};
+    f.a({kind:"register_input_need",need});
+    const returned={needId:need.id,origin:need.origin,inputId:n.proposal.input.id,inputDigest:modelInputValueDigest(n.proposal.input.exactInput),readyStageId:need.stage.id};
+    const parts=structuredClone([...n.selectionParts,nativeInputSupplyReturnPart(returned),
+      {owner:"activity",kind:"stage_submission",proposal:{...need.stage,input:nativeInputReady(returned)}}]) as any[];
+    const selected=parts.find(p=>p.kind==="selection_input").proposal;
+    if(change==="composition")selected.input.nativeConsumer.compositionDigest="changed";
+    if(change==="child")selected.input.activityId="child-native-task";
+    if(change==="receipt")parts.find(p=>p.kind==="native_input_return").proposal.origin.receiptId="changed";
+    if(change==="body")parts.find(p=>p.kind==="native_input_return").proposal.inputDigest="changed";
+    if(change==="cancelled")f.a({kind:"cancel",pathId,expectedControlRevision:0});
+    if(change==="missing-return-entry")parts.pop();
+    const receipt=f.accept(n.proposal.id,parts);
+    expect(receipt.outcome).toBe(change==="valid"?"accepted":"rejected");
+    expect(f.a({kind:"read_path",pathId:n.activity.scope.activityId})).toBeNull();
+    expect(n.j({kind:"state",activityId:n.activity.scope.activityId})).toBeNull();
+    f.db.close();const restored=open(f.directory);
+    expect(restored.a({kind:"read_stage",requestId:need.stage.id})).toEqual(change==="valid"?expect.objectContaining({request:expect.objectContaining({input:nativeInputReady(returned)})}):null);
+    const facts=restored.db.contextFoundationFacts(scope.runId,0,256).contextFacts.filter(f=>f.kind==="native_input_returned");
+    expect(facts).toHaveLength(change==="valid"?1:0);
+    if(change==="valid") {
+      expect(restored.db.selectionCommand(restored.db.generation,{kind:"binding",inputId:n.proposal.input.id,checkCurrentControl:true}).selectionValue).toMatchObject({input:n.proposal.input});
+      expect(restored.accept(n.proposal.id,parts)).toEqual(receipt);
+    } else {
+      expect(restored.db.selectionCommand(restored.db.generation,{kind:"current",scopeId:scope.id}).selectionValue).toBeNull();
+      expect(()=>restored.c({kind:"describe",holdId:n.inputHold.id,recipient:scope})).toThrow();
+    }
+  });
+  it("hands input to a native consumer without a fake Stage and preserves the claim across reopening",async()=>{
+    const f=open(),n=nativeSelection(f);
+    expect(n.accept("before-admission",[{owner:"protocol_execution",kind:"prepare",proposal:{activity:n.activity,input:n.original,contextInput:n.claim}}],"execution-coordinator"))
+      .toMatchObject({outcome:"rejected",rejection:{code:expect.stringContaining("native_run_admission_closed")}});
+    await admitNativeOwner(f);
+    expect(f.a({kind:"read_path",pathId:n.activity.scope.activityId})).toBeNull();
+    expect(()=>f.db.selectionCommand(f.db.generation,{kind:"retire_input",inputId:n.claim.id,basis:"premature"})).toThrow("unsettled");
+    expect(n.accept("wrong-claim",[{owner:"protocol_execution",kind:"prepare",proposal:{activity:n.activity,input:n.original,contextInput:{...n.claim,digest:"wrong"}}}],"execution-coordinator"))
+      .toMatchObject({outcome:"rejected",rejection:{code:expect.stringContaining("native_input_claim_changed")}});
+    expect(n.j({kind:"state",activityId:n.activity.scope.activityId})).toBeNull();
+    const accepted=n.accept("claim-input",[{owner:"protocol_execution",kind:"prepare",proposal:{activity:n.activity,input:n.original,contextInput:n.claim}}],"execution-coordinator");
+    expect(accepted.outcome,JSON.stringify(accepted)).toBe("accepted");
+    expect(()=>f.db.selectionCommand(f.db.generation,{kind:"sent",inputId:n.claim.id,attemptId:"not-dispatched"})).toThrow("not_confirmed");
+    expect(n.accept("claim-owner",[{owner:"protocol_execution",kind:"claim",proposal:{activityId:n.activity.scope.activityId,expectedEpoch:0}}]).outcome).toBe("accepted");
+    const state=n.j({kind:"state",activityId:n.activity.scope.activityId}) as ProtocolExecutionState;
+    expect(n.accept("dispatch",[{owner:"protocol_execution",kind:"record",proposal:{fence:state.fence,record:{ref:n.ref("dispatch"),activityId:state.activity.scope.activityId,
+      operationId:"create",kind:"dispatch_intent",content:n.original,source:null,dependencies:[]}}}]).outcome).toBe("accepted");
+    f.db.selectionCommand(f.db.generation,{kind:"sent",inputId:n.claim.id,attemptId:"create"});
+    expect(n.accept("cancel",[{owner:"protocol_execution",kind:"control",proposal:{activityId:state.activity.scope.activityId,expectedRevision:0,cancelled:true}}],"execution-coordinator").outcome).toBe("accepted");
+    expect(()=>f.db.selectionCommand(f.db.generation,{kind:"retire_input",inputId:n.claim.id,basis:"cancel-is-not-settlement"})).toThrow("unsettled");
+    f.db.close();const restored=open(f.directory);
+    const saved=restored.db.protocolJournalCommand(restored.db.generation,{kind:"state",activityId:n.activity.scope.activityId}).protocolJournalValue as ProtocolExecutionState;
+    expect(saved.contextInput).toEqual(n.claim);expect(saved.cancelled).toBe(true);
+    const selected=restored.db.selectionCommand(restored.db.generation,{kind:"binding",inputId:n.claim.id,checkCurrentControl:true}).selectionValue as ContextSelectionSnapshot;
+    expect(selected.input).toEqual(n.proposal.input);
+    expect(()=>restored.c({kind:"release",holdId:n.inputHold.id,basis:"unresolved-native-work"})).toThrow();
+  });
+  it("withdraws an unclaimed native offer without making a later claim legal",async()=>{
+    const f=open(),n=nativeSelection(f);
+    await admitNativeOwner(f);
+    f.db.selectionCommand(f.db.generation,{kind:"withdraw",scopeId:scope.id,expectedSelectionId:"native-selection",expectedControlRevision:0,basis:"no longer wanted"});
+    expect(n.accept("late-claim",[{owner:"protocol_execution",kind:"prepare",proposal:{activity:n.activity,input:n.original,contextInput:n.claim}}],"execution-coordinator"))
+      .toMatchObject({outcome:"rejected",rejection:{code:expect.stringContaining("native_input_claim_changed")}});
+    expect(n.j({kind:"state",activityId:n.activity.scope.activityId})).toBeNull();
+    f.db.selectionCommand(f.db.generation,{kind:"retire_input",inputId:n.claim.id,basis:"unclaimed-offer-withdrawn"});
+    f.c({kind:"release",holdId:n.inputHold.id,basis:"unclaimed-offer-withdrawn"});
+    f.c({kind:"release",holdId:n.selectionHold.id,basis:"unclaimed-offer-withdrawn"});
+    expect(f.c({kind:"read",access:{id:"retained-original",holdId:n.m.hold.id,recipient,range:n.m.range},offset:0,length:n.m.range.end})).toMatchObject({text:n.m.text});
+  });
   it("keeps a judgment's recipient scope distinct from its source representation across recovery",()=>{
     const f=open(),m=material(f),r=representation(f,m),prepared=selection(f,m,r);
     const judgment:RepresentationJudgment={...prepared.judgment,id:"child-judgment",owner:"child-specialist",runId:"child",

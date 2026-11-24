@@ -13,8 +13,8 @@ export const AGENT_HOOK_EXECUTION_FLOW = createExecutionFlowDefinition({
   entryStepIds:["failure","before_completion"],exitStepIds:["result"],
 });
 export const AGENT_HOOK_HANDLER_FLOW = createExecutionFlowDefinition({
-  owner:"agent-hooks",id:"hook-handler",revision:"1",label:"Agent Hook Handler",
+  owner:"agent-hooks",id:"hook-handler",revision:"2",label:"Agent Hook Handler",
   description:"One registered Handler with bounded interruption, timeout, and result validation.",
-  steps:[{id:"invoke",label:"Invoke registered Handler",kind:"entry",checks:[]},{id:"settle",label:"Record Handler outcome",kind:"exit",checks:["result_contract"]}],
+  steps:[{id:"invoke",label:"Invoke registered Handler",kind:"entry",checks:["recovery_entry"]},{id:"settle",label:"Record Handler outcome",kind:"exit",checks:["result_contract"]}],
   transitions:[{id:"invoke:settle",from:"invoke",to:"settle",label:"Handler returned or bounded"}],entryStepIds:["invoke"],exitStepIds:["settle"],
 });

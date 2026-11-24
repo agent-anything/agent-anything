@@ -2,7 +2,26 @@ import type {
   HelarcRunSnapshot,
 } from "./HelarcDesktopApi.js";
 
+interface HelarcSourceRevision { readonly id:string;readonly revision:string; }
+interface HelarcSourceScope {
+  readonly runId:string;readonly activityId:string;readonly recipientId:string;
+  readonly purpose:HelarcSourceRevision;readonly compositionDigest:string;
+}
+/** Data-only display identity; validation and execution remain in the producing owner. */
+export interface HelarcNativeSourceReference {
+  readonly scope:HelarcSourceScope;
+  readonly protocol:HelarcSourceRevision & {readonly providerId:string};
+  readonly interpretation:HelarcSourceRevision;readonly operationId:string;
+  readonly record:HelarcSourceRevision;readonly position:{readonly format:string;readonly value:string};
+  readonly nativeIdentity:{readonly kind:string;readonly id:string}|null;
+}
+
 export type HelarcOutputSource =
+  | { readonly kind:"native_response";readonly evidence:{readonly scope:HelarcSourceScope;readonly interpreter:HelarcSourceRevision;
+        readonly sources:readonly HelarcNativeSourceReference[];readonly acceptance:HelarcSourceRevision};
+      readonly text?:readonly {readonly source:HelarcNativeSourceReference;readonly text:string}[];
+      readonly adopted?:readonly {readonly source:HelarcNativeSourceReference;readonly text:string;readonly runItem:{readonly id:string;readonly sequence:number};readonly ordinal:number}[];
+      readonly disposition:string;readonly sources:readonly HelarcNativeSourceReference[] }
   | { readonly kind: "model_control"; readonly turnId: string; readonly modelItemId: string;
       readonly modelCallRef: {readonly id: string; readonly providerRequestId: string; readonly controllerRequestId: string;
         readonly turnId: string; readonly contentBlockOrdinal: number; readonly branchId: string};
@@ -42,25 +61,25 @@ export interface HelarcRunPresentationRecord {
     readonly sequence: number;
   };
   readonly content:
-    | { readonly kind: "assistant_reasoning"; readonly turnId: string; readonly modelItemId: string; readonly text: string; readonly omittedBytes: number }
+    | { readonly kind: "assistant_reasoning"; readonly turnId: string | null; readonly modelItemId: string; readonly text: string; readonly omittedBytes: number }
     | { readonly kind: "received_input"; readonly inputKind: "task" | "message" | "agent_result";
         readonly text: string; readonly omittedBytes: number; readonly senderRunId: string | null;
         readonly disposition: string | null }
     | {
         readonly kind: "assistant_text";
-        readonly turnId: string;
+        readonly turnId: string | null;
         readonly modelItemId: string;
         readonly ordinal: number;
         readonly text: string;
         readonly omittedBytes: number;
       }
-    | { readonly kind: "final_response"; readonly turnId: string; readonly modelItemId: string;
+    | { readonly kind: "final_response"; readonly turnId: string | null; readonly modelItemId: string;
         readonly callId: string; readonly text: string; readonly omittedBytes: number;
         readonly disposition: "proposed" | "accepted" | "declined" | "completed" | "failed" | "cancelled" }
     | {
         readonly kind: "tool_call";
         readonly callId: string;
-        readonly turnId: string;
+        readonly turnId: string | null;
         readonly name: string;
         readonly callableKind: "tool" | "control" | "unresolved";
         readonly toolBindingKind: "operation" | "interaction" | "descendant_agent" | "descendant_message" | null;
@@ -159,14 +178,14 @@ interface ConversationEntryBase {
   readonly artifactIds: readonly string[];
   readonly disposition: string | null;
 }
-export type ConversationEntry = ConversationMessageEntry | ConversationTurnEntry;
+export type ConversationEntry = ConversationMessageEntry | ConversationResponseGroupEntry;
 export interface ConversationMessageEntry extends ConversationEntryBase {
   readonly kind: "message" | "steering" | "interaction" | "notice" | "received_input";
 }
-export interface ConversationTurnEntry extends ConversationEntryBase {
-  readonly kind: "turn";
+export interface ConversationResponseGroupEntry extends ConversationEntryBase {
+  readonly kind: "response_group";
   readonly scope: WorkbenchScope;
-  readonly turnId: string;
+  readonly groupId: string;
   readonly blocks: readonly ConversationBlock[];
   readonly nextCursor: string | null;
   readonly blockCount: number;
@@ -187,14 +206,14 @@ export type ConversationBlock = {
   readonly kind: "activity";
   readonly item: ConversationActivityItem;
 });
-export interface ConversationTurnQuery extends WorkbenchScope {
-  readonly turnId: string;
+export interface ConversationResponseGroupQuery extends WorkbenchScope {
+  readonly groupId: string;
   readonly cursor: string | null;
 }
-export interface ConversationTurnPage {
+export interface ConversationResponseGroupPage {
   readonly status: "page";
   readonly scope: WorkbenchScope;
-  readonly turnId: string;
+  readonly groupId: string;
   readonly revision: number;
   readonly blocks: readonly ConversationBlock[];
   readonly nextCursor: string | null;
@@ -339,6 +358,7 @@ export type ArtifactContentRead =
     };
 
 export interface ResponsePreviewPart {
+  readonly groupId?:string;
   readonly id: string;
   readonly kind: "text" | "tool_call" | "final_response" | "reasoning";
   readonly name: string | null;

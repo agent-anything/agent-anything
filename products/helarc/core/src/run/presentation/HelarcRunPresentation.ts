@@ -3,10 +3,19 @@ import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type { ToolBindingRef } from "@agent-anything/tools/identity";
 import type { RuntimeEvent } from "@agent-anything/observability";
 import type { RunInput } from "@agent-anything/agent-core/input";
+import { requireModelCallTurn } from "@agent-anything/model-interaction";
+import {nativeModelSourceKey} from "@agent-anything/model-interaction/protocol";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import {helarcNativePresentationId} from "./HelarcNativePresentation.js";
 
 export type HelarcOutputSource =
+  | { readonly kind:"native_response"; readonly evidence:import("@agent-anything/model-interaction/protocol").ModelPurposeEvidence;
+      readonly text?:readonly {readonly source:import("@agent-anything/model-interaction/protocol").NativeModelSourceRef;readonly text:string}[];
+      readonly adopted?:readonly {readonly source:import("@agent-anything/model-interaction/protocol").NativeModelSourceRef;readonly text:string;
+        readonly runItem:{readonly id:string;readonly sequence:number};readonly ordinal:number}[];
+      readonly disposition:string;readonly sources:readonly import("@agent-anything/model-interaction/protocol").NativeModelSourceRef[] }
   | { readonly kind: "model_control"; readonly turnId: string; readonly modelItemId: string;
-      readonly modelCallRef: import("@agent-anything/model-interaction").ModelCallRef;
+      readonly modelCallRef: import("@agent-anything/model-interaction").TurnModelCallRef;
       readonly control: "final_result"; readonly argumentPath: "/response" }
   | {
       readonly kind: "model_text";
@@ -32,7 +41,8 @@ export type HelarcPresentationValue =
 
 export interface HelarcModelItemOrigin {
   readonly runId: string;
-  readonly turnId: string;
+  readonly turnId: string | null;
+  readonly nativeSource?: import("@agent-anything/model-interaction/protocol").NativeModelSourceRef;
   readonly turnSequence: number;
   readonly modelItemId: string;
   readonly ordinal: number | null;
@@ -54,25 +64,25 @@ export interface HelarcRunPresentationRecord {
     readonly sequence: number;
   };
   readonly content:
-    | { readonly kind: "assistant_reasoning"; readonly turnId: string; readonly modelItemId: string; readonly text: string; readonly omittedBytes: number }
+    | { readonly kind: "assistant_reasoning"; readonly turnId: string | null; readonly modelItemId: string; readonly text: string; readonly omittedBytes: number }
     | { readonly kind: "received_input"; readonly inputKind: "task" | "message" | "agent_result";
         readonly text: string; readonly omittedBytes: number; readonly senderRunId: string | null;
         readonly disposition: string | null }
     | {
         readonly kind: "assistant_text";
-        readonly turnId: string;
+        readonly turnId: string | null;
         readonly modelItemId: string;
         readonly ordinal: number;
         readonly text: string;
         readonly omittedBytes: number;
       }
-    | { readonly kind: "final_response"; readonly turnId: string; readonly modelItemId: string;
+    | { readonly kind: "final_response"; readonly turnId: string | null; readonly modelItemId: string;
         readonly callId: string; readonly text: string; readonly omittedBytes: number;
         readonly disposition: "proposed" | "accepted" | "declined" | "completed" | "failed" | "cancelled" }
     | {
         readonly kind: "tool_call";
         readonly callId: string;
-        readonly turnId: string;
+        readonly turnId: string | null;
         readonly name: string;
         readonly callableKind: "tool" | "control" | "unresolved";
         readonly resolvedName: string | null;
@@ -344,6 +354,7 @@ export function receiveHelarcRunInputPresentation(
 export function appendHelarcRunPresentation(
   current: HelarcRunPresentation,
   record: RunTranscriptRecord,
+  native?:import("./HelarcNativePresentation.js").HelarcNativePresentation,
 ): HelarcRunPresentation {
   if ((current.sourceSequences[record.runId] ?? 0) >= record.sequence)
     return current;
@@ -376,8 +387,39 @@ export function appendHelarcRunPresentation(
       input:projectHelarcPresentationValue(content.input, 1024)}});
   };
   if (payload.kind === "controller_turn") {
+    const evidence=payload.modelItems.find(model=>model.kind==="native_purpose_evidence");
+    if(evidence?.kind==="native_purpose_evidence"){
+      if(!native||modelInputValueDigest(native.evidence)!==modelInputValueDigest(evidence.evidence))throw new TypeError("native_presentation_interpreter_required");
+      const origin=(s:import("@agent-anything/model-interaction/protocol").NativeModelSourceRef,id:string,callId:string|null):HelarcModelItemOrigin=>({
+        runId:record.runId,turnId:null,nativeSource:s,turnSequence:record.sequence,modelItemId:id,
+        ordinal:native.evidence.sources.findIndex(v=>nativeModelSourceKey(v)===nativeModelSourceKey(s)),callId,source});
+      for(const block of native.reasoning??[]){
+        const id=helarcNativePresentationId(block.source);
+        add(id,{kind:"assistant_reasoning",turnId:null,modelItemId:id,...boundedPresentationText(block.text)},{...origin(block.source,id,null),ordinal:null});
+      }
+      for(const block of [...native.text,...native.refusals]){
+        const id=helarcNativePresentationId(block.source),o=origin(block.source,id,null);
+        add(id,{kind:"assistant_text",turnId:null,modelItemId:id,ordinal:o.ordinal??0,...boundedPresentationText(block.text)},o);
+      }
+      for(const {call,binding} of native.calls){
+        const id=call.modelCallRef.id,s=call.modelCallRef.nativeSource!,o=origin(s,id,id);
+        if(binding.kind==="control"&&binding.control==="final_result"){
+          // Adoption points at existing text; it must not produce another visible copy.
+          if(native.ending?.disposition!=="supplied")continue;
+          const bodyId=helarcNativePresentationId(s);
+          add(bodyId,{kind:"final_response",turnId:null,modelItemId:bodyId,callId:id,
+            ...boundedPresentationText(native.ending.response),disposition:"proposed"},{...o,modelItemId:bodyId});
+        }else add(id,{kind:"tool_call",turnId:null,callId:id,name:call.name,...resolvedCallable(binding),input:projectHelarcPresentationValue(call.input),
+          runActionId:null,invocationId:null,invocationIds:[],settlement:null,result:null},o);
+      }
+      for(const rejected of native.rejections){
+        const id=rejected.call.id,s=rejected.call.nativeSource!;
+        add(id,{kind:"tool_call",turnId:null,callId:id,name:rejected.name,...resolvedCallable(null),input:null,
+          runActionId:null,invocationId:null,invocationIds:[],settlement:"invalid",result:{code:rejected.code,message:rejected.message}},origin(s,id,id));
+      }
+    }
     const turns = new Map<string, number>();
-    for (const model of payload.modelItems) {
+    for (const model of evidence?[]:payload.modelItems) {
       if (model.kind === "assistant_reasoning") {
         if (!turns.has(model.turnId)) turns.set(model.turnId, nextSequence);
         add(model.id, { kind: "assistant_reasoning", turnId: model.turnId, modelItemId: model.id,
@@ -388,7 +430,7 @@ export function appendHelarcRunPresentation(
         continue;
       }
       if (model.kind !== "assistant_text" && model.kind !== "model_tool_call") continue;
-      const turnId = model.kind === "assistant_text" ? model.turnId : model.call.modelCallRef.turnId;
+      const turnId = model.kind === "assistant_text" ? model.turnId : requireModelCallTurn(model.call.modelCallRef);
       if (!turns.has(turnId)) turns.set(turnId, nextSequence);
       const origin: HelarcModelItemOrigin = {
         runId: record.runId, turnId, turnSequence: turns.get(turnId)!, modelItemId: model.id,
@@ -407,14 +449,14 @@ export function appendHelarcRunPresentation(
       if (model.kind === "model_tool_call") {
         const binding = resolvedCallable(model.metadata?.helarcCallableBinding);
         if (binding.callableKind === "control" && binding.resolvedName === "final_result") {
-          add(model.id, {kind: "final_response", turnId: model.call.modelCallRef.turnId, modelItemId: model.id,
+          add(model.id, {kind: "final_response", turnId, modelItemId: model.id,
             callId: model.call.modelCallRef.id, ...boundedPresentationText(typeof model.call.input.response === "string" ? model.call.input.response : ""), disposition: "proposed"}, origin);
           continue;
         }
         add(model.id, {
           kind: "tool_call",
           callId: model.call.modelCallRef.id,
-          turnId: model.call.modelCallRef.turnId,
+          turnId,
           name: model.call.name,
           ...resolvedCallable(model.metadata?.helarcCallableBinding),
           input: projectHelarcPresentationValue(model.call.input,
@@ -597,6 +639,15 @@ export function associateHelarcOperationPresentation(current: HelarcRunPresentat
   };
   const records = current.records.map(associate), activeCalls = current.activeCalls.map(associate);
   return changed ? retainPresentation({...current, revision: current.revision + 1, records, activeCalls}) : current;
+}
+
+export function appendHelarcPresentationGap(current:HelarcRunPresentation,record:RunTranscriptRecord,code:string,count=1):HelarcRunPresentation {
+  const id=`presentation-gap:${record.runId}:${record.sequence}`;
+  return retainPresentation({...current,revision:current.revision+1,nextSequence:current.nextSequence+1,
+    records:[...current.records.filter(r=>r.id!==id),{id,runId:record.runId,sequence:current.nextSequence,
+      revision:record.item.committedInRevision,observedAt:record.item.createdAt,origin:null,
+      source:{owner:"runtime",kind:"run_item",id:record.item.ref.id,sequence:record.sequence},
+      content:{kind:"lifecycle",title:"Response display unavailable",detail:{code,count}}}]});
 }
 
 function retainPresentation(current: HelarcRunPresentation): HelarcRunPresentation {

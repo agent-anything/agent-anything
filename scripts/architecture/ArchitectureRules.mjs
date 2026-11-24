@@ -83,6 +83,9 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/agent-core",
     "@agent-anything/model-interaction",
     "eventsource-parser",
+    "undici",
+    "ws",
+    "ajv",
   ],
   "@agent-anything/mcp": [
     "@agent-anything/agent-core",
@@ -134,6 +137,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/host",
     "@agent-anything/interaction",
     "@agent-anything/model-interaction",
+    "@agent-anything/provider-integrations",
     "@agent-anything/observability",
     "@agent-anything/operation-catalog",
     "@agent-anything/operation-composition",

@@ -29,7 +29,8 @@ const SCAN_BYTES=1048576;
 /** Only custody owns content availability. Representation and delivery own why it is retained. */
 export class MaterialCustodyDatabase {
   constructor(private readonly db:Database.Database,private readonly records:ContextFoundationRecords,
-    private readonly storageBudget=8*1024*1024*1024,private readonly mayRelease:(hold:MaterialHold)=>boolean=()=>true) {}
+    private readonly storageBudget=8*1024*1024*1024,private readonly mayRelease:(hold:MaterialHold)=>boolean=()=>true,
+    private readonly count:(name:string,value:number)=>void=()=>{}) {}
 
   command(command:MaterialCustodyCommand):MaterialCustodyValue {
     switch(command.kind) {
@@ -127,13 +128,23 @@ export class MaterialCustodyDatabase {
     }};
   }
   requireProtected(instanceId:string,range:MaterialRange,recipient:MaterialRecipient,holdId?:string):void {
+    this.requireRetained(instanceId,range,recipient,holdId);
+    this.authorized(instanceId,range,recipient);
+  }
+  requireRetained(instanceId:string,range:MaterialRange,recipient:MaterialRecipient,holdId?:string):void {
     const state=this.instance(instanceId);
     if(!state || state.state!=="published") fail("material_unavailable");
     this.range(state.version!,range);
     const rows=(holdId ? this.records.sql("SELECT value,digest FROM material_holds WHERE id=? AND instance_id=? AND released IS NULL").all(holdId,instanceId) :
       this.records.sql("SELECT value,digest FROM material_holds WHERE instance_id=? AND released IS NULL").all(instanceId)) as {value:string;digest:string}[];
     if(!rows.some(row=>{const hold=checkedJson<MaterialHold>(row);return recipientKey(hold.consumer)===recipientKey(recipient)&&containsMaterialRange(hold.range,range);})) fail("material_hold_missing");
-    this.authorized(instanceId,range,recipient);
+  }
+  withdrawGrant(id:string,instanceId:string,recipient:MaterialRecipient,basis:string):void {
+    const row=this.records.sql("SELECT value,digest FROM material_grants WHERE id=?").get(id) as {value:string;digest:string}|undefined;
+    if(!row)return;
+    const grant=checkedJson<MaterialGrant>(row);
+    if(grant.instanceId!==instanceId||recipientKey(grant.recipient)!==recipientKey(recipient))fail("material_grant_identity_invalid");
+    if(grant.allowed)this.grant({...grant,revision:grant.revision+1,allowed:false,basis},grant.revision);
   }
   private resolveReference(id:string,recipient:MaterialRecipient):MaterialAccessDescription|null {
     const rows=this.records.sql("SELECT value,digest FROM material_holds WHERE reference_id=? AND recipient_key=? AND released IS NULL ORDER BY id")
@@ -202,6 +213,7 @@ export class MaterialCustodyDatabase {
       if(prior){requireSame(prior,{instance_id:state.intent.instanceId,offset:command.offset,digest});return state;}
       if(state.state!=="staging" || state.bytes!==command.offset || state.bytes+bytes.length>state.intent.maximumBytes || state.intent.version.bytes!==null&&state.bytes+bytes.length>state.intent.version.bytes) fail("material_write_bound_invalid");
       this.records.sql("INSERT INTO material_custody_chunks VALUES (?,?,?,?,?)").run(state.intent.instanceId,command.offset,command.id,bytes,digest);
+      this.count("custody.chunkWrites",1);this.count("custody.bytesWritten",bytes.length);
       this.records.sql("UPDATE material_custodies SET bytes=bytes+?,chunks=chunks+1 WHERE id=?").run(bytes.length,state.intent.id);
       return this.requireIntent(state.intent.id);
     })();
@@ -213,6 +225,7 @@ export class MaterialCustodyDatabase {
     const hash=createHash("sha256");let offset=0,count=0;
     // The Worker owns mutation; no transaction remains open while content is checked.
     for(const row of this.records.sql("SELECT offset,bytes,digest FROM material_custody_chunks WHERE instance_id=? ORDER BY offset").iterate(state.intent.instanceId) as Iterable<{offset:number;bytes:Buffer;digest:string}>) {
+      this.count("custody.chunkReads",1);this.count("custody.bytesRead",row.bytes.length);
       if(row.offset!==offset || byteDigest(row.bytes)!==row.digest) fail("material_content_corrupt");
       hash.update(row.bytes);offset+=row.bytes.length;count++;
     }
@@ -280,6 +293,7 @@ export class MaterialCustodyDatabase {
   private bytes(instanceId:string,start:number,end:number):Buffer {
     const output:Buffer[]=[];let position=start;
     for(const row of this.records.sql("SELECT offset,bytes,digest FROM material_custody_chunks WHERE instance_id=? AND offset<? AND offset+length(bytes)>? ORDER BY offset").iterate(instanceId,end,start) as Iterable<{offset:number;bytes:Buffer;digest:string}>) {
+      this.count("custody.chunkReads",1);this.count("custody.bytesRead",row.bytes.length);
       if(byteDigest(row.bytes)!==row.digest || row.offset>position)fail("material_content_corrupt");
       const piece=row.bytes.subarray(Math.max(0,position-row.offset),Math.min(row.bytes.length,end-row.offset));
       output.push(piece);position+=piece.length;

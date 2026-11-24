@@ -81,7 +81,9 @@ describe("AgentHookExtensions", () => {
       composition: stopComposition([handler("stop", handle, 1000, recover)]), rootRunId: "run-1", now: () => current});
     const controller = new AbortController();
     const baseContext = callContext();
-    const context = {...baseContext, cancellation: {...baseContext.cancellation, signal: controller.signal}, checkpoints: port, runCheckpoints: port};
+    const facts: ExecutionFlowObservation[] = [];
+    const context = {...baseContext, executionFlow: {observer: {observe: (fact: ExecutionFlowObservation) => {facts.push(fact);}}},
+      cancellation: {...baseContext.cancellation, signal: controller.signal}, checkpoints: port, runCheckpoints: port};
     const notification = completionInput(controllerInput(), complete("Done"));
     await expect(make().beforeCompletion(notification, context)).rejects.toBeInstanceOf(ActivityCheckpointError);
     if (mode === "expired") current = new Date(Date.parse(NOW) + 1001).toISOString();
@@ -96,6 +98,11 @@ describe("AgentHookExtensions", () => {
     const saved = [...values.entries()].find(([key]) => key.startsWith('["hook"'))![1] as AgentHookInvocationCheckpoint;
     expect(saved.startedAt).toBe(NOW);
     expect(saved.outcome?.startedAt).toBe(NOW);
+    const handlerFacts = facts.filter(f => f.definition.id === "hook-handler");
+    expect(handlerFacts.find(f => f.kind === "definition")?.definition).toMatchObject({revision:"2",
+      steps: [expect.objectContaining({id:"invoke",checks:["recovery_entry"]}),expect.objectContaining({id:"settle",checks:["result_contract"]})]});
+    expect(handlerFacts.filter(f => f.kind === "constraint" && f.checkId === "recovery_entry"))
+      .toEqual([expect.objectContaining({stepId:"invoke",disposition:"passed",basis:{invocationId:saved.id,startedAt:saved.startedAt}})]);
   });
   it.each(["intent", "outcome", "aggregate"] as const)("recovers a Hook %s acknowledgement loss without replay or resetting feedback count", async stage => {
     const values = new Map<string, unknown>();
@@ -192,9 +199,13 @@ describe("AgentHookExtensions", () => {
         : { disposition: "allow" })]),
       rootRunId: "run-1", now: () => NOW,
     });
-    await expect(finish(controller, controllerInput(), callContext())).resolves.toMatchObject({ kind: "continue_with_feedback" });
-    await expect(finish(controller, controllerInput(2), callContext())).resolves.toEqual({kind: "allow"});
+    const facts: ExecutionFlowObservation[] = [];
+    const context = {...callContext(),executionFlow:{observer:{observe:(f:ExecutionFlowObservation)=>{facts.push(f);}}}};
+    await expect(finish(controller, controllerInput(), context)).resolves.toMatchObject({ kind: "continue_with_feedback" });
+    await expect(finish(controller, controllerInput(2), context)).resolves.toEqual({kind: "allow"});
     expect(calls).toBe(2);
+    expect(facts.filter(f => f.kind === "constraint" && f.definition.id === "hook-handler").map(f => f.kind === "constraint" && f.checkId))
+      .toEqual(["result_contract","result_contract"]);
   });
   it("isolates projection listener failures from Agent execution", () => {
     const store = new AgentHookExecutionStore();

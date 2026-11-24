@@ -1,6 +1,7 @@
 import {contextMaterialDigest, type ContextMaterialDocument} from "@agent-anything/context/material";
 import type {RunCommit} from "@agent-anything/agent-runtime/execution-coordinator";
 import type {RetainedInputPresentation} from "@agent-anything/agent-runtime/decision";
+import {isNativeTaskSeed} from "@agent-anything/agent-runtime/decision";
 
 /** Only newly accepted public presentations are indexed; neither checkpoints nor reasoning are material. */
 export function projectContextMaterials(commit: RunCommit, previousItemCount: number): readonly ContextMaterialDocument[] {
@@ -32,7 +33,8 @@ export function projectContextMaterials(commit: RunCommit, previousItemCount: nu
   };
   if (previousItemCount === 0) {
     const seed = commit.admission?.modelInteractionSeed;
-    for (const entry of seed?.presentations ?? []) presentation(entry, 0, seed!.sourceRunId);
+    // Native sources are published by their Protocol reader, never by decoding a private checkpoint here.
+    if (seed && !isNativeTaskSeed(seed)) for (const entry of seed.presentations) presentation(entry, 0, seed.sourceRunId);
   }
   for (const item of commit.state.items.slice(previousItemCount)) {
     const payload = item.payload;

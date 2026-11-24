@@ -44,7 +44,11 @@ export class ActivityHandoffProcessor {
     private readonly purposes: ActivityPurposeResolver<ActivityPurposeHandler>,
     private readonly executor: ActivityExecutorIdentity,
     private readonly now: () => string,
-    private readonly acceptedPurposeIds?:readonly string[],private readonly observeTiming?:(event:ActivityTimingObservation)=>void) {}
+    private readonly acceptedPurposeIds?:readonly string[],private readonly observeTiming?:(event:ActivityTimingObservation)=>void) {
+    this.port={command:(command,options)=>port.command(command,{...options,observation:options?.observation??{
+      owner:"execution-coordination",purpose:"activity-handoff",
+    }})};
+  }
 
   /** Bounded discovery/dispatch never waits for a long external execution. */
   async scan(runId:string,signal:AbortSignal,maximum=64,schedulingReviewed=false):Promise<ActivityDrainResult> {
@@ -62,6 +66,11 @@ export class ActivityHandoffProcessor {
   async settled():Promise<void>{await Promise.all([...this.executing.values()].map(work=>work.completion));}
   stopDispatch():void {this.dispatchOpen=false;}
   get inFlight():number{return this.executing.size;}
+  inFlightFor(runId:string):boolean{return [...this.executing.values()].some(work=>work.runId===runId);}
+  forgetIdleScope(runId:string):void {
+    if(this.inFlightFor(runId))throw new TypeError("activity_scope_still_executing");
+    this.cursors.delete(runId);this.completed.delete(runId);
+  }
   private collect(runId:string,result:ActivityDrainResult):ActivityDrainResult {
     const completed=this.completed.get(runId);this.completed.delete(runId);
     return {progressed:[...result.progressed,...(completed?.progressed??[])],pending:[...result.pending,...(completed?.pending??[])],failures:[...result.failures,...(completed?.errors??[])]};
@@ -89,8 +98,9 @@ export class ActivityHandoffProcessor {
         }
         pending.push({requestId:item.requestId,reason:"execution_in_flight"});continue;
       }
-      let stage = await this.port.command({kind:"read_stage",requestId:item.requestId}) as ActivityStageState | null;
-      const path = await this.port.command({kind:"read_path",pathId:item.pathId}) as ActivityPathState | null;
+      const snapshot=await this.port.command({kind:"read_snapshot",pathId:item.pathId,requestIds:[item.requestId],inputNeedIds:[]}) as import("./ActivityObservation.js").ActivitySnapshot;
+      let stage=snapshot.stages[0]??null;
+      const path=snapshot.path;
       if (!stage || !path || path.intent.runId !== runId) throw new TypeError("activity_handoff_scope_invalid");
       if(this.acceptedPurposeIds&&!this.acceptedPurposeIds.includes(path.intent.purpose.contract.ref.id))continue;
       const expectedStatus={admission:"submitted",execution:"admitted",reconciliation:"dispatched",interpretation:"raw_result",settlement:"raw_result"} as const;
@@ -150,7 +160,7 @@ export class ActivityHandoffProcessor {
         if(stage.dispatchRestriction&&!path.cancelled&&!stage.attempt)stage=await this.port.command({kind:"restrict_dispatch",requestId:stage.request.id,expectedControlRevision:path.controlRevision,restriction:null}) as ActivityStageState;
         switch (item.kind) {
           case "admission":
-            await measureActivityWork(timing,"admission.persistence",()=>this.port.command({kind:"admit",requestId:item.requestId,expectedControlRevision:path.controlRevision}));
+            await measureActivityWork(timing,"admission.persistence",()=>this.port.command({kind:"admit",requestId:item.requestId,expectedControlRevision:path.controlRevision},{returnKind:"receipt"}));
             break;
           case "execution": {
             const attempt:ActivityAttempt = {id:`${stage.request.id}:attempt:${(stage.attemptCount??0)+1}`,requestId:stage.request.id,
@@ -163,7 +173,7 @@ export class ActivityHandoffProcessor {
               const result=await measureActivityWork(executionTiming,"execution",()=>handler.execute(path,dispatched.stage,attempt,executionSignal,executionTiming));
               this.resultMatches(result,attempt.id);
               // Raw persistence is not cancelled when the consumer no longer needs the result.
-              await measureActivityWork(executionTiming,"raw.persistence",()=>this.port.command({kind:"save_raw",result}));
+              await measureActivityWork(executionTiming,"raw.persistence",()=>this.port.command({kind:"save_raw",result},{returnKind:"receipt"}));
             };
             if(wait)await execution();
             else {
@@ -178,7 +188,7 @@ export class ActivityHandoffProcessor {
             const result = await measureActivityWork(timing,"reconciliation",()=>handler.reconcile(path,stage!,signal));
             if (!result) {pending.push({requestId:item.requestId,reason:"external_result_unknown"}); continue;}
             this.resultMatches(result,stage.attempt!.id);
-            await this.port.command({kind:"save_raw",result});
+            await this.port.command({kind:"save_raw",result},{returnKind:"receipt"});
             break;
           }
           case "interpretation": {
@@ -198,7 +208,7 @@ export class ActivityHandoffProcessor {
             await measureActivityWork(timing,"acceptance.persistence",()=>this.port.command({kind:"accept",receipt:{id:acceptanceId,requestId:stage!.request.id,
               resultId:claimed.result!.id,owner:path.intent.owner,expectedProgressRevision:path.progressRevision,
               progress:outcome.progress,next:outcome.next,interpretationMs},executor:this.executor,expectedControlRevision:path.controlRevision,
-              ...(outcome.participants?{participants:outcome.participants}:{})}));
+              ...(outcome.participants?{participants:outcome.participants}:{})},{returnKind:"receipt"}));
             break;
           }
           case "settlement": {
@@ -209,7 +219,7 @@ export class ActivityHandoffProcessor {
             await measureActivityWork(timing,"settlement.persistence",()=>this.port.command({kind:"settle",receipt:{id:acceptanceId,requestId:stage!.request.id,
               resultId:stage!.result!.id,owner:path.intent.purpose.contract.recoveryOwner,disposition:outcome.disposition},
               executor:this.executor,expectedControlRevision:path.controlRevision,
-              ...(outcome.participants?{participants:outcome.participants}:{})}));
+              ...(outcome.participants?{participants:outcome.participants}:{})},{returnKind:"receipt"}));
             break;
           }
         }

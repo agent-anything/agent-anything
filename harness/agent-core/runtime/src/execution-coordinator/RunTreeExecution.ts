@@ -430,6 +430,11 @@ export class RunTreeExecution {
     input: DescendantRunReservationInput,
   ): DescendantRunReservation {
     const parent = this.requireParent(input.parentRunId, input.parentLineage);
+    assertToken(input.relationId, "relationId");
+    if ([...this.nodes.values()].some(node => node.lineage.kind === "descendant" &&
+        node.lineage.relation.id === input.relationId)) {
+      throw new TypeError("The descendant relation identity already exists in this tree.");
+    }
     if (this.isCancellationRequested(parent.lineage.root.id) ||
         this.isCancellationRequested(input.parentRunId)) {
       return rejected("descendant_run_start_cancelled", this.revision);
@@ -519,6 +524,13 @@ export class RunTreeExecution {
     const result = this.resources.record(runId, usage);
     this.projectionDirty = true;
     return result;
+  }
+
+  resourceContribution(runId:string,source:string){return this.resources.contribution(runId,source);}
+
+  replaceResourceContribution(runId:string,value:import("./RunResourceContributions.js").RunResourceContribution):RunTreeResourceRecordResult {
+    this.requireNode(runId);
+    const result=this.resources.replaceContribution(runId,value);this.projectionDirty=true;return result;
   }
 
   settleResources(runId: string): RunTreeResourceSettlement {

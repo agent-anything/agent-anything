@@ -2,7 +2,7 @@ import type {AgentDefinition} from "@agent-anything/agent-core/agent";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {TaskDecisionInputSources} from "./TaskDecisionActivity.js";
 import {TaskResponseBindingError} from "./TaskResponseBindingError.js";
-import {assertControllerCheckpointValue} from "../activity/ActivityCheckpointValue.js";
+import {assertControllerCheckpointValue,isImmutableActivityValue} from "../activity/ActivityCheckpointValue.js";
 
 export interface TaskDecisionSourceRecord {
   readonly id:string;
@@ -18,12 +18,15 @@ export function retainTaskDecisionSource(source:TaskDecisionInputSources):TaskDe
   validateTaskDecisionSource(record);
   return record;
 }
+const validatedSources=new WeakSet<object>();
 export function validateTaskDecisionSource(record:TaskDecisionSourceRecord):void {
+  if(validatedSources.has(record))return;
   assertControllerCheckpointValue(record);
   if(record?.version!==1||!record.source?.runId||!record.source.toolExposure?.controllerRequestId||
     !record.source.agent?.id||!record.source.agent.revision||"output" in record.source.agent||
     record.id!==`task-source:${modelInputValueDigest({version:record.version,source:record.source})}`)
     throw new TaskResponseBindingError("task_decision_source_binding_invalid");
+  if(isImmutableActivityValue(record))validatedSources.add(record);
 }
 export function restoreTaskDecisionSource<T>(record:TaskDecisionSourceRecord,agent:AgentDefinition<T>):TaskDecisionInputSources<T> {
   validateTaskDecisionSource(record);

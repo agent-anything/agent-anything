@@ -80,6 +80,8 @@ export type {
   DelegationSteeringRejectionCode,
   DelegationSteeringRoute,
   DelegationResumeReceipt,
+  DelegationCancelReceipt,
+  DelegationCancelRoute,
   DelegationResumeRoute,
 } from "./DelegationControl.js";
 export {

@@ -54,6 +54,7 @@ export {
 } from "./transport/index.js";
 export type {
   ModelCallRef,
+  TurnModelCallRef,
   ModelCallSettlementKind,
   ModelCallSettlementSourceRef,
   ModelCallableRequest,
@@ -63,6 +64,9 @@ export type {
 } from "./ModelCall.js";
 export {
   createModelCallRef,
+  createNativeModelCallRef,
+  requireModelCallTurn,
+  modelCallsShareDecisionBasis,
   modelCallRefKey,
   snapshotModelCallRef,
   snapshotModelCallableRequest,

@@ -24,7 +24,8 @@ export class SharedAcceptanceRejection extends Error {
 /** A transaction boundary, not a professional state owner or unrestricted key/value API. */
 export class SharedAcceptanceDatabase {
   private readonly participants = new Map<string, SharedAcceptanceParticipant>();
-  constructor(private readonly db: Database.Database, participants: readonly SharedAcceptanceParticipant[]) {
+  constructor(private readonly db: Database.Database, participants: readonly SharedAcceptanceParticipant[],
+    private readonly measure:<T>(phase:string,work:()=>T)=>T=(_phase,work)=>work()) {
     for (const participant of participants) {
       if (this.participants.has(participant.owner)) throw new TypeError("acceptance_participant_duplicate");
       this.participants.set(participant.owner,participant);
@@ -33,35 +34,35 @@ export class SharedAcceptanceDatabase {
   accept(proposal: SharedAcceptanceProposal): SharedAcceptanceReceipt {
     [proposal.id,proposal.scope,proposal.actor].forEach(activityToken);
     if (!Array.isArray(proposal.parts) || !proposal.parts.length || proposal.parts.length > 64) throw new TypeError("acceptance_parts_invalid");
-    const digest = modelInputValueDigest(proposal), prior = this.query(proposal.id);
+    const digest = this.measure("digest",()=>modelInputValueDigest(proposal)), prior = this.query(proposal.id);
     if (prior) {this.same(prior,digest); return prior;}
     let prepared: {participant:SharedAcceptanceParticipant;value:unknown}[];
     try {
-      prepared = proposal.parts.map(part => {
+      prepared = this.measure("prepare",()=>proposal.parts.map(part => {
         const participant = this.participants.get(part.owner);
         if (!participant || !participant.kinds.includes(part.kind)) throw new SharedAcceptanceRejection(part.owner,"acceptance_participant_unavailable");
-        return {participant,value:participant.prepare(part,proposal)};
-      });
+        return {participant,value:this.measure(`prepare.${part.owner}`,()=>participant.prepare(part,proposal))};
+      }));
     } catch (error) {
       if (!(error instanceof SharedAcceptanceRejection)) throw error;
       return this.db.transaction(() => this.record(proposal,digest,error))();
     }
-    return this.db.transaction(() => {
+    return this.measure("transaction",()=>this.db.transaction(() => {
       const old = this.query(proposal.id);
       if (old) {this.same(old,digest); return old;}
       let rejection: SharedAcceptanceRejection | null = null;
       try {
         // Savepoint rolls back participant changes while the outer transaction records a known rejection.
         this.db.transaction(() => {
-          for (const part of prepared) part.participant.apply(part.value,proposal);
-          for (const part of prepared) part.participant.validate?.(part.value,proposal);
+          for (const part of prepared) this.measure(`apply.${part.participant.owner}`,()=>part.participant.apply(part.value,proposal));
+          for (const part of prepared) this.measure(`validate.${part.participant.owner}`,()=>part.participant.validate?.(part.value,proposal));
         })();
       } catch (error) {
         if (!(error instanceof SharedAcceptanceRejection)) throw error;
         rejection = error;
       }
       return this.record(proposal,digest,rejection);
-    })();
+    })());
   }
   query(id: string): SharedAcceptanceReceipt | null {
     activityToken(id);

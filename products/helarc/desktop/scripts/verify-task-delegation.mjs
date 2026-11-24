@@ -135,6 +135,7 @@ try{
   assert(active.members.some(m=>m.runId!=="root"&&m.status!=="completed"));
   if(retainedReport){
     await launch("report-retained",73);const requestsAtPublication=requests.length;
+    await launch("report-probes",0);assert.equal(requests.length,requestsAtPublication);
     for(const phase of ["report-interrupted","report-captured","report-published","report-admitted"]){await launch(phase,73);assert.equal(requests.length,requestsAtPublication,"Publication recovery cannot repeat Child requests");}
   }
   await launch("parent-response",73);assert.equal(requests.length-methodCalls,redistribute?11:retainedContinuation?8:6);

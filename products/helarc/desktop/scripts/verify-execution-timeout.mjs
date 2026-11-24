@@ -8,7 +8,7 @@ import {fileURLToPath} from "node:url";
 const desktop = fileURLToPath(new URL("../", import.meta.url));
 const vitest = fileURLToPath(new URL("../../../../node_modules/vitest/vitest.mjs", import.meta.url));
 const root = await mkdtemp(join(tmpdir(), "helarc-timeout-verification-"));
-async function launch(directory, stalled, nextOnly = false) {
+async function launch(directory, stalled, nextOnly = false, cleanupRejects = false) {
   await mkdir(directory, {recursive: true});
   const report = join(directory, nextOnly ? "following-report.json" : "report.json");
   const args = [vitest, "run", "--config", "scripts/execution-timeout.vitest.config.ts", "--reporter=json", `--outputFile=${report}`];
@@ -16,6 +16,7 @@ async function launch(directory, stalled, nextOnly = false) {
   return new Promise((accept, reject) => {
     const child = spawn(process.execPath, args, {cwd: desktop, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"],
       env: {...process.env, HELARC_TIMEOUT_FIXTURE_DIRECTORY: directory, HELARC_TIMEOUT_FIXTURE_STALLED: stalled ? "1" : "0",
+        HELARC_TIMEOUT_FIXTURE_CLEANUP_REJECTS:cleanupRejects?"1":"0",
         HELARC_TIMEOUT_FIXTURE_NEXT_ONLY: nextOnly ? "1" : "0"}});
     let output = "", expired = false;
     const watchdog = setTimeout(() => {
@@ -57,6 +58,17 @@ try {
   assert.equal(after.code, 0, after.output);
   assert.equal(JSON.parse(await readFile(join(stalled, "following.json"), "utf8")).quiescent, true);
   console.log("Noncooperative body: owned fork terminated; next process reopened the database with no residual work.");
+  const rejected=join(root,"cleanup-rejected");
+  const failedClose=await launch(rejected,false,false,true);
+  assert.equal(failedClose.code,1,failedClose.output);
+  assert(failedClose.output.includes("Execution fixture cleanup failed:"),failedClose.output);
+  const rejectedOwner=JSON.parse(await readFile(join(rejected,"started.json"),"utf8"));
+  assert.throws(()=>process.kill(rejectedOwner.processId,0),{code:"ESRCH"});
+  await assert.rejects(readFile(join(rejected,"following.json")),{code:"ENOENT"});
+  const afterRejection=await launch(rejected,false,true);
+  assert.equal(afterRejection.code,0,afterRejection.output);
+  assert.equal(JSON.parse(await readFile(join(rejected,"following.json"),"utf8")).quiescent,true);
+  console.log("Rejected teardown: owned fork terminated; next process reopened the original database without residual work.");
   passed = true;
 } finally {
   if (passed) {

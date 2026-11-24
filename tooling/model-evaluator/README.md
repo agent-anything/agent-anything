@@ -5,6 +5,30 @@ connections, fixtures, requests and reports. It neither imports Helarc runtime
 logic nor publishes capabilities to Helarc. Reports are stored under
 `~/.model-evaluator` (override with `MODEL_EVALUATOR_DATA_DIR`).
 
+## Native Responses probes
+
+Select **OpenAI Responses**, configure the evaluator's own endpoint/key/model, then
+select one probe. Neither runs in the chat suites. Each allows one trial, without
+retries. The target and wire evidence are retained with the observations.
+
+- **Count a tool history**: count a synthetic two-page tool exchange, then repeat
+  the same count with only top-level `context_management` added. Two counts at
+  most, no generations. An explicit rejection of that field is distinct from
+  authentication/transport errors. A valid count means the interface returned
+  a number, not that it included every aspect of generation-time rendering.
+- **Compaction and subsequent use**: two requested local synthetic reads, an
+  operator correction, a count of the visible history and one opportunity for
+  the service to compact at 13,500 tokens. Only a new item in both the stream
+  and completed response qualifies. Stateless replay drops its preceding
+  history. The blind question tests both the corrected value and its scope;
+  a visible answer or another opaque carrier prevents an isolated grade.
+  Maximum four generations (1,800 output tokens each) and one count. The
+  visible-count sample range is not a complete-input token budget.
+
+The interface observation, semantic sample and unproven properties are reported
+separately. These reports are for human review; no Helarc connection, credential,
+admission, execution recovery or Inspector state is read, tested or updated.
+
 ## Context Representation Evaluation
 
 The baseline suite tests instructions and native calls. The context suite tests

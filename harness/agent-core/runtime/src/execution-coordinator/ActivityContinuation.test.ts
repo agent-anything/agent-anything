@@ -24,6 +24,17 @@ function setup() {
 }
 
 describe("Activity continuation acceptance", () => {
+  it("reads accepted continuation locally without creating or accepting another stage", async () => {
+    const {coordinator,input,port}=setup();
+    expect(coordinator.readAccepted(input.arrangement)).toBeNull();
+    expect(port.compareAndCommit).not.toHaveBeenCalled();
+    await coordinator.accept(input);
+    expect(new ActivityContinuationCoordinator(port).readAccepted(input.arrangement)).toEqual(input.arrangement);
+    expect(port.compareAndCommit).toHaveBeenCalledTimes(1);
+    expect(()=>coordinator.readAccepted({...input.arrangement,id:"fabricated"})).toThrow();
+    const changed=createActivityContinuationArrangement({...input.arrangement,cause:{kind:"protocol_correction",code:"changed",feedback:{}}});
+    expect(()=>coordinator.readAccepted(changed)).toThrow();
+  });
   it("recovers one acceptance without repeating feedback or resetting its sequence", async () => {
     const {coordinator, input, port, values} = setup();
     await coordinator.accept(input);

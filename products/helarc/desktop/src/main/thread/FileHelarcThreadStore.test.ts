@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { OPENAI_RESPONSES } from "@agent-anything/model-interaction/protocol";
 import {
   FileHelarcThreadStore,
   HelarcThreadStoreCorruptionError,
@@ -24,6 +25,28 @@ const PROGRESS_AT = "2026-07-18T00:00:10.000Z";
 const COMPLETED_AT = "2026-07-18T00:00:20.000Z";
 
 describe("FileHelarcThreadStore", () => {
+  it("persists native Root/Child origins through progress, terminal commit and reload",async()=>{
+    const path=await threadFilePath(),store=new FileHelarcThreadStore(path);
+    await store.commitRunStart(startCommit("1"));
+    const progress=nativeProjection();
+    expect((await store.commitRunProjection(progress)).status).toBe("applied");
+    const terminal=terminalCommit();
+    const finalProjection={...progress.projection,host:{...progress.projection.host,terminal:terminal.terminal.host}};
+    expect((await store.commitRunTerminal({...terminal,expectedThreadRevision:2,terminal:{...terminal.terminal,finalProjection}})).status).toBe("applied");
+    const restored=await new FileHelarcThreadStore(path).loadThread("thread-1");
+    expect(restored!.runs[0]!.terminal!.finalProjection!.product.presentation).toEqual(progress.projection.product.presentation);
+  });
+  it.each(["missing","malformed","other-run","competing-turn"])("rejects %s native origins without committing a partial view",async kind=>{
+    const path=await threadFilePath(),store=new FileHelarcThreadStore(path);
+    await store.commitRunStart(startCommit("1"));
+    const progress=nativeProjection(),origin=progress.projection.product.presentation.records[0]!.origin!;
+    if(kind==="missing")Object.assign(origin,{nativeSource:undefined});
+    if(kind==="malformed")Object.assign(origin,{nativeSource:{}});
+    if(kind==="other-run")Object.assign(origin.nativeSource!.scope,{runId:"other"});
+    if(kind==="competing-turn")Object.assign(origin,{turnId:"invented"});
+    expect((await store.commitRunProjection(progress)).status).toBe("rejected");
+    expect((await store.loadThread("thread-1"))!.runs[0]!.projectionSequence).toBe(0);
+  });
   it("persists a versioned aggregate and restores Renderer-safe queries", async () => {
     const filePath = await threadFilePath();
     const store = new FileHelarcThreadStore(filePath);
@@ -316,6 +339,18 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
   };
 }
 
+function nativeProjection():HelarcRunProjectionCommit {
+  const progress=projectionCommit(1,"native-progress");
+  const records=["run-1","child"].map((runId,index)=>{
+    const origin={runId,turnId:null,nativeSource:{scope:{runId,activityId:`${runId}:native`,recipientId:"agent",purpose:{id:"task",revision:"1"},compositionDigest:`sha256:${"a".repeat(64)}`},
+      protocol:OPENAI_RESPONSES,interpretation:{id:"native",revision:"1"},operationId:`${runId}:operation`,record:{id:`${runId}:response`,revision:"1"},position:{format:"json-pointer",value:"/output/0"},nativeIdentity:null},
+      turnSequence:1,modelItemId:`${runId}:text`,ordinal:0,callId:null,source:{id:`${runId}:item`,sequence:1}};
+    return {id:`text-${index}`,runId,sequence:index+1,revision:1,observedAt:PROGRESS_AT,origin,
+      source:{owner:"runtime" as const,kind:"run_item" as const,id:origin.source.id,sequence:1},content:{kind:"assistant_text" as const,turnId:null,modelItemId:origin.modelItemId,ordinal:0,text:"Original reply",omittedBytes:0}};
+  });
+  return {...progress,projection:{...progress.projection,product:{...progress.projection.product,presentation:{...progress.projection.product.presentation,records,
+    labels:[{runId:"child",parentRunId:"run-1",parentRunActionId:"delegate",parentOrigin:records[0]!.origin,siblingOrdinal:1,label:"Child",objective:"Assignment"}]}}}};
+}
 function projectionCommit(
   sequence: number,
   commitId: string,

@@ -6,6 +6,7 @@ const codes = new Set([
   "inspection_storage_scan_failed", "inspection_storage_scan_cancelled",
   "inspection_source_unsupported", "inspection_source_invalid",
   "inspection_replay_cancelled", "inspection_replay_unavailable", "inspection_replay_capacity_timeout",
+  "inspection_replay_content_exceeds_window", "inspection_replay_record_rejected",
 ]);
 
 export class InspectionRecorderError extends Error {

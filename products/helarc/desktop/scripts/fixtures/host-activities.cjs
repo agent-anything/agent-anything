@@ -166,7 +166,7 @@ async function main(){
   services?.close();
   await inspection.registerExecutionRecording(prepared.rootRunId,true,store);
   const projectionDeadline=Date.now()+20000;let flushed;
-  do {flushed=await inspection.recorder.flush();if(flushed.native==="settled"&&flushed.projection==="settled")break;
+  do {flushed=await inspection.flushRecording();if(flushed.native==="settled"&&flushed.projection==="settled")break;
     assert(Date.now()<projectionDeadline,JSON.stringify(flushed));await new Promise(r=>setTimeout(r,20));}while(true);
   const health=inspection.recorder.health();assert.equal(health.dropped,0);assert.equal(health.rejected,0);
   await inspection.close();inspection=null;

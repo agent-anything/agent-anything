@@ -15,6 +15,32 @@ function roundTrip(value: unknown) {
 }
 
 describe("execution content", () => {
+  it("retains large decoded roots within the same aggregate budget and rechecks their current closure",()=>{
+    const stats=new ExecutionContentStatistics(true),cache=new ExecutionContentCache(1024*1024,4096,stats);
+    const first=packExecutionContent({rows:Array.from({length:1000},(_,id)=>({id,text:"original ".repeat(70)}))});
+    const second=packExecutionContent({rows:Array.from({length:1000},(_,id)=>({id,text:"distinct ".repeat(70)}))});
+    const blocks=new Map([...first.blocks,...second.blocks].map(block=>[block.id,block]));
+    const read=(id:string)=>blocks.get(id)!;
+    const a=unpackExecutionContent(first,read,cache,true) as {rows:unknown[]};stats.take();
+    expect((unpackExecutionContent(first,read,cache,true) as typeof a).rows).toBe(a.rows);
+    const reused=stats.take();
+    expect(reused["decode.reusedBytes"]).toBeGreaterThan(512*1024);
+    expect(reused["decode.nodes"]??0).toBeLessThan(10);
+    expect(reused["content.closureVisits"]).toBe(first.blocks.length);
+    unpackExecutionContent(second,read,cache,true);
+    expect(stats.take()["decode.retentionEvictions"]).toBeGreaterThan(0);
+    expect((unpackExecutionContent(first,read,cache,true) as typeof a).rows).not.toBe(a.rows);
+    const leaf=first.blocks.find(block=>block.text.includes("original"))!;
+    blocks.set(leaf.id,{...leaf,text:'["value","changed"]'});
+    expect(()=>unpackExecutionContent(first,read,cache,true)).toThrow("execution_content_corrupt");
+    blocks.delete(leaf.id);
+    expect(()=>unpackExecutionContent(first,read,cache,true)).toThrow("execution_content_missing");
+    blocks.set(leaf.id,leaf);
+    const small=new ExecutionContentCache(256*1024,4096,stats);
+    const uncached=unpackExecutionContent(first,read,small,true) as typeof a;
+    expect((unpackExecutionContent(first,read,small,true) as typeof a).rows).not.toBe(uncached.rows);
+    expect(stats.take()["decode.retentionRejected"]).toBeGreaterThan(0);
+  });
   it("reuses decoded representations for a new envelope without changing bytes, depth or size validation",()=>{
     const input={history:Array.from({length:1000},(_,i)=>({i,text:`${i}:`+"retained text ".repeat(80)}))};
     const packed=packExecutionContent(input),blocks=new Map(packed.blocks.map(b=>[b.id,b]));

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
-import {mkdtemp, mkdir, symlink, readFile, rm} from "node:fs/promises";
+import {mkdtemp, mkdir, symlink, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
+import {DatabaseSync,backup} from "node:sqlite";
 import {basename, dirname, join, resolve, delimiter} from "node:path";
 import {fileURLToPath} from "node:url";
 import electron from "electron";
@@ -72,17 +73,33 @@ assert(scenarios.every(value => baselineScenarios.includes(value)));
 try {
   for (const scenario of scenarios) {
     const directory = join(root, scenario); await mkdir(directory);
+    if(process.env.HELARC_RETAINED_NEIGHBOR){
+      assert.deepEqual(scenarios,["effect"]);
+      const archive=resolve(process.env.HELARC_RETAINED_NEIGHBOR);
+      assert.equal(dirname(dirname(archive)),resolve(tmpdir()));assert.equal(basename(archive),"continued_child");
+      assert(/^helarc-electron-recovery-\w+$/.test(basename(dirname(archive))));
+      const db=new DatabaseSync(join(archive,"execution/execution.sqlite"),{readOnly:true});
+      try{await mkdir(join(directory,"execution"));await backup(db,join(directory,"execution/execution.sqlite"));}finally{db.close();}
+    }
     await launch(directory, scenario, "seed", 73);
     await launch(directory, scenario, "resume", 0);
     await launch(directory, scenario, "verify", 0);
     const report = JSON.parse(await readFile(join(directory, "resume.json"), "utf8"));
     assert.equal(report.status, scenario.endsWith("_exhausted") ? "failed" : "completed"); assert.equal(report.effects, 1);
+    if(process.env.HELARC_RETAINED_NEIGHBOR){
+      const {default:{checkOriginalRows}}=await import("./fixtures/retained-protocol-facts.cjs");
+      const open=d=>new DatabaseSync(join(d,"execution/execution.sqlite"),{readOnly:true});
+      const original=open(process.env.HELARC_RETAINED_NEIGHBOR),current=open(directory);
+      try{await writeFile(join(directory,"original-rows.json"),JSON.stringify(checkOriginalRows(original,current)),{flag:"wx"});}
+      finally{original.close();current.close();}
+    }
     console.log(JSON.stringify(report));
   }
   passed = true;
   console.log(`Real Electron + SQLite Worker recovery passed (${scenarios.length} interruption scenarios, ${scenarios.length * 3} processes).`);
 } finally {
-  if (passed) {
+  if(passed&&process.env.HELARC_RETAINED_NEIGHBOR)console.log("Isolated mixed-store evidence:",root);
+  else if (passed) {
     const target = resolve(root);
     if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith("helarc-electron-recovery-")) throw new Error("Unexpected cleanup target");
     await rm(target, {recursive: true, force: true});

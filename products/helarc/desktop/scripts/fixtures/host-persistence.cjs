@@ -3,7 +3,14 @@ const assert = require("node:assert/strict");
 const {mkdir, readFile, writeFile} = require("node:fs/promises");
 const {join} = require("node:path");
 const {pathToFileURL} = require("node:url");
+const {createHash} = require("node:crypto");
 const directory = process.argv[2];
+const nested = process.argv[3] === "--nested";
+const encodingLimitation = process.argv[3] === "--encoding-limitation";
+const reopenLimitation = process.argv[3] === "--reopen-limitation";
+const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const childPrompt = "\r\n Inspect and delegate the detail.\n  ";
+const nestedPrompt = "\tInspect this example:\n    return 1;\r\n";
 app.setPath("userData", join(directory, "electron-user-data"));
 app.disableHardwareAcceleration();
 
@@ -21,8 +28,9 @@ async function main() {
   const {createFakeProviderContext} = await import("@agent-anything/test-support");
   const {OpenAICompatibleProvider}=await import("@agent-anything/provider-integrations/openai-compatible");
   const {createModelCallRef, createModelTurnId, snapshotModelCallableRequest, snapshotProviderResponse} = await import("@agent-anything/model-interaction");
+  const {ModelInputEncodingUnsupportedError} = await import("@agent-anything/model-interaction/input");
   const workspaceRoot = join(directory, "workspace");
-  await mkdir(workspaceRoot);
+  if (!reopenLimitation) await mkdir(workspaceRoot);
   const timings = {}, observed = [];
   const diagnostics = {record() {}, performance(event) {
     if (event.kind !== "finished") return;
@@ -35,12 +43,33 @@ async function main() {
   let store = await HelarcExecutionStore.open(join(directory, "execution"), undefined,
     {observe(event) {observed.push(event);}}, undefined, diagnostics, new ElectronSafeStorageCredentialCipher());
   let active, calls = 0, original;
-  const activityHost=createHelarcActivityHost(store,{diagnostics});
+  const activityHost=createHelarcActivityHost(store,{diagnostics,report:cycle=>{
+    const failures=[...cycle.failures,...cycle.runs.flatMap(run=>run.result.failures),...cycle.reconsiderations.flatMap(run=>run.result.failures)];
+    for(const failure of failures)process.stderr.write(`Activity failure: ${failure.error?.stack??failure.error}\n`);
+  }});
   try {
+    if(reopenLimitation) {
+      const evidence=JSON.parse(await readFile(join(directory,"verification.json"),"utf8"));
+      assert.notEqual(evidence.pid,process.pid);
+      assert.equal(digest(await store.readRunTree(evidence.rootRunId)),evidence.treeDigest);
+      assert.equal(digest(await readStages(store,evidence.rootRunId)),evidence.stagesDigest);
+      assert.equal(await readFile(join(workspaceRoot,"target.txt"),"utf8"),"before");
+      assert.equal(calls,0);
+      process.stdout.write(JSON.stringify({electron:process.versions.electron,scenario:"encoding-limitation-cold-reopen",originalPid:evidence.pid,pid:process.pid,
+        restoredTreeAndStages:true,providerCalls:calls,originalEffectRetained:true})+"\n");
+      return;
+    }
     const providerId = "openai-compatible.chat-completions";
     const context = createFakeProviderContext(providerId, "host-run-test-model");
     const encoder=new OpenAICompatibleProvider({baseUrl:"https://provider.local/v1",apiKey:"",model:context.modelContext.target.model,timeoutMs:30000,nativeToolInteraction:{supported:true},requestBodyTransportLimit:context.requestBodyTransportLimit});
-    const provider = {...context, encodeInput:(request,mode)=>encoder.encodeInput(request,mode),
+    let encodingRejections=0;
+    const provider = {...context,inputTargetDigest:encoder.inputTargetDigest, encodeInput:(request,mode)=>{
+      if(encodingLimitation&&request.messages.some(message=>message.role==="tool")) {
+        encodingRejections++;
+        throw new ModelInputEncodingUnsupportedError("fixture_history_unsupported","Unsupported native history shape.");
+      }
+      return encoder.encodeInput(request,mode);
+    },
       verifyEncodedInput:(request,encoded)=>encoder.verifyEncodedInput(request,encoded),descriptor: {id: providerId, name: "Host persistence verification", metadata: {},
       requestRetryScheduler: {kind: "harness"}, capabilities: {
         nativeToolInteraction: {supported: true, callableDefinitions: true, modelCalls: true, resultMessages: true, multipleCalls: true, callCorrelation: "provider_supplied"},
@@ -56,7 +85,19 @@ async function main() {
         assert.equal(request.instructions.content.length, 0);
         const latest = request.messages.flatMap(message => message.role === "tool" ? message.content.map(block => block.result) : []).at(-1);
         let tool, input;
-        if (calls === 1) {tool = "Write"; input = {file_path: "target.txt", content: "before"};}
+        if (nested) {
+          if (calls === 1) {tool = "Agent"; input = {prompt: childPrompt, description: " Inspection\n"};}
+          else if (calls === 2) {
+            assert(request.messages.some(message => message.role === "user" && message.content.some(block => block.kind === "text" && block.text === `Parent assignment:\n${childPrompt}`)));
+            tool = "Agent"; input = {prompt: nestedPrompt};
+          } else {
+            assert(calls <= 5);
+            if (calls === 3) assert(request.messages.some(message => message.role === "user" && message.content.some(block => block.kind === "text" && block.text === `Parent assignment:\n${nestedPrompt}`)));
+            else assert(JSON.stringify(latest).includes(calls === 4 ? "Nested inspection complete." : "Child inspection complete."));
+            tool = "final_result"; input = {response: calls === 3 ? "Nested inspection complete." : calls === 4 ? "Child inspection complete." : "Parent received the child result."};
+          }
+        }
+        else if (calls === 1) {tool = "Write"; input = {file_path: "target.txt", content: "before"};}
         else if (calls === 2) {
           original = latest.content.references.find(ref => ref.kind === "effect"); assert(original);
           tool = "Write"; input = {file_path: "target.txt", content: "must not be written", compensation_of: {targets: [{...original, id: "unknown"}]}};
@@ -92,7 +133,36 @@ async function main() {
     active = prepared.start();
     const result = await active.result;
     active = null;
+    if(encodingLimitation) {
+      assert.equal(result.runResult.status,"failed");
+      assert.equal(calls,1);assert.equal(encodingRejections,1);
+      assert.equal(result.product.actions.length,1);
+      assert.equal(await readFile(join(workspaceRoot,"target.txt"),"utf8"),"before");
+      const stages=await readStages(store,prepared.rootRunId);
+      assert(stages.some(stage=>stage.result?.value?.kind==="gap"&&stage.result.value.reason==="input_encoding_unsupported:fixture_history_unsupported"));
+      assert(stages.some(stage=>stage.request.input.kind==="context_input_unavailable"&&stage.request.input.reason==="input_encoding_unsupported:fixture_history_unsupported"));
+      const report={electron:process.versions.electron,pid:process.pid,scenario:"encoding-limitation",rootRunId:prepared.rootRunId,
+        elapsedMs:performance.now()-started,calls,effects:1,encodingRejections,treeDigest:digest(await store.readRunTree(prepared.rootRunId)),stagesDigest:digest(stages),timings};
+      await writeFile(join(directory,"verification.json"),JSON.stringify(report,null,2));
+      process.stdout.write(JSON.stringify({...report,timings:undefined})+"\n");
+      return;
+    }
     assert.equal(result.runResult.status, "completed", JSON.stringify(result.product.output.safeErrors));
+    if (nested) {
+      assert.equal(calls, 5);
+      const before = await store.readRunTree(prepared.rootRunId);
+      assert.equal(before.members.length, 3);
+      assert(before.members.every(member => member.head.state.status === "completed"));
+      await activityHost.service.close();
+      await store.close();
+      store = await HelarcExecutionStore.open(join(directory, "execution"), undefined, undefined, undefined, diagnostics, new ElectronSafeStorageCredentialCipher());
+      assert.deepEqual(await store.readRunTree(prepared.rootRunId), before);
+      assert.equal(calls, 5);
+      const report = {electron: process.versions.electron, scenario: "nested-delegation", elapsedMs: performance.now() - started, calls, members: before.members.length, originalAssignments: true, childResultsDelivered: true, reopenedTreeUnchanged: true, timings};
+      await writeFile(join(directory, "verification.json"), JSON.stringify(report, null, 2));
+      process.stdout.write(JSON.stringify({...report, timings: undefined}) + "\n");
+      return;
+    }
     const operations = result.runResult.items.flatMap(item => item.payload.kind === "observation" && item.payload.observation.payload.kind === "operation"
       ? [item.payload.observation.payload.result] : []);
     assert.deepEqual(operations.map(operation => operation.status), ["succeeded", "invalid", "succeeded"]);
@@ -127,5 +197,16 @@ async function main() {
     await activityHost.service.close();
     await store.close();
   }
+}
+async function readStages(store,runId) {
+  const facts=[];
+  for(let after=0;;) {
+    const page=await store.activityHandoffs.command({kind:"facts",runId,after,limit:128});
+    facts.push(...page);if(page.length<128)break;after=page.at(-1).sequence;
+  }
+  const stages=[];
+  for(const requestId of new Set(facts.filter(fact=>fact.kind==="accepted"&&fact.requestId).map(fact=>fact.requestId)))
+    stages.push(await store.activityHandoffs.command({kind:"read_stage",requestId}));
+  return stages;
 }
 main().then(() => app.exit(0), error => {process.stderr.write(`${error.stack}\n`); app.exit(1);});

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { modelCallRefKey, type ModelCallableRequest } from "../ModelCall.js";
+import { modelCallRefKey, requireModelCallTurn, type ModelCallableRequest } from "../ModelCall.js";
 import { snapshotJsonValue, strictRecord, token } from "../ModelInteractionContractValidation.js";
 import { snapshotModelInputSection, snapshotModelInputSourceRef, type ModelInputSection, type ModelInputSourceRef } from "./ModelInput.js";
 import type {ModelInputOwnerForm} from "./ModelInputForms.js";
@@ -10,6 +10,8 @@ export interface ModelInputPreservation {
     readonly id: string;
     readonly requirement: "exact" | "account";
     readonly basis: string;
+    readonly permittedEvidence?:readonly ("direct"|"method_assurance"|"continuation_probe")[];
+    readonly assuranceScope?:{readonly id:string;readonly revision:string};
   }[];
   readonly relationships: readonly {
     readonly kind: "requires" | "qualifies" | "supersedes";
@@ -51,8 +53,15 @@ export interface ModelWorkingView {
   readonly accounts?: readonly ModelInputAccount[];
 }
 
+const valueDigests=new WeakMap<object,string>();
 export function modelInputValueDigest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify(snapshotJsonValue(value, "model input value"))).digest("hex")}`;
+  const snapshot=snapshotJsonValue(value,"model input value");
+  const key=snapshot!==null&&typeof snapshot==="object"?snapshot:null;
+  const retained=key?valueDigests.get(key):undefined;
+  if(retained)return retained;
+  const digest=`sha256:${createHash("sha256").update(JSON.stringify(snapshot)).digest("hex")}`;
+  if(key)valueDigests.set(key,digest);
+  return digest;
 }
 
 export function snapshotModelInputPreservation(input: ModelInputPreservation): ModelInputPreservation {
@@ -62,13 +71,22 @@ export function snapshotModelInputPreservation(input: ModelInputPreservation): M
   }
   const ids = new Set<string>();
   const obligations = input.obligations.map(value => {
-    strictRecord(value, "preservation obligation", ["id", "requirement", "basis"]);
+    strictRecord(value, "preservation obligation", ["id", "requirement", "basis",
+      ...(value.permittedEvidence!==undefined?["permittedEvidence"]:[]),...(value.assuranceScope!==undefined?["assuranceScope"]:[])]);
     const id = token(value.id, "obligation.id");
     if (ids.has(id) || (value.requirement !== "exact" && value.requirement !== "account")) {
       throw new TypeError("Preservation obligation is duplicated or invalid.");
     }
     ids.add(id);
-    return Object.freeze({id, requirement: value.requirement, basis: token(value.basis, "obligation.basis")});
+    if(value.permittedEvidence!==undefined&&(!Array.isArray(value.permittedEvidence)||!value.permittedEvidence.length||
+      new Set(value.permittedEvidence).size!==value.permittedEvidence.length||
+      value.permittedEvidence.some(v=>!["direct","method_assurance","continuation_probe"].includes(v))))throw new TypeError("Invalid preservation evidence.");
+    let assuranceScope:ModelInputPreservation["obligations"][number]["assuranceScope"];
+    if(value.assuranceScope!==undefined){strictRecord(value.assuranceScope,"preservation assurance scope",["id","revision"]);
+      assuranceScope=Object.freeze({id:token(value.assuranceScope.id,"assuranceScope.id"),revision:token(value.assuranceScope.revision,"assuranceScope.revision")});}
+    return Object.freeze({id, requirement: value.requirement, basis: token(value.basis, "obligation.basis"),
+      ...(value.permittedEvidence!==undefined?{permittedEvidence:Object.freeze([...value.permittedEvidence])}:{}),
+      ...(assuranceScope!==undefined?{assuranceScope}:{})});
   });
   const relationships = input.relationships.map((value: ModelInputPreservation["relationships"][number]) => {
     strictRecord(value, "preservation relationship", ["kind", "source"]);
@@ -179,7 +197,7 @@ function nativeExchangeGroups(sections: readonly ModelInputSection[], boundary: 
     if (message.role === "assistant") {
       const calls = message.content.flatMap(block => block.kind === "model_tool_call" ? [block.call] : []);
       if (!calls.length) continue;
-      const turnId = calls[0]!.modelCallRef.turnId;
+      const turnId = requireModelCallTurn(calls[0]!.modelCallRef);
       if (turns.has(turnId) || calls.some(call => call.modelCallRef.turnId !== turnId)) {
         throw new TypeError("Working view has inconsistent native Turn identity.");
       }

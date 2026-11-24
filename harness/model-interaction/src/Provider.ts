@@ -34,6 +34,8 @@ export interface Provider {
   readonly modelContext: ProviderModelContext;
   readonly requestBodyTransportLimit: ProviderTransportLimit;
   readonly inputMeasurement?:import("./input/RemoteInputMeasurement.js").RemoteInputMeasurement;
+  /** Original non-secret encoding target, independent of any candidate request body. */
+  readonly inputTargetDigest?:string;
   /** Explicit capability: accepted-input consumers must require it, never silently re-encode. */
   encodeInput?(request: ProviderRequest, mode: "buffered" | "streaming"): import("./input/EncodedModelInput.js").EncodedModelInput;
   verifyEncodedInput?(request:ProviderRequest,input:import("./input/EncodedModelInput.js").EncodedModelInput):void;

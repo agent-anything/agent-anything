@@ -5,7 +5,7 @@ import type { ToolCall } from "@agent-anything/tools/invocation";
 import type { ResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
 import type { RuntimeRunAction, RunSteeringCommand } from "../run/index.js";
 import type { ModelCallableRequest, ModelToolResult } from "@agent-anything/model-interaction";
-import type { ModelConversationSeed } from "../decision/TaskConversation.js";
+import type { TaskInteractionSeed } from "../decision/TaskInteractionSeed.js";
 import type { AgentInstructionBinding } from "../instructions/index.js";
 import type { RunState } from "../run/index.js";
 import type { RetainedRunConfig } from "./RunConfigurationCheckpoint.js";
@@ -18,7 +18,7 @@ export interface RetainedDescendantContinuation {
   readonly projection: DescendantContinuationTargetProjection;
   readonly sourceRequest: DelegationRequest;
   readonly sourceResult: DelegationResult;
-  readonly modelInteractionSeed: ModelConversationSeed;
+  readonly modelInteractionSeed: TaskInteractionSeed;
   readonly status: "available" | "starting" | "consumed";
 }
 
@@ -97,7 +97,7 @@ export interface RunCommit {
   readonly admission: null | {
     readonly input: RunInput;
     readonly config: RetainedRunConfig;
-    readonly modelInteractionSeed: ModelConversationSeed | null;
+    readonly modelInteractionSeed: TaskInteractionSeed | null;
     readonly lineage: import("@agent-anything/agent-core/run-tree").RunLineage;
     readonly rootTask: import("@agent-anything/agent-core/task").AgentTask;
     readonly rootConfig: RetainedRunConfig;

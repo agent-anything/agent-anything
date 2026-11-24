@@ -42,6 +42,23 @@ export interface UnavailableSourceMaterial {
   readonly stopAcceptanceId:string;
   readonly limitation:ActivityProfessionalLimitation;
 }
+
+/** Exact custody evidence, independent of the input protocol that supplied the bytes. */
+export function validatePublishedSourceMaterial(request:SourceMaterialPublicationRequest,published:PublishedSourceMaterial):void {
+  validateSourceMaterialRequest(request);
+  const equal=(a:unknown,b:unknown)=>modelInputValueDigest(a)===modelInputValueDigest(b);
+  const range={...request.intent.version.ref,start:0,end:request.intent.version.bytes,coordinate:"bytes"};
+  const r=published.representation;
+  if(published.kind!=="published_source_material"||!equal(published.version,request.intent.version)||
+    !equal(published.access.recipient,request.recipient)||!equal(published.access.range,range)||
+    published.access.holdId!==`${request.intent.id}:consumer-hold`||
+    r.runId!==request.recipient.runId||r.owner!==request.intent.owner||r.form!=="original"||
+    r.target!==request.target||r.purpose!==request.purpose||
+    !equal(r.ref,{id:`${request.intent.id}:original`,revision:request.intent.version.ref.version})||!equal(r.body,range)||
+    !equal(r.inputs,[{role:"source",material:range,representation:null}])||!equal(r.declaredCoverage,[range])||
+    r.losses.length||r.restorations.length||r.requirements.length||r.details.length||r.method!==null)
+    throw new TypeError("source_publication_evidence_mismatch");
+}
 export function sourceMaterialOutcome(path:ActivityPathState,stage:ActivityStageState):PublishedSourceMaterial|UnavailableSourceMaterial|null {
   requestOf(path,stage);
   const progress=path.progress as PublishedSourceMaterial|UnavailableSourceMaterial|null;

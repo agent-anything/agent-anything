@@ -7,6 +7,7 @@ import { containedInspectionPath, validateOpaqueId, type InspectionDatasetManife
 import { initialInspectionProgress, initialInspectionTimings, type InspectionTimingStage, type InspectionBatchReceipt, type InspectionIngressHealth, type InspectionRecordingProgress } from "../records/index.js";
 import {validateInspectionInput} from "../records/InspectionValidation.js";
 import {InspectionProcessIndex,INSPECTION_PROCESS_SCHEMA,INSPECTION_PROCESS_TABLES} from "./InspectionProcessIndex.js";
+import {INSPECTION_RANGE_BYTES, inspectionContentHash, inspectionContentRanges, type InspectionContentRanges} from "./InspectionContentRanges.js";
 
 export interface InspectionContentWrite { readonly descriptor: InspectionContentDescriptor; readonly text: string | null }
 export interface InspectionNativeOffer { readonly record: InspectionRecord; readonly contents: readonly InspectionContentWrite[]; readonly bytes: number }
@@ -23,11 +24,12 @@ CREATE TABLE records (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE, cap
 CREATE INDEX records_subject ON records(subject_key, sequence);
 CREATE INDEX records_run ON records(run_id, sequence);
 CREATE INDEX records_kind ON records(kind, sequence);
+CREATE INDEX records_native_category ON records(subject_key, json_extract(value,'$.payload.category'), sequence) WHERE kind='native_fact';
 CREATE TABLE relations (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, from_key TEXT NOT NULL, to_key TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL, value TEXT NOT NULL);
 CREATE INDEX relations_from ON relations(from_key, sequence);
 CREATE INDEX relations_to ON relations(to_key, sequence);
 CREATE TABLE contents (id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, body_id INTEGER, value TEXT NOT NULL);
-CREATE TABLE bodies (id INTEGER PRIMARY KEY, digest TEXT NOT NULL, byte_length INTEGER NOT NULL, bytes BLOB NOT NULL, UNIQUE(digest, byte_length));
+CREATE TABLE bodies (id INTEGER PRIMARY KEY, digest TEXT NOT NULL, byte_length INTEGER NOT NULL, bytes BLOB NOT NULL, ranges TEXT NOT NULL, UNIQUE(digest, byte_length));
 CREATE TABLE batch_receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL, value TEXT NOT NULL);
 CREATE TABLE definitions (subject_key TEXT NOT NULL, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(subject_key, sequence));
 CREATE TABLE lifecycle_definitions (subject_key TEXT NOT NULL, sequence INTEGER NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(subject_key, sequence));
@@ -53,6 +55,7 @@ export class InspectionDatabase {
   private nativeBatch = false;
   private nativeTransactionMaxMs = 0;
   private timings = initialInspectionTimings();
+  readonly readWork = {bodyReads: 0, loadedBodyBytes: 0, returnedBodyBytes: 0};
   readonly directory: string;
   readonly process:InspectionProcessIndex;
 
@@ -114,6 +117,15 @@ export class InspectionDatabase {
 
   write(record: InspectionRecord, contents: readonly InspectionContentWrite[]): { record: InspectionRecord; duplicate: boolean } {
     validateRecordStructure(record);
+    const prepared = new Map(contents.filter(c => c.text !== null).map(c => {
+      const bytes = Buffer.from(c.text!, "utf8"), digest = inspectionContentHash(bytes);
+      if(bytes.length > 8 * 1024 * 1024 || bytes.length !== c.descriptor.retainedBytes || digest !== c.descriptor.digest)
+        throw new Error("inspection_content_integrity_failed");
+      const ranges = inspectionContentRanges(bytes, digest), rangeDigest = inspectionContentHash(ranges);
+      if(c.descriptor.rangeDigest && c.descriptor.rangeDigest !== rangeDigest) throw new Error("inspection_content_integrity_failed");
+      return [c.descriptor.id, {bytes, digest, ranges, rangeDigest}] as const;
+    }));
+    record = {...record, contents: record.contents.map(c => prepared.has(c.id) ? {...c, rangeDigest: prepared.get(c.id)!.rangeDigest} : c)};
     const fingerprint = recordFingerprint(record);
     const prior = this.statement("SELECT fingerprint, value FROM records WHERE id=?").get(record.id) as Row | undefined;
     if (prior) {
@@ -123,26 +135,26 @@ export class InspectionDatabase {
     this.validateFlow(record);
     return this.db.transaction(() => {
       const bodies = new Map<string, number>();
+      const descriptors = new Map<string, InspectionContentDescriptor>();
       for (const content of contents) {
         if (content.text === null) continue;
         validateOpaqueId(content.descriptor.id);
-        const bytes = Buffer.from(content.text, "utf8");
-        const digest = createHash("sha256").update(bytes).digest("hex");
-        if (bytes.length > 8 * 1024 * 1024 || bytes.length !== content.descriptor.retainedBytes || digest !== content.descriptor.digest)
-          throw new Error("inspection_content_integrity_failed");
-        const priorBody = this.statement("SELECT id, bytes FROM bodies WHERE digest=? AND byte_length=?").get(digest, bytes.length) as {id: number; bytes: Buffer} | undefined;
+        const {bytes, digest, ranges, rangeDigest} = prepared.get(content.descriptor.id)!;
+        descriptors.set(content.descriptor.id, {...content.descriptor, rangeDigest});
+        const priorBody = this.statement("SELECT id, bytes, ranges FROM bodies WHERE digest=? AND byte_length=?").get(digest, bytes.length) as {id: number; bytes: Buffer; ranges: string} | undefined;
         if (priorBody && !Buffer.from(priorBody.bytes).equals(bytes)) throw new Error("inspection_content_digest_conflict");
-        const id = priorBody?.id ?? Number(this.statement("INSERT INTO bodies(digest,byte_length,bytes) VALUES (?,?,?)").run(digest, bytes.length, bytes).lastInsertRowid);
+        if (priorBody && priorBody.ranges !== ranges) throw new Error("inspection_content_integrity_failed");
+        const id = priorBody?.id ?? Number(this.statement("INSERT INTO bodies(digest,byte_length,bytes,ranges) VALUES (?,?,?,?)").run(digest, bytes.length, bytes, ranges).lastInsertRowid);
         bodies.set(content.descriptor.id, id);
       }
       const previous = this.snapshot();
       const sequence = nextSequence(previous.watermark);
-      const committed: InspectionRecord = { ...record, commitSequence: sequence };
+      const committed: InspectionRecord = { ...record, contents: record.contents.map(c => descriptors.get(c.id) ?? c), commitSequence: sequence };
       const key = inspectionSubjectKey(record.subject);
       this.statement("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(record.id, sequence, record.captureSequence, key, record.subject.runId, record.subject.owner, record.subject.kind, record.payload.kind, record.occurredAt, fingerprint, JSON.stringify(committed));
       const relationStatement = this.statement("INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?, ?)");
       for (const link of record.links) relationStatement.run(link.id, sequence, inspectionSubjectKey(link.from), inspectionSubjectKey(link.to), link.kind, record.id, JSON.stringify(link));
-      for (const descriptor of record.contents) {
+      for (const descriptor of committed.contents) {
         const bodyId = bodies.get(descriptor.id) ?? null;
         if (descriptor.availability === "present" && bodyId === null) throw new Error("inspection_content_missing");
         this.statement("INSERT INTO contents VALUES (?, ?, ?, ?, ?)").run(descriptor.id, sequence, record.id, bodyId, JSON.stringify(descriptor));
@@ -347,7 +359,7 @@ export class InspectionDatabase {
     })();
   }
 
-  records(input: { watermark: number; after?: number; limit?: number; runId?: string; runIds?: readonly string[]; owner?: string; kind?: string; subjectKey?: string; subjectKind?: string; intervalStarts?: boolean }): InspectionRecord[] {
+  records(input: { watermark: number; after?: number; limit?: number; runId?: string; runIds?: readonly string[]; owner?: string; kind?: string; subjectKey?: string; subjectKind?: string; intervalStarts?: boolean; nativeCategories?: readonly string[] }): InspectionRecord[] {
     const clauses = ["sequence <= ?", "sequence > ?"];
     const values: (string | number)[] = [input.watermark, input.after ?? 0];
     for (const [column, value] of [["run_id", input.runId], ["owner", input.owner], ["kind", input.kind], ["subject_key", input.subjectKey], ["subject_kind", input.subjectKind]]) {
@@ -355,6 +367,10 @@ export class InspectionDatabase {
     }
     if (input.runIds) { clauses.push(`run_id IN (${input.runIds.map(() => "?").join(",") || "NULL"})`); values.push(...input.runIds); }
     if (input.intervalStarts) clauses.push("kind='interval' AND json_extract(value,'$.payload.phase')='started'");
+    if (input.nativeCategories) {
+      clauses.push(`kind='native_fact' AND json_extract(value,'$.payload.category') IN (${input.nativeCategories.map(()=>"?").join(",") || "NULL"})`);
+      values.push(...input.nativeCategories);
+    }
     return (this.db.prepare(`SELECT value FROM records WHERE ${clauses.join(" AND ")} ORDER BY sequence LIMIT ?`).all(...values, Math.min(input.limit ?? 100, 501)) as Row[]).map((row) => JSON.parse(String(row.value)));
   }
 
@@ -455,7 +471,7 @@ export class InspectionDatabase {
   }
 
   subjects(watermark: number, kind?: string, after = 0, limit = 100, runIds?: readonly string[]): InspectionRecord[] {
-    const payload = kind === "run" ? "AND kind='snapshot'" : kind === "definition" ? "AND kind='definition'" : kind === "request" ? "AND kind='request'" : "";
+    const payload = kind === "run" ? "AND kind='snapshot'" : kind === "definition" ? "AND kind='definition'" : kind === "request" ? "AND kind='request'" : kind === "model-activity" ? "AND kind='native_interaction'" : "";
     const filter = runIds ? `AND run_id IN (${runIds.map(() => "?").join(",") || "NULL"})` : "";
     return (this.db.prepare(`SELECT r.value FROM records r JOIN (SELECT subject_key, MAX(sequence) sequence FROM records WHERE sequence<=? ${kind ? "AND subject_kind=?" : ""} ${payload} ${filter} GROUP BY subject_key) latest ON r.sequence=latest.sequence WHERE r.sequence>? ORDER BY r.sequence LIMIT ?`).all(watermark, ...(kind ? [kind] : []), ...(runIds ?? []), after, Math.min(limit, 501)) as Row[]).map((row) => JSON.parse(String(row.value)));
   }
@@ -483,15 +499,31 @@ export class InspectionDatabase {
     const descriptor = this.content(id, watermark);
     if (!descriptor) return null;
     if (descriptor.availability !== "present") return { descriptor, text: "", offset, nextOffset: null };
-    const body = this.db.prepare("SELECT b.bytes FROM contents c JOIN bodies b ON b.id=c.body_id WHERE c.id=? AND c.sequence<=?").get(id, watermark) as {bytes: Buffer} | undefined;
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 4 || length > 256 * 1024) throw new Error("inspection_query_invalid");
+    const body = this.statement("SELECT b.id, b.digest, b.byte_length, b.ranges, length(b.bytes) AS actual_length FROM contents c JOIN bodies b ON b.id=c.body_id WHERE c.id=? AND c.sequence<=?").get(id, watermark) as {id:number;digest:string;byte_length:number;ranges:string;actual_length:number} | undefined;
     if (!body) return { descriptor: { ...descriptor, availability: "unavailable", unavailableReason: "content_missing" }, text: "", offset, nextOffset: null };
-    const bytes = Buffer.from(body.bytes);
-    if (bytes.length > 8 * 1024 * 1024 || !Number.isSafeInteger(offset) || offset < 0 || length < 4 || length > 256 * 1024) throw new Error("inspection_query_invalid");
-    if (bytes.length !== descriptor.retainedBytes || createHash("sha256").update(bytes).digest("hex") !== descriptor.digest) return { descriptor: { ...descriptor, availability: "unavailable", unavailableReason: "content_integrity_failed" }, text: "", offset, nextOffset: null };
-    if (offset > bytes.length || (offset < bytes.length && (bytes[offset]! & 0xc0) === 0x80)) throw new Error("inspection_query_invalid");
-    let end = Math.min(bytes.length, offset + length);
-    while (end > offset && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
-    return { descriptor, text: bytes.subarray(offset, end).toString("utf8"), offset, nextOffset: end < bytes.length ? end : null };
+    const corrupt = () => ({descriptor: {...descriptor, availability: "unavailable" as const, unavailableReason: "content_integrity_failed"}, text: "", offset, nextOffset: null});
+    if (body.byte_length < 0 || body.byte_length > 8 * 1024 * 1024 || body.byte_length !== descriptor.retainedBytes || body.actual_length !== body.byte_length || body.digest !== descriptor.digest || body.ranges.length > 16384 || inspectionContentHash(body.ranges) !== descriptor.rangeDigest) return corrupt();
+    let ranges: InspectionContentRanges;
+    try { ranges = JSON.parse(body.ranges) as InspectionContentRanges; } catch { return corrupt(); }
+    if (ranges.digest !== descriptor.digest || ranges.bytes !== body.byte_length || ranges.chunkBytes !== INSPECTION_RANGE_BYTES || !Array.isArray(ranges.chunks) || ranges.chunks.length !== Math.ceil(body.byte_length / INSPECTION_RANGE_BYTES)) return corrupt();
+    if (offset > body.byte_length) throw new Error("inspection_query_invalid");
+    const first = Math.floor(offset / INSPECTION_RANGE_BYTES);
+    const start = first * INSPECTION_RANGE_BYTES;
+    const wantedEnd = Math.min(body.byte_length, offset + length);
+    // One lookahead byte establishes the UTF-8 boundary; verify its whole range too.
+    const stop = Math.min(body.byte_length, Math.ceil(Math.min(body.byte_length, wantedEnd + 1) / INSPECTION_RANGE_BYTES) * INSPECTION_RANGE_BYTES);
+    const bytes = this.statement("SELECT substr(bytes,?,?) AS bytes FROM bodies WHERE id=?").get(start + 1, stop - start, body.id) as {bytes:Buffer};
+    this.readWork.bodyReads++; this.readWork.loadedBodyBytes += bytes.bytes.length;
+    if (bytes.bytes.length !== stop - start) return corrupt();
+    for (let at = start; at < stop; at += INSPECTION_RANGE_BYTES)
+      if (inspectionContentHash(bytes.bytes.subarray(at - start, Math.min(at + INSPECTION_RANGE_BYTES, stop) - start)) !== ranges.chunks[at / INSPECTION_RANGE_BYTES]) return corrupt();
+    const local = offset - start;
+    if (offset < body.byte_length && (bytes.bytes[local]! & 0xc0) === 0x80) throw new Error("inspection_query_invalid");
+    let end = wantedEnd - start;
+    while (end > local && end + start < body.byte_length && (bytes.bytes[end]! & 0xc0) === 0x80) end--;
+    this.readWork.returnedBodyBytes += end - local;
+    return { descriptor, text: bytes.bytes.subarray(local, end).toString("utf8"), offset, nextOffset: end + start < body.byte_length ? end + start : null };
   }
 
   telemetry(watermark: number, subjectKey: string | null, limit = 100, after = 0, runIds?: readonly string[]): { kind: string; sequence: number; recordId: unknown; subjectKey: unknown; value: unknown }[] {

@@ -1,6 +1,7 @@
 import {snapshotModelMessage,type ModelMessage} from "../ModelMessage.js";
 import type {ModelJsonValue} from "../ModelInteractionContractValidation.js";
 import {modelInputValueDigest} from "./ModelWorkingView.js";
+import {snapshotModelToolResult,type ModelToolResult} from "../ModelCall.js";
 
 /** A source-declared text position inside one result body, never inside its protocol envelope. */
 export interface ModelResultTextSlot {
@@ -18,8 +19,28 @@ export interface ModelInputResultTextBinding {
 }
 
 export function declareModelResultTextSlot(message:ModelToolMessage,callId:string,contentPath:ModelResultTextSlot["contentPath"]):ModelResultTextSlot {
-  const result=selectedResult(message,callId),text=textAt(result.content,contentPath);
-  return {callId,contentPath:[...contentPath],resultDigest:modelInputValueDigest(result),textDigest:modelInputValueDigest(text)};
+  return declareModelResultContentTextSlot(selectedResult(message,callId),contentPath);
+}
+
+export function declareModelResultContentTextSlot(value:ModelToolResult,contentPath:ModelResultTextSlot["contentPath"]):ModelResultTextSlot {
+  const result=snapshotModelToolResult(value),text=textAt(result.content,contentPath);
+  return {callId:result.modelCallRef.id,contentPath:[...contentPath],resultDigest:modelInputValueDigest(result),textDigest:modelInputValueDigest(text)};
+}
+export function readModelResultContentTextSlot(value:ModelToolResult,slot:ModelResultTextSlot):string {
+  const result=snapshotModelToolResult(value),text=textAt(result.content,slot.contentPath);
+  if(result.modelCallRef.id!==slot.callId||modelInputValueDigest(result)!==slot.resultDigest||modelInputValueDigest(text)!==slot.textDigest)
+    throw new TypeError("model_result_text_source_changed");
+  return text;
+}
+export function fillModelResultContentTextSlots(value:ModelToolResult,replacements:readonly {readonly slot:ModelResultTextSlot;readonly text:string}[]):ModelToolResult {
+  const result=snapshotModelToolResult(value),identities=new Set<string>();
+  for(const {slot,text} of replacements){
+    readModelResultContentTextSlot(result,slot);
+    const identity=modelInputValueDigest(slot.contentPath);
+    if(typeof text!=="string"||identities.has(identity))throw new TypeError("model_result_text_replacement_invalid");
+    identities.add(identity);
+  }
+  return snapshotModelToolResult({...result,content:replacements.reduce((content,r)=>replaceText(content,r.slot.contentPath,r.text),result.content)});
 }
 
 /** Checks the declared original; it does not authorize conversion or assess a replacement's meaning. */

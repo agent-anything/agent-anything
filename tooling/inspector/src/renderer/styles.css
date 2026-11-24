@@ -179,6 +179,12 @@ button, input { font: inherit; }
 .edge-label { position: absolute; pointer-events: all; font-size: 10px; background: #fff; padding: 2px 5px; border: 1px solid #c5d5ce; border-radius: 3px; max-width: 190px; overflow-wrap: anywhere; }.timeline-surface { height: 100%; min-height: 0; }.vis-labelset .vis-label { max-width: 180px; overflow: hidden; }.vis-label .vis-inner { text-overflow: ellipsis; overflow: hidden; }.vis-item.interval-settled { background: #d4eae4; border-color: #418673; }.vis-item.interval-open { background: #f6edd4; border-color: #b9a765; border-style: dashed; }
 .lifecycle-canvas { display: flex; flex-direction: column; height: 100%; min-height: 0; }.lifecycle-map { flex: 1; min-height: 0; }.coverage-note { padding: 8px 16px; color: #815c1d; background: #faf1db; font-size: 12px; }.empty-workspace { flex: 1; display: grid; place-items: center; }.comparison-view { flex: 1; min-height: 0; padding: 14px; }.records-table .ant-table-row { cursor: pointer; }
 .canvas-frame { height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #fff; }
+.native-interactions { min-width: 0; }
+.native-interactions .ant-descriptions { margin: 16px 0 8px; }
+.native-fact-details { margin: 5px 0 0; font-size: 12px; }
+.native-fact-details > div { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(80px, 2fr); gap: 8px; }
+.native-fact-details dt { color: #63717b; overflow-wrap: anywhere; }
+.native-fact-details dd { margin: 0; overflow-wrap: anywhere; }
 .canvas-heading { flex: none; min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 6px; border-bottom: 1px solid #e1e7ec; color: #607078; font-size: 12px; }
 .canvas-body { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .canvas-frame.canvas-expanded { position: fixed; inset: 12px; height: auto; z-index: 900; box-shadow: 0 0 0 100vmax #202b3899; border: 1px solid #99acb7; }

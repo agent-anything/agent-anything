@@ -1,5 +1,5 @@
 import type { AgentDefinition } from "@agent-anything/agent-core/agent";
-import {snapshotModelConversationSeed} from "../decision/TaskConversation.js";
+import {snapshotTaskInteractionSeed} from "../decision/TaskInteractionSeed.js";
 import { snapshotToolResultPresenters } from "./ToolResultPresenter.js";
 import { publishRunObservation } from "./RunObserver.js";
 import { publishRunExecutionObservation } from "./RunExecutionObserver.js";
@@ -75,10 +75,16 @@ import {
   snapshotRunInput,
 } from "./RunnerValidation.js";
 
+export interface AdmittedRun<TOutput = unknown> {
+  readonly handle: RunHandle<TOutput>;
+  activate(): RunHandle<TOutput>;
+}
+
 export class RunExecutionCoordinator {
   private readonly dependencies: ResolvedExecutionCoordinatorDependencies;
   private readonly activeRunIds = new Set<string>();
   private readonly recoveringRunIds = new Set<string>();
+  private readonly preparedRunIds = new Set<string>();
 
   constructor(dependencies: RunExecutionCoordinatorDependencies) {
     if (!dependencies.taskDecisions || typeof dependencies.taskDecisions.next !== "function") {
@@ -111,6 +117,30 @@ export class RunExecutionCoordinator {
     config: RootRunConfig,
     options: RunInvocationOptions = {},
   ): RunHandle<TOutput> {
+    const prepared = this.prepareRoot(agent, input, config, options);
+    prepared.activate();
+    return prepared.handle;
+  }
+
+  async admit<TOutput>(agent: AgentDefinition<TOutput>, input: RunInput,
+    config: RootRunConfig, options: RunInvocationOptions = {}): Promise<AdmittedRun<TOutput>> {
+    if (!this.dependencies.runTreeCommits && !this.dependencies.runCommits) {
+      throw new TypeError("Durable Run admission requires an execution commit owner.");
+    }
+    const prepared = this.prepareRoot(agent, input, config, options);
+    try { await prepared.execution.commitAdmission(); }
+    catch (error) {
+      this.preparedRunIds.delete(prepared.handle.runId);
+      throw error;
+    }
+    return Object.freeze({handle: prepared.handle, activate: () => {
+      prepared.activate();
+      return prepared.handle;
+    }});
+  }
+
+  private prepareRoot<TOutput>(agent: AgentDefinition<TOutput>, input: RunInput,
+    config: RootRunConfig, options: RunInvocationOptions) {
     const configuredPublishers = runtimeEventPublishers(
       this.dependencies.runtimeEventPublisher,
       options.runtimeEventPublisher,
@@ -161,7 +191,7 @@ export class RunExecutionCoordinator {
       ordinaryConfig.config,
       null,
       Object.freeze([]),
-      options.modelInteractionSeed ? snapshotModelConversationSeed(options.modelInteractionSeed) : null,
+      options.modelInteractionSeed ? snapshotTaskInteractionSeed(options.modelInteractionSeed) : null,
       tree.rootLineage,
       tree,
       measureInitialRunContextBytes(inputSnapshot),
@@ -173,7 +203,8 @@ export class RunExecutionCoordinator {
       options.executionFlow,
       this.dependencies.runCommits ? undefined :
         new RunTreeCommitWriter(tree.checkpoint(), this.dependencies.runTreeCommits ?? null, this.dependencies.now),
-    ).handle;
+      true,
+    );
   }
 
   run<TOutput>(
@@ -186,7 +217,7 @@ export class RunExecutionCoordinator {
   }
 
   async recover(rootRunId: string, bindings: RunRecoveryBindings, options: RunInvocationOptions = {}): Promise<RunHandle> {
-    if (this.activeRunIds.has(rootRunId) || this.recoveringRunIds.has(rootRunId)) {
+    if (this.activeRunIds.has(rootRunId) || this.preparedRunIds.has(rootRunId) || this.recoveringRunIds.has(rootRunId)) {
       throw new RunRecoveryError(rootRunId, "run_already_active", rootRunId);
     }
     this.recoveringRunIds.add(rootRunId);
@@ -229,6 +260,7 @@ export class RunExecutionCoordinator {
     const rootConfig = restoreRunConfiguration(member.admission.rootConfig, normalizedRoot.config);
     const prepared = new Map<string, {handle: RunHandle; execution: RunExecution<unknown> | null;
       getTerminalFlowOccurrence: () => ExecutionFlowOccurrenceRef | null; activate: () => void}>();
+    try {
     // Construct every owner and route before permitting any member to advance.
     for (const retained of records.members) {
       const {head, admission} = retained;
@@ -305,6 +337,10 @@ export class RunExecutionCoordinator {
     }
     await Promise.all(cancellations);
     return {handle: prepared.get(rootRunId)!.handle, checkpoint};
+    } finally {
+      // Failed local reconstruction is not cancellation or a new admission.
+      for (const runId of prepared.keys()) this.preparedRunIds.delete(runId);
+    }
   }
 
   private async admitDescendant(
@@ -403,7 +439,10 @@ export class RunExecutionCoordinator {
 
     const startedAt = this.dependencies.now();
     if (treeCommits) {
-      return treeCommits.transaction<RuntimeDescendantRunAdmissionResult>(({tree: draft}) => {
+      let admittedExecution: RunExecution<unknown> | undefined;
+      let preparedId: string | undefined;
+      try {
+      const result = await treeCommits.transaction<RuntimeDescendantRunAdmissionResult>(({tree: draft}) => {
         const reservation = draft.reserveDescendant({
           relationId: input.relationId, relationKind: input.relationKind,
           createChildRunId: () => this.dependencies.createRunId(), parentRunId, parentLineage,
@@ -421,11 +460,12 @@ export class RunExecutionCoordinator {
           runtimeEventPublishers, runTraceObservers, actionExecutionObserver, input.executionFlow,
           treeCommits, true);
         const admission = prepared.execution.prepareAdmission(draft);
+        admittedExecution = prepared.execution;
+        preparedId = childRunId;
         let consumed = false;
         const activate = () => {
           if (consumed) throw new TypeError("A descendant admission can be consumed only once.");
           consumed = true;
-          prepared.execution.acceptAdmission();
           prepared.activate();
         };
         const launch = (): RuntimeDescendantRunLaunchResult => {
@@ -455,6 +495,12 @@ export class RunExecutionCoordinator {
         return {runs: [admission], value: {status: "admitted" as const, relation: reservation.relation,
           reservedTreeRevision: reservation.treeRevision, treeRevision: draft.getSnapshot().revision, launch, cancelBeforeLaunch}};
       });
+      admittedExecution?.acceptAdmission();
+      return result;
+      } catch (error) {
+        if (preparedId) this.preparedRunIds.delete(preparedId);
+        throw error;
+      }
     }
     let reservation: ReturnType<RunTreeExecution["reserveDescendant"]>;
     try {
@@ -607,7 +653,7 @@ export class RunExecutionCoordinator {
     readonly execution: RunExecution<TOutput>;
     readonly activate: () => void;
   } {
-    if (this.activeRunIds.has(runId)) {
+    if (this.activeRunIds.has(runId) || this.preparedRunIds.has(runId)) {
       throw new TypeError(`Runner-created runId '${runId}' is already active.`);
     }
     const cancellation = createRunCancellationController({
@@ -705,10 +751,16 @@ export class RunExecutionCoordinator {
     handle.bindDescendantSteering((route) =>
       execution.submitDescendantSteering(route)
     );
+    handle.bindDescendantCancel(route=>execution.submitDescendantCancel(route));
     handle.bindDescendantResume((route) =>
       execution.submitDescendantResume(route)
     );
+    this.preparedRunIds.add(runId);
+    let activated = false;
     const activate = () => {
+      if (activated) return;
+      activated = true;
+      this.preparedRunIds.delete(runId);
       this.activeRunIds.add(runId);
       if (treeCommits) treeCommits.registerCancellation(runId, cancellation);
       else {

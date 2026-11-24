@@ -10,6 +10,14 @@ export function validateMethodInputScheduling(plan:ContextMethodInputPlan):void 
     producers.some(p=>!p.pathId||!p.candidateIds.length||new Set(p.candidateIds).size!==p.candidateIds.length||p.candidateIds.some(id=>!id)))
     throw new TypeError("method_input_producers_invalid");
   const scheduling=plan.scheduling;
+  if(plan.reception){
+    const r=plan.reception,demand=plan.materialization.request.demand;
+    if(r.revision!=="1"||r.pathId!==plan.materialization.intent.id||r.workId!==scheduling?.workId||r.workId!==plan.materialization.intent.scheduledWorkId||
+      !r.requirementsDigest||modelInputValueDigest(r.scope)!==modelInputValueDigest(plan.scope)||r.boundary!==demand.historyBoundary||
+      r.members.length!==producers.length||r.members.some((m,i)=>!m.workId||m.pathId!==producers[i]!.pathId||
+        m.requestDigest!==demand.dependencies[`representationProducer:${i}:producerRequest`]))
+      throw new TypeError("method_input_reception_binding_invalid");
+  }
   if(scheduling===null)return;
   if(!scheduling)throw new TypeError("method_input_scheduling_binding_missing");
   validateActivitySchedulingIntent(scheduling);

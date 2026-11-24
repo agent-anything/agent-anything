@@ -3,7 +3,7 @@ import type { ProviderCredentialCipher } from "./SafeStorageCredentialBackend.js
 
 export class ElectronSafeStorageCredentialCipher implements ProviderCredentialCipher {
   isEncryptionAvailable(): boolean {
-    return safeStorage.isEncryptionAvailable();
+    return safeStorage.isEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
   }
 
   encryptString(value: string): string {

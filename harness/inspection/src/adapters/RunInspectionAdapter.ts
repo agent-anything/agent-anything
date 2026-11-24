@@ -4,6 +4,7 @@ import type { InspectionJson } from "../records/index.js";
 import type { InspectionRecorder } from "../recording/index.js";
 import { inspectionLink, inspectionModelSource } from "./ProviderInspectionAdapter.js";
 import type { RetainedInputPresentation } from "@agent-anything/agent-runtime/decision";
+import { ProtocolEvidenceInspectionAdapter } from "./ProtocolEvidenceInspectionAdapter.js";
 
 /** Reads published owner snapshots; never derives a replacement Run state. */
 export class RunInspectionAdapter implements RunObserver {
@@ -46,7 +47,16 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
     const r = this.recorder;
     const payload = item.payload;
     const ref = (owner: string, kind: Parameters<InspectionRecorder["ref"]>[1], id: string, revision: string | null = null) => r.ref(owner, kind, id, record.runId, revision);
-    if (payload.kind === "run_action") {
+    if(payload.kind==="pending_transition"&&payload.pending.kind==="descendant_run"&&payload.pending.required){
+      const p=payload.pending,branch=ref("runtime","action",p.branchId),child=r.ref("runtime","run",p.childRunId,p.childRunId);
+      const boundary=ref("runtime","contribution",p.relationId+":required-boundary");
+      r.offer({id:item.ref.id+":child-boundary",subject:branch,occurredAt:item.createdAt,
+        payload:{kind:"event",name:"delegation.required_boundary",sequence:item.ref.sequence,code:payload.transition},
+        links:[inspectionLink("binding",subject,branch),inspectionLink("binding",ref("runtime","contribution",p.relationId),branch),
+          inspectionLink("binding",child,boundary),
+          ...(payload.transition==="opened"?[inspectionLink("prerequisite",boundary,branch,{condition:"settled",operation:"required_child_boundary"})]
+            :[inspectionLink("settles",subject,boundary,{operation:payload.transition})])]});
+    } else if (payload.kind === "run_action") {
       const action = ref("runtime", "action", payload.action.ref.id);
       const provenance = payload.action.provenance;
       r.offer({ subject: action, occurredAt: item.createdAt, payload: { kind: "event", name: "run_action.materialized", sequence: payload.action.ref.sequence, code: null },
@@ -55,6 +65,16 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
             : ref("runtime", "call", provenance.modelCallRef.id), action)] : [])],
         contents: [{ name: "Run Action", class: "agent", stage: "materialized", mediaType: "application/json", value: payload.action as unknown as InspectionJson }],
       });
+    } else if(payload.kind==="cancellation_transition"&&payload.transition==="requested"&&payload.cancellation.delegation){
+      const basis=payload.cancellation.delegation;
+      const admission=ref("runtime","contribution",payload.cancellation.requestId+":delegated-scope");
+      const parent=r.ref("runtime","run",basis.parentRunId,basis.parentRunId);
+      r.offer({id:admission.id,subject:admission,occurredAt:item.createdAt,
+        payload:{kind:"event",name:"delegation.cancellation_accepted",sequence:item.ref.sequence,code:payload.cancellation.reasonCode},
+        links:[inspectionLink("produces",subject,admission),inspectionLink("trigger",parent,admission),
+          inspectionLink("binding",admission,ref("runtime","run",basis.childRunId))],
+        contents:[{name:"Parent-authorized subtree cancellation",class:"agent",stage:"committed",mediaType:"application/json",
+          value:payload.cancellation as unknown as InspectionJson}]});
     } else if (payload.kind === "controller_feedback") {
       const feedback = ref("agent-runtime", "contribution", `${payload.turn.id}:feedback`, String(payload.turn.sequence));
       r.offer({subject: feedback, occurredAt: item.createdAt,
@@ -159,11 +179,22 @@ export class RunTranscriptInspectionAdapter implements RunTranscriptObserver {
         this.presentations(payload.openingReceipt.presentations, payload.openingReceipt.requestId, payload.turn.id, record);
       }
       for (const model of payload.modelItems) {
+        if (model.kind === "native_purpose_evidence") {
+          const native = new ProtocolEvidenceInspectionAdapter(r);
+          for (const source of model.evidence.sources) native.source(source);
+          native.accepted(model.evidence);
+          const acceptance = ref("runtime", "event", model.evidence.acceptance.id, model.evidence.acceptance.revision);
+          r.offer({ subject: acceptance, occurredAt: item.createdAt,
+            payload: { kind: "event", name: "controller.native_evidence.committed", sequence: null, code: null },
+            links: [inspectionLink("binding", subject, acceptance), inspectionLink("contains", turn, acceptance)] });
+          continue;
+        }
         if (model.kind !== "assistant_text" && model.kind !== "model_tool_call") continue;
         const modelRef = model.kind === "model_tool_call" ? ref("runtime", "call", model.call.modelCallRef.id)
           : ref("runtime", "contribution", model.id);
         r.offer({subject: modelRef, occurredAt: item.createdAt,
-          payload: {kind: "event", name: `controller.${model.kind}.committed`, sequence: null, code: null},
+          payload: model.kind === "model_tool_call" ? {kind:"call",name:model.call.name,ordinal:model.call.ordinal,
+            origin:model.call.modelCallRef.nativeSource?"native":"model"} : {kind: "event", name: `controller.${model.kind}.committed`, sequence: null, code: null},
           links: [inspectionLink("contains", turn, modelRef)],
           contents: [{name: "Committed model item", class: "agent", stage: "committed", mediaType: "application/json", value: model as unknown as InspectionJson}]});
       }

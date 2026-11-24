@@ -113,6 +113,8 @@ button.wb-activity-row:hover { color: #146346; background: #e7eee9; }
 .wb-child-text-preview.is-empty { color: #747e77; justify-content: flex-start; }
 .wb-child-activity-preview { display: flex; align-items: center; gap: 6px; height: 20px; min-width: 0; font-size: 11px; color: #53685c; }
 .wb-child-activity-preview > svg, .wb-child-activity-preview > small { flex: 0 0 auto; }
+.wb-child-activity-preview > .wb-execution-child { padding: 0; width: 100%; min-width: 0; font-size: inherit; }
+.wb-child-activity-preview > .wb-execution-child > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-child-activity-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-child-activity-status { max-width: 35%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #737b76; }
 .wb-child-more { color: #64726a; }

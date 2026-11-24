@@ -127,14 +127,17 @@ describe("Helarc native Tool controller", () => {
     const source=createControllerInput(),record=retainTaskDecisionSource(source),request=buildHelarcProviderRequest(source,requestBuildContext());
     const sources=createHelarcTaskInputSources(record,request);
     const input={sources,recipient:{runId:source.runId,recipient:"task",purpose:request.purpose},target:"original-target",
-      observedAt:"2026-10-30T00:00:00Z",maximumSourceBytes:1024*1024,activities:{command:async()=>null},signal:new AbortController().signal};
+      observedAt:"2026-10-30T00:00:00Z",maximumSourceBytes:1024*1024,activities:{command:async()=>({path:null,stages:[null],inputNeeds:[]})},signal:new AbortController().signal};
     const plans=await planOriginalInputPublications(input);
     expect(plans.every(plan=>plan.state==="new")).toBe(true);
     const recovered=await planOriginalInputPublications({...input,observedAt:"2026-10-31T00:00:00Z",
       sources:{...sources,originalSourceId:"later-request"},
       activities:{command:async command=>{
-        if(command.kind==="read_path")return {intent:{id:command.pathId,runId:source.runId,owner:"material-source",purpose:{digest:modelInputValueDigest(SOURCE_MATERIAL_PUBLICATION_PURPOSE)}},cancelled:false,progress:null} as ActivityPathState;
-        if(command.kind==="read_stage")return {request:{stageKind:"capture",input:JSON.parse(JSON.stringify(plans.find(plan=>`${plan.pathId}:capture`===command.requestId)!.request))}} as ActivityStageState;
+        if(command.kind==="read_snapshot")return {
+          path:{intent:{id:command.pathId,runId:source.runId,owner:"material-source",purpose:{digest:modelInputValueDigest(SOURCE_MATERIAL_PUBLICATION_PURPOSE)}},cancelled:false,progress:null} as ActivityPathState,
+          stages:command.requestIds.map(requestId=>({request:{stageKind:"capture",input:JSON.parse(JSON.stringify(plans.find(plan=>`${plan.pathId}:capture`===requestId)!.request))}} as ActivityStageState)),
+          inputNeeds:[],
+        };
         throw new Error("Unexpected execution");
       }}});
     expect(recovered.map(plan=>plan.request)).toEqual(plans.map(plan=>plan.request));

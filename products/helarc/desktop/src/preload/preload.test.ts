@@ -43,8 +43,8 @@ describe("Helarc preload bridge", () => {
     const scope = {threadId:"thread",productRunId:"work",runId:"child"};
     await api.readConversation({threadId:"thread",scope,position:{kind:"window",first:"one",last:"two",cursor:"cursor"}});
     expect(invoke).toHaveBeenLastCalledWith("helarc:read-conversation",{threadId:"thread",scope,position:{kind:"window",first:"one",last:"two",cursor:"cursor"}});
-    await api.readConversationTurn({...scope,turnId:"turn",cursor:null});
-    expect(invoke).toHaveBeenLastCalledWith("helarc:read-conversation-turn",{...scope,turnId:"turn",cursor:null});
+    await api.readConversationResponseGroup({...scope,turnId:"turn",cursor:null});
+    expect(invoke).toHaveBeenLastCalledWith("helarc:read-conversation-response-group",{...scope,turnId:"turn",cursor:null});
     await api.readExecutionActivities({...scope,includeDescendants:true,raw:"must-not-cross"} as Parameters<HelarcDesktopApi["readExecutionActivities"]>[0]);
     expect(invoke).toHaveBeenLastCalledWith("helarc:read-execution-activities",{...scope,includeDescendants:true});
   });

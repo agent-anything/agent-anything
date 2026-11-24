@@ -107,10 +107,12 @@ function interactionHistorySections(
   input: TaskDecisionSourceBasis | TaskDecisionInputSources,
 ): readonly ModelInputSectionCandidate[] {
   if (!("interaction" in input)) return Object.freeze([]);
+  if(input.interaction.kind==="native_evidence")throw new TypeError("turn_task_input_participant_mismatch");
+  const interaction=input.interaction;
   const openingIds = new Set(input.interaction.opening?.presentations.map(value => value.section.id) ?? []);
   const selected = canonicalConversationPresentations(input.interaction).filter(value => !openingIds.has(value.section.id));
   const messages = new Map(input.interaction.historyPresentations?.map((value, index) =>
-    [value.section.id, input.interaction.messages[index]]));
+    [value.section.id, interaction.messages[index]]));
   return Object.freeze(selected.map(retained => {
     const message = messages.get(retained.section.id);
     if (retained.section.content.kind !== "model_message" || JSON.stringify(retained.section.content.message) !== JSON.stringify(message)) {

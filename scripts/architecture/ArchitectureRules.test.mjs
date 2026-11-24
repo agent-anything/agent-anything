@@ -98,7 +98,7 @@ test("execution dependencies are exact and owner-directed", () => {
   );
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/provider-integrations"),
-    ["@agent-anything/agent-core", "@agent-anything/model-interaction", "eventsource-parser"],
+    ["@agent-anything/agent-core", "@agent-anything/model-interaction", "eventsource-parser", "undici", "ws", "ajv"],
   );
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/remote-integrations"),

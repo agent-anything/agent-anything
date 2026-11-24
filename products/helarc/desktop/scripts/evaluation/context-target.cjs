@@ -37,7 +37,7 @@ async function main(){
       if(prior&&(prior.binding!==binding||prior.generation>=store.generation||prior.current.runId!==runId))throw new Error("recording_owner_binding_conflict");
       const next={current,previous:prior?.current??null,binding,generation:store.generation};
       await tx.replaceText(JSON.stringify(next));return next;
-    }),activityHandoffs:store.activityHandoffs,
+    }),recordingReplayBounds:store.recordingReplayBounds.bind(store),activityHandoffs:store.activityHandoffs,
     contextFoundationFacts:store.contextFoundationFacts.bind(store),
   });
   const now=()=>new Date().toISOString(),a=command=>store.activityHandoffs.command(command),c=command=>store.materialCustody.command(command);

@@ -32,6 +32,8 @@ function fixture(count=2) {
     if(command.kind==="read_input_need")return need;
     if(command.kind==="read_path")return paths.get(command.pathId)??null;
     if(command.kind==="read_stage")return stages.get(command.requestId)??null;
+    if(command.kind==="read_snapshot"||command.kind==="observe_state")return {path:paths.get(command.pathId)??null,
+      stages:command.requestIds.map(id=>stages.get(id)??null),inputNeeds:command.inputNeedIds.map(id=>id===need.id?need:null)};
     throw new Error(`Unexpected mutating operation: ${command.kind}`);
   }};
   const publications=Array.from({length:count},(_,index)=>({pathId:`material:${index}`,state:"new",published:null,

@@ -11,6 +11,7 @@ import {validateOriginalInputPublication,type OriginalInputPublicationPlan} from
 import {readContextInputEvidence} from "./ContextInputEvidence.js";
 import type {ContextCurrentInput} from "./ContextPreparationPolicy.js";
 import {readPreparedInputRejection} from "./PreparedInputRejection.js";
+import type {ContextInputReceptionBinding} from "./ContextInputReceptionBinding.js";
 
 export type OriginalInputRepresentationReceptionBasis=Pick<Parameters<typeof originalInputRepresentationPlan>[0],
   "sources"|"scope"|"preparation"|"inputSupply"|"checkTemplate"> & {readonly members:readonly OriginalInputRepresentationMember[]};
@@ -72,13 +73,20 @@ export class OriginalInputRepresentationReception {
     if(current.kind!=="not_started")return {participants:[] as readonly SharedAcceptancePart[],observeSources:current.observeSources};
     if(arrangement.intent.id!==current.id)throw new TypeError("representation_reception_identity_changed");
     const members:Parameters<typeof originalInputRepresentationPlan>[0]["members"][number][]=[],conditions:SharedAcceptancePart[]=[];
+    const bindings:ContextInputReceptionBinding["members"][number][]=[];
     for(const member of ordered(basis)) {
       const producer=await this.path(basis,member.pathId),result=await this.ports.methods.result(member.pathId);signal.throwIfAborted();
       if(result.kind!=="ready"||producer.cancelled)throw new TypeError("representation_reception_producer_not_ready");
+      if(arrangement.scheduling){
+        if(!producer.intent.scheduledWorkId)throw new TypeError("representation_reception_producer_schedule_missing");
+        bindings.push({pathId:member.pathId,workId:producer.intent.scheduledWorkId,requestDigest:modelInputValueDigest(member.supply.request)});
+      }
       members.push({...member,progress:result.progress});conditions.push(this.condition(producer));
     }
     const plan=await originalInputRepresentationPlan({...basis,...arrangement,members,materials:this.ports.materials,signal});
-    return {participants:[...conditions,...await this.ports.consumers.prepareStart(plan,signal)],observeSources:current.observeSources};
+    const reception:ContextInputReceptionBinding|undefined=plan.scheduling?{revision:"1",pathId:current.id,workId:plan.scheduling.workId,scope:basis.scope,
+      boundary:basis.sources.boundary,requirementsDigest:modelInputValueDigest(basis.sources.groups.map(g=>g.occurrences.map(o=>o.section.preservation??null))),members:bindings}:undefined;
+    return {participants:[...conditions,...await this.ports.consumers.prepareStart({...plan,...(reception?{reception}:{})},signal)],observeSources:current.observeSources};
   }
 
   async prepareAdoption(basis:OriginalInputRepresentationReceptionBasis,input:{

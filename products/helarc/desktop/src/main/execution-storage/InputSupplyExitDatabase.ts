@@ -2,8 +2,9 @@ import {modelInputValueDigest as digest} from "@agent-anything/model-interaction
 import {contextProcessObject as object,contextProcessRelationship as relationship} from "@agent-anything/context/evidence";
 import {activityToken,activityCount,type SharedAcceptanceProposal,type ActivityInputNeed,type ActivityPathState,type ActivityStageState,
   type ActivitySchedulingAcceptance,type ActivityReconsiderationState} from "@agent-anything/agent-runtime/activity";
-import {ContextMethodInputSupply,type InputSupplyHead,type AcceptedInputSupplyResponsibility,type InputSupplyExit,
-  type InputSupplyExitProposal,type InputSupplyExitDisposition,type InputSupplyExitPending,type ContextMethodInputPlan} from "@agent-anything/agent-runtime/context-representation";
+import {type InputSupplyHead,type AcceptedInputSupplyResponsibility,type InputSupplyExit,
+  type InputSupplyExitProposal,type InputSupplyExitDisposition,type InputSupplyExitPending} from "@agent-anything/agent-runtime/context-representation";
+import {readInputSupplyReception} from "./InputSupplyReceptionBinding.js";
 import {ContextFoundationRecords,checkedJson} from "./ContextFoundationRecords.js";
 import {SharedAcceptanceRejection} from "./SharedAcceptanceDatabase.js";
 
@@ -90,7 +91,8 @@ export class InputSupplyExitDatabase {
         continue;
       }
       const entry=this.entry(value.needId,disposition.responsibilityId);if(!entry)reject("responsibility_missing");
-      const closure=disposition.kind==="reception_transferred"?this.paths.closure(`${entry.target.pathId}:consumer`):null;
+      const reception=disposition.kind==="reception_transferred"?this.reception(entry):null;
+      const closure=reception?this.paths.closure(reception.subscriptionId):null;
       const coveredPathIds=this.coveredPaths(entry,disposition);
       const recorded={disposition,acceptanceId:acceptance.id,closureAcceptanceId:closure?.id??null,coveredPathIds};
       this.records.sql("INSERT INTO context_input_supply_dispositions VALUES(?,?,?,?)").run(value.needId,entry.id,JSON.stringify(recorded),digest(recorded));
@@ -99,15 +101,15 @@ export class InputSupplyExitDatabase {
         if(existing&&existing.responsibility_id!==entry.id)reject("responsibility_coverage_conflict");
         this.records.sql("INSERT OR IGNORE INTO context_input_supply_exit_coverage VALUES(?,?,?)").run(value.needId,pathId,entry.id);
       }
-      const subject=object(OWNER,entry.id,exit.origin.runId),subscriptionId=`${entry.target.pathId}:consumer`;
+      const subject=object(OWNER,entry.id,exit.origin.runId),subscriptionId=reception?.subscriptionId;
       this.records.fact(exit.origin.runId,OWNER,entry.id,disposition.kind,{needId:value.needId,exitRevision:exit.revision+1,target:entry.target,
         coveredPathIds,...(disposition.kind==="reception_transferred"?{subscriptionId,closureAcceptanceId:closure?.id??null}:{}),acceptanceId:acceptance.id},
         {revision:"1",category:"responsibility",subject,state:{phase:"settled",status:disposition.kind},related:[],relationships:[
           relationship("observes",subject,object("activity",value.needId,exit.origin.runId)),
-          ...coveredPathIds.map(id=>{const path=this.paths.path(id);if(!path)reject("covered_path_missing");
-            return relationship("observes",subject,object("activity",id,path.intent.runId));}),
+          ...coveredPathIds.flatMap(id=>{const path=this.paths.path(id);
+            return path?[relationship("observes",subject,object("activity",id,path.intent.runId))]:[];}),
           ...(entry.target.workId?[relationship("observes",subject,object("activity",entry.target.workId,exit.origin.runId))]:[]),
-          ...(disposition.kind==="reception_transferred"?[relationship("delivers",subject,object("activity",subscriptionId,exit.origin.runId),"consumer_responsibility_transfer")]:[]),
+          ...(subscriptionId?[relationship("delivers",subject,object("activity",subscriptionId,exit.origin.runId),"consumer_responsibility_transfer")]:[]),
           ...(closure?[relationship("observes",subject,object("activity",closure.id,exit.origin.runId))]:[]),
           relationship("settles",object("shared_acceptance",acceptance.id,acceptance.scope),subject),
         ]});
@@ -162,14 +164,12 @@ export class InputSupplyExitDatabase {
       if(entry.role!=="input_preparation"||!this.paths.settled(path.intent.id))reject("owned_work_unsettled");return;
     }
     if(entry.role!=="method_reception")reject("disposition_role_invalid");
-    const head=this.head(exit.origin.needId)!,first=this.paths.stage(`${path.intent.id}:stage:1`),sub=this.paths.subscription(`${path.intent.id}:consumer`);
-    if(!first)reject("reception_plan_missing");
-    try {ContextMethodInputSupply.validateInputSupply(head.binding,path.intent,first,sub,false,
-      path.intent.scheduledWorkId?this.paths.scheduling(path.intent.scheduledWorkId):null);}
-    catch {reject("reception_transfer_unconfirmed");}
+    const reception=this.reception(entry);
+    const sub=this.paths.subscription(reception.subscriptionId);
     if(sub!.closed) {
       const receipt=this.paths.closure(sub!.subscription.id);
-      if(!receipt||receipt.decision.kind!=="method_input_closed"||receipt.decision.id!==path.intent.id||!this.paths.settled(path.intent.id))
+      if(!receipt||receipt.decision.kind!==reception.closureKind||receipt.decision.id!==path.intent.id||
+        reception.coveredPathIds.some(id=>this.paths.path(id)&&!this.paths.settled(id)))
         reject("reception_closure_unconfirmed");
       const recorded=checkedJson<{closureAcceptanceId:string|null}>(this.records.sql("SELECT value,digest FROM context_input_supply_dispositions WHERE need_id=? AND id=?")
         .get(exit.origin.needId,entry.id) as Row);
@@ -187,10 +187,21 @@ export class InputSupplyExitDatabase {
   }
   private coveredPaths(entry:AcceptedInputSupplyResponsibility,item:InputSupplyExitDisposition):readonly string[] {
     if(item.kind!=="reception_transferred")return [entry.target.pathId];
-    const stage=this.paths.stage(`${entry.target.pathId}:stage:1`);
-    const plan=(stage?.request.input as {methodInputPlan?:ContextMethodInputPlan}|undefined)?.methodInputPlan;
-    if(!plan)reject("reception_plan_missing");
-    return [...new Set([entry.target.pathId,plan.materialization.request.preparationIntent.id,plan.check.intent.id])].sort();
+    const path=this.paths.path(entry.target.pathId)!;
+    const reception=this.reception(entry);
+    for(const id of reception.coveredPathIds){
+      const covered=this.paths.path(id);
+      if(covered&&(covered.intent.runId!==path.intent.runId||covered.intent.owner!==path.intent.owner||
+        (covered.intent.scheduledWorkId??null)!==reception.workId))reject("reception_coverage_changed");
+    }
+    return [...reception.coveredPathIds].sort();
+  }
+  private reception(entry:AcceptedInputSupplyResponsibility):ReturnType<typeof readInputSupplyReception> {
+    const head=this.head(entry.needId),path=this.paths.path(entry.target.pathId);
+    if(entry.role!=="method_reception"||entry.relation!=="owned"||!head||!path||digest(path.intent)!==entry.target.intentDigest)
+      reject("reception_transfer_unconfirmed");
+    try {return readInputSupplyReception(head.binding,path.intent,this.paths,false);}
+    catch {reject("reception_transfer_unconfirmed");}
   }
   private uncoveredPath(exit:InputSupplyExit):string|null {
     if(!exit.scheduling)return null;

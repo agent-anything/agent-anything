@@ -1,6 +1,6 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {contextProcessObject as object,contextProcessRelationship as relationship} from "@agent-anything/context/evidence";
-import {ContextMethodInputSupply,inputSupplyResponsibility, SOURCE_MATERIAL_PUBLICATION_PURPOSE,CONTEXT_INPUT_PREPARATION_PURPOSE,REPRESENTATION_METHOD_PURPOSE,CONTEXT_INPUT_MATERIALIZATION_PURPOSE,
+import {inputSupplyResponsibility,confirmInputSupplyProduction,confirmInputSupplyPreparation, SOURCE_MATERIAL_PUBLICATION_PURPOSE,CONTEXT_INPUT_PREPARATION_PURPOSE,REPRESENTATION_METHOD_PURPOSE,CONTEXT_INPUT_MATERIALIZATION_PURPOSE,
   type InputSupplyBinding, type InputSupplyHead, type InputSupplyRegistration,
   type InputSupplyResponsibility, type AcceptedInputSupplyResponsibility, type InputSupplyResponsibilityQuery,
   type InputSupplyResponsibilityValue,type InputSupplyExitProposal} from "@agent-anything/agent-runtime/context-representation";
@@ -8,6 +8,9 @@ import {activityToken,activityCount,validateActivitySchedulingIntent} from "@age
 import {InputSupplyExitDatabase,INPUT_SUPPLY_EXIT_SCHEMA,sameSupplySchedulingBinding,type InputSupplyPaths} from "./InputSupplyExitDatabase.js";
 import {ContextFoundationRecords,checkedJson} from "./ContextFoundationRecords.js";
 import {SharedAcceptanceRejection,type SharedAcceptanceParticipant} from "./SharedAcceptanceDatabase.js";
+import {validateNativeInputSupplyReturn,type NativeInputSupplyReturn,type NativeInputSupplySelection} from "@agent-anything/agent-runtime/context-representation";
+import {NativeInputSupplyReturnDatabase} from "./NativeInputSupplyReturnDatabase.js";
+import {readInputSupplyReception} from "./InputSupplyReceptionBinding.js";
 
 export const INPUT_SUPPLY_RESPONSIBILITY_SCHEMA=`
 ${INPUT_SUPPLY_EXIT_SCHEMA}
@@ -24,9 +27,12 @@ const PURPOSES={source_publication:SOURCE_MATERIAL_PUBLICATION_PURPOSE,input_pre
 /** An accepted responsibility index. Original paths and receipts remain their own authority. */
 export class InputSupplyResponsibilityDatabase {
   private readonly exits:InputSupplyExitDatabase;
+  private readonly returns:NativeInputSupplyReturnDatabase;
   constructor(private readonly records:ContextFoundationRecords,private readonly paths:InputSupplyPaths,
-    private readonly changed:(binding:Pick<InputSupplyBinding,"needId"|"runId"|"owner">,revision:number,kind:"membership"|"exit")=>void) {
+    private readonly changed:(binding:Pick<InputSupplyBinding,"needId"|"runId"|"owner">,revision:number,kind:"membership"|"exit")=>void,
+    selection:(id:string)=>NativeInputSupplySelection|null) {
     this.exits=new InputSupplyExitDatabase(records,paths,id=>this.head(id),(needId,id)=>this.readEntry(needId,id),exit=>changed(exit.origin,exit.revision,"exit"));
+    this.returns=new NativeInputSupplyReturnDatabase(records,paths,selection);
   }
 
   query(query:InputSupplyResponsibilityQuery):InputSupplyResponsibilityValue {
@@ -69,8 +75,13 @@ export class InputSupplyResponsibilityDatabase {
   }
 
   participant():SharedAcceptanceParticipant {
-    type Prepared={kind:"register";proposal:InputSupplyRegistration}|{kind:"exit";proposal:InputSupplyExitProposal}|{kind:"producer_unreferenced";workId:string};
-    return {owner:OWNER,kinds:["register","exit","producer_unreferenced"],prepare:(part,acceptance):Prepared=>{
+    type Prepared={kind:"register";proposal:InputSupplyRegistration}|{kind:"exit";proposal:InputSupplyExitProposal}|{kind:"producer_unreferenced";workId:string}|
+      {kind:"native_input_return";proposal:NativeInputSupplyReturn};
+    return {owner:OWNER,kinds:["register","exit","producer_unreferenced","native_input_return"],prepare:(part,acceptance):Prepared=>{
+      if(part.kind==="native_input_return") {
+        const proposal=structuredClone(part.proposal) as NativeInputSupplyReturn;validateNativeInputSupplyReturn(proposal);
+        return {kind:"native_input_return",proposal};
+      }
       if(part.kind==="producer_unreferenced") {
         const {workId}=part.proposal as {workId:string};activityToken(workId);
         const work=this.paths.scheduling(workId);
@@ -84,6 +95,7 @@ export class InputSupplyResponsibilityDatabase {
       return {kind:"register",proposal};
     },apply:(value,acceptance)=>{
       const prepared=value as Prepared;if(prepared.kind==="exit")return this.exits.apply(prepared.proposal,acceptance);
+      if(prepared.kind==="native_input_return")return this.returns.record(prepared.proposal,acceptance);
       if(prepared.kind==="producer_unreferenced")return this.assertUnreferenced(prepared.workId);
       const proposal=prepared.proposal,{binding}=proposal;
       if(this.exits.read(binding.needId))reject("exit_started");
@@ -138,6 +150,7 @@ export class InputSupplyResponsibilityDatabase {
       }
     },validate:(value,acceptance)=>{
       const prepared=value as Prepared;if(prepared.kind==="exit")return this.exits.validate(prepared.proposal,acceptance);
+      if(prepared.kind==="native_input_return"){this.returns.validate(prepared.proposal,acceptance);return;}
       if(prepared.kind==="producer_unreferenced")return this.assertUnreferenced(prepared.workId);
       const proposal=prepared.proposal;
       this.validateOrigin(proposal);
@@ -172,14 +185,33 @@ export class InputSupplyResponsibilityDatabase {
   private validateTarget(binding:InputSupplyBinding,entry:InputSupplyResponsibility,initial:boolean):void {
     const path=this.paths.path(entry.target.pathId);
     if(!path||path.intent.runId!==binding.runId||!same(inputSupplyResponsibility(entry.role,path.intent),entry)||
-      path.intent.purpose.digest!==modelInputValueDigest(PURPOSES[entry.role])||(initial&&path.cancelled))reject("target_unconfirmed");
+      !["input_preparation","method_reception","method_production"].includes(entry.role)&&path.intent.purpose.digest!==modelInputValueDigest(PURPOSES[entry.role])||(initial&&path.cancelled))reject("target_unconfirmed");
     if(entry.relation==="owned"&&path.intent.owner!==binding.owner)reject("target_not_owned");
     if(entry.role==="input_preparation"&&entry.target.workId!==(this.head(binding.needId)?.scheduling?.workId??null))reject("preparation_schedule_unconfirmed");
     const stage=this.paths.stage(entry.role==="source_publication"?`${path.intent.id}:capture`:`${path.intent.id}:stage:1`);
     if(!stage||stage.request.pathId!==path.intent.id)reject("target_stage_missing");
+    if(entry.role==="input_preparation"){
+      const declaration=(stage.request.input as {inputSupplyPreparation?:unknown}|null)?.inputSupplyPreparation;
+      if(declaration){
+        try {confirmInputSupplyPreparation(binding,path.intent,stage,this.head(binding.needId)?.scheduling?.workId??null);}
+        catch {reject("target_preparation_unconfirmed");}
+      }else if(path.intent.purpose.digest!==modelInputValueDigest(CONTEXT_INPUT_PREPARATION_PURPOSE))reject("target_preparation_handoff_missing");
+    }
+    if(entry.role==="method_production"){
+      const declaration=(stage.request.input as {inputSupplyProduction?:import("@agent-anything/agent-runtime/context-representation").InputSupplyProduction}|null)?.inputSupplyProduction;
+      if(declaration){
+        try {confirmInputSupplyProduction(path.intent,stage,this.paths.subscription(declaration.subscriptionId),
+          path.intent.scheduledWorkId?this.paths.scheduling(path.intent.scheduledWorkId):null,initial);}
+        catch {reject("target_production_unconfirmed");}
+      } else if(path.intent.purpose.digest!==modelInputValueDigest(REPRESENTATION_METHOD_PURPOSE))reject("target_production_handoff_missing");
+    }
     if(entry.role==="method_reception") {
-      try {ContextMethodInputSupply.validateInputSupply(binding,path.intent,stage,this.paths.subscription(`${path.intent.id}:consumer`),initial,
-        path.intent.scheduledWorkId?this.paths.scheduling(path.intent.scheduledWorkId):null);}
+      try {
+        const reception=readInputSupplyReception(binding,path.intent,this.paths,initial);
+        for(const id of reception.coveredPathIds){const covered=this.paths.path(id);
+          if(covered&&(covered.intent.runId!==path.intent.runId||covered.intent.owner!==path.intent.owner||
+            (covered.intent.scheduledWorkId??null)!==reception.workId))reject("target_reception_coverage_changed");}
+      }
       catch {reject("target_reception_unconfirmed");}
     }
   }

@@ -2,10 +2,12 @@ import type { ProviderFailure } from "@agent-anything/model-interaction";
 import type { ModelFailure } from "./ModelFailure.js";
 import type {TaskModelExchange} from "./TaskDecisionActivity.js";
 import type {RuntimeFailure} from "../run/RunFailure.js";
+import type {MODEL_REQUEST_INPUT_FAILURE} from "./ModelRequestInputFailure.js";
 
 export type TaskDecisionActivityFailureCode =
-  | "context_input_unavailable"
+  | typeof MODEL_REQUEST_INPUT_FAILURE
   | "model_request_failed"
+  | "model_response_unavailable"
   | "model_output_invalid"
   | "model_output_incomplete"
   | "model_output_limit_exhausted"
@@ -22,7 +24,7 @@ export type TaskDecisionActivityFailureCode =
   | "provider_cancellation_unconfirmed";
 
 export type TaskDecisionActivityFailure =
-  | { readonly kind:"input_preparation";readonly failure:RuntimeFailure & {readonly code:"context_input_unavailable"} }
+  | { readonly kind:"input_preparation";readonly failure:RuntimeFailure & {readonly code:typeof MODEL_REQUEST_INPUT_FAILURE} }
   | { readonly kind: "model"; readonly failure: ModelFailure & { readonly code: TaskDecisionActivityFailureCode } }
   | { readonly kind: "provider"; readonly failure: ProviderFailure & { readonly code: TaskDecisionActivityFailureCode } };
 

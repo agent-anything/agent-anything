@@ -17,7 +17,7 @@ export async function originalInputRepresentationPlan(input:{readonly sources:Or
   readonly scheduling?:Omit<import("../activity/index.js").ActivitySchedulingIntent,"allowedPathIds">;
   readonly scope:ContextUseScope;readonly preparation:ContextInputPreparationRequest;
   readonly intent:Omit<ActivityPathIntent,"purpose"|"owner">;
-  readonly checkTemplate:RepresentationMethodRequest["template"];
+  readonly checkTemplate:NonNullable<RepresentationMethodRequest["template"]>;
   readonly checkCapacity:RepresentationMethodRequest["capacity"];readonly checkBounds:RepresentationMethodRequest["bounds"];
   readonly materials:MaterialCustodyPort;readonly signal:AbortSignal}):Promise<ContextMethodInputPlan> {
   const {scope,intent,signal}=input;signal.throwIfAborted();

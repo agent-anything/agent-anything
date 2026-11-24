@@ -2,7 +2,7 @@ import {afterEach,describe,expect,it,vi} from "vitest";
 import {createRequire} from "node:module";
 import type {DatabaseSync as SqliteDatabase} from "node:sqlite";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {observeContextPreparationInput,readContextPreparationEvidence,type ContextPreparationDecisionRecord,
+import {INITIAL_CONTEXT_PREPARATION_POLICY,contextPreparationApplicabilityKey,observeContextPreparationInput,readContextPreparationEvidence,type ContextPreparationDecisionRecord,
   type ContextPreparationEvidenceReport,type PreparedContextInput} from "@agent-anything/agent-runtime/context-representation";
 import type {SharedAcceptanceProposal} from "@agent-anything/agent-runtime/activity";
 import {ContextFoundationRecords,CONTEXT_FOUNDATION_FACT_SCHEMA} from "./ContextFoundationRecords.js";
@@ -24,11 +24,18 @@ function fixture() {
   const reopen=()=>new ContextPreparationDecisionDatabase(records,value=>({value}) as never,root=>(root as unknown as {value:unknown}).value,
     ()=>({scope,control:{revision:0,allowed:true}}) as never,()=>null,()=>true,()=>({}) as never,()=>true,()=>null,()=>null);
   const add=(id:string,report:ContextPreparationEvidenceReport|null,scopeId=scope.id,expectedDecisionId?:string|null)=>{
-    const record={decision:{id,scope:{...scope,id:scopeId},investment:{kind:"none",reason:"fixture"},
-      foreground:{kind:"limited",reason:"storage_fixture_without_consumer"},limitations:[],excluded:[]},input:{scope:{...scope,id:scopeId},
-      current:{kind:report?"prepared":"gap",evidence:{id,owner:"activity",kind:"fact",revision:"1"}},
-      ...(report?{observationReport:report}:{}),alternatives:[{input:{prepared:{encoded:{id:"independently-adopted-candidate"}}}}]},
-      acceptanceId:`accept:${id}`,investment:null} as unknown as ContextPreparationDecisionRecord;
+    const recipient={...scope,id:scopeId}, evidence={id,owner:"activity",kind:"fact" as const,revision:"1"};
+    const ready=(inputId:string)=>({kind:"recipient_prepared" as const,scope:recipient,inputId,
+      bodyDigest:modelInputValueDigest(inputId),exactInputDigest:modelInputValueDigest({inputId}),
+      judgmentId:`allowed:${inputId}`,allowed:true,risks:[],evidence});
+    const input:ContextPreparationDecisionRecord["input"]={scope:recipient,boundary:id,requirementsDigest:modelInputValueDigest([]),
+      current:report?ready(id):{kind:"gap",gap:{reason:"storage_fixture_without_input",demandId:id,targetRevision:recipient.target,
+        information:[],capacity:[],untested:false,responsibility:"request_owner"},evidence},
+      ...(report?{observationReport:report}:{}),alternatives:[{input:ready("independently-adopted-candidate"),comparisons:[]}],
+      currentRejectedInputId:null,pressure:[],options:[],inFlight:[],explorationHistory:[],optionalInFlight:0,autoPrepare:false,consumerActive:false};
+    const record:ContextPreparationDecisionRecord={input,decision:{id,scope:recipient,policy:INITIAL_CONTEXT_PREPARATION_POLICY,
+      boundary:id,applicabilityKey:contextPreparationApplicabilityKey(input),evidence:[evidence],investment:{kind:"none",reason:"fixture"},
+      foreground:{kind:"limited",reason:"storage_fixture_without_consumer"},limitations:[],excluded:[]},acceptanceId:`accept:${id}`,investment:null};
     const store=reopen(),proposal={input:record.input,investment:null,expectedControlRevision:0,
       expectedDecisionId:expectedDecisionId===undefined?store.query({kind:"latest",scopeId})?.decision.id??null:expectedDecisionId};
     // Exercise the owner's real transactional write path; policy choice is outside this storage fixture.

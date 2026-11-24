@@ -349,7 +349,7 @@ describe("source-owned representation combination",()=>{
     for(const combination of conflicts.combinations)expect(()=>validateOriginalInputRepresentationMembers(original,combination)).not.toThrow();
     const template=originalInputReceptionTemplate(original);
     expect(template.interaction.kind).toBe("text_generation");expect(template.composition.lineage.agent).toBeNull();
-    expect(template.requestId).not.toBe(members[0]!.supply.request.template.requestId);
+    expect(template.requestId).not.toBe(members[0]!.supply.request.template!.requestId);
   });
   it("rejects duplicate identity, duplicate placement, account/body overlap, and changed source or progress",async()=>{
     const {f,original,members,accounts,member}=await setup();
@@ -378,7 +378,8 @@ describe("source-owned representation combination",()=>{
     const {f,original,members,parameters}=await setup(),materials={command:async(command:{kind:string;holdId:string})=>({hold:{instanceId:command.holdId}})} as unknown as MaterialCustodyPort;
     const preparation={kind:"context_input_preparation" as const,demand:f.input.prepared.demand,template:original.request,limits:[],reservations:[],policy:parameters.capacity.policy,
       allowExternalMeasurement:false,deliveryMode:"buffered" as const,localMeasurements:[],sharedCapacity:null,materialAccesses:[]};
-    const basis={sources:original,members,scope:f.input.scope,preparation,checkTemplate:members[0]!.supply.request.template};
+    expect(members[0]!.supply.request.template).toBeDefined();
+    const basis={sources:original,members,scope:f.input.scope,preparation,checkTemplate:members[0]!.supply.request.template!};
     const reception=new OriginalInputRepresentationReception({} as never);
     expect(reception.id(basis)).toBe(reception.id({...basis,members:[...members].reverse()}));
     expect(reception.id(basis)).not.toBe(reception.id({...basis,members:members.slice(0,1)}));
@@ -442,8 +443,9 @@ describe("original account method supply",()=>{
         capacity:{limits:[],reservations:[],policy:{id:"test",revision:"1",purpose:"task",basis:"estimated",allowEstimatedFit:true,allowUnknown:true},maximumCombinations:4,maximumMeasurements:0},
         bounds:{readBytes:1000000,storedBytes:1000000,modelCalls:8,repairs:1,levels:2,pageBytes:65536,ranges:64},limits:{maximumStages:128,maximumAttempts:128}});
     };
-    const first=offer(prepared);expect(first.request.template.messages).toHaveLength(1);expect(first.request.template.interaction.kind).toBe("text_generation");
-    expect(JSON.stringify(first.request.template.messages)).not.toContain("file_missing");
+    const first=offer(prepared);expect(first.request.template).toBeDefined();
+    expect(first.request.template!.messages).toHaveLength(1);expect(first.request.template!.interaction.kind).toBe("text_generation");
+    expect(JSON.stringify(first.request.template!.messages)).not.toContain("file_missing");
     expect(first.request.recipient.purpose).toBe("context_representation");expect(first.option.capability.every(c=>c.conclusion==="unknown")).toBe(true);
     expect(first.request.sources.map(s=>s.role)).toEqual(["background","source"]);
     expect(first.request.requirements).toHaveLength(2);expect(first.materialAdmissions).toHaveLength(2);

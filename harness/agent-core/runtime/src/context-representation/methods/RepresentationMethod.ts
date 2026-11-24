@@ -1,12 +1,15 @@
 import type {MaterialAccess,MaterialRange,MaterialRecipient} from "@agent-anything/context/custody";
 import type {RepresentationRef,RepresentationLoss} from "@agent-anything/context/representation";
 import type {ProviderRequest} from "@agent-anything/model-interaction";
+import {snapshotModelAgentCompositionBinding,requireModelPurpose,type ModelAgentCompositionBinding} from "@agent-anything/model-interaction/protocol";
 import type {InputCapacityLimit,InputCapacityPolicy,CapacityReservation} from "@agent-anything/model-interaction/input";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {ActivityPurposeContract} from "../../activity/ActivityPurpose.js";
 import type {ContextUseScope} from "@agent-anything/context/selection";
 import {validatePreparedContextInput,type PreparedContextInput} from "../ContextInputPreparation.js";
 import {MODEL_ATTEMPT_RETRY} from "../../model-access/ProviderAttemptRecovery.js";
+import type {ContextPreparationMethodProgress} from "../ProtocolRepresentationMethod.js";
+import {validateNativeInputPreparation,type NativeInputPreparationEvidence} from "../NativeInputPreparationEvidence.js";
 
 export const REPRESENTATION_METHOD_PURPOSE:ActivityPurposeContract={
   ref:{id:"context.representation-method",revision:"1"},inputOwner:"context-representation",executionOwner:"representation-execution",
@@ -60,7 +63,8 @@ export interface RepresentationMethodRequest {
   readonly sourceBoundary:string;
   readonly deliveryIds:readonly string[];
   readonly combinationDigest:string|null;
-  readonly combination?:{readonly prepared:PreparedContextInput;readonly scope:ContextUseScope;readonly subjects:readonly RepresentationRef[];
+  readonly combination?:({readonly prepared:PreparedContextInput;readonly native?:never}|{readonly native:NativeInputPreparationEvidence;readonly prepared?:never})&{
+    readonly scope:ContextUseScope;readonly subjects:readonly RepresentationRef[];
     readonly producers?:readonly CombinationProducerEvidence[];
     readonly inheritedChecks?:readonly InheritedMethodCheck[]};
   readonly reuseJudgments?:readonly string[];
@@ -69,7 +73,8 @@ export interface RepresentationMethodRequest {
   /** Required for exact omission; the owner supplies the permitted body, not a summarizer heuristic. */
   readonly omission:{readonly basis:string;readonly body:string}|null;
   readonly search:{readonly query:string;readonly caseMode:"sensitive"|"ascii_insensitive";readonly maximumMatches:number}|null;
-  readonly template:ProviderRequest;
+  readonly template?:ProviderRequest;
+  readonly nativeComposition?:ModelAgentCompositionBinding;
   readonly targetRevision:string;
   readonly capacity:{readonly limits:readonly InputCapacityLimit[];readonly reservations:readonly CapacityReservation[];readonly policy:InputCapacityPolicy;readonly maximumCombinations:number;readonly maximumMeasurements:number};
   readonly bounds:{readonly readBytes:number;readonly storedBytes:number;readonly modelCalls:number;readonly repairs:number;readonly levels:number;readonly pageBytes:number;readonly ranges:number};
@@ -126,7 +131,7 @@ export interface MethodJob {
   readonly relationshipBasis?:MethodRelationshipBasis;
 }
 export interface MethodCheckGroup {readonly candidateId:string;readonly jobs:readonly string[];}
-export interface RepresentationMethodProgress {
+export interface RepresentationMethodProgress extends ContextPreparationMethodProgress<RepresentationMethodRequest> {
   readonly kind:"representation_method_progress";
   readonly request:RepresentationMethodRequest;
   readonly state:"working"|"ready"|"gap";
@@ -148,7 +153,15 @@ export interface RepresentationMethodProgress {
 
 export function validateRepresentationMethodRequest(value:RepresentationMethodRequest):void {
   if(value.kind!=="representation_method"||value.methodRevision!=="1"||!value.objective.trim()||!value.sourceBoundary||!value.targetRevision||
-    value.recipient.recipient!=="context-representation"||value.template.purpose!==value.recipient.purpose)throw new TypeError("representation_method_binding_invalid");
+    value.recipient.recipient!=="context-representation")throw new TypeError("representation_method_binding_invalid");
+  if(Boolean(value.template)===Boolean(value.nativeComposition))throw new TypeError("representation_model_participant_required");
+  if(value.template&&value.template.purpose!==value.recipient.purpose)throw new TypeError("representation_method_binding_invalid");
+  if(value.nativeComposition){
+    snapshotModelAgentCompositionBinding(value.nativeComposition);
+    const purpose=value.nativeComposition.composition.auxiliary.find(p=>p.purpose.id===value.recipient.purpose);
+    if(!purpose)throw new TypeError("representation_native_purpose_missing");
+    requireModelPurpose(value.nativeComposition,purpose.purpose);
+  }
   if(!["preserve","excerpt","detail","omit","summarize","restore","search","check","check_combination"].includes(value.method))throw new TypeError("representation_method_unsupported");
   if((value.reuseJudgments?.length??0)>128)throw new TypeError("representation_reuse_bound_invalid");
   if(!value.sources.length||value.sources.length>128||new Set(value.sources.map(s=>s.alias)).size!==value.sources.length)throw new TypeError("representation_sources_invalid");
@@ -173,9 +186,18 @@ export function validateRepresentationMethodRequest(value:RepresentationMethodRe
   if(value.method==="check_combination"&&!value.combinationDigest)throw new TypeError("representation_combination_identity_required");
   if(value.method==="check_combination") {
     const combination=value.combination;if(!combination||!combination.subjects.length)throw new TypeError("representation_combination_evidence_required");
-    validatePreparedContextInput(combination.prepared);
-    const {scope,prepared}=combination;
-    if(modelInputValueDigest(prepared)!==value.combinationDigest||scope.owner!==value.recipient.recipient||scope.runId!==value.recipient.runId||prepared.demand.recipient!==scope.recipient||prepared.demand.purpose!==scope.purpose||prepared.demand.targetRevision!==scope.target)throw new TypeError("representation_combination_binding_invalid");
+    const {scope}=combination;
+    if(scope.owner!==value.recipient.recipient||scope.runId!==value.recipient.runId)throw new TypeError("representation_combination_binding_invalid");
+    if(combination.native){
+      const {value:prepared,origin}=combination.native;validateNativeInputPreparation(prepared);
+      if(combination.prepared||!value.nativeComposition||Object.values(origin).some(v=>typeof v!=="string"||!v)||
+        modelInputValueDigest(prepared.exactInput)!==value.combinationDigest||modelInputValueDigest(prepared.scope)!==modelInputValueDigest(scope))
+        throw new TypeError("representation_native_combination_binding_invalid");
+    }else{
+      const prepared=combination.prepared;validatePreparedContextInput(prepared);
+      if(modelInputValueDigest(prepared)!==value.combinationDigest||prepared.demand.recipient!==scope.recipient||prepared.demand.purpose!==scope.purpose||prepared.demand.targetRevision!==scope.target)
+        throw new TypeError("representation_combination_binding_invalid");
+    }
     if(combination.subjects.some(ref=>!value.sources.some(s=>s.representation&&modelInputValueDigest(s.representation)===modelInputValueDigest(ref))))throw new TypeError("representation_combination_subject_evidence_missing");
     const checks=combination.inheritedChecks??[];
     if(!Array.isArray(combination.inheritedChecks??[])||new Set(checks.map(c=>c.producerPathId)).size!==checks.length)
@@ -206,7 +228,7 @@ export function validateRepresentationMethodRequest(value:RepresentationMethodRe
   if(value.bounds.pageBytes<1||value.bounds.pageBytes>65536||value.bounds.levels<1||value.bounds.levels>32||value.bounds.repairs>16||value.bounds.ranges<1||value.bounds.ranges>128)throw new TypeError("representation_bound_invalid");
   if(value.capacity.policy.purpose!==value.recipient.purpose)throw new TypeError("representation_capacity_purpose_invalid");
 }
-export function representationMethodRequirements(request:RepresentationMethodRequest):readonly MethodRequirement[] {
+export function representationMethodRequirements(request:Pick<RepresentationMethodRequest,"requirements"|"restorations">):readonly MethodRequirement[] {
   return [...request.requirements,...(request.restorations??[]).map(r=>({id:`restore:${r.lossId}`,revision:"1",basis:`Original evidence ${r.sourceAlias} at bytes ${r.range.start}-${r.range.end}`,description:`Verify this specific lost precision is restored from the supplied original evidence: ${r.description}. No claim about other losses.`}))];
 }
 export function startRepresentationMethod(request:RepresentationMethodRequest):RepresentationMethodProgress {

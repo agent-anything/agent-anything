@@ -15,6 +15,10 @@ CREATE TABLE activity_reconsideration_sources(subscription_id TEXT NOT NULL,sour
 `;
 type Fact=(runId:string,subject:string,kind:"fact_published"|"reconsideration_registered"|"reconsideration_accepted",details:Readonly<Record<string,unknown>>)=>void;
 
+export const ACTIVITY_RECONSIDERATION_ACCESS_SCHEMA=`
+CREATE INDEX activity_reconsiderations_run ON activity_reconsiderations(run_id,closed,id);
+`;
+
 /** Shared by subscription and Host scope discovery; r is the subscription row. */
 export const PENDING_RECONSIDERATION_FACTS_SQL=`r.closed=0 AND EXISTS (
   SELECT 1 FROM activity_published_facts f JOIN activity_reconsideration_sources s ON s.subscription_id=r.id AND s.source_id=f.source_id

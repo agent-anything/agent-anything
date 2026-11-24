@@ -22,6 +22,7 @@ import type {
 } from "@agent-anything/agent-runtime/execution-coordinator";
 import type {
   DelegationResumeReceipt,
+  DelegationCancelRoute, DelegationCancelReceipt,
   DelegationResumeRoute,
 } from "@agent-anything/agent-runtime/delegation";
 import type {
@@ -42,7 +43,7 @@ import { createHostRunProjectionStore } from "../projection/HostRunProjectionRed
 export type HostSessionId = string;
 
 export interface HostRunStartInput<TOutput = unknown> {
-  readonly modelInteractionSeed?: import("@agent-anything/agent-runtime/decision").ModelConversationSeed;
+  readonly modelInteractionSeed?: import("@agent-anything/agent-runtime/decision").TaskInteractionSeed;
   readonly sessionId: HostSessionId;
   readonly agent: AgentDefinition<TOutput>;
   readonly runInput: RunInput;
@@ -89,6 +90,7 @@ export interface HostActiveRun<TOutput = unknown> {
   submitInteraction(input: HostInteractionSubmission): Promise<InteractionSubmissionOutcome>;
   steer(input: HostRunSteeringInput): Promise<HostRunSteeringReceipt>;
   resumeDescendant(input: DelegationResumeRoute): Promise<DelegationResumeReceipt>;
+  cancelDescendant(input: DelegationCancelRoute): Promise<DelegationCancelReceipt>;
   cancel(input: HostRunCancellationInput): Promise<HostRunCancellationReceipt>;
   getStatus(): HostRunStatusProjection;
   wait(): Promise<HostRunResult<TOutput>>;
@@ -96,11 +98,17 @@ export interface HostActiveRun<TOutput = unknown> {
 }
 
 export interface HostRunManager {
+  admit<TOutput>(input: HostRunStartInput<TOutput>): Promise<HostRunAdmission<TOutput>>;
   start<TOutput>(input: HostRunStartInput<TOutput>): HostActiveRun<TOutput>;
   recover(input: HostRunRecoveryInput): Promise<HostActiveRun>;
   getRun(runId: string): HostActiveRun | null;
   listRuns(): readonly HostRunRegistryEntry[];
   releaseRun(runId: string): HostRunReleaseReceipt;
+}
+
+export interface HostRunAdmission<TOutput = unknown> {
+  readonly activeRun: HostActiveRun<TOutput>;
+  activate(): HostActiveRun<TOutput>;
 }
 
 export interface HostRunRecoveryInput {
@@ -151,6 +159,20 @@ export function createHostRunManager(input: CreateHostRunManagerInput): HostRunM
   const now = input.now ?? (() => new Date().toISOString());
   const registry = new HostRunRegistry(terminalRetentionLimit);
   return Object.freeze({
+    async admit<TOutput>(startInput: HostRunStartInput<TOutput>): Promise<HostRunAdmission<TOutput>> {
+      assertStartInput(startInput);
+      const binding = createHostRunBinding({sessionId: startInput.sessionId, taskId: startInput.runInput.task.id,
+        startedAt: readNow(now), enforcement: startInput.runConfig.permissions.permissionProfile.enforcement},
+      now, input.onProjectionListenerFailure);
+      const admitted = await input.runner.admit(startInput.agent, startInput.runInput, startInput.runConfig,
+        {...binding.observers, modelInteractionSeed: startInput.modelInteractionSeed});
+      const registration = binding.bind(admitted.handle);
+      registry.admit(registration);
+      return Object.freeze({activeRun: registration.activeRun, activate: () => {
+        admitted.activate();
+        return registration.activeRun;
+      }});
+    },
     start<TOutput>(startInput: HostRunStartInput<TOutput>): HostActiveRun<TOutput> {
       const registration = startHostRun(
         input.runner,
@@ -360,6 +382,10 @@ function createHostRunBinding(
           currentRunRevision: projection.runRevision,
         });
       }
+    },
+    async cancelDescendant(route:DelegationCancelRoute):Promise<DelegationCancelReceipt>{
+      if(invocationState!=="active")return {status:"rejected",code:"delegation_child_settled"};
+      return handle.cancelDescendant(route);
     },
     async resumeDescendant(candidate: DelegationResumeRoute): Promise<DelegationResumeReceipt> {
       if (invocationState !== "active") {

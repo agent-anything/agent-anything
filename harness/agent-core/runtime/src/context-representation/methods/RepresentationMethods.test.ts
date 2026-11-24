@@ -40,7 +40,7 @@ function candidate():MethodCandidate {
 
 it("retains per-stage method measurements when model input contains no cumulative method state",async()=>{
   const before={...startRepresentationMethod(request()),current:job,readBytes:90,storedBytes:40},after={...before,storedBytes:65,candidates:[candidate()]};
-  const handler=new RepresentationMethodPath({} as RepresentationMethodDependencies);
+  const handler=new RepresentationMethodPath({provider:{}} as RepresentationMethodDependencies);
   const interpretation=handler as unknown as {interpretStage:ActivityPurposeHandler["interpret"]};
   vi.spyOn(interpretation,"interpretStage").mockResolvedValue({progress:{method:after},next:[]});
   const purpose={contract:REPRESENTATION_METHOD_PURPOSE,digest:modelInputValueDigest(REPRESENTATION_METHOD_PURPOSE)};
@@ -95,6 +95,18 @@ describe("scoped text refinement and preservation support",()=>{
 });
 
 describe("representation method authorization",()=>{
+  it("rechecks cleanup authority without requiring renewed source disclosure for accepted cancellation",async()=>{
+    const materials={command:vi.fn(async()=>{throw new Error("source disclosure revoked");})};
+    const authorize=vi.fn(async()=>({kind:"allowed" as const}));
+    const handler=new RepresentationMethodPath({provider:{},materials,authorize} as unknown as RepresentationMethodDependencies);
+    const method={...startRepresentationMethod(request()),current:job};
+    const path={intent:{id:"path",runId:"run",purpose:{contract:REPRESENTATION_METHOD_PURPOSE,digest:modelInputValueDigest(REPRESENTATION_METHOD_PURPOSE)}},
+      progress:{method},cancelled:true} as ActivityPathState;
+    const stage={request:{id:"model-stage",pathId:"path",stageKind:"model",input:{method}}} as ActivityStageState;
+    await expect(handler.authorize(path,stage,new AbortController().signal,"reconciliation")).resolves.toEqual({kind:"allowed"});
+    expect(materials.command).not.toHaveBeenCalled();expect(authorize).toHaveBeenCalledTimes(1);
+    await expect(handler.authorize({...path,cancelled:false},stage,new AbortController().signal,"reconciliation")).rejects.toThrow("source disclosure revoked");
+  });
   it("quotes the exact combination body once, separate from host transport bindings",()=>{
     const r=request(),body=JSON.stringify({messages:[{role:"user",content:'Keep "exact" values'}]});
     const encoded={id:"encoded-original",mediaType:"application/json",body,endpoint:"https://private-target.invalid",adapterRevision:"host-binding"};

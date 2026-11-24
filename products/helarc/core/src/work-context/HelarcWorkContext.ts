@@ -4,11 +4,13 @@ import type {
 } from "@agent-anything/host/projection";
 
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
+import { isRunFailureKind } from "@agent-anything/agent-runtime/run";
+import { snapshotNativeModelSource } from "@agent-anything/model-interaction/protocol";
 import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
 import type { HelarcProviderKind } from "../configuration/HelarcProviderProfile.js";
-import type { HelarcRunPermissionPreset } from "../run/HelarcRun.js";
+import {snapshotHelarcNativeRunModelRef,type HelarcNativeRunModelRef,type HelarcRunPermissionPreset} from "../run/HelarcRun.js";
 import type { HelarcProductRunProjection } from "../run/HelarcRunProjection.js";
 import type {
   CreateHelarcArtifactInput,
@@ -142,6 +144,7 @@ export interface HelarcRunProviderContext {
   displayName: string;
   endpointLabel: string;
   model: string;
+  nativeModel?:HelarcNativeRunModelRef;
 }
 
 export interface HelarcWorkspaceSelectionRef {
@@ -707,6 +710,9 @@ function normalizeTerminalRecord(
   { ok: false; error: HelarcWorkContextError } {
   if (terminal === null) return { ok: true, terminal: null };
   const host = terminal.host;
+  if (host?.failure && !isRunFailureKind(host.failure.kind)) {
+    return reject("run_terminal_invalid", "Run terminal host.failure.kind is invalid.");
+  }
   if (
     host === null || typeof host !== "object" ||
     run.harnessRunId === null || host.runId !== run.harnessRunId ||
@@ -1037,6 +1043,13 @@ function normalizeProvider(
   const displayName = normalizeRequiredString(provider.displayName);
   const endpointLabel = normalizeRequiredString(provider.endpointLabel);
   const model = normalizeRequiredString(provider.model);
+  let nativeModel:HelarcNativeRunModelRef|undefined;
+  if(provider.nativeModel){
+    try{nativeModel=snapshotHelarcNativeRunModelRef(provider.nativeModel);}
+    catch{return reject("run_provider_invalid","Run native model context is invalid.");}
+    if(provider.profileId!==null||provider.providerKind!==null||model!==nativeModel.model)
+      return reject("run_provider_invalid","Run native model context conflicts with a legacy profile.");
+  }
   if (
     !displayName ||
     !endpointLabel ||
@@ -1054,6 +1067,7 @@ function normalizeProvider(
       displayName,
       endpointLabel,
       model,
+      ...(nativeModel?{nativeModel}:{}),
     },
   };
 }
@@ -1193,7 +1207,12 @@ function isDisplayOrigin(value: unknown): value is import("../run/presentation/H
   if (value === null) return true;
   if (!value || typeof value !== "object") return false;
   const origin = value as import("../run/presentation/HelarcRunPresentation.js").HelarcModelItemOrigin;
-  return hasText(origin.runId) && hasText(origin.turnId) && hasText(origin.modelItemId) &&
+  if (origin.turnId === null) {
+    try {
+      if (snapshotNativeModelSource(origin.nativeSource).scope.runId !== origin.runId) return false;
+    } catch { return false; }
+  } else if (!hasText(origin.turnId) || origin.nativeSource !== undefined) return false;
+  return hasText(origin.runId) && hasText(origin.modelItemId) &&
     Number.isSafeInteger(origin.turnSequence) && origin.turnSequence > 0 &&
     (origin.ordinal === null || Number.isSafeInteger(origin.ordinal) && origin.ordinal >= 0) &&
     (origin.callId === null || hasText(origin.callId)) && !!origin.source &&
@@ -1270,13 +1289,6 @@ function isHostTerminalFailure(value: unknown): boolean {
     (failure.retryable === null || typeof failure.retryable === "boolean");
 }
 
-function isRunFailureKind(value: unknown): boolean {
-  return value === "runtime" || value === "model" || value === "provider" ||
-    value === "approval" || value === "permission" || value === "policy" ||
-    value === "action_execution" || value === "sandbox" || value === "tool" ||
-    value === "context" || value === "audit" || value === "telemetry";
-}
-
 function isCancellationSummary(value: unknown): boolean {
   if (value === null) return true;
   if (typeof value !== "object") return false;
@@ -1295,6 +1307,7 @@ function isCancellationSummary(value: unknown): boolean {
       cancellation.reasonCode === "host_shutdown" ||
       cancellation.reasonCode === "approval_cancelled" ||
       cancellation.reasonCode === "parent_run_cancelled" ||
+      cancellation.reasonCode === "parent_run_ending" ||
       cancellation.reasonCode === "runner_shutdown") &&
     typeof cancellation.requestedAt === "string" && isIsoDateTime(cancellation.requestedAt);
 }

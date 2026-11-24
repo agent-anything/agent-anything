@@ -1,7 +1,7 @@
 import {assessModelContext, snapshotProviderRequest, type Provider, type ProviderRequest, type ModelInputMeasurement} from "@agent-anything/model-interaction";
 import {snapshotModelInputMeasurement} from "@agent-anything/model-interaction/context";
 import {inputAccountingFootprint,measureFromAcceptedUsage,type InputAccountingFootprint,type InputMeasurementDerivation,type InputUsageEvidencePort} from "@agent-anything/model-interaction/input";
-import {RemoteInputMeasurementNotDispatchedError,assessInputCapacity, assertEncodedModelInputIntegrity, composeInputChoice, inputChoiceGaps, modelInputValueDigest, nextInputCombination, recordInputCombination,
+import {ModelInputEncodingUnsupportedError,RemoteInputMeasurementNotDispatchedError,assessInputCapacity, assertEncodedModelInputIntegrity, composeInputChoice, inputChoiceGaps, modelInputValueDigest, nextInputCombination, recordInputCombination,
   startInputCombinationSearch, chargeInputCombination, type InputOrganizationDemand, type InputCombinationProgress, type InputCapacityLimit,
   type InputCapacityPolicy, type InputMeasurementEvidence, type CapacityReservation, type EncodedModelInput, type InputCapacityAssessment,
   modelInputSectionLocations, allocateInputCapacity, type RemoteInputMeasurementRequest, type LocalInputMeasurement, type SharedInputCapacity, type ModelInputSectionLocation, type InputChoice} from "@agent-anything/model-interaction/input";
@@ -67,7 +67,7 @@ type PreparationResult =
   | {readonly kind:"continue";readonly input:PreparationStageInput;readonly stageKind:"organize"|"measure";readonly elapsedMs:number}
   | {readonly kind:"remote_returned";readonly raw:unknown;readonly elapsedMs:number}
   | {readonly kind:"remote_not_dispatched";readonly code:string;readonly dependency:string;readonly elapsedMs:number}
-  | {readonly kind:"gap";readonly reason:string;readonly gap:ContextInputPreparationGap;readonly progress:InputCombinationProgress;readonly elapsedMs:number};
+  | {readonly kind:"gap";readonly reason:string;readonly gap:ContextInputPreparationGap|null;readonly progress:InputCombinationProgress;readonly elapsedMs:number};
 type WithoutTiming<T> = T extends unknown ? Omit<T,"elapsedMs"> : never;
 
 /** Professional input preparation; shared execution owns admission, cancellation and durable results. */
@@ -180,7 +180,12 @@ export class ContextInputPreparationHandler implements ActivityPurposeHandler {
         interaction:template.interaction,lineage:template.composition.lineage,composedAt:template.composition.composedAt}));
       request=snapshotProviderRequest({...template,requestId:composition.id,composition,instructions:composition.instructions,messages:composition.messages,
         modelContext:{...template.modelContext,assessment:null}});
-      encoded=await measureActivityWork(timing,"input.encoding",async()=>provider.encodeInput!(request,input.request.deliveryMode));
+      try {
+        encoded=await measureActivityWork(timing,"input.encoding",async()=>provider.encodeInput!(request,input.request.deliveryMode));
+      } catch(error) {
+        if(!(error instanceof ModelInputEncodingUnsupportedError))throw error;
+        return {kind:"gap",reason:`input_encoding_unsupported:${error.code}`,progress,gap:null};
+      }
       if(encoded.targetDigest!==demand.targetRevision)throw new TypeError("input_preparation_target_changed");
       measurement=await measureActivityWork(timing,"input.local_measurement",async()=>provider.modelContext.measure(composition,this.dependencies.now()));
       if(measurement.status==="unknown" && input.request.allowExternalMeasurement && provider.inputMeasurement && progress.externalMeasurements<demand.maximumExternalMeasurements) {
@@ -236,7 +241,9 @@ export function firstContextInputPreparationStage(pathId:string,request:ContextI
   return {id:`${pathId}:stage:1`,pathId,stageKind:"organize",input:{request,progress:startInputCombinationSearch(request.demand)} satisfies PreparationStageInput,capabilities:[],dependencies:[]};
 }
 
+const validatedPreparedInputs=new WeakSet<object>();
 export function validatePreparedContextInput(value:PreparedContextInput):void {
+  if(validatedPreparedInputs.has(value))return;
   snapshotProviderRequest(value.request);
   assertEncodedModelInputIntegrity(value.encoded,value.request);
   const composition=composeInputChoice(value.demand,value.choice,{providerId:value.request.composition.providerId,model:value.request.composition.model,
@@ -254,6 +261,7 @@ export function validatePreparedContextInput(value:PreparedContextInput):void {
       value.request.purpose!==value.demand.purpose || value.capacity.encodedInputId!==value.encoded.id || value.capacity.targetRevision!==value.demand.targetRevision ||
       value.capacity.policy.purpose!==value.demand.purpose || !value.capacity.allowed || !value.progress.tested.some(t=>t.id===value.request.composition.id &&
         t.assessment?.id===value.capacity.id && modelInputValueDigest(t.choice)===modelInputValueDigest(value.choice)))throw new TypeError("prepared_context_input_invalid");
+  if(isImmutableActivityValue(value))validatedPreparedInputs.add(value);
 }
 
 function inputDeliveryLocations(demand:InputOrganizationDemand,choice:InputChoice,locations:readonly ModelInputSectionLocation[]) {
@@ -297,3 +305,4 @@ function targetCapacity(provider:Provider,request:ContextInputPreparationRequest
   return {limits,reservations};
 }
 import {measureActivityWork,type ActivityWorkTiming} from "../activity/ActivityWorkTiming.js";
+import {isImmutableActivityValue} from "../activity/ActivityCheckpointValue.js";

@@ -1,4 +1,4 @@
-import type { HelarcExecutionAdmission } from "../execution-storage/HelarcExecutionAdmission.js";
+import type { HelarcLegacyExecutionAdmission as HelarcExecutionAdmission } from "../execution-storage/HelarcExecutionAdmission.js";
 import { retainHelarcProviderBinding } from "../execution-storage/HelarcExecutionAdmission.js";
 import { canonicalEncode } from "@agent-anything/canonical-action/subject";
 import type { ProviderObserver } from "@agent-anything/model-interaction/transport";

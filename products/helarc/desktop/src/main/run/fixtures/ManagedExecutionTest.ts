@@ -1,4 +1,5 @@
 import {onTestFinished} from "vitest";
+import {writeSync} from "node:fs";
 import {ExecutionFixtureScope} from "./ExecutionFixtureScope.js";
 import {startExecutionTestCpuProfile} from "./ExecutionTestCpuProfile.js";
 import {RunTreeCommitWriter,type RunTreeCommitDraft,type PreparedRunTreeTransition} from "@agent-anything/agent-runtime/execution-coordinator";
@@ -10,9 +11,12 @@ export function withExecutionScope<A extends unknown[]>(body: (...args: A) => Pr
     const scope = new ExecutionFixtureScope();
     let stopProfile:(()=>Promise<void>)|null=null;
     const stopIdentities=process.env.HELARC_TEST_SNAPSHOT_IDENTITIES==="1"?observeCommitIdentities():null;
-    onTestFinished(async () => {
-      try {await closeExecutionScope(scope, cleanupMs);}
-      finally {stopIdentities?.();await stopProfile?.();}
+    onTestFinished(async result => {
+      try {if(result.state==="fail")console.error("Execution fixture failure snapshot",JSON.stringify(scope.snapshot()));}
+      finally {
+        try {await closeExecutionScope(scope, cleanupMs);}
+        finally {stopIdentities?.();await stopProfile?.();}
+      }
     }, 0);
     return scope.run(async () => {stopProfile=await startExecutionTestCpuProfile();return body(...args);});
   };
@@ -35,5 +39,10 @@ export async function closeExecutionScope(scope: ExecutionFixtureScope, cleanupM
       process.kill(process.pid, "SIGKILL");
     }
   }, cleanupMs);
-  try {await scope.close();} finally {clearTimeout(watchdog);}
+  try {await scope.close();}
+  catch(error) {
+    try {writeSync(2, `Execution fixture cleanup failed: ${String(error)}; terminating its isolated test process.\n`);}
+    finally {process.kill(process.pid,"SIGKILL");}
+    throw error;
+  } finally {clearTimeout(watchdog);}
 }

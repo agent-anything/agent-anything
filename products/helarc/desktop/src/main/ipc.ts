@@ -21,11 +21,12 @@ import { HelarcResponseProgress } from "./workbench/HelarcResponseProgress.js";
 import { readToken, workScopeValid } from "./workbench/WorkbenchReadLimits.js";
 
 export const HELARC_IPC_CHANNELS = {
+  providerConfigurations: "helarc:provider-configurations",
   saveProject: "helarc:save-project",
   selectProject: "helarc:select-project",
   chooseProjectFolder: "helarc:choose-project-folder",
   readConversation: "helarc:read-conversation",
-  readConversationTurn: "helarc:read-conversation-turn",
+  readConversationResponseGroup: "helarc:read-conversation-response-group",
   readCurrentWork: "helarc:read-current-work",
   readExecutionActivities: "helarc:read-execution-activities",
   readTaskDetails: "helarc:read-task-details",
@@ -56,6 +57,7 @@ export const HELARC_IPC_CHANNELS = {
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
   resumeDescendant: "helarc:resume-descendant",
+  cancelDescendant: "helarc:cancel-descendant",
   saveProviderConfig: "helarc:save-provider-config",
   discoverModels: "helarc:discover-models",
   getProviderCredentialSettings: "helarc:get-provider-credential-settings",
@@ -69,6 +71,8 @@ export const HELARC_IPC_CHANNELS = {
 } as const;
 
 export interface RegisterHelarcIpcInput {
+  startProtocolRun?: (payload: import("../shared/HelarcDesktopCommand.js").HelarcProductCommandPayloadMap["run.start"], selection: import("../shared/ProviderSettingsApi.js").ProviderTaskSelection) => ReturnType<HelarcMainController["startRun"]>;
+  providerConfigurations?: import("../shared/ProviderSettingsApi.js").ProviderSettingsApi;
   projectStore?: FileHelarcProjectStore;
   inspection?: import("./inspection/HelarcInspection.js").HelarcInspection;
   storage?: import("./storage/HelarcStorageService.js").HelarcStorageService;
@@ -112,6 +116,28 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   };
   const trustedSender = (event: IpcMainInvokeEvent) => event.sender === input.window.webContents &&
     event.senderFrame === input.window.webContents.mainFrame && event.senderFrame?.url === input.window.webContents.getURL();
+  ipcMain.handle(HELARC_IPC_CHANNELS.providerConfigurations, async (event, request) => {
+    const api = input.providerConfigurations;
+    if (!trustedSender(event) || !api || !request || typeof request !== "object" ||
+        JSON.stringify(request).length > 65536) return { ok: false, code: "provider_settings_request_invalid" };
+    // A narrow channel deliberately bypasses generic command retention: save contains a transient secret.
+    switch (request.operation) {
+      case "list": return api.list();
+      case "save": return api.save(request.input);
+      case "receipt": return api.receipt(request.input);
+      case "previewPolicy": return api.previewPolicy(request.input);
+      case "credentialSettings": return api.credentialSettings(request.input);
+      case "discover": return api.discover(request.input);
+      case "eligibility": return api.eligibility(request.input);
+      case "activate": return api.activate(request.input);
+      case "archive": return api.archive(request.input);
+      case "dependencies": return api.dependencies(request.input);
+      case "revoke": return api.revoke(request.input);
+      case "destroyCredential": return api.destroyCredential(request.input);
+      case "repair": return api.repair(request.input);
+      default: return { ok: false, code: "provider_settings_request_invalid" };
+    }
+  });
   ipcMain.handle(HELARC_IPC_CHANNELS.getProviderCredentialSettings, async (event, query) => {
     if (!trustedSender(event) || !input.providerCredentialStore || !input.providerProfileStore ||
         !query || typeof query !== "object" || Object.keys(query).sort().join() !== "profileId,profileRevision" ||
@@ -130,7 +156,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     return selection.discover(query);
   });
   for (const method of ["listThreadRuns", "readCommandDetails", "readWorkbenchItem", "readCommandOutput",
-    "readConversation", "readConversationTurn", "readCurrentWork", "readExecutionActivities", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
+    "readConversation", "readConversationResponseGroup", "readCurrentWork", "readExecutionActivities", "readTaskDetails", "readWorkHistory", "readArtifactContent", "readResponsePreview"] as const) {
     ipcMain.handle(HELARC_IPC_CHANNELS[method], (event, query) => {
       if (!trustedSender(event)) return { status: "rejected", code: "invalid_query" };
       return input.controller.workbench[method](query);
@@ -281,6 +307,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
         );
       },
       "provider.save": async (payload) => {
+        if (input.providerConfigurations) throw new Error("Legacy Provider configurations are read-only; use Protocol configurations.");
         if (!input.providerProfileStore || !input.providerCredentialStore) {
           return projectHelarcDesktopSnapshot(
             input.controller.configureProvider({
@@ -306,6 +333,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
         return projectHelarcDesktopSnapshot(saved.cleanupWarning ? input.controller.reportProviderError(saved.cleanupWarning) : snapshot);
       },
       "provider.select": async ({ profileId }) => {
+        if (input.providerConfigurations) throw new Error("Use the explicit Protocol configuration activation command.");
         if (!input.providerProfileStore || !input.providerCredentialStore) throw new Error("Provider storage unavailable.");
         const selected = await input.providerProfileStore.selectActiveProfile(profileId, input.providerCredentialStore);
         if (!selected.ok && selected.error.code === "provider_profile_not_found") return projectHelarcDesktopSnapshot(input.controller.reportProviderError(selected.error.message));
@@ -313,12 +341,28 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
         catch (error) { return projectHelarcDesktopSnapshot(input.controller.reportProviderError(error instanceof Error ? error.message : "Provider selection failed.")); }
       },
       "provider.delete": async ({ profileId, expectedRevision }) => {
+        if (input.providerConfigurations) throw new Error("Legacy execution credentials are retained for recovery.");
         if (!input.providerProfileStore || !input.providerCredentialStore) throw new Error("Provider storage unavailable.");
         const warning = await input.providerProfileStore.deleteProfile(profileId, expectedRevision, input.providerCredentialStore);
         const snapshot = await refreshProvider();
         return projectHelarcDesktopSnapshot(warning ? input.controller.reportProviderError(warning) : snapshot);
       },
       "run.start": async (payload) => {
+        let protocolSelection = payload.providerConfiguration;
+        if (!protocolSelection && !payload.modelSelection && input.providerConfigurations) {
+          const listing = await input.providerConfigurations.list();
+          if (!listing.ok) throw new Error(listing.code);
+          protocolSelection = listing.value.defaultSelection ?? undefined;
+        }
+        if (protocolSelection) {
+          const eligible = await input.providerConfigurations?.eligibility(protocolSelection);
+          if (!eligible?.ok || !eligible.value.available || !input.startProtocolRun) {
+            const snapshot = input.controller.reportProviderError("The selected native execution arrangement is unavailable. No other Provider was selected.");
+            return { ok: false as const, error: { code: "provider_config_invalid", message: snapshot.error!.message }, snapshot: projectHelarcDesktopSnapshot(snapshot) };
+          }
+          const result = await input.startProtocolRun(payload, protocolSelection);
+          return { ...result, snapshot: projectHelarcDesktopSnapshot(result.snapshot) };
+        }
         let resolved;
         try { resolved = await selection?.resolve(payload.modelSelection); }
         catch (error) {
@@ -404,7 +448,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
 
   ipcMain.handle(
     HELARC_IPC_CHANNELS.saveProviderConfig,
-    (_event, command: unknown) => {
+    (event, command: unknown) => {
+      if (!trustedSender(event) || input.providerConfigurations) throw new Error("Use the protected Protocol configuration save channel.");
       return productCommands.dispatch(command, "provider.save");
     },
   );
@@ -425,6 +470,10 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       receipt: projectHelarcHostCommandReceipt(receipt),
       snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()),
     };
+  });
+  ipcMain.handle(HELARC_IPC_CHANNELS.cancelDescendant,async (_event,command:unknown)=>{
+    const receipt=await input.controller.dispatchHostCommand(command,"descendant.cancel");
+    return {receipt:projectHelarcHostCommandReceipt(receipt),snapshot:projectHelarcDesktopSnapshot(input.controller.getSnapshot())};
   });
 
   ipcMain.handle(

@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from "vitest";
-import {createModelCallRef, createNativeToolTurnInteraction, snapshotModelCallableRequest, snapshotModelToolResult,
+import {createModelCallRef, createNativeToolTurnInteraction, snapshotModelCallableRequest, snapshotModelToolResult, snapshotModelJsonValue,
   snapshotProviderRequest, type ModelTurn, type ProviderResponse, type ProviderRequest} from "@agent-anything/model-interaction";
 import {allocateInputCapacity, assessInputCapacity, assertEncodedModelInputIntegrity, composeInputChoice, composeModelInput, createEncodedModelInput,
   declareModelResultTextSlot, fillModelResultTextSlot, modelInputSectionLocations, modelInputValueDigest, nextInputCombination,
@@ -13,7 +13,7 @@ import {acceptedConversationRepresentationContinuity} from "../context-represent
 import type {RunItem} from "../run/RunItem.js";
 import type {TaskDecisionInputSources} from "./TaskDecisionActivity.js";
 import {createControllerModelItems} from "./TaskDecisionModelItems.js";
-import {retainTaskDecisionSource} from "./TaskDecisionSourceRecord.js";
+import {retainTaskDecisionSource, validateTaskDecisionSource} from "./TaskDecisionSourceRecord.js";
 import {snapshotTaskModelExchange, validateTaskDecisionProposal} from "./TaskDecisionValidation.js";
 import {projectModelInteraction} from "./ModelInteractionProjection.js";
 import {canonicalConversationPresentations, createModelConversationSeed} from "./TaskConversation.js";
@@ -118,6 +118,27 @@ function rehash(value: SelectedResultPresentationReceipt): SelectedResultPresent
 }
 
 describe("accepted native result presentation", () => {
+  it("revalidates modified or newly loaded prepared inputs and source records", () => {
+    const f=fixture(), frozen=snapshotModelJsonValue(f.prepared as never) as unknown as PreparedContextInput;
+    validatePreparedContextInput(frozen);
+    validatePreparedContextInput(frozen);
+    const restored=structuredClone(frozen);
+    validatePreparedContextInput(restored);
+    Object.freeze(restored);
+    (restored.capacity as {allowed:boolean}).allowed=false;
+    expect(()=>validatePreparedContextInput(restored)).toThrow("prepared_context_input_invalid");
+    const source={runId,agent:{id:"agent",revision:"1",output:{}},toolExposure:{controllerRequestId}} as unknown as TaskDecisionInputSources;
+    const original=retainTaskDecisionSource(source);
+    const immutable=snapshotModelJsonValue(original as never) as unknown as typeof original;
+    validateTaskDecisionSource(immutable);
+    validateTaskDecisionSource(immutable);
+    const changed=structuredClone(immutable);
+    validateTaskDecisionSource(changed);
+    Object.freeze(changed);
+    (changed.source as {runId:string}).runId="other-run";
+    expect(()=>validateTaskDecisionSource(changed)).toThrow("task_decision_source_binding_invalid");
+    expect(()=>validateTaskDecisionSource({...immutable,id:"claimed"})).toThrow("task_decision_source_binding_invalid");
+  });
   it("binds the original, chosen declaration, encoded request, selection judgment, raw and acceptance", () => {
     const f = fixture();
     expect(f.receipt).toMatchObject({originalRequestId: f.originalRequest.requestId, requestId: f.prepared.request.requestId,

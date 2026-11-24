@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ComposerModelSelection } from "./provider/ComposerModelSelection.js";
+import { ProtocolTaskSelection } from "./provider/ProtocolTaskSelection.js";
 import type { HelarcModelSelection } from "../shared/HelarcModelSelection.js";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Group, Panel, Separator, type Layout, type PanelImperativeHandle } from "react-resizable-panels";
@@ -59,6 +60,7 @@ const initialSnapshot: HelarcMainSnapshot = {
 const commandId = (kind: string) =>
   `helarc-desktop-${kind}-${crypto.randomUUID()}`;
 export function App() {
+  const providerApi=globalThis.window?.helarc?.providerConfigurations;
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [settings, setSettings] = useState(false);
   const [threads, setThreads] = useState(() => typeof window === "undefined" || window.innerWidth >= 900);
@@ -194,6 +196,7 @@ export function App() {
     });
   }
   const [modelSelection, setModelSelection] = useState<HelarcModelSelection | undefined>();
+  const [providerConfiguration, setProviderConfiguration] = useState<import("../shared/ProviderSettingsApi.js").ProviderTaskSelection | undefined>();
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!(runActive ? steering : draft).trim() || busy) return;
@@ -220,6 +223,7 @@ export function App() {
             commandId: commandId("run.start"),
             taskText: draft,
             ...(modelSelection === undefined ? {} : { modelSelection }),
+            ...(providerConfiguration === undefined ? {} : { providerConfiguration }),
             target:
               snapshot.activeThread && !newThread
                 ? { kind: "continue_thread", threadId: snapshot.activeThread.id }
@@ -387,7 +391,7 @@ export function App() {
               busy ||
               !(runActive ? steering : draft).trim() ||
               !snapshot.workspace ||
-              (!runActive && !modelSelection && !snapshot.provider.configured)
+              (!runActive && !modelSelection && !providerConfiguration && !snapshot.provider.configured)
             }
           >
             <ArrowUp size={19} />
@@ -397,12 +401,14 @@ export function App() {
           <summary>
             {runActive
               ? (current?.context.model ?? "Current model")
-              : (modelSelection?.model ?? snapshot.provider.activeProfile?.model ??
+              : (providerConfiguration ? "Next task configuration" : modelSelection?.model ?? snapshot.provider.activeProfile?.model ??
                 "Model not configured")}
             {runActive &&
               ` / ${current?.context.permissionPreset?.replaceAll("_", " ") ?? "Access"}`}
           </summary>
-          {!runActive && <ComposerModelSelection provider={snapshot.provider} value={modelSelection} onChange={setModelSelection} disabled={busy}/>}
+          {!runActive && (providerApi
+            ? <ProtocolTaskSelection api={providerApi} value={providerConfiguration} onChange={value => { setProviderConfiguration(value); setModelSelection(undefined); }} disabled={busy} visible={!settings}/>
+            : <ComposerModelSelection provider={snapshot.provider} value={modelSelection} onChange={setModelSelection} disabled={busy}/>)}
           <p>
             {runActive
               ? "Bound to current work"
@@ -424,7 +430,7 @@ export function App() {
         </details>
         {snapshot.run?.display.status === "failed" && (
           <p className="wb-warning" role="status">
-            {snapshot.run.product.result?.output.safeErrors.at(-1)?.message ??
+            {snapshot.run.product.result?.output.safeErrors[0]?.message ??
               "Work could not continue."}
           </p>
         )}

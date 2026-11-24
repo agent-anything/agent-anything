@@ -39,6 +39,15 @@ export function createActivityContinuationArrangement(input: Omit<ActivityContin
 /** Coordinates acceptance only; input preparation and protocol interpretation remain with their owners. */
 export class ActivityContinuationCoordinator {
   constructor(private readonly records: ActivityCheckpointPort | undefined) { }
+  /** Reads original acceptance only; it grants no new continuation or execution authority. */
+  readAccepted(expected: ActivityContinuationArrangement): ActivityContinuationArrangement | null {
+    const arrangement = createActivityContinuationArrangement(expected);
+    if (arrangement.id !== expected.id) throw new ActivityCheckpointError("activity_continuation_basis_changed");
+    const key = continuationKey(arrangement), retained = this.records?.read(key);
+    if (retained === null || retained === undefined) return null;
+    if (modelInputValueDigest(retained) !== modelInputValueDigest(arrangement)) throw new ActivityCheckpointError(key);
+    return createActivityContinuationArrangement(retained as ActivityContinuationArrangement);
+  }
   async accept(input: {
     readonly arrangement: ActivityContinuationArrangement;
     readonly expectedActivity: ModelActivityBinding;
@@ -55,13 +64,8 @@ export class ActivityContinuationCoordinator {
       throw new TypeError("Activity continuation is not admitted for this activity or remaining allowance.");
     }
     // Repeating one source stage must find the same acceptance, not allocate another request.
-    const key = `activity-continuation:${arrangement.activity.id}:${arrangement.cause.kind}:${arrangement.sourceRequestId}:${arrangement.sequence}`;
-    const retained = this.records?.read(key);
-    if (retained !== null && retained !== undefined) {
-      if (modelInputValueDigest(retained) !== modelInputValueDigest(arrangement))
-        throw new ActivityCheckpointError(key);
-      return createActivityContinuationArrangement(retained as ActivityContinuationArrangement);
-    }
+    const key = continuationKey(arrangement), retained = this.readAccepted(arrangement);
+    if (retained) return retained;
     if (this.records) {
       if (!this.records.compareAndCommit)
         throw new ActivityCheckpointError("activity_continuation_requires_conditional_acceptance");
@@ -70,4 +74,7 @@ export class ActivityContinuationCoordinator {
     input.signal.throwIfAborted();
     return arrangement;
   }
+}
+function continuationKey(arrangement: ActivityContinuationArrangement): string {
+  return `activity-continuation:${arrangement.activity.id}:${arrangement.cause.kind}:${arrangement.sourceRequestId}:${arrangement.sequence}`;
 }

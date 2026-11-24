@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { contextCases, contextScenario } from './context-cases.mjs';
 
-export const suiteRevision = 'model-capability-and-context.v3';
+export const suiteRevision = 'model-capability-and-context.v4';
 const baselineCases = [
   { id: 'instruction', title: 'Exact instruction following' },
   { id: 'json', title: 'Structured response' },
@@ -10,13 +10,19 @@ const baselineCases = [
   { id: 'calls', title: 'Multiple independent calls' },
   { id: 'correction', title: 'Correct a rejected argument' },
 ];
-export const cases = [...baselineCases.map(c => ({ ...c, dimension: 'baseline' })), ...contextCases];
+const chatCases = [...baselineCases.map(c => ({ ...c, dimension: 'baseline' })), ...contextCases];
+const nativeCases = [
+  { id:'responses-count-field', dimension:'count-interface', title:'Count a tool history with the compaction setting', budget:'Up to 2 count requests; no generation.' },
+  { id:'responses-compaction-use', dimension:'native-compaction', title:'Observe a new compaction item and use the reduced history', budget:'Up to 4 generations and 1 count; one attempt, no retries.' },
+];
+export const cases = [...chatCases, ...nativeCases];
 export const suites = [
   { id: 'baseline', title: 'Basic capabilities', cases: baselineCases.map(c => c.id) },
   { id: 'context-generation', title: 'Context generation', cases: contextCases.filter(c => c.dimension !== 'checking').map(c => c.id) },
   { id: 'context-checking', title: 'Context checking', cases: contextCases.filter(c => c.dimension === 'checking').map(c => c.id) },
   { id: 'context', title: 'Full context suite', cases: contextCases.map(c => c.id) },
-  { id: 'all', title: 'All cases', cases: cases.map(c => c.id) },
+  { id: 'all', title: 'All chat cases', cases: chatCases.map(c => c.id) },
+  ...nativeCases.map(c => ({id:c.id, title:c.title, cases:[c.id], kind:'openai-responses'})),
 ];
 export function selectedCases(id = 'baseline') {
   const suite = suites.find(s => s.id === id);
@@ -31,6 +37,12 @@ export const limitations = [
   'Context generation uses structured representations with fixed answer keys, not an arbitrary-prose semantic grader.',
   'Context checking uses controlled prose candidates; false acceptance and false rejection are measured separately.',
   'No automatic capability publishing. Passing does not waive runtime preservation checks or establish a safe window size.',
+];
+export const nativeLimitations = [
+  'These observations describe this endpoint, model, settings, sample and time only.',
+  'Accepting a field or returning a token count does not establish complete initial input coverage or a safe margin.',
+  'A correct answer from reduced replay tests only the specified correction and scope, not general retention.',
+  'No product budget admission, method selection, recovery or Inspector behavior is assessed or configured.',
 ];
 
 export function scenario(id) {

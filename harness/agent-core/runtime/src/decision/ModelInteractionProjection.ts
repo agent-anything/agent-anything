@@ -143,6 +143,8 @@ export function projectModelInteraction(input: {
       if (item.payload.modelItems.length === 0) {
         continue;
       }
+      if (item.payload.modelItems.some(model => model.kind === "native_purpose_evidence"))
+        throw projectionFailure("native_history_interpreter_required", "Native evidence requires its adopted Protocol input participant, not Turn-message reconstruction.");
       const projected = projectControllerTurn(item.payload.modelItems);
       for (const model of item.payload.modelItems) if (model.kind === "model_response_correlation" && model.metadata.workingAccounts !== undefined) {
         if (!Array.isArray(model.metadata.workingAccounts)) throw projectionFailure("working_accounts_invalid", "Accepted account receipt is invalid.");
@@ -196,7 +198,7 @@ export function projectModelInteraction(input: {
       }
       if (
         result.name !== call.name ||
-        JSON.stringify(result.providerCallRef) !== JSON.stringify(call.providerCallRef)
+        !sameTaskProviderCall(result.providerCallRef,call.providerCallRef)
       ) {
         throw projectionFailure(
           "model_call_settlement_mismatch",
@@ -299,3 +301,4 @@ function projectControllerTurn(items: readonly TaskDecisionModelItem[]): {
 function projectionFailure(code: string, message: string): ModelInteractionProjectionError {
   return new ModelInteractionProjectionError(code, message);
 }
+import {sameTaskProviderCall} from "./TaskDecisionModelItems.js";

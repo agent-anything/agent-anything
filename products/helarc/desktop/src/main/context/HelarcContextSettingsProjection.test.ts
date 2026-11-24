@@ -17,6 +17,7 @@ describe("Desktop context settings projection",()=>{
     "preserves validated revisions and exact meaning with thinking %j",thinking=>{
       const core=contextSettingsSnapshot({autoRepresentation:false,observations:[observation(thinking)]});
       const projected=projectHelarcContextSettings(core),shown=projected.settings.observations[0]!,original=core.settings.observations[0]!;
+      if("kind" in shown.target||"kind" in original.target)throw new Error("Expected historical profile target");
       expect(projected).toEqual(core);
       expect(contextSettingsSnapshot(projected.settings)).toEqual(core);
       expect(projected).not.toBe(core);expect(projected.settings).not.toBe(core.settings);
@@ -28,6 +29,7 @@ describe("Desktop context settings projection",()=>{
   it("does not expose future internal fields at any nested boundary or share mutable source values",()=>{
     const core=contextSettingsSnapshot({autoRepresentation:true,observations:[observation({mode:"enabled",effort:"high"})]});
     const extended=structuredClone(core),item=extended.settings.observations[0]!;
+    if("kind" in item.target)throw new Error("Expected historical profile target");
     for(const value of [extended,extended.settings,item,item.target,item.target.modelSettings,item.target.modelSettings.thinking,item.method!])
       Object.assign(value,{privateBinding:"DO-NOT-DISCLOSE"});
     const projected=projectHelarcContextSettings(extended);

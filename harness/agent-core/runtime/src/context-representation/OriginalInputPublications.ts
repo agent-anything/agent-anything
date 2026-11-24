@@ -1,7 +1,7 @@
 import {createHash} from "node:crypto";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {MaterialRecipient} from "@agent-anything/context/custody";
-import type {ActivityHandoffPort,ActivityPathState,ActivityStageState} from "../activity/index.js";
+import type {ActivityHandoffPort,ActivitySnapshot} from "../activity/index.js";
 import {SOURCE_MATERIAL_PUBLICATION_PURPOSE,validateSourceMaterialRequest,sourceMaterialOutcome,type SourceMaterialPublicationRequest,type PublishedSourceMaterial,type UnavailableSourceMaterial} from "./SourceMaterialPublication.js";
 import {originalInputSourceBytes,originalInputDataBody,validateOriginalInputSources,type OriginalInputSources,type OriginalInputSourceGroup} from "./OriginalInputSources.js";
 import {recipientContextDeliveryId} from "./ContextDeliveryFacts.js";
@@ -43,9 +43,11 @@ export async function planOriginalInputPublications(input:{
     if(bytes.length>input.maximumSourceBytes)throw new TypeError("input_source_material_capture_limit");
     const digest=`sha256:${createHash("sha256").update(bytes).digest("hex")}`;
     const pathId=`${sources.runId}:source-publication:${modelInputValueDigest({id:group.id,revision:group.revision,recipient,target:input.target})}`;
-    const existing=await input.activities.command({kind:"read_path",pathId}) as ActivityPathState|null;
+    const snapshot=await input.activities.command({kind:"read_snapshot",pathId,requestIds:[`${pathId}:capture`],inputNeedIds:[]},
+      {observation:{owner:"context-representation",purpose:"source-publication-evidence",operationId:sources.id}}) as ActivitySnapshot;
+    const existing=snapshot.path;
     if(existing) {
-      const stage=await input.activities.command({kind:"read_stage",requestId:`${pathId}:capture`}) as ActivityStageState|null;
+      const stage=snapshot.stages[0];
       if(!stage||existing.intent.runId!==sources.runId||existing.intent.owner!=="material-source"||
         existing.intent.purpose.digest!==modelInputValueDigest(SOURCE_MATERIAL_PUBLICATION_PURPOSE))
         throw new TypeError("original_source_publication_unavailable");

@@ -70,6 +70,12 @@ export function validateRunTreeRecoveryRecords({commit, members}: RunTreeRecover
     const member = heads.get(node.runId);
     if (!member) invalid("missing Run");
     const {admission, head: {state}} = member;
+    const basis=state.cancellationRequest?.delegation;
+    if(basis && (node.lineage.kind!=="descendant" || basis.scope!=="subtree" ||
+        basis.childRunId!==node.runId || basis.parentRunId!==node.lineage.parent.id ||
+        basis.relationId!==node.lineage.relation.id || basis.requestId!==admission.delegationRequest?.ref.id ||
+        basis.requestRevision!==admission.delegationRequest?.ref.revision ||
+        !same(basis,member.head.control.cancellation?.delegation))) invalid("delegated cancellation authority");
     if (!same(admission.lineage, node.lineage) || state.status !== node.status ||
         state.completedAt !== node.completedAt || node.startedAt !== state.startedAt ||
         !Number.isFinite(Date.parse(state.deadlineAt)) ||

@@ -1,6 +1,7 @@
 import {HelarcActivityBindings} from "./HelarcActivityBindings.js";
 import {HelarcActivityService,type HelarcActivityServiceOptions} from "./HelarcActivityService.js";
 import {HELARC_ACTIVITY_PURPOSES} from "./HelarcContextRunBinding.js";
+import {nativeDiscoveryPurposeIds} from "./HelarcNativeActivityPurposes.js";
 import type {HelarcExecutionStore} from "../execution-storage/HelarcExecutionStore.js";
 
 /** Application lifetime, independently of a window, task wait or professional path. */
@@ -18,7 +19,8 @@ export function createHelarcActivityHost(store:HelarcExecutionStore,
     if(roots.size>512)roots.delete(roots.keys().next().value!);
     return root;
   });
-  const service=new HelarcActivityService({store,...options,purposes:bindings,purposeIds:HELARC_ACTIVITY_PURPOSES.map(p=>p.ref.id),
+  const purposeIds=[...new Set([...HELARC_ACTIVITY_PURPOSES.map(p=>p.ref.id),...nativeDiscoveryPurposeIds])];
+  const service=new HelarcActivityService({store,...options,purposes:bindings,purposeIds,
     scopeAvailable:async runId=>{
       if(await bindings.available(runId))return true;
       if(restore)await restore(runId);

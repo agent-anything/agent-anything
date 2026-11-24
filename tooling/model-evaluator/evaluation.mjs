@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, writeFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { selectedCases, scenario, suiteRevision, limitations } from './cases.mjs';
+import { selectedCases, scenario, suiteRevision, limitations, nativeLimitations } from './cases.mjs';
 import { safeConfiguration, exchange, toolReply } from './connection.mjs';
+import { evaluateResponsesTrial } from './responses-trials.mjs';
 
 export class Evaluation {
   active = null;
@@ -36,7 +37,7 @@ export class Evaluation {
     if (this.reports.size >= 100) throw Error('Report storage is full. Delete or archive an older report.');
     const specs = selectedCases(config.suite);
     const abort = new AbortController();
-    const report = { version: 1, id: randomUUID(), suiteRevision, target: safeConfiguration(config), limitations,
+    const report = { version: 1, id: randomUUID(), suiteRevision, target: safeConfiguration(config), limitations:config.kind==='openai-responses'?nativeLimitations:limitations,
       startedAt: new Date().toISOString(), finishedAt: null, status: 'running', total: specs.length * config.repetitions, trials: [], summary: [] };
     const active = { id: report.id, abort, work: null }; this.active = active;
     try { await this.save(report); } catch(error) { this.active = null; throw error; }
@@ -52,11 +53,14 @@ export class Evaluation {
         const trial = { caseId: spec.id, title: spec.title, dimension: spec.dimension, candidateClass: spec.candidateClass ?? null,
           repetition, status: 'inconclusive', category: null, reason: '', evidence: [], assessments: [] };
         try {
-          const sc = scenario(spec.id);
-          if (sc.assess) {
+          if (config.kind==='openai-responses') {
+            await evaluateResponsesTrial(config,spec.id,trial,signal);
+          } else if (spec.dimension!=='baseline') {
+            const sc = scenario(spec.id);
             trial.oracle = sc.oracle;
             await evaluateContextTrial(config, sc, trial, signal);
           } else {
+            const sc = scenario(spec.id);
             const first = await exchange(config, sc.messages, sc.tools, signal, trial.evidence);
             if (first.truncated) { trial.reason = 'Provider output was truncated.'; trial.category = 'provider_truncation'; }
             else if (!sc.check(first)) { trial.status = 'failed'; trial.reason = 'Response did not satisfy the case requirement.'; }

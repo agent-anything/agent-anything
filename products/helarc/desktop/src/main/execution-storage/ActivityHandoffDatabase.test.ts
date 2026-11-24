@@ -1,9 +1,9 @@
-import {afterEach, describe, expect, it} from "vitest";
+import {afterEach, describe, expect, it, vi} from "vitest";
 import {mkdtempSync, rmSync} from "node:fs";
 import {join,resolve,dirname,basename} from "node:path";
 import {tmpdir} from "node:os";
 import SqliteDatabase from "better-sqlite3";
-import {ActivityPurposeRegistry,activityStageEvidence, type ActivityHandoffCommand, type ActivityStageState, type ActivityProcessingReceipt} from "@agent-anything/agent-runtime/activity";
+import {ActivityPurposeRegistry,activityStageEvidence, type ActivityHandoffCommand, type ActivityPathIntent, type ActivityStageState, type ActivityProcessingReceipt} from "@agent-anything/agent-runtime/activity";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {ExecutionDatabase} from "./ExecutionDatabase.js";
 import {ActivityHandoffDatabase} from "./ActivityHandoffDatabase.js";
@@ -14,9 +14,9 @@ afterEach(() => {for (const db of databases.splice(0)) db.close(); for (const di
   if(dirname(resolve(dir))!==resolve(tmpdir())||!basename(dir).startsWith("helarc-activity-handoff-"))throw new Error("Unsafe cleanup");
   rmSync(dir,{recursive:true,force:true});
 }});
-function open(directory = mkdtempSync(join(tmpdir(),"helarc-activity-handoff-"))) {
+function open(directory = mkdtempSync(join(tmpdir(),"helarc-activity-handoff-")),diagnostics=false) {
   if (!directories.includes(directory)) directories.push(directory);
-  const db = new ExecutionDatabase(directory); databases.push(db);
+  const db = new ExecutionDatabase(directory,diagnostics); databases.push(db);
   return {db,directory,send:(command:ActivityHandoffCommand) => db.activityHandoffCommand(db.generation,command).activityValue};
 }
 const registry = new ActivityPurposeRegistry<null>();
@@ -28,7 +28,7 @@ const request = {id:"stage",pathId:"path",stageKind:"generate",input:{source:"ex
 const executor = {hostSession:"host:1",worker:"worker:1",generation:1};
 const attempt = {id:"attempt:1",requestId:request.id,executor,inputDigest:modelInputValueDigest(request.input),startedAt:"2026-10-28T00:00:00Z"};
 const result = {id:"raw:1",attemptId:attempt.id,completeness:"complete" as const,outcome:"returned" as const,value:{text:"original answer"},usage:{tokens:7},recordedAt:"2026-10-28T00:00:01Z"};
-function seed(send:ReturnType<typeof open>["send"],pathIntent=intent) {
+function seed(send:ReturnType<typeof open>["send"],pathIntent:ActivityPathIntent=intent) {
   send({kind:"open_path",intent:pathIntent}); send({kind:"submit",request}); send({kind:"admit",requestId:request.id,expectedControlRevision:0});
   send({kind:"dispatch",attempt,expectedControlRevision:0});
 }
@@ -36,6 +36,103 @@ function claim(send:ReturnType<typeof open>["send"]) {
   send({kind:"claim_processing",claim:{id:"claim:1",requestId:request.id,previousClaimId:null,executor},expectedControlRevision:0});
 }
 describe("durable activity handoff", () => {
+  it("opens shared-budget work after source progress without expanding that progress, and restores reservations",()=>{
+    const f=open(undefined,true);seed(f.send,{...intent,resourceLimits:{measurementCalls:2}});
+    f.send({kind:"save_raw",result});claim(f.send);
+    f.send({kind:"accept",receipt:{id:"source-progress",requestId:request.id,resultId:result.id,owner:"method",
+      expectedProgressRevision:0,progress:{report:"unrelated professional body"},next:[]},executor,expectedControlRevision:0});
+    const receiver={...intent,id:"receiver",resourceScope:"receiver",resourceLimits:{measurementCalls:2},resourceBudgetSources:{measurementCalls:intent.id}};
+    const stage={...request,id:"receiver-stage",pathId:receiver.id};
+    const proposal={id:"open-receiver",scope:intent.runId,actor:intent.owner,parts:[
+      {owner:"activity",kind:"path_opening",proposal:receiver},{owner:"activity",kind:"stage_submission",proposal:stage}]};
+    f.db.takeContentStatistics();
+    expect(f.db.acceptShared(f.db.generation,proposal).acceptanceValue.outcome).toBe("accepted");
+    expect(f.db.takeContentStatistics()["content.reads"]??0).toBe(0);
+    f.send({kind:"admit",requestId:stage.id,expectedControlRevision:0});
+    f.send({kind:"dispatch",attempt:{...attempt,id:"receiver-attempt",requestId:stage.id},expectedControlRevision:0});
+    const reserve={kind:"reserve_resources" as const,reservation:{id:"count-once",pathId:receiver.id,requestId:stage.id,amounts:{measurementCalls:1}},expectedControlRevision:0};
+    f.send(reserve);f.db.close();
+    const restored=open(f.directory);restored.send(reserve);
+    expect(restored.db.acceptShared(restored.db.generation,proposal).acceptanceValue.outcome).toBe("accepted");
+    expect(restored.send({kind:"resource_allowance",pathId:receiver.id})).toMatchObject({reserved:{measurementCalls:1}});
+    expect(restored.send({kind:"read_path",pathId:intent.id})).toMatchObject({progressRevision:1,progress:{report:"unrelated professional body"},dispatchedAttempts:1});
+    const raw=new SqliteDatabase(join(f.directory,"execution.sqlite"));
+    try {
+      raw.prepare("UPDATE activity_paths SET digest='damaged' WHERE id=?").run(intent.id);
+      expect(()=>restored.send({kind:"open_path",intent:{...receiver,id:"after-corruption",resourceScope:"after-corruption"}})).toThrow("activity_corrupt");
+    } finally {raw.close();}
+  });
+  it("does not persist an internal preparation failure as a domain rejection",()=>{
+    const f=open(),activity=(f.db as unknown as {activityHandoffs:ActivityHandoffDatabase}).activityHandoffs;
+    const proposal={id:"internal-fault",scope:intent.runId,actor:intent.owner,parts:[
+      {owner:"activity",kind:"path_opening",proposal:intent},{owner:"activity",kind:"stage_submission",proposal:request}]};
+    const body=vi.spyOn(activity as unknown as {body(root:string):unknown},"body").mockImplementation(()=>{
+      throw Object.assign(new Error("activity_content_not_prepared"),{code:"activity_content_not_prepared"});
+    });
+    try {expect(()=>f.db.acceptShared(f.db.generation,proposal)).toThrow("activity_content_not_prepared");}
+    finally {body.mockRestore();}
+    expect(f.db.querySharedAcceptance(f.db.generation,proposal.id)).toBeNull();
+    expect(f.send({kind:"read_path",pathId:intent.id})).toBeNull();
+    expect(f.send({kind:"read_stage",requestId:request.id})).toBeNull();
+    expect(f.db.acceptShared(f.db.generation,proposal).acceptanceValue.outcome).toBe("accepted");
+  });
+  it("shares content reads across one consistent snapshot and rechecks stored bytes in the next snapshot",()=>{
+    const f=open(undefined,true),shared={lines:Array.from({length:400},(_,i)=>`${i}: ${"retained original content ".repeat(20)}`)};
+    const submitted={...request,input:shared};
+    f.send({kind:"open_path",intent});f.send({kind:"submit",request:submitted});
+    f.send({kind:"admit",requestId:request.id,expectedControlRevision:0});
+    f.send({kind:"dispatch",attempt:{...attempt,inputDigest:modelInputValueDigest(shared)},expectedControlRevision:0});
+    f.send({kind:"save_raw",result:{...result,value:shared}});claim(f.send);
+    f.send({kind:"accept",receipt:{id:"accepted",requestId:request.id,resultId:result.id,owner:"method",expectedProgressRevision:0,progress:shared,next:[]},executor,expectedControlRevision:0});
+    f.db.takeContentStatistics();
+    f.send({kind:"read_path",pathId:intent.id});f.send({kind:"read_stage",requestId:request.id});
+    const separate=f.db.takeContentStatistics();
+    const together=f.send({kind:"read_snapshot",pathId:intent.id,requestIds:[request.id],inputNeedIds:[]});
+    const combined=f.db.takeContentStatistics();
+    expect(together).toMatchObject({path:{progress:shared},stages:[{request:submitted,result:{value:shared},receipt:{progress:shared}}]});
+    expect(combined["content.reads"]).toBeLessThan(separate["content.reads"]!);
+    expect(combined["content.readReuses"]).toBeGreaterThan(0);
+    const raw=new SqliteDatabase(join(f.directory,"execution.sqlite"));
+    try {
+      raw.prepare("UPDATE execution_content SET value='null' WHERE id=(SELECT json_extract(request,'$.root') FROM activity_stages WHERE id=?)").run(request.id);
+      expect(()=>f.send({kind:"read_snapshot",pathId:intent.id,requestIds:[request.id],inputNeedIds:[]})).toThrow();
+    } finally {raw.close();}
+  });
+  it("acknowledges mutations without bodies, preserves original identities and reopens complete evidence",()=>{
+    const f=open();seed(f.send);
+    const saved=f.db.activityHandoffCommand(f.db.generation,{kind:"save_raw",result},"receipt").activityValue;
+    expect(saved).toMatchObject({kind:"activity_command_receipt",requestId:request.id,status:"raw_result",resultId:result.id});
+    expect(JSON.stringify(saved)).not.toContain("original answer");
+    expect(f.send({kind:"save_raw",result})).toMatchObject({request,result});
+    claim(f.send);
+    const receipt={id:"accepted",requestId:request.id,resultId:result.id,owner:"method",expectedProgressRevision:0,progress:{done:true},next:[]};
+    expect(f.db.activityHandoffCommand(f.db.generation,{kind:"accept",receipt,executor,expectedControlRevision:0},"receipt").activityValue)
+      .toMatchObject({kind:"activity_command_receipt",status:"accepted",receiptId:receipt.id});
+    expect(f.send({kind:"accept",receipt,executor,expectedControlRevision:0})).toMatchObject({receipt,result});
+    f.db.close();
+    const restored=open(f.directory);
+    expect(restored.send({kind:"read_stage",requestId:request.id})).toMatchObject({status:"accepted",receipt,result});
+    expect(()=>restored.db.activityHandoffCommand(restored.db.generation,{kind:"cancel",pathId:intent.id,expectedControlRevision:0},"receipt"))
+      .toThrow("activity_command_receipt_unsupported");
+    expect(restored.send({kind:"observe_state",pathId:intent.id,requestIds:[],inputNeedIds:[]})).toMatchObject({path:{cancelled:false}});
+  });
+  it("separates scoped observation, consistent content and cancellation without hiding corrupt evidence",()=>{
+    const f=open();seed(f.send);f.send({kind:"save_raw",result});
+    const scope={pathId:"path",requestIds:["stage","absent"],inputNeedIds:[]};
+    const observed=f.send({kind:"observe_state",...scope});
+    expect(observed).toMatchObject({path:{intent:{id:"path"},cancelled:false},stages:[{requestId:"stage",status:"raw_result"},null]});
+    expect(JSON.stringify(observed)).not.toContain("original answer");
+    expect(f.send({kind:"read_snapshot",...scope})).toMatchObject({stages:[{request,result},null]});
+    expect(()=>f.send({kind:"observe_state",...scope,pathId:"other"})).toThrow(/scope/);
+    expect(()=>f.send({kind:"read_snapshot",...scope,requestIds:Array(65).fill("stage")})).toThrow(/scope/);
+    const raw=new SqliteDatabase(join(f.directory,"execution.sqlite"));
+    try {
+      raw.prepare("UPDATE activity_stages SET digest='damaged' WHERE id=?").run(request.id);
+      expect(f.send({kind:"cancel",pathId:"path",expectedControlRevision:0})).toMatchObject({kind:"activity_control",cancelled:true,controlRevision:1});
+      expect(()=>f.send({kind:"read_snapshot",...scope})).toThrow(/corrupt/);
+      expect(f.send({kind:"read_raw_result",resultId:result.id})).toEqual(result);
+    } finally {raw.close();}
+  });
   it("observes bounded path heads without unfolding content, survives reopen and does not certify corrupt input",()=>{
     const f=open();seed(f.send);
     const first=f.send({kind:"observe_paths",pathIds:["path","absent"]});
@@ -293,6 +390,14 @@ describe("durable activity handoff", () => {
     f.db.close();const restored=open(f.directory);
     expect(restored.db.acceptShared(restored.db.generation,proposal).acceptanceValue.outcome).toBe("accepted");
     expect(restored.send({kind:"read_stage",requestId:first.id})).toMatchObject({request:first,status:"submitted"});
+    const scope={pathId:intent.id,requestIds:[],inputNeedIds:[need.id]};
+    const snapshot=restored.send({kind:"read_snapshot",...scope}) as import("@agent-anything/agent-runtime/activity").ActivitySnapshot;
+    expect(snapshot.inputNeeds).toEqual([need]);
+    expect(snapshot.stages.map(item=>item?.request.id??null)).toEqual(outcome==="supplied"?[stage.id,null]:[null,need.unavailableStage.id]);
+    const observed=restored.send({kind:"observe_state",...scope}) as import("@agent-anything/agent-runtime/activity").ActivityStateObservation;
+    expect(observed.stages.map(item=>item?.requestId??null)).toEqual(snapshot.stages.map(item=>item?.request.id??null));
+    for(const kind of ["read_snapshot","observe_state"] as const)
+      expect(()=>restored.send({...scope,kind,pathId:"other-path"})).toThrow("scope_invalid");
     const late=restored.db.acceptShared(restored.db.generation,{id:"opposite",scope:intent.runId,actor:"context",parts:[{owner:"activity",kind:"stage_submission",proposal:other}]}).acceptanceValue;
     expect(late).toMatchObject({outcome:"rejected",rejection:{code:"activity_input_need_already_answered"}});
     expect(restored.send({kind:"read_stage",requestId:other.id})).toBeNull();

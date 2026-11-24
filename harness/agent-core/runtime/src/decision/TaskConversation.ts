@@ -155,7 +155,7 @@ function validateSettledConversation(presentations: readonly RetainedInputPresen
     }
     if (message.role === "tool") for (const {result} of message.content) {
       const key = modelCallRefKey(result.modelCallRef), call = pending.get(key);
-      if (!call || call.name !== result.name || JSON.stringify(call.providerCallRef) !== JSON.stringify(result.providerCallRef)) {
+      if (!call || call.name !== result.name || !sameTaskProviderCall(call.providerCallRef,result.providerCallRef)) {
         throw new TypeError("Conversation seed result has no matching Call.");
       }
       pending.delete(key);
@@ -163,3 +163,4 @@ function validateSettledConversation(presentations: readonly RetainedInputPresen
   }
   if (pending.size) throw new TypeError("Conversation seed contains unsettled Calls.");
 }
+import {sameTaskProviderCall} from "./TaskDecisionModelItems.js";

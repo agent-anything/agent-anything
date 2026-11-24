@@ -70,6 +70,7 @@ async function main() {
   const provider = {modelContext: {...context.modelContext, accounting: {...wireAdapter.modelContext.accounting,
       basis: {fixture: "deterministic-usage.v1"}, inputUsage: "complete", outputUsage: "complete", limitations: ["synthetic_usage_not_endpoint_qualification"]},
       measure(composition, measuredAt) {return createUnknownModelInputMeasurement({compositionId: composition.id, measuredAt, reason: "unsupported"});}},
+    inputTargetDigest:wireAdapter.inputTargetDigest,
     encodeInput: (request, mode) => wireAdapter.encodeInput(request, mode),
     verifyEncodedInput:(request,encoded)=>wireAdapter.verifyEncodedInput(request,encoded),
     requestBodyTransportLimit: context.requestBodyTransportLimit,
@@ -222,7 +223,8 @@ async function main() {
   const identity = {id: "test-anonymous", kind: "anonymous", displayName: "Test user", metadata: {}};
   const profile = createHelarcProviderProfile({id: "test-provider", providerKind: "openai-compatible", displayName: "Test Provider", baseUrl: "https://provider.local/v1",
     model: context.modelContext.target.model, timeoutMs: 30000, credentialStatus: "empty_allowed", isActive: true}).profile;
-  const common = {provider, task, sessionId: "test-session", productRunId: "test-product-run", inputItems: [],
+  const neighbor=process.env.HELARC_RETAINED_NEIGHBOR;
+  const common = {provider, task, sessionId: "test-session", productRunId: neighbor?"independent-test-product-run":"test-product-run", inputItems: [],
     ...(inspection ? {inspection} : {}),
     permissionPreset: scenario.startsWith("approval") ? "ask_for_approval" : "full_access", providerProfile: profile,
     executionStore: store,activityHost, commandOutputDirectory: join(directory, "command-output"),
@@ -384,6 +386,24 @@ async function main() {
   const seed = JSON.parse(await readFile(seedFile, "utf8")); rootRunId = seed.rootRunId;
   materialRef = seed.materialRef;
   const admission = await store.readProductRun(rootRunId);
+  if(neighbor){
+    const entries=await store.discoverProductWork("undelivered");
+    const old=entries.find(e=>e.rootRunId!==rootRunId),current=entries.find(e=>e.rootRunId===rootRunId);
+    assert.equal(entries.length,2);assert(old.terminal&&old.admitted&&current.admitted);
+    assert.equal(current.resumeLimitation,null);assert.equal(current.terminal,stage==="verify");
+    assert.equal((await store.readProductRun(old.rootRunId)).contextBinding.policy.revision,"8");
+    if(stage==="resume"){
+      const {bindHelarcRunProvider}=await load("provider/HelarcRunProviderBinding.js");
+      const {HelarcHostRunRecovery}=await load("run/HelarcHostRunRecovery.js");
+      let bindings=0,secrets=0;
+      const installed=new HelarcHostRunRecovery({executionStore:store,recoverProvider:async a=>{
+        assert.equal(a.rootRunId,rootRunId);assert.equal(a.providerBinding.descriptor.id,providerId);bindings++;
+        return bindHelarcRunProvider(a,{resolveApiKey(){secrets++;throw Error("unexpected credential access");}},undefined,{});
+      }});
+      await assert.rejects(()=>installed.prepare(rootRunId),/The original Provider implementation or effective configuration is unavailable/);
+      assert.equal(bindings,1);assert.equal(secrets,0);
+    }
+  }
   const recording = await store.registerRecording({sourceId:"recovery-test",datasetId:"resume",runId:rootRunId});
   const recordedResume = stage === "verify" && process.env.HELARC_RECOVERY_INSPECTION === "1"
     ? JSON.parse(await readFile(join(directory, "resume.json"), "utf8")).inspection : null;
@@ -609,7 +629,7 @@ async function main() {
       assert.equal(new Set(settlements).size, settlements.length, "No Call may settle twice");
       assert.equal(new Set(items.map(item => item.ref.id)).size, items.length);
     }
-    assert.equal((await store.listProductRuns())[0].delivered, false);
+    assert.equal((await store.listProductRuns(rootRunId))[0].delivered, false);
     if (seed.actionId) {
       const records = await store.readAction({runId: seed.actionRunId, action: {id: seed.actionId}});
       assert.equal(records.attempts.length, 1);
@@ -671,8 +691,8 @@ async function main() {
       members: after.members.length, originalItemsPreserved: true, countersAndDeadlinesPreserved: true,
       environmentRestoredExactly: true, electron: process.versions.electron, sqliteWorkerGeneration: store.generation}));
   } else {
-    assert.equal((await store.listProductRuns())[0].terminal, true);
-    assert.equal((await store.listProductRuns())[0].delivered, false);
+    assert.equal((await store.listProductRuns(rootRunId))[0].terminal, true);
+    assert.equal((await store.listProductRuns(rootRunId))[0].delivered, false);
     if (scenario === "material_read_prepared") {
       await store.contextMaterialRetention.accept(seed.secondTransfer);
       await assert.rejects(store.contextMaterialRetention.accept(seed.transfer), /released/);
@@ -684,7 +704,7 @@ async function main() {
       await store.contextMaterialRetention.release("fixture-cancelled-before-prepare");
       await assert.rejects(store.contextMaterialRetention.prepare({...seed.transfer,id:"fixture-cancelled-before-prepare"}), /released/);
     }
-    assert.equal((await store.listProductRuns())[0].delivered, true);
+    assert.equal((await store.listProductRuns(rootRunId))[0].delivered, true);
     assert.equal(await readFile(marker, "utf8"), "x"); assert.equal(calls, 0);
     const corrupted = {...admission, commandEnvironment: {...admission.commandEnvironment, digest: "invalid"}};
     await assert.rejects(prepareHelarcHostRun({...savedInput, recoveryAdmission: corrupted}), /digest_mismatch/);

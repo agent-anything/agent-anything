@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {MaterialCustodyError,custodyToken,containsMaterialRange,type MaterialHold,type MaterialRange,type MaterialRecipient} from "@agent-anything/context/custody";
 import type {ContextAcceptancePart,ContextDelivery,ContextDeliveryPage,ContextInputBinding,ContextSelectionCommand,ContextSelectionProposal,
-  ContextSelectionSnapshot,ContextSelectionValue,ContextUseControl,ContextUseScope,ContextDeliveryState,ContextDeliveryFinalization} from "@agent-anything/context/selection";
+  ContextSelectionSnapshot,ContextSelectionValue,ContextUseControl,ContextUseScope,ContextDeliveryState,ContextDeliveryFinalization,ContextInputUse,ContextInputUsePage,ContextSelectionHeadPage} from "@agent-anything/context/selection";
 import type {RepresentationRef} from "@agent-anything/context/representation";
 import {contextProcessObject as object,contextProcessRelationship as relation,type ContextProcessRelationship} from "@agent-anything/context/evidence";
 import {activityFactSourceId,type SharedAcceptanceProposal,type ActivityReconsiderationReceipt} from "@agent-anything/agent-runtime/activity";
@@ -23,8 +23,19 @@ CREATE INDEX context_recipient_delivery_lookup ON context_recipient_deliveries(r
 CREATE TABLE context_input_sends(input_id TEXT NOT NULL,attempt_id TEXT NOT NULL,PRIMARY KEY(input_id,attempt_id));
 `;
 type Selection=NonNullable<ContextSelectionProposal["selection"]>;
+export const CONTEXT_SELECTION_ACCESS_SCHEMA=`
+CREATE INDEX context_use_scopes_owner ON context_use_scopes(json_extract(value,'$.owner'),id);
+CREATE INDEX context_inputs_scope_retirement ON context_input_bindings(scope_id,retired,id);
+CREATE INDEX material_holds_input_basis ON material_holds(json_extract(value,'$.basis'),released);
+`;
+export const CONTEXT_SELECTION_ACCESS_OBJECTS=["context_use_scopes_owner","context_inputs_scope_retirement","material_holds_input_basis"];
 type DeliveryPart=Extract<ContextAcceptancePart,{owner:"context_delivery"}>;
 interface StoredInput extends Omit<ContextInputBinding,"exactInput"> {readonly exactInputRoot:ExecutionContentRoot;readonly exactInputDigest:string;}
+export interface NativeContextConsumer {
+  describe(input:Omit<ContextInputBinding,"exactInput">&{readonly exactInputDigest:string},scope:ContextUseScope):{readonly acceptanceOwner:string;readonly recoveryOwner:string;readonly settled:boolean;readonly claimed:boolean}|null;
+  attempt(input:Omit<ContextInputBinding,"exactInput">&{readonly exactInputDigest:string},scope:ContextUseScope,id:string):boolean;
+  result(input:Omit<ContextInputBinding,"exactInput">&{readonly exactInputDigest:string},scope:ContextUseScope,id:string):boolean;
+}
 export class ContextSelectionDatabase {
   constructor(private readonly db:Database.Database,private readonly records:ContextFoundationRecords,
     private readonly materials:MaterialCustodyDatabase,private readonly representations:RepresentationDatabase,
@@ -35,7 +46,30 @@ export class ContextSelectionDatabase {
     private readonly confirmPreparation:(runId:string,input:PreparedContextInput)=>boolean,
     private readonly consumer:(pathId:string)=>import("@agent-anything/agent-runtime/activity").ActivityPathState|null,
     private readonly deliveryFacts:ContextDeliveryFactPublisher,
-    private readonly deliveryLifetime:ContextDeliveryLifecycleReader) {}
+    private readonly deliveryLifetime:ContextDeliveryLifecycleReader,
+    private readonly nativeConsumer?:NativeContextConsumer) {}
+  claimNativeInput(activity:import("@agent-anything/agent-runtime/model-access").ProtocolModelActivity,claim:{readonly id:string;readonly digest:string},existing:boolean):void {
+    const {input,retired}=this.storedInput(claim.id),scope=this.scope(input.scopeId),a=activity.scope;
+    if(retired!==null||!scope.control.allowed||!existing&&scope.currentId!==input.selectionId||input.stageRequestId!==null||!input.nativeConsumer||input.activityId!==a.activityId||
+      scope.scope.runId!==a.runId||scope.scope.recipient!==a.recipientId||scope.scope.purpose!==a.purpose.id||
+      input.exactInputDigest!==claim.digest||input.nativeConsumer.compositionDigest!==a.compositionDigest||
+      modelInputValueDigest(input.nativeConsumer.protocol)!==modelInputValueDigest(activity.composition.composition.protocol))reject("native_input_claim_changed");
+    for(const hold of input.holds)this.materials.requireProtected(hold.instanceId,hold.range,scope.scope,hold.id);
+  }
+  private inputConsumer(input:StoredInput) {
+    if(input.nativeConsumer)return this.nativeConsumer?.describe(input,this.scope(input.scopeId).scope)??null;
+    const path=this.consumer(input.activityId),scope=this.scope(input.scopeId).scope;
+    return path&&path.intent.runId===scope.runId?{acceptanceOwner:path.intent.purpose.contract.acceptanceOwner,
+      recoveryOwner:path.intent.purpose.contract.recoveryOwner,settled:this.pathSettled(input.activityId),claimed:true}:null;
+  }
+  private inputSettled(input:StoredInput){
+    const consumer=this.inputConsumer(input);
+    return consumer?.settled===true||consumer?.claimed===false&&this.scope(input.scopeId).currentId!==input.selectionId;
+  }
+  private inputResult(input:StoredInput,id:string){
+    const scope=this.scope(input.scopeId).scope;
+    return input.nativeConsumer?this.nativeConsumer?.result(input,scope,id)===true:this.confirmResult(scope.runId,input.activityId,input.exactInputDigest,id);
+  }
   command(command:ContextSelectionCommand):ContextSelectionValue {
     switch(command.kind) {
       case "lookup_scope":{
@@ -52,12 +86,35 @@ export class ContextSelectionDatabase {
       case "delivery":return this.delivery(command.id);
       case "delivery_state":return this.deliveryState(command.id);
       case "pending_deliveries":return this.pendingDeliveries(command);
-      case "sent":return this.sent(command.inputId,command.attemptId);
+      case "input_use":return this.db.transaction(()=>this.inputUse(command.inputId))();
+      case "native_input_uses":return this.nativeInputUses(command);
+      case "native_selection_heads":return this.nativeSelectionHeads(command);
+      case "sent":return this.sent(command.inputId,command.attemptId,command.acceptedResponseId);
       case "retire_input":return this.retireInput(command.inputId,command.basis);
       case "withdraw":return this.withdraw(command);
     }
   }
   registeredScope(id:string):{scope:ContextUseScope;control:ContextUseControl} {return this.scope(id);}
+  inputSupplySelection(id:string):import("@agent-anything/agent-runtime/context-representation").NativeInputSupplySelection {
+    const {input,acceptanceId,retired}=this.storedInput(id),current=this.scope(input.scopeId);
+    if(retired!==null||!current.control.allowed||current.currentId!==input.selectionId)reject("input_supply_selection_inactive");
+    const {exactInputRoot:_,...metadata}=input;
+    return {acceptanceId,scope:current.scope,input:metadata};
+  }
+  confirmsRecipientRejection(value:import("@agent-anything/agent-runtime/model-access").ProtocolInputRejectionEvidence,scope:ContextUseScope):boolean {
+    const {input}=this.storedInput(value.inputId),registered=this.scope(input.scopeId),judgment=this.representations.judgment(input.combinationJudgmentId);
+    return Boolean(input.nativeConsumer&&input.activityId===value.activityId&&input.scopeId===value.scopeId&&input.target===value.targetRevision&&
+      input.exactInputDigest===value.exactInputDigest&&modelInputValueDigest(registered.scope)===modelInputValueDigest(scope)&&
+      judgment?.kind==="combination"&&judgment.owner===scope.owner&&judgment.runId===scope.runId&&judgment.target===scope.target&&
+      judgment.purpose===scope.purpose&&judgment.conclusion==="supported"&&judgment.dependencies.inputDigest===value.exactInputDigest&&
+      judgment.dependencies.bodyDigest===value.bodyDigest);
+  }
+  confirmsRecipientReadiness(readiness:import("@agent-anything/agent-runtime/context-representation").ContextRecipientInputReadiness):boolean {
+    const {input,retired}=this.storedInput(readiness.inputId),scope=this.scope(input.scopeId);
+    return retired===null&&scope.control.allowed&&scope.currentId===input.selectionId&&
+      modelInputValueDigest(scope.scope)===modelInputValueDigest(readiness.scope)&&
+      input.exactInputDigest===readiness.exactInputDigest&&input.combinationJudgmentId===readiness.judgmentId;
+  }
   participants():readonly SharedAcceptanceParticipant[] {
     return [
       {owner:"context_selection",kinds:["scope","selection_input","input_retirement"],prepare:(part,acceptance)=>{
@@ -94,7 +151,11 @@ export class ContextSelectionDatabase {
           (part.proposal as import("@agent-anything/agent-runtime/activity").ActivityStageRequest)?.id===proposal.input.stageRequestId);
         if(submissions.length>1)reject("input_activity_submission_ambiguous");
         const request=submissions[0]?.proposal as import("@agent-anything/agent-runtime/activity").ActivityStageRequest|undefined;
-        if(!request || request.id!==proposal.input.stageRequestId || request.pathId!==proposal.input.activityId ||
+        if(proposal.input.nativeConsumer){
+          const consumer=proposal.input.nativeConsumer;
+          if(proposal.input.stageRequestId!==null||request||!this.nativeConsumer)reject("input_native_submission_invalid");
+          custodyToken(consumer.protocol.id);custodyToken(consumer.protocol.revision);custodyToken(consumer.compositionDigest);custodyToken(proposal.input.activityId);
+        }else if(!request || request.id!==proposal.input.stageRequestId || request.pathId!==proposal.input.activityId ||
           modelInputValueDigest(request.input)!==modelInputValueDigest(exactInput))reject("input_activity_submission_missing");
         const stored:StoredInput={...metadata,exactInputRoot:this.retain(exactInput),exactInputDigest:modelInputValueDigest(exactInput)};
         const judgment=(acceptance.parts.find(part=>part.owner==="representation"&&part.kind==="judge"&&
@@ -137,7 +198,7 @@ export class ContextSelectionDatabase {
               (value.proposal as {receipt?:{id:string;requestId:string;resultId:string}}).receipt?.id===acceptance.id&&
               (value.proposal as {receipt:{requestId:string}}).receipt.requestId===input.stageRequestId&&
               (value.proposal as {receipt:{resultId:string}}).receipt.resultId===part.proposal.responseId);
-            if(!professional)reject("delivery_professional_acceptance_missing");
+            if(!professional&&!input.nativeConsumer)reject("delivery_professional_acceptance_missing");
             this.validateDeliveryResponse(input,part.proposal.responseId);
           }
         }
@@ -216,11 +277,12 @@ export class ContextSelectionDatabase {
     this.records.sql("INSERT INTO context_input_bindings VALUES (?,?,?,?,?,NULL)").run(input.id,scope.id,acceptance.id,JSON.stringify(input),modelInputValueDigest(input));
     const subject=object("context_selection",input.id,scope.runId),selected=object("context_selection",selection.id,scope.runId);
     this.selectionFact(scope.runId,input.id,"input_bound",{acceptanceId:acceptance.id,scopeId:scope.id,selectionId:selection.id,activityId:input.activityId,
-      stageRequestId:input.stageRequestId,deliveries:input.deliveries,deliveryIds:input.deliveries.map(d=>d.id),holds:input.holds.map(h=>h.id),changedSelection:proposal.selection!==null,
+      stageRequestId:input.stageRequestId,nativeConsumer:input.nativeConsumer??null,deliveries:input.deliveries,deliveryIds:input.deliveries.map(d=>d.id),holds:input.holds.map(h=>h.id),changedSelection:proposal.selection!==null,
       exactInputDigest:input.exactInputDigest,combinationJudgmentId:input.combinationJudgmentId},[
       relation("observes",subject,object("shared_acceptance",acceptance.id,acceptance.scope)),
       relation("includes",object("context_selection",scope.id,scope.runId),selected),relation("observes",subject,selected),
-      relation("observes",subject,object("activity",input.activityId,scope.runId)),relation("observes",subject,object("activity",input.stageRequestId,scope.runId)),
+      relation("observes",subject,object("activity",input.activityId,scope.runId)),
+      ...(input.stageRequestId?[relation("observes",subject,object("activity",input.stageRequestId,scope.runId))]:[]),
       relation("observes",subject,object("representation",input.combinationJudgmentId,scope.runId)),
       ...selection.representations.map(ref=>relation("includes",selected,object("representation",JSON.stringify([ref.id,ref.revision]),scope.runId))),
       ...input.deliveries.map(delivery=>relation("includes",subject,object("context_delivery",delivery.id,scope.runId),"selected_for_input")),
@@ -257,7 +319,7 @@ export class ContextSelectionDatabase {
     const delivery=checkedJson<ContextDelivery>(row),input=row.input_id?this.storedInput(row.input_id).input:null;
     if(delivery.id!==id||input&&(!input.deliveries.some(value=>value.id===id)||recipientKey(this.scope(input.scopeId).scope)!==recipientKey(delivery.recipient)))
       reject("delivery_state_binding_invalid");
-    return {delivery,selectedInputId:row.input_id,selectedPathId:input?.activityId??null,selectionSettled:!input||this.pathSettled(input.activityId),
+    return {delivery,selectedInputId:row.input_id,selectedPathId:input?.activityId??null,selectionSettled:!input||this.inputSettled(input),
       acceptedResponseId:row.accepted_response,disposition:row.disposition?JSON.parse(row.disposition) as ContextDeliveryState["disposition"]:null};
   }
   private validateDeliveryLifetime(delivery:ContextDelivery,acceptance:SharedAcceptanceProposal):void {
@@ -306,6 +368,8 @@ export class ContextSelectionDatabase {
     return state;
   }
   private validateDeliveryResponse(input:StoredInput,responseId:string):void {
+    if(input.nativeConsumer){if(!this.inputResult(input,responseId))reject("delivery_response_not_confirmed");return;}
+    if(input.stageRequestId===null)reject("delivery_stage_missing");
     const scope=this.scope(input.scopeId).scope,stage=this.deliveryLifetime.stage(input.stageRequestId);
     if(!stage||stage.request.pathId!==input.activityId||!this.confirmResult(scope.runId,input.activityId,input.exactInputDigest,responseId)||
       !(stage.status==="accepted"&&stage.receipt?.resultId===responseId||stage.status==="settled"&&stage.settlement?.resultId===responseId))
@@ -342,10 +406,10 @@ export class ContextSelectionDatabase {
     } else if(part.kind==="release_selection") {
       const {inputId,basis}=part.proposal;custodyToken(basis);
       const {input}=this.storedInput(inputId),scope=this.scope(input.scopeId).scope;
-      const consumer=this.consumer(input.activityId);
-      if(!consumer||consumer.intent.runId!==scope.runId||acceptance.scope!==scope.runId ||
-        (acceptance.actor!==scope.owner&&acceptance.actor!==consumer.intent.purpose.contract.recoveryOwner))reject("delivery_release_actor_invalid");
-      if(!this.pathSettled(input.activityId))reject("delivery_release_unsettled");
+      const consumer=this.inputConsumer(input);
+      if(!consumer||acceptance.scope!==scope.runId ||
+        (acceptance.actor!==scope.owner&&acceptance.actor!==consumer.recoveryOwner))reject("delivery_release_actor_invalid");
+      if(!this.inputSettled(input))reject("delivery_release_unsettled");
       for(const selected of input.deliveries) {
         const row=this.records.sql("SELECT input_id,accepted_response,disposition FROM context_recipient_deliveries WHERE id=?").get(selected.id) as {input_id:string|null;accepted_response:string|null;disposition:string|null}|undefined;
         if(!row || row.input_id!==inputId || row.accepted_response!==null || row.disposition!==null)reject("delivery_release_conflict");
@@ -359,7 +423,7 @@ export class ContextSelectionDatabase {
       const row=this.records.sql("SELECT input_id,accepted_response,disposition FROM context_recipient_deliveries WHERE id=?").get(deliveryId) as {input_id:string|null;accepted_response:string|null;disposition:string|null};
       const disposition=JSON.stringify({reason,basis});
       if(row.disposition!==null){if(row.disposition!==disposition)reject("delivery_disposition_conflict");return;}
-      if(row.accepted_response!==null || row.input_id!==null&&!this.pathSettled(this.storedInput(row.input_id).input.activityId))reject("delivery_disposition_unsettled");
+      if(row.accepted_response!==null || row.input_id!==null&&!this.inputSettled(this.storedInput(row.input_id).input))reject("delivery_disposition_unsettled");
       this.records.sql("UPDATE context_recipient_deliveries SET disposition=? WHERE id=?").run(disposition,deliveryId);
       this.recordDelivery(recipient,deliveryId,"disposed",{reason,basis},acceptance);
     } else if(part.kind==="publish") {
@@ -382,11 +446,11 @@ export class ContextSelectionDatabase {
       }
     } else {
       const {input}=this.storedInput(part.proposal.inputId),scope=this.scope(input.scopeId).scope;
-      const consumer=this.consumer(input.activityId);
-      if(!consumer||consumer.intent.runId!==scope.runId||acceptance.scope!==scope.runId ||
-        acceptance.actor!==consumer.intent.purpose.contract.acceptanceOwner ||
+      const consumer=this.inputConsumer(input);
+      if(!consumer||acceptance.scope!==scope.runId ||
+        acceptance.actor!==consumer.acceptanceOwner ||
         !this.records.sql("SELECT 1 FROM context_input_sends WHERE input_id=?").get(input.id))reject("delivery_not_sent");
-      if(!this.confirmResult(scope.runId,input.activityId,input.exactInputDigest,part.proposal.responseId))reject("delivery_response_not_confirmed");
+      if(!this.inputResult(input,part.proposal.responseId))reject("delivery_response_not_confirmed");
       for(const selected of input.deliveries) {
         const delivery=this.delivery(selected.id)!;
         const prior=this.records.sql("SELECT input_id,accepted_response,disposition FROM context_recipient_deliveries WHERE id=?").get(selected.id) as {input_id:string|null;accepted_response:string|null;disposition:string|null};
@@ -416,20 +480,74 @@ export class ContextSelectionDatabase {
       return {through,nextAfter:rows.length>limit?entries.at(-1)!.sequence:null,entries};
     })();
   }
-  private sent(inputId:string,attemptId:string):null {
+  private inputUse(id:string):ContextInputUse {
+    const {input,acceptanceId,retired}=this.storedInput(id),scope=this.scope(input.scopeId),consumer=this.inputConsumer(input);
+    const {exactInputRoot:_,...metadata}=input;
+    return {acceptanceId,input:metadata,scope:scope.scope,control:scope.control,currentSelectionId:scope.currentId,
+      retired,settled:this.inputSettled(input),claimed:consumer?.claimed??null,
+      liveHoldIds:input.holds.filter(hold=>{const current=this.materials.hold(hold.id);if(current)requireSame(current,hold);return current!==null;}).map(hold=>hold.id)};
+  }
+  private nativeInputUses(command:Extract<ContextSelectionCommand,{kind:"native_input_uses"}>):ContextInputUsePage {
+    this.discoveryPage(command);
+    return this.db.transaction(()=>{
+      const rows=this.records.sql(`SELECT i.id FROM context_input_bindings i JOIN context_use_scopes s ON s.id=i.scope_id
+        WHERE json_extract(s.value,'$.owner')=? AND i.id>? AND json_type(i.value,'$.nativeConsumer')='object'
+        AND (i.retired IS NULL OR EXISTS(SELECT 1 FROM material_holds h WHERE json_extract(h.value,'$.basis')=i.id
+          AND h.released IS NULL AND json_extract(h.value,'$.responsibility')='input')) ORDER BY i.id LIMIT ?`)
+        .all(command.owner,command.after??"",command.limit+1) as {id:string}[];
+      const entries=rows.slice(0,command.limit).map(row=>this.inputUse(row.id));
+      if(entries.some(entry=>entry.scope.owner!==command.owner||!entry.input.nativeConsumer))reject("input_discovery_scope_changed");
+      return {entries,next:rows.length>command.limit?entries.at(-1)!.input.id:null};
+    })();
+  }
+  private nativeSelectionHeads(command:Extract<ContextSelectionCommand,{kind:"native_selection_heads"}>):ContextSelectionHeadPage {
+    this.discoveryPage(command);
+    return this.db.transaction(()=>{
+      const rows=this.records.sql(`SELECT s.id FROM context_use_scopes s WHERE json_extract(s.value,'$.owner')=? AND s.id>?
+        AND s.current_id IS NOT NULL AND EXISTS(SELECT 1 FROM context_input_bindings i WHERE i.scope_id=s.id
+          AND json_type(i.value,'$.nativeConsumer')='object') ORDER BY s.id LIMIT ?`)
+        .all(command.owner,command.after??"",command.limit+1) as {id:string}[];
+      const entries=rows.slice(0,command.limit).map(row=>{const value=this.scope(row.id);
+        if(value.scope.owner!==command.owner||!value.currentId)reject("selection_discovery_scope_changed");
+        return {scope:value.scope,control:value.control,selection:this.selection(value.currentId)};});
+      return {entries,next:rows.length>command.limit?entries.at(-1)!.scope.id:null};
+    })();
+  }
+  private discoveryPage(command:{owner:string;after:string|null;limit:number}):void {
+    custodyToken(command.owner);if(command.after!==null)custodyToken(command.after);
+    if(!Number.isSafeInteger(command.limit)||command.limit<1||command.limit>128)reject("input_discovery_page_invalid");
+  }
+  private sent(inputId:string,attemptId:string,acceptedResponseId?:string):null {
     custodyToken(attemptId);
     this.db.transaction(()=>{
       const {input,retired}=this.storedInput(inputId),scope=this.scope(input.scopeId);
       if(retired!==null)reject("input_retired");
-      if(!scope.control.allowed)reject("input_control_revoked");
-      if(!this.confirmAttempt(scope.scope.runId,input.activityId,input.stageRequestId,input.exactInputDigest,attemptId))reject("input_attempt_not_confirmed");
+      if(acceptedResponseId!==undefined){custodyToken(acceptedResponseId);if(!this.inputResult(input,acceptedResponseId))reject("input_receipt_not_confirmed");}
+      else if(!scope.control.allowed)reject("input_control_revoked");
+      if(input.nativeConsumer?!this.nativeConsumer?.attempt(input,scope.scope,attemptId):
+        input.stageRequestId===null||!this.confirmAttempt(scope.scope.runId,input.activityId,input.stageRequestId,input.exactInputDigest,attemptId))reject("input_attempt_not_confirmed");
       for(const hold of input.holds)this.materials.requireProtected(hold.instanceId,hold.range,scope.scope,hold.id);
       const result=this.records.sql("INSERT OR IGNORE INTO context_input_sends VALUES (?,?)").run(inputId,attemptId);
       if(result.changes)this.selectionFact(scope.scope.runId,input.id,"sent",{attemptId,activityId:input.activityId,stageRequestId:input.stageRequestId},[
         relation("delivers",object("context_selection",input.id,scope.scope.runId),object("activity",attemptId,scope.scope.runId),"input_sent"),
-        relation("observes",object("context_selection",input.id,scope.scope.runId),object("activity",input.stageRequestId,scope.scope.runId)),
+        ...(input.stageRequestId?[relation("observes",object("context_selection",input.id,scope.scope.runId),object("activity",input.stageRequestId,scope.scope.runId))]:[]),
       ],scope.scope);
     })();return null;
+  }
+  deliveryGuard(hold:MaterialHold):import("@agent-anything/context/custody").MaterialDeliveryGuard {
+    const heads=this.records.sql("SELECT id FROM context_use_scopes WHERE run_id=? ORDER BY id").all(hold.consumer.runId) as {id:string}[];
+    const facts:unknown[]=[];let active=false;
+    const overlaps=(other:MaterialHold)=>other.range.materialId===hold.range.materialId&&other.range.version===hold.range.version&&
+      other.range.start<hold.range.end&&hold.range.start<other.range.end;
+    for(const {id} of heads){
+      const scope=this.scope(id);
+      if(recipientKey(scope.scope)!==recipientKey(hold.consumer))continue;
+      facts.push({id,current:scope.currentId,control:scope.control});
+      if(scope.currentId&&this.selection(scope.currentId).holds.some(overlaps))active=true;
+      const rows=this.records.sql("SELECT id FROM context_input_bindings WHERE scope_id=? AND retired IS NULL ORDER BY id").all(id) as {id:string}[];
+      for(const row of rows){const {input}=this.storedInput(row.id);facts.push({input:row.id,selection:input.selectionId});if(input.holds.some(overlaps))active=true;}
+    }
+    return {revision:modelInputValueDigest(facts),active};
   }
   mayRelease(hold:MaterialHold):boolean {
     if(hold.responsibility==="input")return !this.records.sql("SELECT 1 FROM context_input_bindings WHERE id=? AND retired IS NULL").get(hold.basis);
@@ -442,9 +560,12 @@ export class ContextSelectionDatabase {
     this.db.transaction(()=>{
       const {input,retired}=this.storedInput(id),scope=this.scope(input.scopeId).scope;
       if(retired!==null){if(retired!==basis)reject("input_retirement_conflict");return;}
-      if(!this.pathSettled(input.activityId) || this.records.sql("SELECT 1 FROM context_recipient_deliveries WHERE input_id=? AND accepted_response IS NULL AND disposition IS NULL").get(id))reject("input_responsibility_unsettled");
+      if(!this.inputSettled(input) || this.records.sql("SELECT 1 FROM context_recipient_deliveries WHERE input_id=? AND accepted_response IS NULL AND disposition IS NULL").get(id))reject("input_responsibility_unsettled");
       this.records.sql("UPDATE context_input_bindings SET retired=? WHERE id=? AND retired IS NULL").run(basis,id);
-      this.selectionFact(scope.runId,id,"input_retired",{basis},[],scope);
+      this.selectionFact(scope.runId,id,"input_retired",{basis,activityId:input.activityId,selectionId:input.selectionId,holds:input.holds.map(hold=>hold.id)},[
+        relation("observes",object("context_selection",id,scope.runId),object("context_selection",input.selectionId,scope.runId)),
+        ...input.holds.map(hold=>relation("observes",object("context_selection",id,scope.runId),object("material_custody",hold.id,hold.consumer.runId))),
+      ],scope);
     })();return null;
   }
   private withdraw(command:Extract<ContextSelectionCommand,{kind:"withdraw"}>):null {

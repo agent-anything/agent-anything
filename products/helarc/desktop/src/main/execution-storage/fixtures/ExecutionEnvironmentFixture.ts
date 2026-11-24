@@ -2,6 +2,12 @@ import {createCipheriv, createDecipheriv, createHash, randomBytes} from "node:cr
 import {HelarcExecutionStore} from "../HelarcExecutionStore.js";
 import type {ExecutionEnvironmentCipher} from "../ExecutionEnvironmentProtection.js";
 import {createExecutionCommitIdentityProbe} from "./ExecutionCommitIdentityProbe.js";
+import {pathToFileURL} from "node:url";
+import {resolve} from "node:path";
+import {join} from "node:path";
+import {mkdir,writeFile} from "node:fs/promises";
+import {ExecutionRequestEvidence} from "../../diagnostics/ExecutionRequestEvidence.js";
+import {safeExecutionPerformanceEvent} from "../../diagnostics/HelarcPerformanceDiagnostics.js";
 
 /** Deterministic test key; production uses Electron safeStorage, never this cipher. */
 export function environmentFixtureCipher(): ExecutionEnvironmentCipher {
@@ -24,13 +30,16 @@ export function environmentFixtureCipher(): ExecutionEnvironmentCipher {
 }
 
 export async function openExecutionStoreFixture(...args: Parameters<typeof HelarcExecutionStore.open>): Promise<HelarcExecutionStore> {
+  if(process.env.HELARC_TEST_WORKER_CPU_PROFILE==="1")args[1]=pathToFileURL(resolve("scripts/fixtures/profile-execution-worker.mjs"));
   const timings=new Map<string,{count:number;totalMs:number;maxMs:number;counters:Record<string,number>}>();
+  const evidence=new ExecutionRequestEvidence({recent:512,slow:32,active:32,events:128});
   const observer=process.env.HELARC_TEST_STORAGE_TIMINGS==="1"?{
     record:(...values:Parameters<NonNullable<typeof args[4]>["record"]>)=>args[4]?.record(...values),
     performance(event:import("../../diagnostics/ExecutionPerformance.js").ExecutionPerformanceEvent){
       args[4]?.performance?.(event);
+      evidence.record(safeExecutionPerformanceEvent(event));
       if(event.kind!=="finished")return;
-      const key=`${event.stage}:${event.context.command??event.context.commandKind??event.context.sourceKind??""}`;
+      const key=`${event.stage}:${event.context.command??event.context.commandKind??event.context.sourceKind??""}:${event.context.activityCommand??""}`;
       const aggregate=timings.get(key)??{count:0,totalMs:0,maxMs:0,counters:{}};
       aggregate.count++;aggregate.totalMs+=event.durationMs;aggregate.maxMs=Math.max(aggregate.maxMs,event.durationMs);timings.set(key,aggregate);
       for(const [name,value] of Object.entries(event.counters??{}))aggregate.counters[name]=(aggregate.counters[name]??0)+value;
@@ -44,7 +53,14 @@ export async function openExecutionStoreFixture(...args: Parameters<typeof Helar
   }
   if(observer!==args[4]){
     const close=store.close.bind(store);let printed=false;
-    store.close=async()=>{try{await close();}finally{if(!printed){printed=true;console.info("Execution fixture timing summary",JSON.stringify(Object.fromEntries(timings)));}}};
+    store.close=async()=>{try{await close();}finally{if(!printed){printed=true;
+      const output=process.env.HELARC_TEST_PERFORMANCE_DIRECTORY??args[0];
+      await mkdir(output,{recursive:true});
+      const path=join(output,`performance-evidence-${store.hostSession}.json`);
+      await writeFile(path,JSON.stringify({storeInstanceId:store.hostSession,summary:Object.fromEntries(timings),...evidence.snapshot()}));
+      console.info("Execution fixture timing evidence",path);
+      console.info("Execution fixture timing summary",JSON.stringify(Object.fromEntries(timings)));
+    }}};
   }
   return store;
 }

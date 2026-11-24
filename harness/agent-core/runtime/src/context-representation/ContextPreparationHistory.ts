@@ -1,19 +1,22 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
-import {contextPreparationWorkKey,type ContextPreparationPolicyInput} from "./ContextPreparationPolicy.js";
+import {contextPreparationApplicabilityKey,contextPreparationWorkKey,type ContextPreparationPolicyInput} from "./ContextPreparationPolicy.js";
 import type {ContextPreparationDecisionRecord,ContextPreparationDecisionStore} from "./ContextPreparationDecisionStore.js";
-import type {RepresentationMethodWork} from "./methods/RepresentationMethodWork.js";
+import type {ContextPreparationWorkEvidence} from "./ContextPreparationWorkEvidence.js";
+import type {RepresentationMethodRequest} from "./methods/RepresentationMethod.js";
+import type {ContextPreparationMethodRequest} from "./ProtocolRepresentationMethod.js";
 
-export type ContextPreparationCurrentEvidence=Omit<ContextPreparationPolicyInput,"inFlight"|"explorationHistory"|"optionalInFlight">;
-type ProducerDescription=Pick<Awaited<ReturnType<RepresentationMethodWork["describe"]>>,"state"|"revision">;
+export type ContextPreparationCurrentEvidence<R extends ContextPreparationMethodRequest=RepresentationMethodRequest>=Omit<ContextPreparationPolicyInput<R>,"inFlight"|"explorationHistory"|"optionalInFlight">;
+type ProducerDescription=Pick<ContextPreparationWorkEvidence,"state"|"revision"|"limitationEvidence"|"assessmentIssues">&Partial<Pick<ContextPreparationWorkEvidence,"remaining"|"limitations">>;
 
 /** Reads accepted work for the original recipient. It neither decides nor accepts preparation. */
-export async function readContextPreparationHistory(input:{
-  readonly current:ContextPreparationCurrentEvidence;
+export async function readContextPreparationHistory<R extends ContextPreparationMethodRequest>(input:{
+  readonly current:ContextPreparationCurrentEvidence<R>;
+  readonly includeRevisionBasis?:boolean;
   readonly decisions:ContextPreparationDecisionStore;
   readonly methods:{readonly describe:(pathId:string)=>Promise<ProducerDescription>};
 },signal:AbortSignal):Promise<{
   readonly previous:ContextPreparationDecisionRecord|null;
-  readonly basis:ContextPreparationPolicyInput;
+  readonly basis:ContextPreparationPolicyInput<R>;
   readonly producers:readonly {readonly record:ContextPreparationDecisionRecord;readonly description:ProducerDescription}[];
 }> {
   signal.throwIfAborted();
@@ -47,7 +50,9 @@ export async function readContextPreparationHistory(input:{
       if(record.decision.investment.reason==="optional"&&["accepted","active","unknown"].includes(description.state))optionalInFlight++;
       const optionId=record.decision.investment.optionId,option=record.input.options.find(o=>o.id===optionId);
       if(!option)throw new TypeError("context_policy_original_option_missing");
-      inFlight.push({...original,preparationKey:contextPreparationWorkKey(record.input.scope,option.request),producerState:description.state,
+      inFlight.push({...original,preparationKey:contextPreparationWorkKey(record.input.scope,option.request),originalNeedKey:contextPreparationApplicabilityKey(record.input),producerState:description.state,
+        ...(input.includeRevisionBasis&&["failed","cancelled"].includes(description.state)?{
+          ...(description.remaining?{remaining:description.remaining}:{}),...(description.limitationEvidence?{limitationEvidence:description.limitationEvidence}:{})}:{}),
         evidence:{owner:"context-representation",kind:"fact",id:original.pathId,revision:String(description.revision)}});
     }
     if(records.length<64)break;

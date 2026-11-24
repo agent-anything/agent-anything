@@ -1,13 +1,13 @@
 import type { ExecutionFlowDefinition, ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
 
-export const INSPECTION_FORMAT_VERSION = 5 as const;
+export const INSPECTION_FORMAT_VERSION = 6 as const;
 
 export type InspectionJson = null | boolean | number | string |
   readonly InspectionJson[] | { readonly [key: string]: InspectionJson };
 export type InspectionContentClass = "definition" | "agent" | "provider" | "execution";
 export type InspectionSubjectKind = "run" | "turn" | "request" | "provider-attempt" |
   "call" | "operation" | "action" | "attempt" | "control" | "definition" |
-  "artifact" | "context" | "contribution" | "hook" | "event" | "process" | "process-observation" | "flow-definition" | "flow-invocation" | "flow-step";
+  "artifact" | "context" | "contribution" | "hook" | "event" | "process" | "process-observation" | "flow-definition" | "flow-invocation" | "flow-step" | "model-activity";
 
 export interface InspectionSubjectRef {
   readonly sourceId: string;
@@ -49,6 +49,11 @@ export interface InspectionLifecycleDefinition {
 }
 
 export interface InspectionPayloadMap {
+  call: {readonly name:string;readonly ordinal:number;readonly origin:"model"|"native"};
+  native_interaction: {readonly protocol:string;readonly protocolRevision:string;readonly interpretation:string;readonly interpretationRevision:string;
+    readonly purpose:string;readonly recipientId:string;readonly compositionDigest:string;readonly model:string|null};
+  native_fact: {readonly details:readonly {readonly name:string;readonly value:string|null}[];readonly category:string;readonly nativeType:string;readonly nativeId:string|null;readonly operationId:string|null;
+    readonly position:string|null;readonly status:string|null;readonly origin:"live"|"import";readonly limitation:string|null};
   evaluation_report: {readonly reportId: string; readonly comparison: "C01" | "C02" | "C03" | "C04";
     readonly target: string; readonly startingBoundary: string; readonly status: "complete" | "partial";
     readonly trialCount: number; readonly limitationCount: number};
@@ -129,6 +134,7 @@ export interface InspectionContentInput {
 }
 
 export interface InspectionContentDescriptor {
+  readonly rangeDigest?: string;
   readonly unavailableReason?: string;
   readonly id: string;
   readonly name: string;

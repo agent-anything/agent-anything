@@ -1,5 +1,6 @@
 import {
   createHelarcRunProjection,
+  helarcNativePresentationId,
   type HelarcRunProjection,
 } from "@agent-anything/helarc/run";
 import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
@@ -43,7 +44,7 @@ export class HelarcWorkbenchQueries {
   }
   readExecutionActivities = (query: Parameters<HelarcExecutionActivityQueries["read"]>[0]) => this.executionActivities.read(query);
   readConversation = (query: Parameters<HelarcConversationQueries["readConversation"]>[0]) => this.conversation.readConversation(query);
-  readConversationTurn = (query: Parameters<HelarcConversationQueries["readConversationTurn"]>[0]) => this.conversation.readConversationTurn(query);
+  readConversationResponseGroup = (query: Parameters<HelarcConversationQueries["readConversationResponseGroup"]>[0]) => this.conversation.readConversationResponseGroup(query);
   readCurrentWork = (query: Parameters<HelarcCollaborationQueries["readCurrentWork"]>[0]) => this.collaboration.readCurrentWork(query);
   readTaskDetails = (query: Parameters<HelarcCollaborationQueries["readTaskDetails"]>[0]) => this.collaboration.readTaskDetails(query);
   readWorkHistory = (query: Parameters<HelarcCollaborationQueries["readWorkHistory"]>[0]) => this.collaboration.readWorkHistory(query);
@@ -116,7 +117,8 @@ export class HelarcWorkbenchQueries {
         if (!message || query.runId !== resolved.projection.harnessRunId) return rejected("not_found");
         const source = message.metadata.outputSource as import("../../shared/HelarcWorkbench.js").HelarcOutputSource | undefined;
         const content = query.section === undefined ? message.content : source?.kind === "model_text"
-          ? source.adopted?.blocks.find(block => block.modelItemId === query.section)?.text : undefined;
+          ? source.adopted?.blocks.find(block => block.modelItemId === query.section)?.text : source?.kind === "native_response"
+            ? source.adopted?.find(block => helarcNativePresentationId(block.source) === query.section)?.text : undefined;
         if (content === undefined) return rejected("not_found");
         const offset = query.offset ?? 0;
         if (!validOffset(content,offset)) return rejected("invalid_query");

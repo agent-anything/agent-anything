@@ -1,6 +1,15 @@
 import {activityCount, activityToken} from "./ActivityPurpose.js";
 
 export type ActivityServiceClass = "guaranteed" | "spare";
+/** Interpret admission receipts without rewriting the original fact or its digest. */
+export function schedulingAdmissionLimitation(code:string) {
+  switch(code){
+    case "activity_schedule_pool_missing": return code;
+    case "activity_schedule_resource_unavailable":
+    case "activity_schedule_claim_exceeds_pool_capacity": return "activity_schedule_claim_exceeds_pool_capacity";
+    default: return null;
+  }
+}
 export interface ActivityResourcePool {
   readonly id: string;
   readonly revision: string;

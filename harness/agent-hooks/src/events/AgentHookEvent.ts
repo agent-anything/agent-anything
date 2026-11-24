@@ -3,7 +3,6 @@ import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type {
   TaskDecisionInputSources,
-  ModelInteractionProjection,
 } from "@agent-anything/agent-runtime/decision";
 
 export type AgentHookPoint = "Stop" | "StopFailure";
@@ -37,7 +36,7 @@ export interface AgentStopEvent<TOutput = unknown> {
   readonly controllerRequestId: string;
   readonly iteration: number;
   readonly candidate: AgentTerminalCandidate<TOutput>;
-  readonly interaction: ModelInteractionProjection;
+  readonly interaction: TaskDecisionInputSources<TOutput>["interaction"];
   readonly plan: TaskDecisionInputSources<TOutput>["plan"];
   readonly pending: TaskDecisionInputSources<TOutput>["pending"];
   readonly emittedAt: string;

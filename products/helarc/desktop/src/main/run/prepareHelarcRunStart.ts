@@ -13,6 +13,7 @@ import {
   type HelarcRunContractErrorCode,
   type HelarcRunPermissionPreset,
   type HelarcRunProviderRef,
+  type HelarcNativeRunModelRef,
 } from "@agent-anything/helarc/run";
 import type {
   HelarcThreadWorkspaceIdentity,
@@ -23,15 +24,15 @@ import {
   type HelarcTaskInputErrorCode,
 } from "@agent-anything/helarc/task";
 
-export interface PrepareHelarcRunStartInput {
+export type PrepareHelarcRunStartInput = ({providerProfileId:string;providerProfiles:readonly HelarcProviderProfile[]}|{
+  nativeModel:HelarcNativeRunModelRef;displayName:string;endpointLabel:string;
+}) & {
   runId: string;
   taskId: string;
   taskText: string;
   workspaceProfileId: string;
   additionalWorkspaceProfileIds?: readonly string[];
-  providerProfileId: string;
   workspaceProfiles: readonly HelarcWorkspaceProfile[];
-  providerProfiles: readonly HelarcProviderProfile[];
   createdAt: string;
   permissionPreset?: HelarcRunPermissionPreset;
   metadata?: Record<string, unknown>;
@@ -95,11 +96,8 @@ export function prepareHelarcRunStart(
     },
   );
 
-  const providerResult = selectHelarcProviderProfile(
-    input.providerProfiles,
-    input.providerProfileId,
-  );
-  if (!providerResult.ok) {
+  const providerResult = "nativeModel" in input?null:selectHelarcProviderProfile(input.providerProfiles,input.providerProfileId);
+  if (providerResult&&!providerResult.ok) {
     return reject(
       providerResult.error.code,
       providerResult.error.message,
@@ -113,7 +111,7 @@ export function prepareHelarcRunStart(
     additionalWorkspaceProfileIds: additionalWorkspaceProfiles.map(
       (profile) => profile.id,
     ),
-    providerProfileId: providerResult.activeProfile.id,
+    ...("nativeModel" in input?{nativeModel:input.nativeModel}:{providerProfileId:providerResult!.activeProfile.id}),
     permissionPreset: input.permissionPreset,
     createdAt: input.createdAt,
     metadata: input.metadata,
@@ -129,7 +127,7 @@ export function prepareHelarcRunStart(
     metadata: {
       ...(input.metadata ?? {}),
       runId: runResult.input.runId,
-      providerProfileId: providerResult.activeProfile.id,
+      ...("nativeModel" in input?{modelConfiguration:input.nativeModel.configuration}:{providerProfileId:providerResult!.activeProfile.id}),
     },
   });
   if (!taskResult.ok) {
@@ -145,12 +143,13 @@ export function prepareHelarcRunStart(
         primary: toThreadWorkspaceRef(workspaceResult.profile),
         additional: additionalWorkspaceProfiles.map(toThreadWorkspaceRef),
       },
-      provider: {
-        profileId: providerResult.activeProfile.id,
-        providerKind: providerResult.activeProfile.providerKind,
-        displayName: providerResult.activeProfile.displayName,
-        endpointLabel: providerResult.activeProfile.endpointLabel,
-        model: providerResult.activeProfile.model,
+      provider: "nativeModel" in input?{nativeModel:input.nativeModel,profileId:null,providerKind:null,
+        displayName:input.displayName,endpointLabel:input.endpointLabel,model:input.nativeModel.model}:{
+        profileId: providerResult!.activeProfile.id,
+        providerKind: providerResult!.activeProfile.providerKind,
+        displayName: providerResult!.activeProfile.displayName,
+        endpointLabel: providerResult!.activeProfile.endpointLabel,
+        model: providerResult!.activeProfile.model,
       },
     },
   };

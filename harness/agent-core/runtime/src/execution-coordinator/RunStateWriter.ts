@@ -1,6 +1,7 @@
 import type { RunItemPayload, RunState } from "../run/index.js";
 import type { CreateExecutionIdentity } from "./RunExecutionCoordinatorDependencies.js";
 import type {RunCommitBookkeeping} from "./RunCommitBookkeeping.js";
+import {retainRunCheckpointValue} from "./RunCommitSnapshot.js";
 
 export type RunStatePatch<TOutput> = { readonly [K in keyof RunState<TOutput>]?: RunState<TOutput>[K] };
 
@@ -27,7 +28,7 @@ export class RunStateWriter<TOutput> {
     private readonly onCommit: (state: RunState<TOutput>, previous: RunState<TOutput>, bookkeepingInvocationId: RunCommitBookkeeping) => void,
     private readonly persist?: (state: RunState<TOutput>, previous: RunState<TOutput>, accept: () => void, bookkeepingInvocationId: RunCommitBookkeeping) => Promise<void>,
   ) {
-    this.state = deepFreeze(initial);
+    this.state = retainRunCheckpointValue(initial);
   }
 
   getSnapshot(): RunState<TOutput> {
@@ -78,7 +79,7 @@ export class RunStateWriter<TOutput> {
       const revision = current.revision + 1;
       const items = payloads.map((payload, index) => {
         const sequence = current.items.length + index + 1;
-        return deepFreeze({
+        return retainRunCheckpointValue({
           ref: {
             run: current.run,
             id: this.createId({ kind: "run_item", runId: current.run.id, sequence }),
@@ -89,11 +90,11 @@ export class RunStateWriter<TOutput> {
           payload,
         });
       });
-      const next = deepFreeze({
+      const next = retainRunCheckpointValue({
         ...current,
         ...patch,
         revision,
-        items: [...current.items, ...items],
+        items: items.length?[...current.items, ...items]:current.items,
       }) as RunState<TOutput>;
       let accepted = false;
       const accept = () => {
@@ -130,11 +131,4 @@ export class RunStateWriter<TOutput> {
       throw new TypeError("A terminal Run cannot accept state mutations.");
     }
   }
-}
-
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== "object" || seen.has(value)) return value;
-  seen.add(value);
-  for (const child of Object.values(value)) deepFreeze(child, seen);
-  return Object.freeze(value);
 }

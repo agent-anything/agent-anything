@@ -1,6 +1,6 @@
 import {createHash} from "node:crypto";
 import type { TaskDecisionInputSources, TaskDecisionSourceBasis } from "@agent-anything/agent-runtime/decision";
-import { importModelConversationSeed, canonicalConversationPresentations } from "@agent-anything/agent-runtime/decision";
+import { importModelConversationSeed, canonicalConversationPresentations, requireTurnTaskInput } from "@agent-anything/agent-runtime/decision";
 import type { ModelInputSectionCandidate, ModelInputSourceRef } from "@agent-anything/model-interaction/input";
 import type { ContextProjectionEstimationInput } from "@agent-anything/context/projection";
 import type { HelarcShellRuntimeProfile } from "../tools/HelarcBaselineToolContracts.js";
@@ -29,6 +29,7 @@ export function renderHelarcSelectedMaterial(input: ContextProjectionEstimationI
 
 export function helarcConversationOpening(input: TaskDecisionInputSources | TaskDecisionSourceBasis,
   environment?: HelarcExecutionBackground): readonly ModelInputSectionCandidate[] {
+  requireTurnTaskInput(input);
   if (input.interaction.opening) {
     const selected = canonicalConversationPresentations(input.interaction);
     const sources = selected

@@ -1,10 +1,15 @@
 export type {
   CreateHelarcProductCompositionInput,
+  CreateHelarcNativeProductCompositionInput,
   HelarcProductComposition,
 } from "./HelarcProductComposition.js";
-export { createHelarcProductComposition } from "./HelarcProductComposition.js";
+export { createHelarcProductComposition, createHelarcNativeProductComposition } from "./HelarcProductComposition.js";
 export { createHelarcTaskModelBinding } from "./HelarcTaskModelBinding.js";
 export type { HelarcTaskModelBinding, HelarcTaskExecutionComposition, HelarcTaskExecutionFactory } from "./HelarcTaskModelBinding.js";
+export type { HelarcNativeTaskModelBinding, HelarcNativeTaskExecutionFactory } from "./HelarcTaskModelBinding.js";
+export {createHelarcResponsesTaskExecution,createHelarcDeepSeekTaskExecution,createHelarcOllamaTaskExecution,type HelarcNativeTaskCompositionPorts} from "./HelarcNativeTaskComposition.js";
+export {createHelarcResponsesStructuredPurposes,createHelarcDeepSeekStructuredPurposes,createHelarcOllamaStructuredPurposes,
+  type HelarcNativeStructuredPurposePorts} from "./HelarcNativeStructuredPurposes.js";
 export * from "./HelarcProviderCompatibility.js";
 export type {
   CreateHelarcActionCompositionInput,

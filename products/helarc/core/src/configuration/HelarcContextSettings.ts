@@ -1,7 +1,7 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {snapshotHelarcProviderModelSettings,type HelarcProviderProfile,type HelarcProviderModelSettings} from "./HelarcProviderProfile.js";
 
-export interface HelarcContextObservationTarget {
+export interface HelarcProfileContextObservationTarget {
   readonly profileId:string;
   readonly providerKind:HelarcProviderProfile["providerKind"];
   readonly baseUrl:string;
@@ -10,6 +10,15 @@ export interface HelarcContextObservationTarget {
   readonly contextWindowTokens:number|null;
   readonly artifact:string|null;
 }
+export interface HelarcNativeContextObservationTarget {
+  readonly kind:"native_configuration";
+  readonly configuration:{readonly id:string;readonly revision:string};
+  readonly protocol:{readonly id:"openai.responses"|"deepseek.chat-completions"|"ollama.chat";readonly revision:string};
+  readonly model:string;
+  readonly semanticRevision:string;
+  readonly artifact:string|null;
+}
+export type HelarcContextObservationTarget=HelarcProfileContextObservationTarget|HelarcNativeContextObservationTarget;
 export interface HelarcContextCapabilityObservation {
   readonly id:string;
   readonly revision:string;
@@ -39,17 +48,12 @@ export function snapshotHelarcContextSettings(value:unknown):HelarcContextSettin
   const observations=input.observations.map(value=>{
     const item=record(value,["id","revision","target","duty","method","protocol","conclusion","dimensions","conditions","finding","source","limitations","observedAt"]);
     const id=text(item.id,256);if(ids.has(id))throw new TypeError("context_observation_duplicate");ids.add(id);
-    const target=record(item.target,["profileId","providerKind","baseUrl","model","modelSettings","contextWindowTokens","artifact"]);
-    if(target.providerKind!=="ollama"&&target.providerKind!=="openai-compatible")throw new TypeError("context_observation_provider_invalid");
-    if(target.contextWindowTokens!==null&&(!Number.isSafeInteger(target.contextWindowTokens)||(target.contextWindowTokens as number)<1))throw new TypeError("context_observation_window_invalid");
-    const url=new URL(text(target.baseUrl,2048));
-    if(!["http:","https:"].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new TypeError("context_observation_endpoint_invalid");
+    const target=snapshotContextObservationTarget(item.target);
     const method=item.method===null?null:record(item.method,["id","revision"]);
     if(!["generation","assessment"].includes(item.duty as string)||!["supported","limited","unknown","conflicting"].includes(item.conclusion as string)||
       !Array.isArray(item.dimensions)||new Set(item.dimensions).size!==item.dimensions.length||item.dimensions.some(d=>!DIMENSIONS.includes(d)))throw new TypeError("context_observation_invalid");
     const observedAt=text(item.observedAt,64);if(!Number.isFinite(Date.parse(observedAt)))throw new TypeError("context_observation_date_invalid");
-    const body={id,target:{profileId:text(target.profileId,256),providerKind:target.providerKind,baseUrl:url.toString().replace(/\/$/,""),model:text(target.model,512),
-      modelSettings:snapshotHelarcProviderModelSettings(target.modelSettings as HelarcProviderModelSettings,target.providerKind),contextWindowTokens:target.contextWindowTokens,artifact:nullableText(target.artifact,2048)},
+    const body={id,target,
       duty:item.duty,method:method?{id:text(method.id,256),revision:text(method.revision,256)}:null,protocol:nullableText(item.protocol,256),conclusion:item.conclusion,
       dimensions:[...item.dimensions],conditions:text(item.conditions,8192,true),finding:text(item.finding,8192),source:text(item.source,4096),limitations:text(item.limitations,8192,true),observedAt};
     return deepFreeze({...body,revision:modelInputValueDigest(body)}) as HelarcContextCapabilityObservation;
@@ -69,6 +73,34 @@ export function matchHelarcContextObservations(settings:HelarcContextSettings,pr
       observedArtifact!==null&&observedArtifact!==artifact?"target_mismatch":"target_matched";
     return Object.freeze({observation,match,limitations:Object.freeze(["material_applicability_not_established",...(observedArtifact===null?["model_artifact_unknown"]:[])])});
   });
+}
+export function matchHelarcNativeContextObservations(settings:HelarcContextSettings,target:HelarcNativeContextObservationTarget){
+  const {artifact,...expected}=snapshotContextObservationTarget(target) as HelarcNativeContextObservationTarget;
+  return settings.observations.map(observation=>{
+    const {artifact:observedArtifact,...recorded}=observation.target;
+    const match=modelInputValueDigest(recorded)!==modelInputValueDigest(expected)?"target_mismatch":observedArtifact!==null&&artifact===null?"target_unknown":
+      observedArtifact!==null&&observedArtifact!==artifact?"target_mismatch":"target_matched";
+    return Object.freeze({observation,match,limitations:Object.freeze(["material_applicability_not_established",...(observedArtifact===null?["model_artifact_unknown"]:[])])});
+  });
+}
+function snapshotContextObservationTarget(value:unknown):HelarcContextObservationTarget {
+  if(value&&typeof value==="object"&&"kind" in value){
+    const t=record(value,["kind","configuration","protocol","model","semanticRevision","artifact"]);
+    const c=record(t.configuration,["id","revision"]),p=record(t.protocol,["id","revision"]);
+    if(t.kind!=="native_configuration"||!["openai.responses","deepseek.chat-completions","ollama.chat"].includes(p.id as string))
+      throw new TypeError("context_observation_protocol_invalid");
+    return {kind:"native_configuration",configuration:{id:text(c.id,256),revision:text(c.revision,256)},
+      protocol:{id:p.id as HelarcNativeContextObservationTarget["protocol"]["id"],revision:text(p.revision,256)},model:text(t.model,512),
+      semanticRevision:text(t.semanticRevision,256),artifact:nullableText(t.artifact,2048)};
+  }
+  const t=record(value,["profileId","providerKind","baseUrl","model","modelSettings","contextWindowTokens","artifact"]);
+  if(t.providerKind!=="ollama"&&t.providerKind!=="openai-compatible")throw new TypeError("context_observation_provider_invalid");
+  if(t.contextWindowTokens!==null&&(!Number.isSafeInteger(t.contextWindowTokens)||(t.contextWindowTokens as number)<1))throw new TypeError("context_observation_window_invalid");
+  const url=new URL(text(t.baseUrl,2048));
+  if(!["http:","https:"].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new TypeError("context_observation_endpoint_invalid");
+  return {profileId:text(t.profileId,256),providerKind:t.providerKind,baseUrl:url.toString().replace(/\/$/,""),model:text(t.model,512),
+    modelSettings:snapshotHelarcProviderModelSettings(t.modelSettings as HelarcProviderModelSettings,t.providerKind),contextWindowTokens:t.contextWindowTokens as number|null,
+    artifact:nullableText(t.artifact,2048)};
 }
 const DIMENSIONS=["format_and_references","source_support","coverage","exact_values_and_unknowns","revision_and_relationships","misses_and_false_positives"];
 function record(value:unknown,keys:readonly string[]):Record<string,unknown> {

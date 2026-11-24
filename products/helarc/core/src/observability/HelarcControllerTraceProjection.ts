@@ -54,6 +54,8 @@ export class HelarcTracingController<TOutput = unknown> implements TaskDecisionA
     >,
   ) {}
 
+  get historyKind(): TaskDecisionActivity<TOutput>["historyKind"] { return this.inner.historyKind; }
+
   get resourceMetering(): TaskDecisionActivity<TOutput>["resourceMetering"] {
     return this.inner.resourceMetering;
   }

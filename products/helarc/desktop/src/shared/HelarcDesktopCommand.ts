@@ -63,6 +63,8 @@ export interface HelarcProductCommandPayloadMap {
     readonly apiKey: string;
   };
   readonly "run.start": {
+    readonly maxInputTokensPerGeneration?:number;
+    readonly providerConfiguration?: import("./ProviderSettingsApi.js").ProviderTaskSelection;
     readonly modelSelection?: import("./HelarcModelSelection.js").HelarcModelSelection;
     readonly taskText: string;
     readonly target: HelarcProductRunStartTarget;

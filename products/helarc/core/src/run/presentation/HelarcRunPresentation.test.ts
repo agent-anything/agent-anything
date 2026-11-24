@@ -31,13 +31,19 @@ const call = {
   id: "call",
   kind: "model_tool_call",
   call: {
-    modelCallRef: { id: "call", turnId: "turn" },
+    modelCallRef: { id: "call", turnId: "turn", contentBlockOrdinal: 0,
+      providerRequestId: "request", controllerRequestId: "decision", branchId: "main" },
     name: "Agent",
     input: { description: "Inspect files", prompt: "Inspect the repository" },
   },
 };
 
 describe("Run presentation", () => {
+  it("does not silently discard native sources in the Turn-specific reader", () => {
+    expect(() => appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {
+      kind: "controller_turn", modelItems: [{ kind: "native_purpose_evidence", id: "original-evidence" }],
+    }))).toThrow("native_presentation_interpreter_required");
+  });
   it("records actual delegated input once without label truncation or system material", () => {
     const text = "Task detail ".repeat(3000);
     let state = labelHelarcRunPresentation(createHelarcRunPresentation(), "child", {
@@ -126,7 +132,7 @@ describe("Run presentation", () => {
       kind: "controller_turn", modelItems: [
         { kind: "assistant_text", id: "commentary", turnId: "turn", text: "Same words", contentBlockOrdinal: 0 },
         { ...call, id: "final", metadata: { helarcCallableBinding: { kind: "control", control: "final_result" } },
-          call: { ...call.call, modelCallRef: { id: "final", turnId: "turn" }, input: { response: "Same words" } } },
+          call: { ...call.call, modelCallRef: { ...call.call.modelCallRef, id: "final" }, input: { response: "Same words" } } },
       ],
     }));
     expect(state.records.map(r => r.content.kind)).toEqual(["assistant_text", "final_response"]);
@@ -163,7 +169,7 @@ describe("Run presentation", () => {
     const state = appendHelarcRunPresentation(createHelarcRunPresentation(), record(1, {
       kind: "controller_turn", modelItems: bindings.map((binding, i) => ({
         ...call, id: `call-${i}`, metadata: { helarcCallableBinding: binding },
-        call: { ...call.call, name: `callable-${i}`, modelCallRef: { id: `call-${i}`, turnId: "turn" } },
+        call: { ...call.call, name: `callable-${i}`, modelCallRef: { ...call.call.modelCallRef, id: `call-${i}` } },
       })),
     }));
     expect(state.records.map(r => r.content)).toMatchObject([
@@ -181,7 +187,7 @@ describe("Run presentation", () => {
           call: { ...call.call, name: "Agent_abc123" } },
         { ...call, id: "unknown", call: { ...call.call, name: "Agent_not_registered" } },
         { ...call, id: "plan", metadata: { helarcCallableBinding: { kind: "control", control: "update_plan" } },
-          call: { ...call.call, modelCallRef: { id: "plan", turnId: "turn" }, name: "plan_alias" } },
+          call: { ...call.call, modelCallRef: { ...call.call.modelCallRef, id: "plan" }, name: "plan_alias" } },
         { ...call, id: "named-tool", metadata: { helarcCallableBinding: { kind: "tool", toolName: "update_plan" } },
           call: { ...call.call, name: "update_plan" } },
         { ...call, id: "missing-binding", call: { ...call.call, name: "update_plan" } },

@@ -66,6 +66,7 @@ function DelegatedBranch({child, visible, renderChild, readingFor}: {
   const additional = Math.max(0, (child.activity?.activeCount ?? 0) - 1);
   const Icon = activity?.kind === "command" ? Terminal : activity?.kind === "model" ? MessageSquare : Wrench;
   const reading = open && visible ? readingFor(child.scope.runId) : null;
+  const executionOwnsPreview = !operations.length && execution.some(item => item.placement === "foreground" && !item.taskEnded);
   return <section className={`wb-child-branch${open ? " is-expanded" : ""}`} aria-label={child.displayName}>
     <div className="wb-child-navigation" ref={navigation} data-reading-anchor={`delegation:${child.scope.runId}`}>
       <strong>{child.displayName}</strong>
@@ -89,7 +90,7 @@ function DelegatedBranch({child, visible, renderChild, readingFor}: {
         <span>{child.textPreview?.text ?? child.label}</span>
       </div>
       <div className="wb-child-activity-preview" aria-label="Current activity">
-        {activity && !(activity.kind === "model" && execution.some(item => item.placement === "foreground")) && <>
+        {executionOwnsPreview ? <ChildExecutionActivity scope={child.scope} responseProgress={activity?.kind === "model" ? activity.title : undefined} /> : activity && <>
           <Icon size={13} aria-hidden="true" />
           {activity.runId !== child.scope.runId && <small>{activity.attribution}</small>}
           <span className="wb-child-activity-title" title={activity.title}>{activity.title}</span>
@@ -97,7 +98,6 @@ function DelegatedBranch({child, visible, renderChild, readingFor}: {
           {additional > 0 && <small className="wb-child-more" title={`${additional} additional activities`}>+{additional}</small>}
         </>}
       </div>
-      <ChildExecutionActivity scope={child.scope} />
     </div>}
     {open && <div id={`${id}-body`}>
       <div className="wb-child-objective">{child.label}</div>

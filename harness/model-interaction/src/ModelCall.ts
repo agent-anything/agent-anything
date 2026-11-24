@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { nativeModelSourceKey, snapshotNativeModelSource, type NativeModelSourceRef } from "./protocol/NativeModelSource.js";
+import { snapshotProtocolRevisionRef, sameRevisionRef, protocolDigest, type ProtocolRevisionRef } from "./protocol/ProtocolIdentity.js";
 import type { ModelJsonValue } from "./ModelInteractionContractValidation.js";
 import {
   nonNegativeInteger,
@@ -12,14 +14,18 @@ const MAX_MODEL_CALL_INPUT_BYTES = 131_072;
 const MAX_MODEL_RESULT_BYTES = 131_072;
 const MAX_SETTLEMENT_SOURCE_COUNT = 32;
 
-export interface ModelCallRef {
+interface ModelCallIdentity {
   readonly id: string;
   readonly providerRequestId: string;
   readonly controllerRequestId: string;
-  readonly turnId: string;
   readonly contentBlockOrdinal: number;
   readonly branchId: string;
 }
+export type ModelCallRef = ModelCallIdentity & (
+  | { readonly turnId: string; readonly nativeSource?: never; readonly purposeAcceptance?: never }
+  | { readonly turnId: null; readonly nativeSource: NativeModelSourceRef; readonly purposeAcceptance: ProtocolRevisionRef }
+);
+export type TurnModelCallRef = Extract<ModelCallRef, { readonly turnId: string }>;
 
 export interface ProviderCallRef {
   readonly providerId: string;
@@ -84,7 +90,7 @@ export function createModelCallRef(input: {
   readonly turnId: string;
   readonly contentBlockOrdinal: number;
   readonly branchId: string;
-}): ModelCallRef {
+}): TurnModelCallRef {
   const identity = {
     providerRequestId: token(input.providerRequestId, "ModelCallRef.providerRequestId"),
     controllerRequestId: token(input.controllerRequestId, "ModelCallRef.controllerRequestId"),
@@ -95,7 +101,7 @@ export function createModelCallRef(input: {
     ),
     branchId: token(input.branchId, "ModelCallRef.branchId"),
   };
-  return snapshotModelCallRef({
+  return Object.freeze({
     id: `model-call:sha256:${createHash("sha256")
       .update(JSON.stringify(identity), "utf8")
       .digest("hex")}`,
@@ -103,16 +109,56 @@ export function createModelCallRef(input: {
   });
 }
 
+export function createNativeModelCallRef(input: {
+  readonly providerRequestId: string;
+  readonly controllerRequestId: string;
+  readonly branchId: string;
+  readonly contentBlockOrdinal: number;
+  readonly nativeSource: NativeModelSourceRef;
+  readonly purposeAcceptance: ProtocolRevisionRef;
+}): ModelCallRef {
+  strictRecord(input, "NativeModelCallRef", ["providerRequestId", "controllerRequestId", "branchId", "contentBlockOrdinal", "nativeSource", "purposeAcceptance"]);
+  const identity = Object.freeze({ providerRequestId: token(input.providerRequestId, "providerRequestId"),
+    controllerRequestId: token(input.controllerRequestId, "controllerRequestId"), branchId: token(input.branchId, "branchId"),
+    contentBlockOrdinal: nonNegativeInteger(input.contentBlockOrdinal, "contentBlockOrdinal"),
+    turnId: null, nativeSource: snapshotNativeModelSource(input.nativeSource), purposeAcceptance: snapshotProtocolRevisionRef(input.purposeAcceptance) });
+  const effectIdentity = { runId: identity.nativeSource.scope.runId, acceptance: identity.purposeAcceptance, ordinal: identity.contentBlockOrdinal };
+  return Object.freeze({ id: `model-call:native:sha256:${createHash("sha256").update(JSON.stringify(effectIdentity), "utf8").digest("hex")}`, ...identity });
+}
+
+/** This guard belongs only to consumers of the existing Turn convention. */
+export function requireModelCallTurn(input: ModelCallRef): string {
+  const ref = snapshotModelCallRef(input);
+  if (ref.turnId === null) throw new TypeError("model_call_turn_convention_required");
+  return ref.turnId;
+}
+
+export function modelCallsShareDecisionBasis(left: ModelCallRef, right: ModelCallRef): boolean {
+  const a = snapshotModelCallRef(left), b = snapshotModelCallRef(right);
+  if (a.controllerRequestId !== b.controllerRequestId || a.branchId !== b.branchId) return false;
+  if (a.turnId !== null || b.turnId !== null) return a.turnId !== null && b.turnId !== null && a.turnId === b.turnId;
+  return sameRevisionRef(a.purposeAcceptance, b.purposeAcceptance) &&
+    protocolDigest(a.nativeSource.scope) === protocolDigest(b.nativeSource.scope);
+}
+
 export function snapshotModelCallRef(input: ModelCallRef): ModelCallRef {
   strictRecord(input, "ModelCallRef", [
     "id", "providerRequestId", "controllerRequestId", "turnId",
-    "contentBlockOrdinal", "branchId",
+    "contentBlockOrdinal", "branchId", "nativeSource", "purposeAcceptance",
   ]);
+  const origin = input.turnId === null
+    ? { turnId: null, nativeSource: snapshotNativeModelSource(input.nativeSource), purposeAcceptance: snapshotProtocolRevisionRef(input.purposeAcceptance) }
+    : { turnId: token(input.turnId, "ModelCallRef.turnId") };
+  if (input.turnId !== null && (input.nativeSource !== undefined || input.purposeAcceptance !== undefined)) throw new TypeError("Model Call cannot have competing source identities.");
+  if (input.turnId === null && input.id !== createNativeModelCallRef({ providerRequestId: input.providerRequestId,
+    controllerRequestId: input.controllerRequestId, branchId: input.branchId, contentBlockOrdinal: input.contentBlockOrdinal,
+    nativeSource: input.nativeSource, purposeAcceptance: input.purposeAcceptance }).id)
+    throw new TypeError("native_model_call_identity_invalid");
   return Object.freeze({
     id: token(input.id, "ModelCallRef.id"),
     providerRequestId: token(input.providerRequestId, "ModelCallRef.providerRequestId"),
     controllerRequestId: token(input.controllerRequestId, "ModelCallRef.controllerRequestId"),
-    turnId: token(input.turnId, "ModelCallRef.turnId"),
+    ...origin,
     contentBlockOrdinal: nonNegativeInteger(
       input.contentBlockOrdinal,
       "ModelCallRef.contentBlockOrdinal",
@@ -202,7 +248,7 @@ export function snapshotModelToolResultContent(input: unknown): ModelJsonValue {
 
 export function modelCallRefKey(input: ModelCallRef): string {
   const ref = snapshotModelCallRef(input);
-  return [
+  const key = [
     ref.id,
     ref.providerRequestId,
     ref.controllerRequestId,
@@ -210,6 +256,7 @@ export function modelCallRefKey(input: ModelCallRef): string {
     ref.contentBlockOrdinal,
     ref.branchId,
   ].join("\u0000");
+  return ref.turnId === null ? `${key}\u0000${nativeModelSourceKey(ref.nativeSource)}\u0000${JSON.stringify(ref.purposeAcceptance)}` : key;
 }
 
 function isSettlement(value: unknown): value is ModelCallSettlementKind {

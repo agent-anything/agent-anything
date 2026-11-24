@@ -7,8 +7,8 @@ import type {
   ConversationBlock,
   ConversationEntry,
   ConversationPage,
-  ConversationTurnEntry,
-  ConversationTurnPage,
+  ConversationResponseGroupEntry,
+  ConversationResponseGroupPage,
   ResponsePreviewSummary,
   WorkbenchScope,
 } from "../../shared/HelarcWorkbench.js";
@@ -42,8 +42,8 @@ export function ConversationEntries(
   const mapping = new Map(
     props.attempts.flatMap((a) =>
       a.parts
-        .filter((p) => p.turnId)
-        .map((p) => [p.turnId!, `preview:${a.invocationId}`] as const),
+        .filter((p) => p.groupId || p.turnId)
+        .map((p) => [p.groupId ?? p.turnId!, `preview:${a.invocationId}`] as const),
     ),
   );
   return (
@@ -52,13 +52,13 @@ export function ConversationEntries(
         <article
           key={entry.id}
           data-entry={
-            entry.kind === "turn"
-              ? (mapping.get(entry.turnId) ?? entry.id)
+            entry.kind === "response_group"
+              ? (mapping.get(entry.groupId) ?? entry.id)
               : entry.id
           }
-          className={`wb-message wb-message-${entry.role}${entry.kind === "turn" ? " wb-response" : ""}${entry.kind === "received_input" ? " wb-received-input" : ""}`}
+          className={`wb-message wb-message-${entry.role}${entry.kind === "response_group" ? " wb-response" : ""}${entry.kind === "received_input" ? " wb-received-input" : ""}`}
         >
-          {(entry.kind !== "turn" ||
+          {(entry.kind !== "response_group" ||
             entry.blocks.some((b) => b.kind !== "activity")) && (
             <header>
               <strong>
@@ -72,7 +72,7 @@ export function ConversationEntries(
               {entry.disposition && (
                 <small>{entry.disposition.replaceAll("_", " ")}</small>
               )}
-              {entry.kind !== "turn" && <CopyButton text={entry.content} />}
+              {entry.kind !== "response_group" && <CopyButton text={entry.content} />}
               {entry.productRunId && entry.runId && (
                 <details className="wb-message-menu">
                   <summary aria-label="Message options">
@@ -94,8 +94,8 @@ export function ConversationEntries(
               )}
             </header>
           )}
-          {entry.kind === "turn" ? (
-            <ConversationTurn key={entry.id} entry={entry} {...props} />
+          {entry.kind === "response_group" ? (
+            <ConversationResponseGroup key={entry.id} entry={entry} {...props} />
           ) : (
             <>
               <ConversationText
@@ -184,13 +184,13 @@ export function ModelResponseProgress({
   );
 }
 
-function ConversationTurn({
+function ConversationResponseGroup({
   entry,
   ...props
-}: ConversationContentProps & { entry: ConversationTurnEntry }) {
+}: ConversationContentProps & { entry: ConversationResponseGroupEntry }) {
   const [pages, setPages] = useState(0);
   const capacity = useConversationCapacity("turns", pages ? 1 : 0);
-  const [full, setFull] = useState<ConversationTurnPage | null>(null);
+  const [full, setFull] = useState<ConversationResponseGroupPage | null>(null);
   const [error, setError] = useState(false);
   const reader = useRef<() => void>(() => {});
   const latest = useRef({ entry, pages: capacity ? pages : 0 });
@@ -209,12 +209,12 @@ function ConversationTurn({
       const { entry, pages } = latest.current;
       try {
         let cursor: string | null = null,
-          result: ConversationTurnPage | null = null;
+          result: ConversationResponseGroupPage | null = null;
         const blocks: ConversationBlock[] = [];
         for (let index = 0; index < pages; index++) {
-          const page = await window.helarc.readConversationTurn({
+          const page = await window.helarc.readConversationResponseGroup({
             ...entry.scope,
-            turnId: entry.turnId,
+            groupId: entry.groupId,
             cursor,
           });
           if (disposed) return;

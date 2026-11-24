@@ -1,4 +1,26 @@
 // Shared strict snapshot helpers for Model Interaction Contracts.
+// Owned snapshots may bypass copying; stable sources still need initial validation.
+const ownedJson = new WeakSet<object>();
+const stableInputs = new WeakSet<object>();
+const inputSnapshots = new WeakMap<object,ModelJsonValue>();
+
+/** Prove the whole plain-data graph, never just the root's frozen flag. */
+export function isStableModelJsonInput(value:unknown, ancestors=new Set<object>()):boolean {
+  if(value===null||typeof value!=="object")return true;
+  if(ownedJson.has(value)||stableInputs.has(value))return true;
+  if(ancestors.has(value)||!Object.isFrozen(value))return false;
+  const array=Array.isArray(value),prototype=Object.getPrototypeOf(value);
+  if(array?prototype!==Array.prototype:prototype!==Object.prototype&&prototype!==null)return false;
+  ancestors.add(value);
+  try {
+    for(const key of Reflect.ownKeys(value)) {
+      const descriptor=Object.getOwnPropertyDescriptor(value,key);
+      if(!descriptor||!("value" in descriptor)||!isStableModelJsonInput(descriptor.value,ancestors))return false;
+    }
+    stableInputs.add(value);
+    return true;
+  } finally {ancestors.delete(value);}
+}
 
 export function strictRecord(
   value: unknown,
@@ -65,14 +87,20 @@ export function snapshotJsonValue(
   if (ancestors.has(value)) {
     throw new TypeError(`${path} must not contain cycles.`);
   }
+  if (ownedJson.has(value)) return value as ModelJsonValue;
+  const saved=inputSnapshots.get(value);
+  if(saved!==undefined)return saved;
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
-      return Object.freeze(
+      const output = Object.freeze(
         value.map((item, index) =>
           snapshotJsonValue(item, `${path}[${index}]`, ancestors),
         ),
       );
+      ownedJson.add(output);
+      if(isStableModelJsonInput(value))inputSnapshots.set(value,output);
+      return output;
     }
     const output: Record<string, ModelJsonValue> = {};
     for (const key of Object.keys(value).sort()) {
@@ -82,7 +110,10 @@ export function snapshotJsonValue(
         ancestors,
       )});
     }
-    return Object.freeze(output);
+    Object.freeze(output);
+    ownedJson.add(output);
+    if(isStableModelJsonInput(value))inputSnapshots.set(value,output);
+    return output;
   } finally {
     ancestors.delete(value);
   }

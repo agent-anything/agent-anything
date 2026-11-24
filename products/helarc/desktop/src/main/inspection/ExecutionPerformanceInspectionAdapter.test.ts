@@ -6,7 +6,7 @@ import {InspectionQueryService} from "@agent-anything/inspection/query";
 import {HelarcInspection} from "./HelarcInspection.js";
 import {beginExecutionTiming} from "../diagnostics/ExecutionPerformance.js";
 
-it("records correlated performance separately from authority without nested duplicates or sensitive fields",async()=>{
+it("records correlated request and nested work evidence without sensitive fields",async()=>{
   const directory=await mkdtemp(join(tmpdir(),"helarc-performance-inspection-")),root=join(directory,"inspection");
   const inspection=await HelarcInspection.create(join(directory,"settings.json"),root),query=new InspectionQueryService(root);
   try {
@@ -26,7 +26,8 @@ it("records correlated performance separately from authority without nested dupl
       expect(content.content?.text).toContain("clockDomain");
       samples.push(...JSON.parse(content.content!.text).samples);
     }
-    expect(samples.map(sample=>sample.context.requestId)).toEqual(Array.from({length:70},(_,index)=>index+1));
-    expect(new Set(samples.map(sample=>sample.id)).size).toBe(70);
+    expect(samples.map(sample=>sample.context.requestId)).toEqual([...Array.from({length:70},(_,index)=>index+1),3]);
+    expect(samples.at(-1).stage).toBe("storage.worker.content.expand");
+    expect(new Set(samples.map(sample=>sample.id)).size).toBe(71);
   }finally{await inspection.close();await query.close();await rm(directory,{recursive:true,force:true});}
 },30000);

@@ -1,116 +1,82 @@
 import { test, expect } from "@playwright/test";
 
-test("named profiles, metadata-backed thinking and credentials stay independent", async ({ page }, testInfo) => {
-  const errors: string[] = [];
-  page.on("pageerror", error => errors.push(error.message));
-  await page.addInitScript(() => {
-    const profiles: any[] = [{
-      id: "local", revision: "1", providerKind: "ollama", displayName: "Local Ollama",
-      baseUrl: "http://localhost:11435/", model: "gemma4:e4b", timeoutMs: 300000000,
-      credentialStatus: "empty_allowed", isActive: true,
-      ollamaRuntime: { contextWindowTokens: 163840 },
-      modelSettings: { service: "ollama", thinking: { mode: "default" } },
-    }];
-    const snapshot: any = {
-      projects: [], selectedProjectId: null, status: "idle", workspace: null, workspaceProfiles: [],
-      acceptedTask: null, activeThread: null, threadSummaries: [], run: null, error: null,
-      provider: { configured: true, nativeToolInteraction: { supported: true }, profiles, error: null, activeProfile: profiles[0] },
-    };
-    const saves: any[] = [];
-    (window as any).providerSettingsSaves = saves;
-    const receipt = () => ({ status: "handled", result: structuredClone(snapshot) });
-    (window as any).helarc = {
-      listRecoverableWork: async () => [],
-      recoverWork: async () => ({ok: true}),
-      getSnapshot: async () => structuredClone(snapshot), subscribeSnapshot: () => () => {},
-      getProviderCredentialSettings: async ({ profileId }: any) => ({ windowsAvailable: true,
-        selection: profiles.find(p => p.id === profileId)?.credential ?? { source: "safe-storage" } }),
-      discoverModels: async (query: any) => ({ ok: true, profileId: query.profileId, profileRevision: query.profileRevision,
-        catalog: { observedAt: new Date().toISOString(), source: "fixture", declarationRevision: null,
-          models: [{ id: query.model || "deepseek-flash", name: query.model || "deepseek-flash", artifact: null, contextWindowTokens: null, maximumOutputTokens: null,
-            thinking: query.profileId === "local"
-              ? { status: "known", source: "endpoint", values: [false, true], defaultValue: true }
-              : { status: "known", source: "endpoint", values: [false, true, "low", "high", "max"], defaultValue: "high" } }] } }),
-      selectProvider: async ({ profileId }: any) => { snapshot.provider.activeProfile = profiles.find(p => p.id === profileId); return receipt(); },
-      deleteProvider: async ({ profileId }: any) => { profiles.splice(profiles.findIndex(p => p.id === profileId), 1); snapshot.provider.activeProfile = profiles[0]; return receipt(); },
-      saveProviderConfig: async (input: any) => {
-        saves.push(input);
-        const previous = profiles.find(p => p.id === input.profileId);
-        const profile = { id: input.profileId ?? "remote", revision: String(Number(previous?.revision ?? 0) + 1),
-          providerKind: input.providerKind, displayName: input.displayName, baseUrl: new URL(input.baseUrl).href,
-          model: input.model, timeoutMs: input.timeoutMs, ollamaRuntime: input.ollamaRuntime, modelSettings: input.modelSettings, credentialStatus: input.apiKeyUpdate === "clear" ? "empty_allowed" : "present" };
-        (profile as any).credential = input.credential;
-        if (previous) profiles.splice(profiles.indexOf(previous), 1, profile); else profiles.push(profile);
-        snapshot.provider.activeProfile = profile;
-        snapshot.provider.configured = !!profile.model;
-        snapshot.provider.error = profile.model ? null : { code: "provider_config_missing", message: "Select a model before starting work." };
-        return receipt();
-      },
-    };
+test("Protocol browsing, saved credentials, explicit discovery and activation are separate",async({page},testInfo)=>{
+  const errors:string[]=[];page.on("pageerror",error=>errors.push(error.message));
+  await page.addInitScript(()=>{
+    const profiles:any[]=[],updates=new Map(),calls={save:0,query:0,activate:0};
+    (window as any).providerCalls=calls;
+    const snapshot:any={execution:"idle",projects:[],selectedProjectId:null,status:"idle",workspace:null,workspaceProfiles:[],acceptedTask:null,activeThread:null,threadSummaries:[],run:null,error:null,
+      provider:{configured:false,nativeToolInteraction:{supported:false},profiles:[],activeProfile:null,error:{code:"missing",message:"No provider"}}};
+    const ok=(value:any)=>({ok:true,value});
+    (window as any).helarc={bridgeVersion:11,productId:"helarc",listRecoverableWork:async()=>[],getSnapshot:async()=>structuredClone(snapshot),subscribeSnapshot:()=>()=>{},
+      providerConfigurations:{
+        list:async()=>ok({configurations:structuredClone(profiles),defaultSelection:null}),
+        receipt:async(id:string)=>ok(updates.get(id)??null),
+        previewPolicy:async({draft}:any)=>{
+          const n=draft.native,base=JSON.stringify([draft.protocol,draft.baseUrl,draft.model,n.organization,n.project]);
+          const target=JSON.stringify([base,[n.reasoningEffort,n.transport,n.continuity,n.background,n.store,n.stream]]);
+          if(draft.inRequestCompaction&&draft.inRequestCompaction.target!==target)return {ok:false,code:"provider_compaction_target_changed"};
+          return ok(draft.inRequestCompaction??{revision:"1",target,origin:"unassessed",basis:"test",reviewedAt:"2026-11-24",support:"unassessed",profiles:[],trigger:{windowTokens:null,thresholdTokens:null,basis:"test"}});
+        },
+        credentialSettings:async()=>ok({windowsAvailable:true,selection:{source:"windows-managed"}}),
+        save:async(input:any)=>{
+          calls.save++;if(updates.has(input.updateId))return ok(updates.get(input.updateId));
+          const saved={...structuredClone(input.draft),id:input.configurationId,revision:crypto.randomUUID(),semanticRevision:"semantic",connectionBindingId:`binding-${calls.save}`,
+            credentialBackend:input.credential.storage??"windows-managed",credentialAvailability:"unchecked",availabilityObservedAt:null,targetAttribution:"provider_endpoint",isDefault:false,archived:false};
+          const i=profiles.findIndex(c=>c.id===saved.id);if(i<0)profiles.push(saved);else profiles[i]=saved;
+          const receipt={updateId:input.updateId,disposition:"committed",configuration:saved};updates.set(input.updateId,receipt);return ok(receipt);
+        },
+        discover:async(input:any)=>{calls.query++;return ok({configurationId:input.id,revision:input.revision,models:["fixture-model"],capabilityEvidence:"unknown",observedAt:new Date().toISOString()});},
+        eligibility:async(input:any)=>ok({available:!!profiles.find(c=>c.id===input.id)?.model,reason:null}),
+        activate:async(input:any)=>{calls.activate++;const saved=profiles.find(c=>c.id===input.id);saved.isDefault=true;return ok(saved);},
+        archive:async(input:any)=>{profiles.splice(profiles.findIndex(c=>c.id===input.id),1);return ok(null);},
+        dependencies:async()=>ok({bindingRevision:1,bindingOutstanding:2,credentialOutstanding:2,credentialBindings:1}),
+      }};
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Open settings", exact: true }).click();
-  const form = page.getByRole("form", { name: "Provider settings" });
-  const thinking = form.getByLabel("Thinking", { exact: true });
-  await expect(thinking.locator("option")).toHaveCount(3);
-  await thinking.selectOption("disabled");
-  await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).providerSettingsSaves.length)).toBe(1);
-  expect(await page.evaluate(() => (window as any).providerSettingsSaves[0])).toMatchObject({
-    profileId: "local", expectedRevision: "1", modelSettings: { service: "ollama", thinking: { mode: "disabled" } }, apiKeyUpdate: "clear",
-  });
-  await form.getByRole("button", { name: "Add Provider" }).click();
-  await form.getByLabel("Service", { exact: true }).selectOption("deepseek");
-  await form.getByLabel("Name", { exact: true }).fill("DeepSeek");
-  await expect(form.getByLabel("Model", { exact: true })).toHaveValue("");
-  await expect(thinking).toBeDisabled();
-  await form.getByLabel("API key", { exact: true }).fill("fixture-key");
-  await expect(thinking.locator("option")).toHaveCount(1);
-  await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(form.getByLabel("API key", { exact: true })).toHaveValue("");
-  await expect(form.getByLabel("API key", { exact: true })).toHaveAttribute("placeholder", "Stored key is present");
-  await expect(form.locator('#provider-models option[value="deepseek-flash"]')).toHaveCount(1);
-  expect(await page.evaluate(() => (window as any).providerSettingsSaves[1])).toMatchObject({ model: "", apiKeyUpdate: "set" });
-  await form.getByLabel("Model", { exact: true }).fill("deepseek-flash");
-  await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).providerSettingsSaves.length)).toBe(3);
-  await expect(thinking.locator("option")).toHaveCount(6);
-  await thinking.selectOption("effort:max");
-  await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).providerSettingsSaves.length)).toBe(4);
-  expect(await page.evaluate(() => (window as any).providerSettingsSaves[3])).toMatchObject({
-    profileId: "remote", modelSettings: { service: "deepseek", thinking: { mode: "enabled", effort: "max" } }, apiKeyUpdate: "keep", apiKey: "",
-  });
-  await form.getByLabel("Saved configuration").selectOption("local");
-  await expect(form.getByLabel("Model", { exact: true })).toHaveValue("gemma4:e4b");
-  await expect(thinking).toHaveValue("disabled");
-  await form.getByLabel("Saved configuration").selectOption("remote");
-  await expect(thinking).toHaveValue("effort:max");
-  await expect(thinking.locator("option")).toHaveCount(6);
-  await form.getByLabel("Credential storage", { exact: true }).selectOption("windows-managed");
-  await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).providerSettingsSaves.at(-1).credential.source)).toBe("windows-managed");
-  await expect(form.getByLabel("Credential storage", { exact: true })).toHaveValue("windows-managed");
-  await form.getByLabel("Credential storage", { exact: true }).selectOption("windows-reference");
-  await expect(form.getByLabel("API key", { exact: true })).toHaveCount(0);
-  await form.getByLabel("Credential target", { exact: true }).fill("Example/DeepSeek");
-  await form.getByLabel("Credential encoding", { exact: true }).selectOption("utf8");
-  await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).providerSettingsSaves.at(-1).apiKeyUpdate)).toBe("reference");
-  expect(await page.evaluate(() => (window as any).providerSettingsSaves.at(-1))).toMatchObject({ apiKey: "", credential: { source: "windows-reference", target: "Example/DeepSeek", encoding: "utf8" } });
-  await expect(form.getByLabel("Credential target", { exact: true })).toHaveValue("Example/DeepSeek");
-  await page.screenshot({ path: testInfo.outputPath("provider-settings.png"), fullPage: true });
-  await page.getByRole("button", { name: "Close settings", exact: true }).click();
-  await page.locator(".wb-context > summary").click();
-  await expect(page.getByLabel("Next task Provider")).toHaveValue("remote");
-  await expect(page.getByLabel("Next task model")).toHaveValue("deepseek-flash");
-  await page.getByLabel("Next task Provider").selectOption("local");
-  await expect(page.getByLabel("Next task model")).toHaveValue("gemma4:e4b");
-  await page.getByRole("button", { name: "Open settings", exact: true }).click();
-  await expect(form.getByLabel("Saved configuration")).toHaveValue("remote");
-  page.on("dialog", dialog => dialog.accept());
-  await form.getByRole("button", { name: "Delete Provider" }).click();
-  await expect(form.getByLabel("Model", { exact: true })).toHaveValue("gemma4:e4b");
-  await expect(form.getByLabel("Saved configuration").locator("option")).toHaveCount(2);
+  await page.goto("/");await page.getByRole("button",{name:"Open settings",exact:true}).click();
+  const panel=page.getByRole("region",{name:"Provider configuration"});
+  await panel.getByLabel("Model Interaction Protocol").selectOption("openai.responses");
+  await expect(panel.getByLabel("Configuration name")).toHaveCount(0);
+  await panel.getByRole("button",{name:"New configuration",exact:true}).click();
+  await expect(panel.getByLabel("Credential source")).toHaveValue("windows-managed");
+  await panel.getByLabel("New API key").fill("synthetic-ui-test-key");
+  await panel.getByRole("button",{name:"Save configuration",exact:true}).click();
+  await expect(panel.getByLabel("Credential source")).toHaveValue("keep");
+  expect(await page.evaluate(()=>(window as any).providerCalls)).toEqual({save:1,query:0,activate:0});
+  await expect(panel.getByRole("button",{name:"Use as default"})).toBeDisabled();
+  await panel.getByRole("button",{name:"Query models"}).click();
+  await expect(panel.getByLabel("Available models").locator('option[value="fixture-model"]')).toHaveCount(1);
+  await panel.getByLabel("Available models").selectOption("fixture-model");
+  await panel.getByText("In-request compaction use policy",{exact:true}).click();
+  const policy=panel.getByLabel("In-request compaction use policy",{exact:true});
+  const original=JSON.parse(await policy.inputValue());
+  await policy.fill(JSON.stringify({...original,target:"previous-target"}));
+  await expect(panel.getByText("provider_compaction_target_changed")).toBeVisible();
+  await expect(panel.getByRole("button",{name:"Save configuration",exact:true})).toBeDisabled();
+  await panel.getByRole("button",{name:"Restore documentation defaults"}).click();
+  await expect(panel.getByRole("button",{name:"Save configuration",exact:true})).toBeEnabled();
+  await panel.getByRole("button",{name:"Save configuration",exact:true}).click();
+  await expect(panel.getByRole("button",{name:"Use as default"})).toBeEnabled();
+  expect(await page.evaluate(()=>(window as any).providerCalls.activate)).toBe(0);
+  await panel.getByRole("button",{name:"Use as default"}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).providerCalls.activate)).toBe(1);
+  await panel.getByLabel("Model Interaction Protocol").selectOption("ollama.chat");
+  await expect(panel.getByLabel("Model",{exact:true})).toHaveCount(0);
+  await panel.getByLabel("Model Interaction Protocol").selectOption("openai.responses");
+  const option=await panel.getByLabel("Saved configuration").locator("option").nth(1).getAttribute("value");
+  await panel.getByLabel("Saved configuration").selectOption(option!);
+  await expect(panel.getByLabel("Model",{exact:true})).toHaveValue("fixture-model");
+  expect(await page.evaluate(()=>(window as any).providerCalls)).toEqual({save:2,query:1,activate:1});
+  await page.screenshot({path:testInfo.outputPath("protocol-settings.png"),fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:testInfo.outputPath("protocol-settings-mobile.png"),fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.setViewportSize({width:1440,height:900});
+  await page.getByRole("button",{name:"Close settings",exact:true}).click();
+  await page.locator("details.wb-context > summary").click();
+  const nextTask=page.getByLabel("Next task protocol configuration");
+  await expect(nextTask.locator("optgroup option")).toHaveCount(1);
+  await nextTask.selectOption((await nextTask.locator("optgroup option").getAttribute("value"))!);
+  expect(await page.evaluate(()=>(window as any).providerCalls)).toEqual({save:2,query:1,activate:1});
   expect(errors).toEqual([]);
 });

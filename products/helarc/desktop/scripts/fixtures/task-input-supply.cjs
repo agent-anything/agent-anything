@@ -226,8 +226,9 @@ async function main() {
       reconcile:handler.reconcile.bind(handler),settle:handler.settle.bind(handler),interpret:async(path,stage,...args)=>{
         if(stage.request.stageKind==="model"){
           assert.equal(stage.result.value.kind,"succeeded");
-          assert(responseEvents.length>0,"The original physical response must be observable");
-          assert(responseEvents.every(event=>event.runId===path.intent.runId&&event.progress.requestId===stage.request.input.request.requestId));
+          const deliveries=responseEvents.filter(event=>event.kind==="delivery");
+          assert(deliveries.length>0,"The original physical response must be observable");
+          assert(deliveries.every(event=>event.runId===path.intent.runId&&event.progress.requestId===stage.request.input.request.requestId));
           await writeFile(join(directory,"response-observations.json"),JSON.stringify(responseEvents));
           if(taskPreparation==="accepted")assert.equal((await a({kind:"read_path",pathId:"background-preparation"})).dispatchedAttempts,0,"Foreground response must not wait for the background producer");
           if(interruptTask){const result=await runnerHandle.steer({commandId:"changed-after-response",expectedRunRevision:runnerHandle.getSnapshot().runRevision,
@@ -372,7 +373,8 @@ async function main() {
       await assert.rejects(readTaskModelResponseHandoff(store.activityHandoffs,{...originalHandoff,sourceId:"another-source"}),/task_response_handoff_source_changed/);
       await assert.rejects(readTaskModelResponseHandoff(store.activityHandoffs,{...originalHandoff,runId:"another-run"}),/task_response_original_path_unavailable/);
       assert.equal(accepted.progress.state,"interpreted",JSON.stringify(accepted.progress));
-      assert(multipleTurns?responseEvents.every(event=>event.progress.requestId!==stage.request.input.request.requestId):responseEvents.length===0,"Local recovery must not pretend to receive the physical response again");
+      const deliveries=responseEvents.filter(event=>event.kind==="delivery");
+      assert(multipleTurns?deliveries.every(event=>event.progress.requestId!==stage.request.input.request.requestId):deliveries.length===0,"Local recovery must not pretend to receive the physical response again");
       assert((JSON.parse(await readFile(join(directory,"response-observations.json"),"utf8"))).length>0);
       assert.equal(accepted.progress.proposal.kind,multipleTurns?"advance":"propose_completion");
       if(!multipleTurns)assert(accepted.progress.proposal.output.summary.includes("7391"));
@@ -480,7 +482,8 @@ async function main() {
       for(const fact of authorizationFacts) {
         const subject=inspection.recorder.ref("activity","event",`${fact.runId}:handoff:${fact.sequence}`,fact.runId);
         const visible=await queries.query({...inspectionSelection,kind:"get_subject",subject});
-        const record=visible.records.find(r=>r.payload.kind==="event"&&r.payload.name==="activity.authorization_restricted"&&r.payload.sequence===fact.sequence);
+        const record=visible.records.find(r=>r.payload.kind==="process_evidence"&&r.payload.name==="activity.authorization_restricted"&&
+          r.payload.origin.owner==="activity.fact"&&r.payload.origin.id===String(fact.sequence)&&r.payload.origin.runId===fact.runId);
         assert(record,"Each original restriction and clearance must be visible as its exact durable activity event");
         const content=record.contents.find(c=>c.name==="Durable activity handoff");assert(content);
         const retained=await queries.query({...inspectionSelection,kind:"get_content",contentId:content.id});

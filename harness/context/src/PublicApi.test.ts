@@ -56,8 +56,8 @@ describe("Context public API", () => {
       "validateContextProcessEvidence",
     ]);
     expect(Object.keys(persistenceApi)).toEqual([]);
-    expect(Object.keys(custodyApi).sort()).toEqual(["CustodyMaterialAccess", "MaterialCustodyError", "containsMaterialRange", "custodyCount", "custodyToken", "materialViewReference", "materialViewReferenceId", "sameMaterialVersion"]);
-    expect(Object.keys(representationApi)).toEqual([]);
+    expect(Object.keys(custodyApi).sort()).toEqual(["CustodyMaterialAccess", "MaterialCustodyError", "containsMaterialRange", "custodyCount", "custodyToken", "materialViewReference", "materialViewReferenceId", "sameMaterialVersion", "snapshotMaterialDeliveryDisposition", "snapshotMaterialDeliveryObligation"]);
+    expect(Object.keys(representationApi)).toEqual(["assessTransformationQuality"]);
     expect(Object.keys(selectionApi)).toEqual([]);
     expect(Object.keys(preparationApi).sort()).toEqual(["InMemoryContextPreparationStore", "contextPreparationDigest", "validateContextPreparationIntent"]);
     expect(Object.keys(materialApi).sort()).toEqual([

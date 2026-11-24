@@ -10,7 +10,7 @@ export const views: Record<string, InspectionViewQuery | "get_execution_flow"> =
 export const areaViews: Record<string, string[]> = {
   Definitions: ["Records", "Data Flow", "Dependencies"],
   Runs: ["Overview", "Execution Flow", "Lifecycle", "Timeline", "Data Flow", "Hierarchy", "Scheduling", "Dependencies", "Records", "Telemetry"],
-  "Model Interaction": ["Requests", "Data Flow", "Records", "Telemetry"],
+  "Model Interaction": ["Native interactions", "Requests", "Data Flow", "Records", "Telemetry"],
   Execution: ["Calls", "Scheduling", "Timeline", "Dependencies", "Data Flow", "Records"],
   Comparison: ["Records"],
   "Context Process": ["Records"],
@@ -49,8 +49,8 @@ export function useInspectionSnapshot() {
   const inventoryFilter = {kind: (area === "Definitions" ? "list_definitions" : "list_runs") as InspectionViewQuery};
   const dataObjectFocus = view === "Data Flow" && selected !== null && (selected.kind !== "run" || params.get("dataFocus") === "true");
   const viewFilter = () => ({
-    kind: views[view] as InspectionViewQuery,
-    subject: ["Requests", "Calls", "Scheduling", "Timeline", "Overview", "Execution Flow"].includes(view) || (view === "Data Flow" && !dataObjectFocus) ? undefined : selected ?? undefined,
+    kind: view === "Native interactions" ? "list_native_interactions" as const : views[view] as InspectionViewQuery,
+    subject: ["Native interactions", "Requests", "Calls", "Scheduling", "Timeline", "Overview", "Execution Flow"].includes(view) || (view === "Data Flow" && !dataObjectFocus) ? undefined : selected ?? undefined,
     ...(runId && area !== "Definitions" && !dataObjectFocus ? {runId, includeDescendants} : {}),
   });
 

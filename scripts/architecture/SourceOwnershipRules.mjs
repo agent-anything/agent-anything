@@ -28,6 +28,11 @@ export function evaluateSourceOwnershipRules({
   }
 
   if (!isTestOnly) {
+    if (path.startsWith("harness/model-interaction/src/protocol/") &&
+        /\b(?:ProviderRequest|ProviderResponse|ModelTurn|RetryExecutor|RetryPolicy)\b/.test(text)) {
+      reject("native_protocol_cooperation_not_common_execution",
+        "Protocol cooperation contracts cannot depend on the former common request/response/Turn or retry engine.");
+    }
     if (
       /\bapplyContextTransition\s*\(/.test(text) &&
       path !== "harness/context/src/active-context/ContextTransitionApplication.ts" &&

@@ -568,6 +568,18 @@ textarea {
 .provider-profile-picker label { flex: 1; min-width: 0; }
 .provider-profile-picker { width: 100%; }
 .provider-configuration-form { display: grid; width: 100%; gap: 10px; justify-items: start; }
+.provider-configuration-fields { display: grid; gap: 12px; margin: 0; padding: 0; border: 0; min-width: 0; width: 100%; }
+.provider-configuration-fields details { min-width: 0; }
+.provider-configuration-fields details label { margin-top: 10px; }
+.provider-configuration-fields summary { cursor: pointer; }
+.provider-model-catalog { padding: 8px 10px; border-left: 2px solid #cbd2ce; }
+.provider-model-catalog summary { font-size: 12px; font-weight: 600; }
+.provider-model-catalog > input, .provider-model-catalog > select, .provider-model-catalog > small { display: block; margin-top: 6px; }
+.settings-panel .provider-model-catalog select { height: auto; max-height: min(12rem, 30vh); padding: 2px; overflow-y: auto; }
+.provider-model-catalog option { padding: 3px 6px; }
+.provider-configuration-actions { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.provider-configuration-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; height: auto; width: auto; padding: 8px 12px; white-space: nowrap; line-height: 1.25; }
+.provider-configuration-fields input[type="checkbox"] { width: 16px; height: 16px; margin-right: 8px; }
 .provider-profile-picker button, .provider-discovery-status button { min-width: 34px; height: 34px; padding: 7px; }
 .provider-discovery-status { align-items: center; }
 .provider-discovery-status small { overflow-wrap: anywhere; }

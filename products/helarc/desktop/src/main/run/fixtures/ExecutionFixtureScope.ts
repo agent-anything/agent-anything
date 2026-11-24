@@ -21,6 +21,11 @@ export class ExecutionFixtureScope {
   private readonly pending = new Map<Promise<unknown>, FixtureStore | undefined>();
   private readonly runs = new Map<HelarcHostRunComposition, {settled: Promise<void>; store?: FixtureStore}>();
   private readonly stores = new Map<FixtureStore, OwnedStore>();
+  private readonly activityIssues = new Set<string>();
+
+  snapshot() {
+    return {runs:[...this.runs.keys()].map(run=>run.activeRun.getStatus()),activityIssues:[...this.activityIssues]};
+  }
 
   static current(): ExecutionFixtureScope | undefined {return current.getStore();}
 
@@ -47,7 +52,16 @@ export class ExecutionFixtureScope {
     this.assertOpen(store);
     const owned = this.own(store);
     if (owned.host && options) throw new Error("execution_fixture_activity_host_already_bound");
-    return owned.host ??= createHelarcActivityHost(store, options);
+    return owned.host ??= createHelarcActivityHost(store, {...options,report:async cycle=>{
+      for(const issue of [...cycle.failures,...cycle.runs.flatMap(run=>run.result.failures),
+        ...cycle.reconsiderations.flatMap(run=>run.result.failures)]) {
+        if(this.activityIssues.size<32)this.activityIssues.add(String(issue.error));
+      }
+      for(const run of cycle.reconsiderations)for(const rejected of run.result.rejected) {
+        if(this.activityIssues.size<32)this.activityIssues.add(`${rejected.subscriptionId}: ${rejected.code}`);
+      }
+      await options?.report?.(cycle);
+    }});
   }
 
   prepare(create: () => Promise<PreparedHelarcHostRun>, store?: FixtureStore): Promise<PreparedHelarcHostRun> {

@@ -1,5 +1,26 @@
 const MAX_CONTROLLER_CHECKPOINT_DEPTH = 64;
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const immutableData = new WeakSet<object>();
+
+/** Immutability is only a prerequisite for reusing an owner's successful validation. */
+export function isImmutableActivityValue(value:unknown,ancestors=new Set<object>()):boolean {
+  if(value===null||typeof value==="string"||typeof value==="boolean")return true;
+  if(typeof value==="number")return Number.isFinite(value);
+  if(typeof value!=="object")return false;
+  if(immutableData.has(value))return true;
+  if(ancestors.has(value)||!Object.isFrozen(value))return false;
+  const prototype=Object.getPrototypeOf(value);
+  if(Array.isArray(value)?prototype!==Array.prototype:prototype!==Object.prototype&&prototype!==null)return false;
+  ancestors.add(value);
+  try {
+    for(const key of Reflect.ownKeys(value)) {
+      const descriptor=Object.getOwnPropertyDescriptor(value,key);
+      if(!descriptor||!("value" in descriptor)||!isImmutableActivityValue(descriptor.value,ancestors))return false;
+    }
+    immutableData.add(value);
+    return true;
+  } finally {ancestors.delete(value);}
+}
 
 /** Validate checkpoint data without imposing Action fingerprint limits on retained history. */
 export function assertControllerCheckpointValue(value: unknown): void {

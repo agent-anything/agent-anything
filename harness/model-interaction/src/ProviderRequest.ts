@@ -16,6 +16,7 @@ import {
 import type { ModelJsonValue } from "./ModelInteractionContractValidation.js";
 import {
   snapshotJsonValue,
+  isStableModelJsonInput,
   strictRecord,
   token,
 } from "./ModelInteractionContractValidation.js";
@@ -60,8 +61,13 @@ export interface ProviderRequestCorrelation {
   readonly controllerRequestId: string;
   readonly branchId: string;
 }
+const ownedRequests = new WeakSet<object>();
+const sourceRequests = new WeakMap<object,ProviderRequest>();
 
 export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest {
+  if(ownedRequests.has(input))return input;
+  const retained=sourceRequests.get(input);
+  if(retained)return retained;
   strictRecord(input, "ProviderRequest", [
     "requestId", "purpose", "correlation", "instructions", "messages", "interaction", "composition",
     "modelContext", "continuation", "metadata",
@@ -83,7 +89,7 @@ export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
     throw new TypeError("ProviderRequest.metadata must be a JSON object.");
   }
-  return Object.freeze({
+  const result=Object.freeze({
     requestId: token(input.requestId, "ProviderRequest.requestId"),
     purpose: token(input.purpose, "ProviderRequest.purpose"),
     correlation: snapshotProviderRequestCorrelation(input.correlation),
@@ -97,6 +103,9 @@ export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest
       : snapshotModelContinuationRef(input.continuation),
     metadata: metadata as { readonly [key: string]: ModelJsonValue },
   });
+  ownedRequests.add(result);
+  if(isStableModelJsonInput(input))sourceRequests.set(input,result);
+  return result;
 }
 
 export function createProviderSemanticRequestDigest(input: ProviderRequest): string {

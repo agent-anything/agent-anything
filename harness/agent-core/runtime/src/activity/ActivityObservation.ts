@@ -1,5 +1,26 @@
 import type {ActivityHandoffPort} from "./ActivityHandoff.js";
 import {activityToken} from "./ActivityPurpose.js";
+import type {ActivityPathState, ActivityStageState, ActivityInputNeed} from "./ActivityHandoff.js";
+
+/** One bounded read, not an acceptance or a grant. Bodies are absent in observations. */
+export interface ActivityReadScope {
+  readonly pathId:string;
+  readonly requestIds:readonly string[];
+  /** Include the supplied/unavailable stage references declared by these needs. */
+  readonly inputNeedIds:readonly string[];
+}
+export interface ActivityControlReceipt {readonly kind:"activity_control";readonly pathId:string;readonly runId:string;readonly controlRevision:number;readonly cancelled:boolean;}
+export interface ActivitySnapshot {
+  readonly path:ActivityPathState|null;
+  readonly stages:readonly (ActivityStageState|null)[];
+  readonly inputNeeds:readonly (ActivityInputNeed|null)[];
+}
+export interface ActivityStateObservation {
+  readonly path:Omit<ActivityPathState,"progress">|null;
+  readonly stages:readonly ({readonly requestId:string;readonly pathId:string;readonly requestDigest:string;
+    readonly status:ActivityStageState["status"]}|null)[];
+  readonly inputNeeds:readonly (ActivityInputNeed|null)[];
+}
 
 /** A discovery hint, never an acceptance, dispatch or content-integrity proof. */
 export interface ActivityPathObservation {

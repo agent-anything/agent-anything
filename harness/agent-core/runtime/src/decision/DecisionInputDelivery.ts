@@ -3,6 +3,7 @@ import { snapshotModelMessage, type ModelMessage, type ProviderRequest } from "@
 import { modelInputSectionLocations, snapshotModelInputSection, selectModelWorkingView, type ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
 import type { RunInputNotification } from "../execution-coordinator/RunInputNotifications.js";
 import {snapshotSelectedInputDeliveryReceipt,type SelectedInputDeliveryBasis} from "./SelectedInputDelivery.js";
+import {snapshotModelPurposeEvidence,type ModelPurposeEvidence} from "@agent-anything/model-interaction/protocol";
 
 export interface ControllerInputDeliveryBatch {
   readonly id: string;
@@ -15,6 +16,9 @@ export interface ControllerInputDeliveryReceipt {
   readonly batch: { readonly id: string; readonly revision: string; readonly runId: string };
   readonly entries: readonly { readonly sequence: number; readonly digest: string }[];
   readonly via:
+    | { readonly kind: "protocol"; readonly requestId:string; readonly evidence:ModelPurposeEvidence;
+        readonly input:{readonly id:string;readonly revision:string;readonly digest:string};
+        readonly mapping:readonly {readonly sequence:number;readonly position:string;readonly contentDigest:string}[] }
     | { readonly kind: "controller"; readonly controllerRequestId: string }
     | { readonly kind: "provider"; readonly requestId: string; readonly compositionId: string;
         readonly workingViewId: string;
@@ -128,6 +132,7 @@ export function snapshotInputDeliveryReceipt(
   if (value.via?.kind === "controller") {
     return createControllerInputDeliveryReceipt(batch, value.via.controllerRequestId);
   }
+  if(value.via?.kind==="protocol")return createNativeInputDeliveryReceipt(batch,value.via);
   if(value.via?.kind==="provider"&&value.via.selection)return snapshotSelectedInputDeliveryReceipt(value,batch);
   if (value.via?.kind !== "provider" || JSON.stringify(value.via.sectionIds) !==
       JSON.stringify(batch.entries.map(entry => `${batch.id}:entry:${entry.sequence}`)) ||
@@ -151,6 +156,21 @@ export function snapshotInputDeliveryReceipt(
     return retained;
   });
   return receipt(batch, Object.freeze({...value.via, sectionIds: Object.freeze([...value.via.sectionIds]), presentations: Object.freeze(presentations)}));
+}
+
+/** Content/location correspondence is checked by the bound Protocol input participant. */
+export function createNativeInputDeliveryReceipt(batch:ControllerInputDeliveryBatch,
+  via:Extract<ControllerInputDeliveryReceipt["via"],{kind:"protocol"}>):ControllerInputDeliveryReceipt {
+  const evidence=snapshotModelPurposeEvidence(via.evidence);
+  requireToken(via.requestId);requireToken(via.input.id);requireToken(via.input.revision);requireToken(via.input.digest);
+  if(evidence.scope.runId!==batch.runId||via.mapping.length!==batch.entries.length||
+    new Set(via.mapping.map(m=>m.position)).size!==via.mapping.length)throw new TypeError("native_delivery_scope_invalid");
+  const mapping=via.mapping.map((m,i)=>{
+    if(m.sequence!==batch.entries[i]!.sequence||!m.position.startsWith("/")||!/^sha256:[a-f0-9]{64}$/.test(m.contentDigest))
+      throw new TypeError("native_delivery_mapping_invalid");
+    return Object.freeze({...m});
+  });
+  return receipt(batch,Object.freeze({kind:"protocol",requestId:via.requestId,evidence,input:Object.freeze({...via.input}),mapping:Object.freeze(mapping)}));
 }
 
 function receipt(batch: ControllerInputDeliveryBatch, via: ControllerInputDeliveryReceipt["via"]): ControllerInputDeliveryReceipt {

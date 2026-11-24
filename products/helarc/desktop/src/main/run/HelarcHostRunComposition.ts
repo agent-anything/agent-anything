@@ -1,12 +1,14 @@
 import type { RunInputItem } from "@agent-anything/agent-core/input";
 import { createDefaultHelarcInstructionSettings, snapshotHelarcInstructionSettings, type HelarcInstructionSettings,createDefaultHelarcContextSettings,type HelarcContextSettings } from "@agent-anything/helarc/configuration";
 import {bindHelarcContextSettings,validateHelarcContextRunBinding} from "../context/HelarcContextRunBinding.js";
+import {bindHelarcNativeContextSettings,validateHelarcNativeContextRunBinding} from "../context/HelarcNativeContextRunBinding.js";
+import type {HelarcNativeHostArrangement} from "./HelarcNativeHostArrangement.js";
 import {createHelarcRunActivityComposition,HELARC_RUN_ACTIVITY_COMPOSITION,type HelarcActivityHost} from "../context/HelarcRunActivityComposition.js";
 import { randomUUID } from "node:crypto";
 import { canonicalEncode } from "@agent-anything/canonical-action/subject";
 import { createRunTranscriptRecord } from "@agent-anything/agent-runtime/transcript";
 import type { HelarcExecutionStore } from "../execution-storage/HelarcExecutionStore.js";
-import { retainHelarcProviderBinding, type HelarcExecutionAdmission } from "../execution-storage/HelarcExecutionAdmission.js";
+import { retainHelarcProviderBinding, type HelarcLegacyExecutionAdmission as HelarcExecutionAdmission } from "../execution-storage/HelarcExecutionAdmission.js";
 import type { IdentityRef } from "@agent-anything/agent-core/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type {
@@ -53,11 +55,13 @@ import {
 import type { HelarcPermissionPreset } from "@agent-anything/helarc/configuration";
 import {
   createHelarcProductComposition,
+  createHelarcNativeProductComposition,
   type HelarcActivityItem,
   type HelarcProductResult,
 } from "@agent-anything/helarc/composition";
 import {
   createHelarcContextProjectionConfiguration,
+  createHelarcNativeContextProjectionConfiguration,
   type HelarcAgentOutput,
 } from "@agent-anything/helarc/controller";
 import type {
@@ -131,6 +135,7 @@ export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
+  readonly createProductStart?: (workspace: WorkspaceSelection) => import("@agent-anything/helarc/work-context").HelarcRunStartCommit;
   readonly conversationSourceRunId?: string;
   readonly activityHost:HelarcActivityHost;
   readonly executionStore: HelarcExecutionStore;
@@ -152,6 +157,7 @@ export interface PrepareHelarcHostRunInput {
   readonly provider: Provider;
   readonly providerProfile: HelarcProviderProfile;
   readonly providerCredential?: import("../provider/HelarcRunProviderBinding.js").HelarcRunCredentialBinding;
+  readonly connectionRetention?: import("../provider/ProviderConnectionRetention.js").ProviderConnectionRetention;
   readonly contextManifestPersistence?: ContextManifestPersistencePort;
   readonly runTranscriptPort?: RunTranscriptPort;
   readonly permissionPreset: HelarcPermissionPreset;
@@ -177,6 +183,13 @@ export interface HelarcHostRunResult {
   readonly product: HelarcProductResult;
   readonly activity: readonly HelarcActivityItem[];
 }
+
+export type PrepareHelarcNativeHostRunInput=Omit<PrepareHelarcHostRunInput,"provider"|"providerProfile"|"providerCredential"|"recoveryAdmission">&{
+  readonly maxInputTokensPerGeneration?:number|undefined;
+  readonly native:HelarcNativeHostArrangement;
+  readonly recoveryAdmission?:import("../execution-storage/HelarcExecutionAdmission.js").HelarcNativeExecutionAdmission;
+};
+type HostRunInput=PrepareHelarcHostRunInput|PrepareHelarcNativeHostRunInput;
 
 export interface HelarcHostRunComposition {
   readonly activeRun: HelarcHostActiveRun;
@@ -204,7 +217,7 @@ export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
 }
 
 export async function prepareHelarcHostRun(
-  input: PrepareHelarcHostRunInput,
+  input: HostRunInput,
 ): Promise<PreparedHelarcHostRun> {
   try { return await prepareHostRun(input); }
   catch (error) {
@@ -225,18 +238,21 @@ class HelarcRecoveryBindingError extends Error {
   }
 }
 
-async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<PreparedHelarcHostRun> {
+async function prepareHostRun(input: HostRunInput): Promise<PreparedHelarcHostRun> {
   if(!input.activityHost||!input.executionStore)throw new TypeError("Helarc execution requires the shared Activity Host and retained execution store.");
-  if(!input.provider.encodeInput||!input.provider.verifyEncodedInput)throw new TypeError("Helarc execution requires complete Provider input encoding and verification.");
-  if (input.recoveryAdmission && (!input.executionStore || input.recoveryAdmission.version !== 3 ||
+  if(!("native" in input)&&(!input.provider.encodeInput||!input.provider.verifyEncodedInput))throw new TypeError("Helarc execution requires complete Provider input encoding and verification.");
+  if (input.recoveryAdmission && (!input.executionStore || input.recoveryAdmission.version !== ("native" in input?4:3) ||
       input.recoveryAdmission.productRunId !== input.productRunId || input.recoveryAdmission.sessionId !== input.sessionId))
     throw new HelarcRecoveryBindingError("admission");
   const recoveryEnvironment = input.recoveryAdmission
     ? input.executionStore!.restoreCommandEnvironment(input.recoveryAdmission.commandEnvironment) : undefined;
   const rootRunId = input.recoveryAdmission?.rootRunId ?? `run_${randomUUID()}`;
   const instructionSettings = snapshotHelarcInstructionSettings(input.instructionSettings ?? createDefaultHelarcInstructionSettings());
-  const contextBinding=input.recoveryAdmission?.contextBinding??bindHelarcContextSettings(input.contextSettings??createDefaultHelarcContextSettings(),input.providerProfile);
-  validateHelarcContextRunBinding(contextBinding);
+  const settings=input.contextSettings??createDefaultHelarcContextSettings();
+  const nativeContext="native" in input?input.recoveryAdmission?.contextBinding??bindHelarcNativeContextSettings(settings,input.native.configuration,null,input.maxInputTokensPerGeneration):null;
+  const legacyContext="native" in input?null:input.recoveryAdmission?.contextBinding??bindHelarcContextSettings(settings,input.providerProfile);
+  if(nativeContext)validateHelarcNativeContextRunBinding(nativeContext);
+  if(legacyContext)validateHelarcContextRunBinding(legacyContext);
   const runContext = await resolveHostRunContext({
     sessionId: input.sessionId,
     runId: input.productRunId,
@@ -322,11 +338,12 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     },
     now,
   });
-  const activities=createHelarcRunActivityComposition({rootRunId,store:input.executionStore,provider:input.provider,
-    context:contextBinding,host:input.activityHost,deliveryMode:input.responseDelivery??"buffered",now});
-  const product = await createHelarcProductComposition({
-    contextMaterials: activities.contextMaterials,
-    taskExecution:activities.taskExecution,stopExecution:activities.stopExecution,reportHandoff:activities.reportHandoff,
+  const activityInput={rootRunId,store:input.executionStore,host:input.activityHost,deliveryMode:input.responseDelivery??"buffered" as const,now};
+  const nativeActivities="native" in input?input.native.compose({...activityInput,context:nativeContext!}):null;
+  if(nativeActivities&&input.recoveryAdmission?.version===4)nativeActivities.restoreCompositions(input.recoveryAdmission.model);
+  const legacyActivities="native" in input?null:createHelarcRunActivityComposition({...activityInput,provider:input.provider,context:legacyContext!});
+  const activities=nativeActivities??legacyActivities!;
+  const productInput={
     materialHandoff: input.executionStore ? createHelarcMaterialHandoff(input.executionStore) : undefined,
     executionEvidence: input.executionStore,
     executionEvidenceAccess: executionAccess,
@@ -338,23 +355,25 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     runId: input.productRunId,
     task: input.task,
     workspace: runWorkspace,
-    provider: input.provider,
-    providerProfile: input.providerProfile,
     executionFlow: input.inspection?.executionFlow,
-    instructionTarget: "production",
+    instructionTarget: "production" as const,
     instructionSettings,
     codeSource: createLocalCodeSourcePort(now),
     fileActions,
     commandActions,
     now,
-  });
+  };
+  const product="native" in input?await createHelarcNativeProductComposition({...productInput,...nativeActivities!.product}):
+    await createHelarcProductComposition({...productInput,provider:input.provider,providerProfile:input.providerProfile,
+      contextMaterials:legacyActivities!.contextMaterials,taskExecution:legacyActivities!.taskExecution,
+      stopExecution:legacyActivities!.stopExecution,reportHandoff:legacyActivities!.reportHandoff});
   const inspectionDefinitions = input.inspection?.definitions;
   if (inspectionDefinitions) {
     try {
       inspectionDefinitions.agent(product.agent);
       inspectionDefinitions.agent(product.delegatedAgent);
       inspectionDefinitions.tools(product.actions.toolSelection, product.actions.toolInputSemanticValidators);
-      inspectionDefinitions.provider(input.provider.descriptor, input.provider.modelContext.target.revision);
+      if(!("native" in input))inspectionDefinitions.provider(input.provider.descriptor, input.provider.modelContext.target.revision);
       inspectionDefinitions.hooks(product.hookRegistrations);
       product.agentHooks.subscribe((projection) => inspectionDefinitions.hookInvocations(projection));
     } catch { /* Diagnostic capture cannot change Product composition. */ }
@@ -370,7 +389,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       invocationId:s.origin?.invocationId ?? null,attemptId:s.origin?.attemptId ?? null});
   };
   const executionBindings = {
-      activities:HELARC_RUN_ACTIVITY_COMPOSITION,
+      activities:nativeActivities?.definition??HELARC_RUN_ACTIVITY_COMPOSITION,
       platform,
       enforcement,
       commandEnvironment: commandActions.environment,
@@ -418,7 +437,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     ...product.runMetadata,
     enforcement,
   });
-  const baseContextProjection = createHelarcContextProjectionConfiguration();
+  const baseContextProjection = "native" in input?createHelarcNativeContextProjectionConfiguration():createHelarcContextProjectionConfiguration();
   const contextProjection = input.contextManifestPersistence === undefined
     ? baseContextProjection
     : Object.freeze({
@@ -467,6 +486,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     },
     executionFlow: input.inspection?.executionFlow,
     taskDecisions: product.taskDecisions,
+    resourceContributions:product.resourceContributions,
     extensions: product.extensions,
     preparations: product.preparations,
     inputNotifications: {read: (runId, afterSequence) => commandActions.processes.readInputNotifications(runId, afterSequence)},
@@ -507,6 +527,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
     now,
   });
   const manager = createHostRunManager({ runner, now });
+  let admitted: import("@agent-anything/host/run").HostRunAdmission<HelarcAgentOutput> | null = null;
   const conversationHandoff = input.recoveryAdmission ? input.recoveryAdmission.conversationHandoff : (input.conversationSourceRunId ? {
     ...await input.executionStore.prepareConversationHandoff(input.conversationSourceRunId, input.sessionId),
     recipientAgent: {id: product.agent.id, revision: product.agent.revision},
@@ -587,7 +608,10 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
   } as const;
   if (input.recoveryAdmission) {
     const retained = input.recoveryAdmission;
-    if (!sameBinding(retained.providerBinding, retainHelarcProviderBinding(input.provider))) throw new HelarcRecoveryBindingError("provider");
+    if("native" in input){
+      const original=input.recoveryAdmission!.model,current={configuration:input.native.configuration,connection:input.native.connection,...nativeActivities!.compositions()};
+      if(!sameBinding(original,current)||!sameBinding(input.recoveryAdmission!.contextBinding,nativeContext))throw new HelarcRecoveryBindingError("native-composition");
+    }else if (!sameBinding(input.recoveryAdmission!.providerBinding, retainHelarcProviderBinding(input.provider))) throw new HelarcRecoveryBindingError("provider");
     if (retained.environmentFingerprint !== configurationFingerprint || !sameBinding(retained.executionBindings, executionBindings)) {
       const original = retained.executionBindings as Record<string, unknown>;
       const changed = Object.entries(executionBindings).filter(([key, value]) => !sameBinding(original?.[key], value)).map(([key]) => key);
@@ -597,16 +621,31 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       changedVariableNames: Object.keys({...recoveryEnvironment!.environment, ...process.env})
         .filter(key => recoveryEnvironment!.environment[key] !== process.env[key]).sort()});
   } else if (input.executionStore) {
-    await input.executionStore.admitProductRun({version: 3, rootRunId, productRunId: input.productRunId,
+    const commonAdmission={rootRunId, productRunId: input.productRunId,
+      ...(input.createProductStart?{productStart:input.createProductStart(runWorkspace)}:{}),
       ...(conversationHandoff ? {conversationHandoff} : {}),
       sessionId: input.sessionId, createdAt: now(), task: input.task, inputItems: input.inputItems,
-      workspace: runWorkspace, identity: runContext.identity, providerProfile: input.providerProfile,
-      providerBinding: retainHelarcProviderBinding(input.provider),
-      providerCredential: input.providerCredential ?? {kind:"none"},
-      instructionSettings,contextBinding, permissionPreset: input.permissionPreset,
+      workspace: runWorkspace, identity: runContext.identity,
+      instructionSettings, permissionPreset: input.permissionPreset,
       enforcement, commandLimits: input.commandLimits ?? null, runLimits, runTreeLimits,
-      responseDelivery: input.responseDelivery ?? "buffered", environmentFingerprint: configurationFingerprint,
-      executionBindings, commandEnvironment: input.executionStore.retainCommandEnvironment(commandActions.recoveryEnvironment)});
+      responseDelivery: input.responseDelivery ?? "buffered" as const, environmentFingerprint: configurationFingerprint,
+      executionBindings, commandEnvironment: input.executionStore.retainCommandEnvironment(commandActions.recoveryEnvironment)};
+    const admission:import("../execution-storage/HelarcExecutionAdmission.js").HelarcExecutionAdmission="native" in input?
+      {...commonAdmission,version:4,model:{configuration:input.native.configuration,connection:input.native.connection,...nativeActivities!.compositions()},contextBinding:nativeContext!}:
+      {...commonAdmission,version:3,providerProfile:input.providerProfile,providerBinding:retainHelarcProviderBinding(input.provider),
+        providerCredential:input.providerCredential??{kind:"none"},contextBinding:legacyContext!};
+    const connection = admission.version===4?admission.model.connection:admission.providerCredential;
+    if (connection.kind === "connection") {
+      if (!input.connectionRetention) throw new Error("provider_connection_custody_unavailable");
+      await input.connectionRetention.accept({id:connection.pinId,bindingId:connection.bindingId,acceptanceId:connection.acceptanceId,
+        owner:rootRunId,purpose:"run_tree",state:"provisional"},async()=>{
+          await input.executionStore.admitProductRun(admission);
+          admitted = await manager.admit(hostRunStartInput);
+        });
+    } else {
+      await input.executionStore.admitProductRun(admission);
+      admitted = await manager.admit(hostRunStartInput);
+    }
   }
   if (input.executionStore) await input.inspection?.registerExecutionRecording(rootRunId, Boolean(input.recoveryAdmission), input.executionStore);
   if (conversationHandoff) input.inspection?.recordConversationHandoff(rootRunId, conversationHandoff, Boolean(input.recoveryAdmission));
@@ -617,11 +656,11 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
   const wrap = (hostActiveRun: HostActiveRun<HelarcAgentOutput>): HelarcHostRunComposition => {
     const activeRun = createHelarcHostActiveRun(hostActiveRun, product.getProductProjection,
       product.subscribeProductProjection, product.getResponsePreviews, product.subscribeResponsePreviews, commandActions.processes);
-    return Object.freeze({activeRun, result: activeRun.wait().then((outcome): HelarcHostRunResult => ({
+    return Object.freeze({activeRun, result: activeRun.wait().then(async(outcome): Promise<HelarcHostRunResult> => {await product.flushPresentation();return ({
       kind: "run_result", productRunId: input.productRunId, harnessRunId: outcome.runId, runResult: outcome.runResult,
       terminal: outcome.terminal, product: product.projectResult(outcome.runResult, enforcement),
       activity: product.getProductProjection().activity,
-    })).finally(() => releaseExecution?.())});
+    });}).finally(() => releaseExecution?.())});
   };
 
   return Object.freeze({
@@ -641,7 +680,11 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       started = true;
       if (input.recoveryAdmission) throw new Error("A retained execution must use recover, not start.");
       releaseExecution = input.executionStore?.acquireRun(rootRunId);
-      try { activities.activate();return wrap(manager.start(hostRunStartInput)); }
+      try {
+        if (!admitted) throw new Error("Original execution admission has not been confirmed.");
+        activities.activate();
+        return wrap(admitted.activate());
+      }
       catch (error) {releaseExecution?.(); throw error;}
     },
     async recover(intent: "continue" | "cancel" = "continue"): Promise<HelarcHostRunComposition> {
@@ -651,7 +694,21 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
       releaseExecution = input.executionStore.acquireRun(rootRunId);
       try {
       const saved = await input.executionStore.readRunTree(rootRunId);
-      if (!saved) throw new Error("Original Run Tree admission is unavailable.");
+      if (!saved) {
+        const resolution = await input.executionStore.resolveAdmission(rootRunId, input.productRunId);
+        if (resolution.status !== "prepared") throw new Error("Original Run admission is unavailable or fenced closed.");
+        rootIdentityAllocated = false;
+        const recoveredAdmission = await manager.admit(hostRunStartInput);
+        const retained = input.recoveryAdmission;
+        const connection = retained.version === 4 ? retained.model.connection : retained.providerCredential;
+        if (connection.kind === "connection") {
+          if (!input.connectionRetention) throw new Error("provider_connection_custody_unavailable");
+          await input.connectionRetention.recover(connection);
+        }
+        if (intent === "cancel") await recoveredAdmission.activeRun.cancel({origin:"user",reasonCode:"user_requested"});
+        activities.activate(intent);
+        return wrap(recoveredAdmission.activate());
+      }
       for (const member of saved.members) {
         const runId = member.head.state.run.id;
         await commandActions.restoreRun(runId);
@@ -659,6 +716,7 @@ async function prepareHostRun(input: PrepareHelarcHostRunInput): Promise<Prepare
         product.recordRunInput(runId, member.admission.input, member.head.state.startedAt);
         for (const item of member.head.state.items) product.recordTranscript(createRunTranscriptRecord(item));
       }
+      await product.flushPresentation();
       activities.activate(intent);
       const host = await manager.recover({sessionId: input.sessionId, runId: rootRunId, taskId: input.task.id,
         startedAt: saved.commit.checkpoint.input.startedAt, enforcement,
@@ -712,6 +770,7 @@ function createHelarcHostActiveRun(
     submitInteraction: (input: Parameters<HostActiveRun["submitInteraction"]>[0]) =>
       host.submitInteraction(input),
     steer: (input: Parameters<HostActiveRun["steer"]>[0]) => host.steer(input),
+    cancelDescendant: (input: Parameters<HostActiveRun["cancelDescendant"]>[0]) => host.cancelDescendant(input),
     resumeDescendant: (input: Parameters<HostActiveRun["resumeDescendant"]>[0]) =>
       host.resumeDescendant(input),
     cancel: (input: Parameters<HostActiveRun["cancel"]>[0]) => host.cancel(input),

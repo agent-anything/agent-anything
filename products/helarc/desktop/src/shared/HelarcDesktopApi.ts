@@ -556,6 +556,7 @@ export interface HelarcMainSnapshot {
 }
 
 export interface HelarcStartRunInput {
+  providerConfiguration?: import("./ProviderSettingsApi.js").ProviderTaskSelection;
   modelSelection?: import("./HelarcModelSelection.js").HelarcModelSelection;
   commandId: string;
   taskText: string;
@@ -698,6 +699,7 @@ export interface HelarcCancellationSummarySnapshot {
     | "host_shutdown"
     | "approval_cancelled"
     | "parent_run_cancelled"
+    | "parent_run_ending"
     | "runner_shutdown";
   readonly requestedAt: string;
 }
@@ -713,7 +715,7 @@ export type HelarcRunCancellationReceipt =
     };
 
 interface HelarcHostCommandReceiptBase<
-  TKind extends "run.cancel" | "run.steer" | "descendant.resume" | "interaction.submit",
+  TKind extends "run.cancel" | "run.steer" | "descendant.resume" | "descendant.cancel" | "interaction.submit",
 > {
   readonly version: 1;
   readonly commandId: string;
@@ -831,7 +833,7 @@ export interface HelarcHostCommandRejectedReceipt {
   readonly version: 1;
   readonly commandId: string;
   readonly runId: string;
-  readonly kind: "run.cancel" | "run.steer" | "descendant.resume" | "interaction.submit" | null;
+  readonly kind: "run.cancel" | "run.steer" | "descendant.resume" | "descendant.cancel" | "interaction.submit" | null;
   readonly status: "rejected";
   readonly code: HelarcHostCommandRejectionCode;
 }
@@ -847,6 +849,8 @@ export type HelarcHostCommandRejectionCode =
   | "host_command_failed";
 
 export type HelarcHostCommandReceipt =
+  | (HelarcHostCommandReceiptBase<"descendant.cancel"> & {readonly status:"handled";readonly result:
+      {readonly status:"rejected";readonly code:string}|{readonly status:"routed";readonly requestId:string;readonly cancellationStatus:"accepted"|"already_requested"|"run_settled"}})
   | HelarcRunCancellationCommandReceipt
   | HelarcRunSteeringCommandReceipt
   | HelarcDescendantResumeCommandReceipt
@@ -906,11 +910,12 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
+  readonly providerConfigurations?: import("./ProviderSettingsApi.js").ProviderSettingsApi;
   readExecutionActivities(input: import("./HelarcExecutionActivities.js").ExecutionActivitiesQuery): Promise<import("./HelarcExecutionActivities.js").ExecutionActivitiesResult>;
   listRecoverableWork(): Promise<readonly import("./HelarcExecutionRecovery.js").HelarcRecoverableWork[]>;
   recoverWork(input: import("./HelarcExecutionRecovery.js").HelarcRecoverWorkInput): Promise<import("./HelarcExecutionRecovery.js").HelarcRecoverWorkResult>;
   readConversation(input: import("./HelarcWorkbench.js").ConversationQuery): Promise<import("./HelarcWorkbench.js").ConversationPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
-  readConversationTurn(input: import("./HelarcWorkbench.js").ConversationTurnQuery): Promise<import("./HelarcWorkbench.js").ConversationTurnPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
+  readConversationResponseGroup(input: import("./HelarcWorkbench.js").ConversationResponseGroupQuery): Promise<import("./HelarcWorkbench.js").ConversationResponseGroupPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readCurrentWork(input: import("./HelarcWorkbench.js").CurrentWorkQuery): Promise<import("./HelarcWorkbench.js").CurrentWorkPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readTaskDetails(input: import("./HelarcWorkbench.js").WorkbenchScope): Promise<import("./HelarcWorkbench.js").TaskDetailsPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
   readWorkHistory(input: import("./HelarcWorkbench.js").WorkHistoryQuery): Promise<import("./HelarcWorkbench.js").WorkHistoryPage | import("./HelarcWorkbench.js").WorkbenchRejected>;
@@ -960,6 +965,7 @@ export interface HelarcDesktopApi {
   cancelRun(input: HelarcCancelRunInput): Promise<HelarcHostCommandResponse>;
   steerRun(input: HelarcSteerRunInput): Promise<HelarcHostCommandResponse>;
   resumeDescendant(input: HelarcResumeDescendantInput): Promise<HelarcHostCommandResponse>;
+  cancelDescendant(input:{readonly commandId:string;readonly runId:string;readonly parentRunId:string;readonly relationId:string;readonly childRunId:string;readonly requestId:string;readonly requestRevision:string;readonly reason:string|null}): Promise<HelarcHostCommandResponse>;
   submitInteraction(input: HelarcSubmitInteractionInput): Promise<HelarcHostCommandResponse>;
   getRunStatus(input: HelarcGetRunStatusInput): Promise<HelarcRunStatusResponse>;
   openThread(

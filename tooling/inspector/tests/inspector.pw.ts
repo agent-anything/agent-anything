@@ -145,6 +145,35 @@ test("uncaptured Agent definition opens its recorded state without an access err
   } finally { await server.close(); await recording.close(); }
 });
 
+test("comparison and download recheck the current policy of each selected body", async ({page})=>{
+  const recording=await createTestRecording(),r=recording.recorder;
+  r.offer({id:"scope-check",subject:r.ref("provider","provider-attempt","scope-attempt","root-run"),occurredAt:null,
+    payload:{kind:"event",name:"scope",sequence:null,code:null},contents:[
+      {name:"Previous body",class:"provider",stage:"received",mediaType:"text/plain",value:"PROTECTED_SAMPLE"},
+      {name:"Current body",class:"agent",stage:"received",mediaType:"text/plain",value:"CURRENT_SAMPLE"}]});
+  await r.flush();
+  const server=await startInspectorServer({root:recording.root,assets:fileURLToPath(new URL("../dist/renderer",import.meta.url))});
+  try{
+    const url=new URL(server.launchUrl);for(const [k,v] of Object.entries({source:recording.sourceId,dataset:recording.datasetId,record:"scope-check",view:"Records"}))url.searchParams.set(k,v);
+    await page.goto(url.toString());await page.locator(".content-row").filter({hasText:"Previous body"}).click();
+    const previous=page.getByRole("dialog",{name:"Previous body",exact:true});await expect(previous.locator(".view-lines")).toContainText("PROTECTED_SAMPLE");
+    await previous.getByRole("button",{name:"Set content comparison baseline"}).click();await expect(previous).toContainText("Baseline: Previous body");
+    await previous.getByRole("button",{name:"Close",exact:true}).click();
+    const policy={revision:"previous-revoked",enabled:true,definition:true,agent:true,execution:true,provider:false};
+    r.setPolicy(policy);await r.flush();
+    await page.locator(".content-row").filter({hasText:"Current body"}).click();
+    const current=page.getByRole("dialog",{name:"Current body",exact:true});await expect(current.locator(".view-lines")).toContainText("CURRENT_SAMPLE");
+    await expect(current).toContainText("inspection_access_denied");await expect(current).not.toContainText("PROTECTED_SAMPLE");
+    await expect(current.locator(".monaco-diff-editor")).toHaveCount(0);
+    r.setPolicy({...policy,revision:"current-revoked",agent:false});await r.flush();
+    let downloads=0;page.on("download",()=>downloads++);
+    const denied=page.waitForResponse(resp=>resp.url().includes("/api/inspection/query")&&resp.status()===403);
+    await current.getByRole("button",{name:"Download retained content"}).click();await denied;
+    await expect(current.getByRole("button",{name:"Download retained content"})).toBeEnabled();
+    expect(downloads).toBe(0);
+  }finally{await server.close();await recording.close();}
+});
+
 test("shared content viewer manually formats text as JSON and restores the recorded text", async ({ page }, testInfo) => {
   const recording = await createTestRecording();
   const text = '{"count":9007199254740993,"items":[1,2]}';

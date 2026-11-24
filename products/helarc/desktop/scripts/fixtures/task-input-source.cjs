@@ -15,7 +15,7 @@ module.exports=async function taskInputSource(provider, suppliedSource=null, opt
   const descendant=options.delegation?await (async()=>{
     const {pathToFileURL}=require("node:url"),{join}=require("node:path");
     const {createHelarcDescendantAgentContribution}=await import(pathToFileURL(join(__dirname,"../../../core/dist/agent/HelarcDescendantAgent.js")));
-    return createHelarcDescendantAgentContribution(delegatedAgent,"2026-10-30T00:00:00.000Z",undefined,options.materialAccess,options.materialHandoff,options.reportHandoff);
+    return createHelarcDescendantAgentContribution(delegatedAgent,"2026-10-30T00:00:00.000Z",undefined,options.materialAccess,options.materialHandoff,options.reportHandoff,options.nativeNarratives);
   })():null;
   const runId="root",createdAt="2026-10-30T00:00:00.000Z";
   const question=findHelarcBaselineToolContract("AskUserQuestion"),toolRef={tool:{namespace:"helarc",name:"ask-user-question"},revision:"2"};
@@ -54,6 +54,7 @@ module.exports=async function taskInputSource(provider, suppliedSource=null, opt
   const toolGuidance=resolveHelarcToolGuidance({catalog:createHelarcToolGuidanceCatalog({sources:guidanceSources,releases:[release]}),release:release.ref,
     providerId:provider.descriptor.id,modelId:provider.modelContext.target.model,toolSelectionRevision:source.toolExposure.selectionRevision,tools:registration.registrations});
   const protocol=createHelarcControllerProtocolComposition({instructionSettings:settings,toolGuidance,controlGuidance:HELARC_CONTROLLER_CONTROL_GUIDANCE});
+  if(options.nativeSource)return {source,agent,registration,selection,protocol,delegatedAgent,delegation:descendant?.delegation,contextAccess};
   const binding=createHelarcTaskModelBinding({agents:[agent,delegatedAgent],protocol,delivery:{mode:"buffered"},...(options.materialAccess?{materials:options.materialAccess}:{})});
   const request=binding.buildRequest(source,{attemptNumber:1,correction:null,target:provider.modelContext.target,requestedOutput:provider.modelContext.requestedOutput});
   return {source,request,agent,registration,selection,binding,delegatedAgent,delegation:descendant?.delegation,contextAccess};

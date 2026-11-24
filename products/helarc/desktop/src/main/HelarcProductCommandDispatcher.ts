@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import {validWorkInputBudget} from "../shared/HelarcWorkInputBudget.js";
 import { snapshotCredentialSelection } from "../shared/HelarcProviderCredentials.js";
 import { snapshotHelarcInstructionSettings,snapshotHelarcContextSettings } from "@agent-anything/helarc/configuration";
 import { snapshotHelarcInspectionSettings } from "../shared/HelarcInspectionSettings.js";
@@ -352,7 +353,16 @@ function snapshotRunStart(
   candidate: unknown,
 ): HelarcProductCommandPayloadMap["run.start"] {
   assertRecord(candidate, "Run start payload");
-  assertExactKeys(candidate, ["taskText", "target", ...(candidate.modelSelection === undefined ? [] : ["modelSelection"])], "Run start payload");
+  assertExactKeys(candidate, ["taskText", "target", ...["modelSelection", "providerConfiguration","maxInputTokensPerGeneration"].filter(key => candidate[key] !== undefined)], "Run start payload");
+  const budget=candidate.maxInputTokensPerGeneration;
+  if(budget!==undefined&&!validWorkInputBudget(budget))invalid("Work input budget must be a positive safe integer.");
+  let providerConfiguration: import("../shared/ProviderSettingsApi.js").ProviderTaskSelection | undefined;
+  if (candidate.providerConfiguration !== undefined) {
+    if (candidate.modelSelection !== undefined) invalid("Choose one execution configuration.");
+    assertRecord(candidate.providerConfiguration, "Protocol configuration");
+    assertExactKeys(candidate.providerConfiguration, ["id", "revision"], "Protocol configuration");
+    providerConfiguration = { id: identity(candidate.providerConfiguration.id, "Configuration id"), revision: identity(candidate.providerConfiguration.revision, "Configuration revision") };
+  }
   let modelSelection: import("../shared/HelarcModelSelection.js").HelarcModelSelection | undefined;
   if (candidate.modelSelection !== undefined) {
     const value = candidate.modelSelection;
@@ -363,7 +373,9 @@ function snapshotRunStart(
   }
   return Object.freeze({
     taskText: boundedText(candidate.taskText, "Run Task text", TASK_TEXT_MAX_LENGTH),
+    ...(budget===undefined?{}:{maxInputTokensPerGeneration:budget}),
     ...(modelSelection === undefined ? {} : { modelSelection }),
+    ...(providerConfiguration === undefined ? {} : { providerConfiguration }),
     target: snapshotRunStartTarget(candidate.target),
   });
 }

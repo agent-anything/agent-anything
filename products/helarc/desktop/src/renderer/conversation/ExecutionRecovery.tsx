@@ -27,12 +27,13 @@ export function ExecutionRecovery({threadId, status, onRecovered}: {
   };
   if (entries.length === 0 && !error) return null;
   return <section className="wb-recovery" aria-label="Interrupted work">
-    {entries.filter(entry => threadId === null || entry.threadId === threadId).map(entry =>
+    {entries.filter(entry => threadId === null || entry.threadId === null || entry.threadId === threadId).map(entry =>
       <div key={entry.id} className="wb-recovery-item">
-        <div><strong>{entry.state === "delivery_pending" ? "Result ready to restore" : "Interrupted work"}</strong><p>{entry.title}</p></div>
-        <button type="button" className="wb-icon" title={entry.state === "delivery_pending" ? "Restore result" : "Resume work"}
-          aria-label={entry.state === "delivery_pending" ? "Restore result" : "Resume work"} disabled={busy} onClick={() => void recover(entry, "continue")}><Play size={16}/></button>
-        {entry.state === "interrupted" && <button type="button" className="wb-icon danger" title="Cancel retained work"
+        <div><strong>{entry.state === "delivery_pending" ? "Result ready to restore" : entry.state === "admission_unconfirmed" ? "Start not confirmed" : entry.state === "prepared" ? "Start pending" : "Interrupted work"}</strong><p>{entry.title}</p>
+          {entry.resumeLimitation&&<p className="wb-warning">Resume unavailable: the original {entry.resumeLimitation.component.replaceAll("_"," ")} is not installed.</p>}</div>
+        {entry.state !== "admission_unconfirmed" && <button type="button" className="wb-icon" title={entry.state === "delivery_pending" ? "Restore result" : "Resume work"}
+          aria-label={entry.state === "delivery_pending" ? "Restore result" : "Resume work"} disabled={busy||!!entry.resumeLimitation} onClick={() => void recover(entry, "continue")}><Play size={16}/></button>}
+        {entry.state !== "delivery_pending" && <button type="button" className="wb-icon danger" title="Cancel retained work"
           aria-label="Cancel retained work" disabled={busy} onClick={() => void recover(entry, "cancel")}><CircleStop size={16}/></button>}
       </div>)}
     {error && <p role="alert" className="wb-warning">{error}</p>}

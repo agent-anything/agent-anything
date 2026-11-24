@@ -1,4 +1,5 @@
 import type {ContextPreparationPolicyInput,ContextPreparationDecision} from "./ContextPreparationPolicy.js";
+import type {ContextPreparationMethodRequest} from "./ProtocolRepresentationMethod.js";
 
 export interface ContextPreparationInvestment {
   readonly workId:string;
@@ -7,14 +8,17 @@ export interface ContextPreparationInvestment {
   readonly previousPathId?:string;
 }
 export interface ContextPreparationDecisionProposal {
-  readonly input:ContextPreparationPolicyInput;
+  /** Absent as a pair only on proposals emitted before explicit policy binding. */
+  readonly policyRevision?:ContextPreparationDecision["policy"]["revision"];
+  readonly decisionId?:string;
+  readonly input:ContextPreparationPolicyInput<ContextPreparationMethodRequest>;
   readonly expectedDecisionId:string|null;
   readonly expectedControlRevision:number;
   readonly investment:ContextPreparationInvestment|null;
 }
 export interface ContextPreparationDecisionRecord {
   readonly decision:ContextPreparationDecision;
-  readonly input:ContextPreparationPolicyInput;
+  readonly input:ContextPreparationPolicyInput<ContextPreparationMethodRequest>;
   readonly acceptanceId:string;
   readonly investment:ContextPreparationInvestment|null;
 }

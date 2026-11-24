@@ -5,6 +5,8 @@ import { HELARC_NATIVE_TOOL_PROTOCOL_REVISION } from "./HelarcController.js";
 import { HelarcProtocolRecoveryController } from "./HelarcProtocolRecoveryController.js";
 import { HELARC_PROTOCOL_RECOVERY_POLICY } from "./HelarcControllerProtocolComposition.js";
 import type { ExecutionFlowObservation } from "@agent-anything/observability/execution-flow";
+import {OPENAI_RESPONSES,type ModelPurposeEvidence} from "@agent-anything/model-interaction/protocol";
+import {createNativeTaskModelItems} from "@agent-anything/agent-runtime/decision";
 
 const key = HELARC_PROTOCOL_RECOVERY_POLICY.id;
 function input(iteration: number, runId = "root"): TaskDecisionInputSources<string> {
@@ -42,6 +44,29 @@ function fixture() {
 }
 
 describe("Helarc protocol recovery", () => {
+  it("retains the third native purpose on exhaustion and recovers without a synthetic Turn or another invocation", async()=>{
+    const f=fixture(),ref=(id:string)=>({id,revision:"1"});
+    const source=(n:number)=>({...input(n),agent:{id:"agent"},interaction:{kind:"native_evidence",entries:[],unsettledCalls:[],seed:null}}) as unknown as TaskDecisionInputSources<string>;
+    f.next.mockImplementation(async i=>{
+      const scope={runId:i.runId,activityId:`native:${i.iteration}`,recipientId:"agent",purpose:ref("task"),compositionDigest:`sha256:${"a".repeat(64)}`};
+      const evidence:ModelPurposeEvidence={scope,interpreter:ref("native-task"),acceptance:ref(`${scope.activityId}:accepted`),sources:[{
+        scope,protocol:OPENAI_RESPONSES,interpretation:ref("responses-reader"),operationId:`${scope.activityId}:create`,
+        record:ref(`${scope.activityId}:response`),position:{format:"json-pointer",value:""},nativeIdentity:{kind:"response",id:`response:${i.iteration}`}}]};
+      return {kind:"continue_with_feedback",modelItems:createNativeTaskModelItems(evidence,[]),feedback:{code:"helarc_ending_signal_missing",
+        message:"Use the final control.",source:{owner:"helarc",kind:"native_task_acceptance",...evidence.acceptance}}};
+    });
+    const inner={...f.inner,historyKind:"native_evidence" as const},controller=new HelarcProtocolRecoveryController(inner);
+    expect(controller.historyKind).toBe("native_evidence");
+    await controller.next(source(1),f.context);await new HelarcProtocolRecoveryController(inner).recover(source(1),f.context);
+    expect(f.saved.get(key)).toMatchObject({consecutiveMissing:1});
+    await controller.next(source(2),f.context);
+    const expected={exchange:{modelItems:[expect.objectContaining({kind:"native_purpose_evidence",evidence:expect.objectContaining({acceptance:ref("native:3:accepted")})})]}};
+    await expect(controller.next(source(3),f.context)).rejects.toMatchObject(expected);
+    const count=f.next.mock.calls.length;
+    await expect(new HelarcProtocolRecoveryController(inner).recover(source(3),f.context)).rejects.toMatchObject(expected);
+    await expect(new HelarcProtocolRecoveryController(inner).interrupt(source(3),f.context)).rejects.toMatchObject(expected);
+    expect(f.next).toHaveBeenCalledTimes(count);expect(f.port.commit).toHaveBeenCalledTimes(3);
+  });
   it("charges an empty accepted turn once across recreation and retains the empty exchange on exhaustion", async () => {
     const f = fixture();
     f.next.mockImplementation(async i => ({...decision(i), modelItems: decision(i).modelItems.filter(item => item.kind !== "assistant_text")}));

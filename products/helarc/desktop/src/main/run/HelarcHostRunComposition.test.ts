@@ -23,7 +23,7 @@ import type { InvocationInterruptionContext } from "@agent-anything/agent-core/c
 import {readTaskModelResponseHandoff, type TaskModelResponseHandoff, type TaskModelSource} from "@agent-anything/agent-runtime/decision";
 import type {ActivityDispatchReceipt, ActivityHandoffCycle, ActivityHandoffFact, ActivityRawResult, ActivityStageState, SharedAcceptanceProposal} from "@agent-anything/agent-runtime/activity";
 import type {PreparedContextInput} from "@agent-anything/agent-runtime/context-representation";
-import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import {modelInputValueDigest,ModelInputEncodingUnsupportedError} from "@agent-anything/model-interaction/input";
 import { createFakeProviderContext } from "@agent-anything/test-support";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { access, mkdir, readFile, writeFile, rm, readdir, rmdir } from "node:fs/promises";
@@ -103,7 +103,7 @@ afterAll(async () => {
   }
   await rm(target, { recursive: true, force: true });
   // Never delete a store directory left by an unconfirmed Host shutdown.
-  await rmdir(executionDirectory);
+  if(process.env.HELARC_TEST_RETAIN_EXECUTION!=="1")await rmdir(executionDirectory);
 });
 
 function openIsolatedExecutionStoreFixture(): Promise<HelarcExecutionStore> {
@@ -115,6 +115,10 @@ function openIsolatedExecutionStoreFixture(): Promise<HelarcExecutionStore> {
     const close = store.close.bind(store);
     store.close = async () => {
       await close();
+      if(process.env.HELARC_TEST_RETAIN_EXECUTION==="1") {
+        console.info("Execution fixture retained store",directory);
+        return;
+      }
       const target = resolve(directory);
       if (dirname(target) !== resolve(executionDirectory) || !basename(target).startsWith("store-")) {
         throw new Error("Unexpected execution fixture directory");
@@ -256,6 +260,7 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
       const common = {...createTask(workspaceRoot), provider, executionStore: store};
       const first = await prepareTestHostRun(common);
       const saved = (await store.readProductRun(first.rootRunId))!;
+      if(saved.version!==3)throw new Error("Expected original generic composition");
       expect(await store.readProcesses(first.rootRunId)).toEqual([]);
       process.env.HELARC_TEST_NEW_HOST_VARIABLE = "different-after-restart";
       const restored = await prepareTestHostRun({...common, recoveryAdmission: saved,
@@ -305,6 +310,7 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
       expect(provider.requests).toHaveLength(2);
       await expect(readFile(join(workspaceRoot, "target.txt"), "utf8")).resolves.toBe("before");
       const saved = (await store.readProductRun(prepared.rootRunId))!;
+      if(saved.version!==3)throw new Error("Expected original generic composition");
       await store.close();
       store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       const nextProvider = new ScriptedProvider([{kind: "completion", summary: "The retained call settled."}]);
@@ -428,6 +434,7 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
         vi.spyOn(store, "finalizeFileMaterials").mockRejectedValueOnce(new Error("interrupted material finalization"));
         await expect(store.commitProductDelivery(prepared.rootRunId)).rejects.toThrow("interrupted material finalization");
         expect(await store.listProductRuns()).toContainEqual(expect.objectContaining({delivered: true, terminal: true}));
+        expect((await store.discoverProductWork("file_cleanup")).map(entry=>entry.rootRunId)).toEqual([prepared.rootRunId]);
         expect((await store.readFileMaterialRecord(material as never))?.pins).toContain(prepared.rootRunId);
       } else {
         await store.commitProductDelivery(prepared.rootRunId);
@@ -437,6 +444,7 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
       expect(await store.readExecutionEvidence(material as never)).not.toBeNull();
       const released = await store.readFileMaterialRecord(material as never);
       expect(released).toMatchObject({state: "available", pins: []});
+      expect(await store.discoverProductWork("file_cleanup")).toEqual([]);
       await store.finalizeFileMaterials(prepared.rootRunId);
       expect((await store.readFileMaterialRecord(material as never))?.expiresAt).toBe(released!.expiresAt);
       await store.expireFileMaterials("2100-01-01T00:00:00.000Z");
@@ -521,6 +529,7 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
       expect(lost).toBe(true);
       expect(await readFile(join(workspaceRoot, "target.txt"), "utf8")).toBe("original bytes");
       const saved = (await store.readProductRun(prepared.rootRunId))!;
+      if(saved.version!==3)throw new Error("Expected original generic composition");
       await store.close(); store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       const next = new ScriptedProvider([{kind: "completion", summary: "Restored."}]);
       const recovered = await prepareTestHostRun({...createTask(workspaceRoot), provider: next, executionStore: store,
@@ -628,6 +637,7 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
         });
       }
       const saved = (await store.readProductRun(prepared.rootRunId))!;
+      if(saved.version!==3)throw new Error("Expected original generic composition");
       await store.close();store = await openExecutionStoreFixture(join(directory, "execution"), worker);
       const restoredCheckpoint = (await store.readRunTree(prepared.rootRunId))!.members[0]!.head.control.controllerCheckpoints
         .find(([key]) => JSON.parse(key)[2] === checkpointKey)![1];
@@ -711,6 +721,7 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
       expect(interrupted).toBe(true);
       expect(provider.requests).toHaveLength(1);
       const saved = (await store.readProductRun(prepare.rootRunId))!;
+      if(saved.version!==3)throw new Error("Expected original generic composition");
       const before = await store.readRunTree(prepare.rootRunId);
       expect(before?.members[0]?.head.control.decision?.status).toBe("active");
       await store.close();
@@ -1246,6 +1257,28 @@ describe("Helarc Host Run composition", {timeout:30_000}, () => {
       })]),
     }));
     expect(operationResults(result)).toEqual([]);
+  }));
+
+  it("delivers a retained encoding limitation without losing the prior exchange or repeating a completed Tool",withExecutionScope(async()=>{
+    const workspaceRoot=await mkdtemp(join(tmpdir(),"helarc-encoding-limitation-"));
+    await writeFile(join(workspaceRoot,"source.txt"),"Original file evidence.");
+    const provider=new ScriptedProvider([{kind:"tool_call",toolName:"Read",input:{file_path:"source.txt"}}]);
+    const bound:Provider=bindFixtureProviderEncoding(provider),encode=bound.encodeInput!.bind(bound);
+    const rejected=vi.fn(()=>{throw new ModelInputEncodingUnsupportedError("fixture_history_unsupported","Unsupported native history shape.");});
+    bound.encodeInput=(request,mode)=>request.messages.some(m=>m.role==="tool")?rejected():encode(request,mode);
+    const store=await openIsolatedExecutionStoreFixture();
+    const result=await executeTestHostRun({...createTask(workspaceRoot),provider,executionStore:store});
+    expect(result.runResult.status).toBe("failed");
+    expect(provider.requests).toHaveLength(1);
+    expect(rejected).toHaveBeenCalledTimes(1);
+    expect(operationResults(result)).toHaveLength(1);
+    const facts=await store.activityHandoffs.command({kind:"facts",runId:result.runResult.runId,after:0,limit:256}) as readonly ActivityHandoffFact[];
+    const stages=[];
+    for(const fact of facts.filter(f=>f.kind==="accepted"&&f.requestId))stages.push(await store.activityHandoffs.command({kind:"read_stage",requestId:fact.requestId!}) as ActivityStageState);
+    expect(stages).toContainEqual(expect.objectContaining({result:expect.objectContaining({value:expect.objectContaining({
+      kind:"gap",reason:"input_encoding_unsupported:fixture_history_unsupported",gap:null})})}));
+    expect(stages).toContainEqual(expect.objectContaining({request:expect.objectContaining({input:expect.objectContaining({kind:"context_input_unavailable",
+      reason:"input_encoding_unsupported:fixture_history_unsupported"})})}));
   }));
 
   it("retains Provider retry history in its original shared activity rather than a second Runner retry authority", withExecutionScope(async () => {
@@ -2259,13 +2292,13 @@ function unavailableAutomaticReviewer() {
 class ScriptedProvider implements Provider {
   readonly stopRequests: ProviderRequest[] = [];
   private readonly context = createFakeProviderContext(
-    "scripted-helarc-provider",
+    "openai-compatible.chat-completions",
     "host-run-test-model",
   );
   readonly modelContext = this.context.modelContext;
   readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
-    id: "scripted-helarc-provider",
+    id: "openai-compatible.chat-completions",
     name: "Scripted Helarc Provider",
     capabilities: {
       nativeToolInteraction: {
@@ -2341,13 +2374,13 @@ class ScriptedProvider implements Provider {
 
 class RetryThenCompleteProvider implements Provider {
   private readonly context = createFakeProviderContext(
-    "retry-then-complete-provider",
+    "openai-compatible.chat-completions",
     "host-run-test-model",
   );
   readonly modelContext = this.context.modelContext;
   readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
-    id: "retry-then-complete-provider",
+    id: "openai-compatible.chat-completions",
     name: "Retry Then Complete Provider",
     capabilities: {
       nativeToolInteraction: {

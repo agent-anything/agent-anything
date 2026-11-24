@@ -3,20 +3,36 @@ import {inspectionLink} from "@agent-anything/inspection/adapters";
 import type {ExecutionPerformanceEvent} from "../diagnostics/ExecutionPerformance.js";
 import {safeExecutionPerformanceEvent} from "../diagnostics/HelarcPerformanceDiagnostics.js";
 import {randomUUID} from "node:crypto";
+import type {WorkSample,WorkSubject} from "../diagnostics/IdentifiedWorkTiming.js";
 
 type Finished=Extract<ExecutionPerformanceEvent,{kind:"finished"}>;
 interface Batch {samples:Finished[];bytes:number}
 
-/** Request envelopes and startup, not a second copy of every nested timing sample. */
+/** Correlated bounded timing batches; inclusive substeps are not additive. */
 export class ExecutionPerformanceInspectionAdapter {
   private readonly batches=new Map<string|null,Batch>();
   private timer:ReturnType<typeof setTimeout>|null=null;
   private closed=false;
+  private sampleWindow=performance.now();
+  private retained=0;
+  private unsampled=0;
   constructor(private readonly recorder:InspectionRecorder) {}
+  workBoundary(s:WorkSample):void{
+    if(this.closed)return;
+    const r=this.recorder,ref=(x:WorkSubject)=>r.ref(x.owner,x.kind,x.id,x.runId);
+    const subject=r.ref("work-timing","event",s.invocation,s.work.runId);
+    r.offer({id:`work-timing:${s.invocation}:${s.boundary}`,subject,occurredAt:s.at,
+      payload:{kind:"event",name:"work."+s.phase,code:s.boundary,sequence:null},
+      links:[inspectionLink("observes",subject,ref(s.work)),...(s.awaited?[inspectionLink("prerequisite",ref(s.awaited),subject,{condition:"settled",operation:"awaited_by_this_invocation"})]:[])],
+      contents:[{name:"Work, wait and measured stages",class:"execution",stage:s.phase,mediaType:"application/json",
+        value:JSON.parse(JSON.stringify({...s,coverage:"observed stages only; no terminal boundary means unknown; inclusive intervals are not additive"}))}]});
+  }
   performance(input:ExecutionPerformanceEvent):void {
     if(this.closed||input.kind!=="finished"||!Number.isFinite(input.durationMs)||input.durationMs<0||
-      !["storage.host.request","storage.worker.command","storage.host.startup","storage.worker.entry",
-        "storage.worker.load_database","storage.worker.open_database"].includes(input.stage))return;
+      !input.stage.startsWith("storage."))return;
+    if(performance.now()-this.sampleWindow>=10000){this.flush();this.sampleWindow=performance.now();this.retained=0;}
+    if(this.retained>=128){this.unsampled++;return;}
+    this.retained++;
     const event=safeExecutionPerformanceEvent(input) as Finished;
     const runId=typeof event.context.runId==="string"?event.context.runId:null;
     const bytes=Buffer.byteLength(JSON.stringify(event));
@@ -33,6 +49,11 @@ export class ExecutionPerformanceInspectionAdapter {
   flush():void {
     if(this.timer){clearTimeout(this.timer);this.timer=null;}
     for(const runId of this.batches.keys())this.write(runId);
+    if(this.unsampled){const count=this.unsampled;this.unsampled=0;
+      this.recorder.offer({subject:this.recorder.ref("execution-performance","event",randomUUID(),null),occurredAt:new Date().toISOString(),
+        payload:{kind:"event",name:"execution.performance_sample_coverage",sequence:null,code:"raw_samples_not_retained"},
+        contents:[{name:"Raw sample coverage",class:"execution",stage:"timing",mediaType:"application/json",value:{unsampled:count,
+          reason:"bounded_raw_detail",scope:"process; not apportioned to work",maximumPerWindow:128,windowMs:10000}}]});}
   }
   close():void {this.flush();this.closed=true;}
   private write(runId:string|null):void {

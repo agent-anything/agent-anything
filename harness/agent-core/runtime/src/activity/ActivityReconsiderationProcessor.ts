@@ -10,6 +10,8 @@ export interface ActivityReconsiderationPreparation {
   readonly participants:readonly SharedAcceptancePart[];
   readonly close:boolean;
   readonly observeSources?:readonly string[];
+  /** Maximum distinct refusals the owner can dispose of in this finite observation. */
+  readonly rejectionLimit?:number;
   /** The owner may retain a known limitation; stale state is reread, not recursively retried. */
   readonly rejected?:(receipt:SharedAcceptanceReceipt)=>Promise<ActivityReconsiderationPreparation|null>;
 }
@@ -49,7 +51,9 @@ export class ActivityReconsiderationProcessor {
           if(snapshot.state.closed||!snapshot.facts.length)continue;
           let proposed=await handler.prepare(snapshot,signal);
           signal.throwIfAborted();
-          for(let attempt=0;attempt<2;attempt++) {
+          const limit=proposed.rejectionLimit??1,seen=new Set<string>();
+          if(!Number.isSafeInteger(limit)||limit<1)throw new TypeError("activity_reconsideration_refusal_limit_invalid");
+          for(let attempt=0;attempt<=limit;attempt++) {
             if(proposed.decision.owner!==subscription.owner)throw new TypeError("activity_reconsideration_decision_owner_invalid");
             const basis={subscriptionId:subscription.id,expectedRevision:snapshot.state.revision,through:snapshot.through,factIds:snapshot.facts.map(f=>f.id),decision:proposed.decision,close:proposed.close,
               ...(proposed.observeSources?{observeSources:proposed.observeSources}:{})};
@@ -59,7 +63,9 @@ export class ActivityReconsiderationProcessor {
               parts:[...proposed.participants,{owner:"activity",kind:"reconsideration_acceptance",proposal:{id,...basis}}]});
             if(receipt.outcome==="accepted") {accepted.push(subscription.id);break;}
             rejected.push({subscriptionId:subscription.id,code:receipt.rejection!.code});
-            const limited=attempt===0?await proposed.rejected?.(receipt):null;
+            if(seen.has(receipt.id))throw new TypeError("activity_reconsideration_repeated_refusal");
+            seen.add(receipt.id);
+            const limited=attempt<limit?await proposed.rejected?.(receipt):null;
             if(!limited)break;
             signal.throwIfAborted();proposed=limited;
           }

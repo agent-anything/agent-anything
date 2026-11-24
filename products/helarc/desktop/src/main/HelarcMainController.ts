@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import {validWorkInputBudget} from "../shared/HelarcWorkInputBudget.js";
 import { persistenceFailureCode, type HelarcPersistenceDiagnostics, type HelarcPersistenceDiagnostic } from "./persistence/HelarcPersistenceDiagnostics.js";
 import { AtomicFileError, isTransientFileAccessFailure, type AtomicFileWriteReport } from "./persistence/SerializedAtomicFile.js";
 import { captureExecutionError } from "./diagnostics/ExecutionErrorDetails.js";
@@ -6,6 +8,9 @@ import { reportExecutionFailure, type ExecutionDiagnosticSink } from "./diagnost
 import {measureExecutionAsync} from "./diagnostics/ExecutionPerformance.js";
 import { restoreHelarcTerminalResult } from "./execution-storage/restoreHelarcTerminalResult.js";
 import {HelarcHostRunRecovery} from "./run/HelarcHostRunRecovery.js";
+import {OPENAI_RESPONSES,OLLAMA_CHAT,DEEPSEEK_CHAT_COMPLETIONS} from "@agent-anything/model-interaction/protocol";
+import type {ProviderConfiguration} from "../shared/ProviderConfiguration.js";
+import type {HelarcNativeHostArrangement} from "./run/HelarcNativeHostArrangement.js";
 import {ActivityHostUnavailableError} from "@agent-anything/agent-runtime/activity";
 import {
   createDefaultHelarcInstructionSettings,
@@ -253,6 +258,7 @@ export interface HelarcMainError {
 }
 
 export interface StartHelarcRunInput {
+  maxInputTokensPerGeneration?:number;
   taskText: string;
   target: HelarcProductRunStartTarget;
 }
@@ -306,7 +312,10 @@ export interface HelarcMainControllerInput {
   executionDiagnostics?: ExecutionDiagnosticSink;
   executionStore?: import("./execution-storage/HelarcExecutionStore.js").HelarcExecutionStore;
   recoverProvider?: (admission: import("./execution-storage/HelarcExecutionAdmission.js").HelarcExecutionAdmission) => Promise<Provider>;
-  bindRunProvider?: (provider:Provider,profile:HelarcProviderProfile)=>Promise<{provider:Provider;credential:import("./provider/HelarcRunProviderBinding.js").HelarcRunCredentialBinding}>;
+  recoverNative?: (admission:import("./execution-storage/HelarcExecutionAdmission.js").HelarcNativeExecutionAdmission)=>Promise<HelarcNativeHostArrangement>;
+  bindNativeRun?: (configuration:ProviderConfiguration,productRunId:string)=>Promise<HelarcNativeHostArrangement>;
+  bindRunProvider?: (provider:Provider,profile:HelarcProviderProfile,productRunId:string)=>Promise<{provider:Provider;credential:import("./provider/HelarcRunProviderBinding.js").HelarcRunCredentialBinding}>;
+  connectionRetention?: import("./provider/ProviderConnectionRetention.js").ProviderConnectionRetention;
   commandOutputDirectory: string;
   projects?: readonly HelarcProject[];
   responseDelivery?: "buffered" | "streaming";
@@ -363,6 +372,8 @@ export class HelarcMainController {
   private readonly executionDiagnostics: ExecutionDiagnosticSink | undefined;
   private readonly recoverProvider: HelarcMainControllerInput["recoverProvider"];
   private readonly bindRunProvider: HelarcMainControllerInput["bindRunProvider"];
+  private readonly bindNativeRun:HelarcMainControllerInput["bindNativeRun"];
+  private readonly connectionRetention: HelarcMainControllerInput["connectionRetention"];
   private readonly commandOutputDirectory: string;
   private readonly responseDelivery: "buffered" | "streaming";
   readonly workbench: HelarcWorkbenchQueries;
@@ -388,7 +399,6 @@ export class HelarcMainController {
   private instructionSettings: HelarcInstructionSettings;
   private contextSettings:HelarcContextSettings;
   private inactiveStatus: "idle" | "workspace_selected" = "idle";
-  private nextTaskNumber = 1;
   private activeRunSlot: DesktopActiveRunSlot = { kind: "empty" };
   private readonly hostCommandDispatcher: HostCommandDispatcher =
     createHostCommandDispatcher({
@@ -434,6 +444,8 @@ export class HelarcMainController {
     this.executionDiagnostics = input.executionDiagnostics;
     this.recoverProvider = input.recoverProvider;
     this.bindRunProvider = input.bindRunProvider;
+    this.bindNativeRun=input.bindNativeRun;
+    this.connectionRetention = input.connectionRetention;
     this.persistenceDiagnostics = input.persistenceDiagnostics;
     this.commandOutputDirectory = input.commandOutputDirectory;
     this.responseDelivery = input.responseDelivery ?? "buffered";
@@ -458,7 +470,6 @@ export class HelarcMainController {
     this.workspaceProfiles = input.workspaceProfiles ?? [];
     this.projects = (input.projects ?? []).map(snapshotHelarcProject);
     this.threadSummaries = (input.threadSummaries ?? []).map(createThreadSummarySnapshot);
-    this.nextTaskNumber = resolveNextTaskNumber(input.threadSummaries ?? []);
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
     this.contextManifestPersistence = input.contextManifestPersistence;
     this.runTranscriptPort = input.runTranscriptPort;
@@ -477,7 +488,8 @@ export class HelarcMainController {
     if(input.activityHost){
       if(!input.executionStore||!input.recoverProvider)throw new TypeError("host_activity_recovery_ports_required");
       this.activityRecovery=new HelarcHostRunRecovery({activityHost:input.activityHost,executionStore:input.executionStore,
-        recoverProvider:input.recoverProvider,commandOutputDirectory:this.commandOutputDirectory,inspection:this.inspection,
+        connectionRetention:input.connectionRetention,
+        recoverProvider:input.recoverProvider,recoverNative:input.recoverNative,commandOutputDirectory:this.commandOutputDirectory,inspection:this.inspection,
         contextManifestPersistence:this.contextManifestPersistence,runTranscriptPort:this.runTranscriptPort,
         sessionAuthorityPort:this.sessionAuthorityStore,persistentPolicyAmendments:this.policyAmendmentStore,
         retainCommandOutput:saved=>(runId,executionId,paths)=>this.commandOutputRegistry.register(
@@ -485,6 +497,8 @@ export class HelarcMainController {
       input.activityHost.setRecoveryResolver(id=>this.activityRecovery!.restoreScope(id));
     }
   }
+
+  forgetRetiredNativeComposition(rootRunId:string):void {this.activityRecovery?.forgetRetired(rootRunId);}
 
   configureProvider(input: {
     profiles?: HelarcProviderProfile[];
@@ -653,7 +667,7 @@ export class HelarcMainController {
     return this.publishSnapshot();
   }
 
-  async startRun(input: StartHelarcRunInput, selection?: { provider: Provider; profile: HelarcProviderProfile }): Promise<StartHelarcRunResult> {
+  async startRun(input: StartHelarcRunInput, selection?: { provider: Provider; profile: HelarcProviderProfile }|{native:ProviderConfiguration}): Promise<StartHelarcRunResult> {
     if (!selection && !this.provider.configured) {
       const error = this.setError("provider_config_missing", this.provider.error.message);
       return { ok: false, error, snapshot: this.getSnapshot() };
@@ -663,8 +677,14 @@ export class HelarcMainController {
       const error = this.setError("provider_not_available", "Provider is not available.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-    const providerInstance = selection?.provider ?? this.providerInstance!;
-    const providerProfile = selection?.profile ?? this.provider.activeProfile!;
+    const native=selection&&"native" in selection?selection.native:null;
+    const budget=input.maxInputTokensPerGeneration;
+    if(budget!==undefined&&(!validWorkInputBudget(budget)||native?.protocol!=="openai.responses")){
+      const error=this.setError("provider_config_invalid","This work input budget requires a positive token limit and a native Responses input counter.");
+      return {ok:false,error,snapshot:this.getSnapshot()};
+    }
+    const providerInstance = selection&&"provider" in selection?selection.provider:this.providerInstance;
+    const providerProfile = selection&&"profile" in selection?selection.profile:this.provider.activeProfile;
     const instructionSettings = this.instructionSettings;
     const contextSettings=this.contextSettings;
 
@@ -678,12 +698,11 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    const sequenceNumber = this.nextTaskNumber;
-    const taskId = `helarc-task-${sequenceNumber}`;
-    const runId = `helarc-run-${sequenceNumber}`;
+    const taskId = `helarc-task-${randomUUID()}`;
+    const runId = `helarc-run-${randomUUID()}`;
+    const messageId = `helarc-message-${randomUUID()}`;
     const resolvedTarget = this.resolveRunStartTarget(
       input.target,
-      sequenceNumber,
       new Date().toISOString(),
     );
     if (!resolvedTarget.ok) {
@@ -710,9 +729,10 @@ export class HelarcMainController {
       taskText: input.taskText,
       workspaceProfileId,
       additionalWorkspaceProfileIds,
-      providerProfileId: providerProfile.id,
+      ...(native?{nativeModel:{configuration:{id:native.id,revision:native.revision},model:native.model,
+        protocol:native.protocol==="openai.responses"?OPENAI_RESPONSES:native.protocol==="ollama.chat"?OLLAMA_CHAT:DEEPSEEK_CHAT_COMPLETIONS},
+        displayName:native.name,endpointLabel:new URL(native.baseUrl).host}:{providerProfileId:providerProfile!.id,providerProfiles:[providerProfile!]}),
       workspaceProfiles,
-      providerProfiles: [providerProfile],
       permissionPreset: "ask_for_approval",
       createdAt: startedAt,
       metadata: {
@@ -744,10 +764,22 @@ export class HelarcMainController {
     try {
       const activityHost=this.activityHost,executionStore=this.executionStore;
       if(!activityHost||!executionStore)throw new Error("The application execution services are unavailable.");
-      const boundProvider=await this.bindRunProvider?.(providerInstance,providerProfile);
+      const boundNative=native?await this.bindNativeRun?.(native,runId):null;
+      if(native&&!boundNative)throw new Error("The selected native execution arrangement is unavailable.");
+      const boundProvider=native?null:await this.bindRunProvider?.(providerInstance!,providerProfile!,runId);
       const threadWorkspace = preparedStart.prepared.workspace;
+      let startCommit: HelarcRunStartCommit | null = null;
       const preparedHostRun = await measureExecutionAsync(this.executionDiagnostics, "host.prepare", {threadId, productRunId: runId}, () => prepareHelarcHostRun({
         activityHost,
+        createProductStart: runWorkspace => {
+          const created = this.createRunStartCommit({project,messageId,taskId,
+            taskText:preparedStart.prepared.task.input.prompt,runId,target:commitTarget,startedAt,
+            threadWorkspace,runWorkspace,provider:preparedStart.prepared.provider,
+            permissionPreset:preparedStart.prepared.run.permissionPreset});
+          if(!created.ok)throw new TypeError(created.error.message);
+          startCommit=created.commit;
+          return created.commit;
+        },
         executionStore,
         commandOutputDirectory: this.commandOutputDirectory,
         responseDelivery: this.responseDelivery,
@@ -769,9 +801,8 @@ export class HelarcMainController {
         identitySelection: { kind: "anonymous" },
         productRunId: runId,
         sessionId: threadId,
-        provider: boundProvider?.provider ?? providerInstance,
-        providerCredential: boundProvider?.credential,
-        providerProfile,
+        ...(boundNative?{native:boundNative,maxInputTokensPerGeneration:budget}:{provider:boundProvider?.provider??providerInstance!,providerProfile:providerProfile!,providerCredential:boundProvider?.credential}),
+        connectionRetention: this.connectionRetention,
         contextManifestPersistence: this.contextManifestPersistence,
         runTranscriptPort: this.runTranscriptPort,
         inspection: this.inspection,
@@ -782,25 +813,10 @@ export class HelarcMainController {
         persistentPolicyAmendments: this.policyAmendmentStore,
       }));
       this.activityRecovery?.retain(preparedHostRun);
-      const startCommitResult = this.createRunStartCommit({
-        project,
-        sequenceNumber,
-        taskId,
-        taskText: preparedStart.prepared.task.input.prompt,
-        runId,
-        target: commitTarget,
-        startedAt,
-        threadWorkspace,
-        runWorkspace: preparedHostRun.workspace,
-        provider: preparedStart.prepared.provider,
-        permissionPreset: preparedStart.prepared.run.permissionPreset,
-      });
-      if (!startCommitResult.ok) {
-        throw new TypeError(startCommitResult.error.message);
-      }
+      if (!startCommit) throw new TypeError("Original product start is unavailable.");
       let committed: Awaited<ReturnType<HelarcThreadStore["commitRunStart"]>>;
       try {
-        committed = await this.threadStore.commitRunStart(startCommitResult.commit);
+        committed = await this.threadStore.commitRunStart(startCommit);
       } catch {
         throw new HelarcDesktopPersistenceError(
           "thread_store_write_failed",
@@ -811,8 +827,7 @@ export class HelarcMainController {
         throw new HelarcDesktopPersistenceError(committed.code, committed.message);
       }
       startCommitted = true;
-      this.recordReplacementRecovery(startCommitResult.commit, 0, committed.persistence);
-      this.nextTaskNumber += 1;
+      this.recordReplacementRecovery(startCommit, 0, committed.persistence);
       this.currentThreadRecord = committed.aggregate.record;
       this.threadSummaries = upsertThreadSummarySnapshot(
         this.threadSummaries,
@@ -839,9 +854,6 @@ export class HelarcMainController {
         snapshot: this.getSnapshot(),
       };
     } catch (cause) {
-      if (startCommitted && this.nextTaskNumber === sequenceNumber) {
-        this.nextTaskNumber += 1;
-      }
       reportExecutionFailure(this.executionDiagnostics,"run_start",{threadId,productRunId:runId,startCommitted},cause);
       this.releaseActiveRunSlot(token);
       const persistenceFailure = cause instanceof HelarcDesktopPersistenceError;
@@ -867,23 +879,75 @@ export class HelarcMainController {
 
   async listRecoverableWork(): Promise<readonly import("../shared/HelarcExecutionRecovery.js").HelarcRecoverableWork[]> {
     if (!this.executionStore) return [];
-    const entries = await this.executionStore.listProductRuns();
+    const entries = await this.executionStore.discoverProductWork("undelivered");
     const active = this.activeRunSlot;
-    return entries.filter(entry => !entry.delivered &&
-      !(active.kind !== "empty" && active.threadId === entry.admission.sessionId && active.productRunId === entry.admission.productRunId))
-      .map(entry => ({id: entry.admission.rootRunId, threadId: entry.admission.sessionId,
-        title: entry.admission.task.input.prompt.slice(0, 160), revision: entry.revision,
-        state: entry.terminal ? "delivery_pending" as const : "interrupted" as const}));
+    const values:import("../shared/HelarcExecutionRecovery.js").HelarcRecoverableWork[]=entries.filter(entry => !entry.delivered &&
+      !(active.kind !== "empty" && active.threadId === entry.sessionId && active.productRunId === entry.productRunId))
+      .map(entry => ({id: entry.rootRunId, threadId: entry.sessionId,title:entry.title, revision: entry.revision,
+        ...(entry.resumeLimitation?{resumeLimitation:entry.resumeLimitation}:{}),
+        state: entry.terminal ? "delivery_pending" as const : entry.admitted?"interrupted" as const:"prepared" as const}));
+    if(this.connectionRetention){
+      let after="";
+      do{
+        const pins=await this.connectionRetention.pins(after,64);
+        for(const pin of pins){
+          if(pin.purpose!=="run_tree"||pin.state!=="provisional"||entries.some(entry=>entry.rootRunId===pin.owner)||
+            active.kind!=="empty"&&active.productRunId===pin.acceptanceId)continue;
+          const resolution=await this.executionStore.resolveAdmission(pin.owner,pin.acceptanceId);
+          if(resolution.status==="unknown")values.push({id:pin.owner,threadId:null,title:"A previous start could not be confirmed.",
+            revision:-2,state:"admission_unconfirmed"});
+        }
+        after=pins.length===64?pins.at(-1)!.id:"";
+      }while(after);
+    }
+    return values;
   }
 
   async recoverWork(request: import("../shared/HelarcExecutionRecovery.js").HelarcRecoverWorkInput): Promise<import("../shared/HelarcExecutionRecovery.js").HelarcRecoverWorkResult> {
     if (!this.executionStore) return {ok: false, message: "Execution recovery is unavailable."};
-    if (this.activeRunSlot.kind !== "empty") return {ok: false, message: "Wait for current work to settle."};
     if (!request || typeof request.id !== "string" || !Number.isSafeInteger(request.revision) ||
         !["continue", "cancel"].includes(request.intent)) return {ok: false, message: "Invalid recovery request."};
-    const entry = (await this.executionStore.listProductRuns()).find(item => item.admission.rootRunId === request.id && !item.delivered);
+    if(request.revision===-2){
+      if(request.intent!=="cancel"||!this.connectionRetention)return {ok:false,message:"The original start is unconfirmed; it cannot be resumed as new work."};
+      let after="";
+      do{
+        const pins=await this.connectionRetention.pins(after,64);
+        const pin=pins.find(value=>value.purpose==="run_tree"&&value.owner===request.id&&value.state==="provisional");
+        if(pin){
+          if(this.activeRunSlot.kind!=="empty"&&this.activeRunSlot.productRunId===pin.acceptanceId)return {ok:false,message:"This start is still active."};
+          const closed=await this.executionStore.closeAdmission(pin.owner,pin.acceptanceId);
+          if(closed.status!=="closed")return {ok:false,message:"The original execution was accepted. Reload its recovery entry."};
+          await this.connectionRetention.reconcile(pin);
+          this.publishSnapshot();return {ok:true};
+        }
+        after=pins.length===64?pins.at(-1)!.id:"";
+      }while(after);
+      return {ok:false,message:"Original start custody changed; reload its recovery entry."};
+    }
+    const entry = (await this.executionStore.listProductRuns(request.id)).find(item => !item.delivered);
     if (!entry || entry.revision !== request.revision) return {ok: false, message: "Retained execution changed; reload its recovery entry."};
     const saved = entry.admission;
+    if (!entry.admitted && request.intent === "cancel") {
+      if(this.activeRunSlot.kind!=="empty"&&this.activeRunSlot.productRunId===saved.productRunId)return {ok:false,message:"This start is still active."};
+      const closed=await this.executionStore.closeAdmission(saved.rootRunId,saved.productRunId);
+      if(closed.status==="closed") {
+        const connection=saved.version===4?saved.model.connection:saved.providerCredential;
+        if(connection.kind==="connection")await this.connectionRetention?.reconcile({id:connection.pinId,bindingId:connection.bindingId,
+          acceptanceId:connection.acceptanceId,owner:saved.rootRunId,purpose:"run_tree",state:"provisional"});
+        this.publishSnapshot();
+        return {ok:true};
+      }
+    }
+    if (this.activeRunSlot.kind !== "empty") return {ok: false, message: "Wait for current work to settle."};
+    // Replay the original product delivery, not a new user message or a new Run.
+    if(saved.productStart){
+      const existing=await this.threadStore.loadThread(saved.sessionId);
+      if(!existing?.runs.some(run=>run.id===saved.productRunId)){
+        const receipt=await this.threadStore.commitRunStart(saved.productStart);
+        if(receipt.status==="rejected")return {ok:false,message:receipt.message};
+        this.threadSummaries=upsertThreadSummarySnapshot(this.threadSummaries,createThreadSummarySnapshotFromRecord(receipt.aggregate.record));
+      }
+    }
     const opened = await this.openThread(saved.sessionId);
     if (!opened.ok) return {ok: false, message: opened.error.message};
     if (this.activeRunSlot.kind !== "empty") return {ok: false, message: "Another execution started."};
@@ -979,7 +1043,6 @@ export class HelarcMainController {
 
   private resolveRunStartTarget(
     target: HelarcProductRunStartTarget,
-    sequenceNumber: number,
     requestedStartedAt: string,
   ): ResolveHelarcRunStartTargetResult {
     const selectedWorkspace = this.selectedWorkspace;
@@ -999,7 +1062,7 @@ export class HelarcMainController {
     const projectRef = project === null ? null : Object.freeze({ id: project.id, revision: project.revision });
 
     if (target.kind === "new_thread") {
-      const threadId = `helarc-thread-${sequenceNumber}`;
+      const threadId = `helarc-thread-${randomUUID()}`;
       const workspaceProfile = this.workspaceProfiles.find(
         (profile) =>
           profile.id === selectedWorkspace.id &&
@@ -1414,7 +1477,7 @@ export class HelarcMainController {
 
   private createRunStartCommit(input: {
     project: HelarcProjectRef | null;
-    sequenceNumber: number;
+    messageId: string;
     taskId: string;
     taskText: string;
     runId: string;
@@ -1426,7 +1489,7 @@ export class HelarcMainController {
     permissionPreset: HelarcRunPermissionPreset;
   }): { ok: true; commit: HelarcRunStartCommit } | { ok: false; error: HelarcWorkContextError } {
     const threadId = input.target.threadId;
-    const messageId = `helarc-message-${input.sequenceNumber}`;
+    const messageId = input.messageId;
 
     const messageResult = createHelarcMessage({
       id: messageId,
@@ -1935,18 +1998,6 @@ function createConfiguredProviderSnapshot(
     profiles: [activeProfile],
     error: null,
   };
-}
-
-function resolveNextTaskNumber(summaries: readonly HelarcThreadSummary[]): number {
-  let maximum = 0;
-  for (const summary of summaries) {
-    const match = /^helarc-thread-(\d+)$/.exec(summary.id);
-    const value = match?.[1] === undefined ? 0 : Number(match[1]);
-    if (Number.isSafeInteger(value) && value > maximum) {
-      maximum = value;
-    }
-  }
-  return maximum + 1;
 }
 
 function createInjectedProviderProfile(provider: Provider | null): HelarcProviderProfile {

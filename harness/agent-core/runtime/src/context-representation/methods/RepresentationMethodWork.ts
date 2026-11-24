@@ -37,7 +37,8 @@ export class RepresentationMethodWork {
     if(intent.resourceLimits&&modelInputValueDigest(intent.resourceLimits)!==modelInputValueDigest(resourceLimits))throw new TypeError("representation_resource_binding_invalid");
     const path={...intent,resourceLimits,owner:this.purpose.contract.acceptanceOwner,purpose:this.purpose};
     return [{owner:"activity",kind:"path_opening",proposal:path},
-      {owner:"activity",kind:"stage_submission",proposal:{id:`${intent.id}:stage:1`,pathId:intent.id,stageKind:request.method==="preserve"?"exact":"read",input:{method,quotation:quote,source:source.alias,offset:source.access.range.start},capabilities:["material-read"],dependencies:[]}},
+      {owner:"activity",kind:"stage_submission",proposal:{id:`${intent.id}:stage:1`,pathId:intent.id,stageKind:request.method==="preserve"?"exact":"read",input:{method,quotation:quote,source:source.alias,offset:source.access.range.start,
+        ...(this.lifecycle&&intent.scheduledWorkId?{inputSupplyProduction:this.lifecycle.declaration(path,`${intent.id}:stage:1`)}:{})},capabilities:["material-read"],dependencies:[]}},
       ...(this.lifecycle&&intent.scheduledWorkId?[this.lifecycle.subscription(path)]:[])];
   }
   async result(pathId:string):Promise<{kind:"pending"}|{kind:"cancelled"}|{kind:"ready"|"gap";progress:RepresentationMethodProgress}> {

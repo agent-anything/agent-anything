@@ -84,6 +84,16 @@ const interaction = Object.freeze({
   }),
 });
 
+export const HELARC_TASK_FULFILLMENT_SCHEMA = interaction.outputFormat.schema;
+export interface HelarcStopEvaluation {
+  readonly kind:"purpose";
+  readonly id:string;
+  evaluate(event:AgentStopEvent,instructions:string,interruption:InvocationInterruptionContext,mode:"execute"|"recover"):Promise<HelarcTaskFulfillmentAssessment>;
+}
+function isPurposeEvaluation(value:Provider|HelarcStopEvaluation):value is HelarcStopEvaluation {
+  return "kind" in value && value.kind === "purpose";
+}
+
 export interface HelarcStopModelSource {
   readonly kind: "helarc_stop_source";
   readonly id: string;
@@ -121,15 +131,15 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
   readonly recover?: AgentStopHandler["recover"];
 
   constructor(
-    private readonly provider: Provider,
+    private readonly provider: Provider | HelarcStopEvaluation,
     stopInstructions: readonly HelarcInstructionSectionSetting[],
     private readonly execution?: HelarcStopExecution,
   ) {
     this.instructions = stopInstructions
       .filter(({ enabled, content }) => enabled && content.trim().length > 0)
       .map(({ content }) => content).join("\n\n");
-    if(this.instructions.length&&!execution)throw new TypeError("helarc_stop_execution_required");
-    if (execution) this.recover = (event, interruption, flow) => this.handleMode(event, interruption, flow, "recover");
+    if(this.instructions.length&&!execution&&!isPurposeEvaluation(provider))throw new TypeError("helarc_stop_execution_required");
+    if (execution || isPurposeEvaluation(provider)) this.recover = (event, interruption, flow) => this.handleMode(event, interruption, flow, "recover");
   }
 
   getAssessments(): readonly HelarcTaskFulfillmentAssessment[] {
@@ -162,11 +172,13 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
       return Object.freeze({ disposition: "allow" as const });
     }
     readHelarcTaskObjective(event);
-    flow.advance("request", {mode, providerId:this.provider.descriptor.id}, [{owner:"model-interaction",kind:"request",id:`${event.ref.id}:task-fulfillment`,revision:null}]);
-    let assessment = mode === "recover" && this.execution ? await this.execution.recover(event, interruptionContext) : null;
-    if (!assessment) {
-      const source = createHelarcStopModelSource(this.provider, event, this.instructions);
-      assessment = await this.execution!.execute(source, interruptionContext);
+    flow.advance("request", {mode, evaluationOwner:isPurposeEvaluation(this.provider)?this.provider.id:this.provider.descriptor.id}, [{owner:"model-interaction",kind:"request",id:`${event.ref.id}:task-fulfillment`,revision:null}]);
+    let assessment:HelarcTaskFulfillmentAssessment;
+    if (isPurposeEvaluation(this.provider)) {
+      assessment=await this.provider.evaluate(event,this.instructions,interruptionContext,mode);
+    } else {
+      const recovered=mode === "recover" && this.execution ? await this.execution.recover(event, interruptionContext) : null;
+      assessment=recovered ?? await this.execution!.execute(createHelarcStopModelSource(this.provider,event,this.instructions),interruptionContext);
     }
     const assessmentStep = flow.advance("assessment", {mode, assessmentId: assessment.id});
     const prior = this.assessments.find(value => value.id === assessment.id);
@@ -184,7 +196,7 @@ export class HelarcTaskFulfillmentHook implements AgentStopHandler {
 }
 
 export function createHelarcTaskFulfillmentHookComposition(
-  provider: Provider,
+  provider: Provider | HelarcStopEvaluation,
   stopInstructions: readonly HelarcInstructionSectionSetting[],
   execution?: HelarcStopExecution,
 ): Readonly<{
@@ -225,6 +237,7 @@ interface HelarcFulfillmentCandidate {
 }
 
 function buildRequest(provider: Provider, event: AgentStopEvent, instructions: string): ProviderRequest {
+  if(event.interaction.kind==="native_evidence")throw new TypeError("turn_stop_input_participant_mismatch");
   if (!provider.descriptor.capabilities.structuredGeneration.supported) {
     throw new TypeError("Task Fulfillment requires Provider structured generation.");
   }
@@ -474,7 +487,7 @@ function buildFeedback(
   return feedback.length <= 4_096 ? feedback : `${feedback.slice(0, 4_093)}...`;
 }
 
-function readHelarcTaskObjective(event: AgentStopEvent): string {
+export function readHelarcTaskObjective(event: AgentStopEvent): string {
   if (event.task.input === null ||
       typeof event.task.input !== "object" ||
       typeof (event.task.input as { prompt?: unknown }).prompt !== "string" ||
@@ -482,6 +495,10 @@ function readHelarcTaskObjective(event: AgentStopEvent): string {
     throw new TypeError("Helarc Task Fulfillment requires a Product Task with one prompt objective.");
   }
   return (event.task.input as { prompt: string }).prompt;
+}
+
+export function interpretHelarcFulfillmentValue(event:AgentStopEvent,value:unknown,assessedAt:string):HelarcTaskFulfillmentAssessment {
+  return createAssessment(event,parseCandidate(value as ModelJsonValue),assessedAt);
 }
 
 function boundedText(value: unknown, field: string, maximum = 8_192): string {

@@ -273,7 +273,7 @@ describe("Runner semantic integration", () => {
     expect((await handle.wait()).status).toBe("completed");
     expect(controller.calls).toHaveLength(2);
   });
-  it("joins a live suspended Child's final transfer before committing Parent cancellation", async () => {
+  it.each(["cancelled", "failed"] as const)("joins a live suspended Child's final transfer before committing Parent %s", async ending => {
     const handles = captureRunHandles();
     const child = createAgent("child", "1", "Child");
     const operations = createOperationFixture([], [], {delegation: createTestDelegation(child)});
@@ -285,7 +285,11 @@ describe("Runner semantic integration", () => {
     const controller = new ScriptedController([
       input => advance([toolCandidate("Agent", {prompt: "Inspect"}, input.toolExposure.controllerRequestId)], "delegate"),
       async input => {await suspendHandle(handles.get(input.runId)!); return complete("Await direction");},
-      async () => {parentContinued.resolve(); await finishResponse.promise; return complete("Late response");},
+      async () => {
+        parentContinued.resolve(); await finishResponse.promise;
+        if (ending === "failed") throw new Error("Parent decision failed while Child was suspended");
+        return complete("Late response");
+      },
     ]);
     const root = createRunner(controller, operations, {resourceFinalizers: [{binding: {id: "cleanup", revision: "1"},
       async finalize(context) {
@@ -294,13 +298,14 @@ describe("Runner semantic integration", () => {
       },
     }]}).start(createAgent(), createRunInput(), createRunConfig(operations, {tools}));
     await parentContinued.promise;
-    await root.cancel({origin: "user", reasonCode: "user_requested"});
+    if (ending === "cancelled") await root.cancel({origin: "user", reasonCode: "user_requested"});
     finishResponse.resolve();
     await cleaningChild.promise;
     expect(root.getResult()).toBeNull();
     finishCleanup.resolve();
     const result = await root.wait();
-    expect(result.status).toBe("cancelled");
+    expect(result.status).toBe(ending);
+    expect(handles.get("run_002")!.getResult()?.status).toBe("cancelled");
     expect(root.getSnapshot().runTree.settlement.complete).toBe(true);
     expect(observations(result).filter(value => value.payload.kind === "descendant_result_transfer")).toHaveLength(1);
     expect(controller.calls).toHaveLength(3);
@@ -587,6 +592,40 @@ describe("Runner semantic integration", () => {
     expect(result.items.filter(item => item.payload.kind === "input_delivery")).toHaveLength(1);
     expect(result.items.filter(item => item.payload.kind === "controller_turn" && item.payload.status === "decided")).toHaveLength(1);
   });
+  it.each([false,true])("retains the original pending exchange during cancellation without executing Calls (lost acknowledgement=%s)",async loseAcknowledgement=>{
+    const operations=createOperationFixture([]),store=createTreeCommitFixture(),commit=store.port.commitRunTree.bind(store.port);
+    let firstCheckpoint=true,lost=false;
+    store.port.commitRunTree=async value=>{
+      const receipt=await commit(value);
+      if(firstCheckpoint&&value.runs.some(r=>r.control.controllerCheckpoints.length>0)){
+        firstCheckpoint=false;throw new Error("original owner acknowledgement lost");
+      }
+      if(loseAcknowledgement&&!lost&&value.runs.some(r=>r.state.items.some(i=>i.payload.kind==="controller_turn"&&i.payload.status==="interrupted"&&i.payload.modelItems.length>0))){
+        lost=true;throw new Error("interruption acknowledgement lost");
+      }
+      return receipt;
+    };
+    const interrupted=vi.fn(async(input:TaskDecisionInputSources<TestOutput>)=>({...completionWithPlan([{step:"Must not apply",status:"completed"}],"Retained only","original-final"),
+      inputDeliveryReceipt:createControllerInputDeliveryReceipt(input.inputDelivery!,input.toolExposure.controllerRequestId)}));
+    const controller:TaskDecisionActivity<TestOutput>={resourceMetering:new ScriptedController([]).resourceMetering,
+      next:async(_input,context)=>{await context.checkpoints!.commit("original-response",{accepted:true});throw new Error("must not continue");},
+      recover:async()=>{throw new Error("must interrupt, never regenerate");},interrupt:interrupted};
+    const fact={runId:"run_001",sequence:1,occurredAt:NOW,source:{owner:"test",kind:"result",id:"original-fact",revision:"1"},data:{done:true}};
+    const dependencies={runTreeCommits:store.port,inputNotifications:{read:(_run:string,cursor:number)=>cursor<1?[fact]:[]}};
+    const agent=createAgent(),config=createRunConfig(operations),runner=createRunner(controller,operations,dependencies);
+    const first=runner.start(agent,createRunInput(),config);
+    await expect(first.wait()).rejects.toMatchObject({name:"ActivityCheckpointError"});
+    const resolver={async resolve(){return {agent,config};}};
+    let resumed=await runner.recover(first.runId,resolver,{recoveryCancellation:{origin:"user",reasonCode:"user_requested"}});
+    if(loseAcknowledgement){await expect(resumed.wait()).rejects.toMatchObject({name:"RunCommitError"});resumed=await runner.recover(first.runId,resolver);}
+    const result=await resumed.wait();expect(result.status,JSON.stringify(result.cause)).toBe("cancelled");
+    expect(interrupted).toHaveBeenCalledTimes(1);
+    expect(result.items.filter(i=>i.payload.kind==="input_delivery")).toHaveLength(1);
+    expect(result.items.filter(i=>i.payload.kind==="controller_turn"&&i.payload.status==="interrupted")).toHaveLength(1);
+    expect(result.items.filter(i=>i.payload.kind==="model_call_settlement")).toHaveLength(1);
+    expect(result.items.filter(i=>i.payload.kind==="run_action")).toHaveLength(0);
+    expect(result.items.some(i=>i.payload.kind==="state_transition"&&i.payload.transition==="plan")).toBe(false);
+  });
   it.each(["admitted", "active", "child_result", "terminal"] as const)(
     "restores the original Composite at %s without repeating a settled child", async position => {
     const outer = operationRef("composite-recovery");
@@ -669,8 +708,11 @@ describe("Runner semantic integration", () => {
       resourceMetering: {modelInputTokens: "not_applicable", modelOutputTokens: "not_applicable", costUnits: "not_applicable"},
       async next(input) {
         if (input.runId !== "run_001") {childCalls++; return complete("Retained Child answer", "child-end");}
-        if (++rootCalls === 1) return advance([toolCandidate("Agent", {prompt: "Inspect"}, input.toolExposure.controllerRequestId)], "delegate");
-        expect(deliveredResults(input).filter(value => value.kind === "descendant_run")).toHaveLength(1);
+        if (++rootCalls === 1) return advance([
+          toolCandidate("Agent", {prompt: "Inspect A"}, input.toolExposure.controllerRequestId),
+          toolCandidate("Agent", {prompt: "Inspect B"}, input.toolExposure.controllerRequestId),
+        ], ["delegate-a", "delegate-b"]);
+        expect(deliveredResults(input).filter(value => value.kind === "descendant_run")).toHaveLength(2);
         return complete("Parent answer", "parent-end");
       },
       async recover(input, execution) {return this.next(input, execution);},
@@ -690,7 +732,9 @@ describe("Runner semantic integration", () => {
       if (hit && !lost) {lost = true; throw new Error("lost Child-route acknowledgement");}
       return receipt;
     };
-    const overrides = {runTreeCommits: store.port, executionFlow: {}};
+    let runSequence = 0;
+    const overrides = {runTreeCommits: store.port, executionFlow: {},
+      createRunId: () => `run_${String(++runSequence).padStart(3, "0")}`};
     const first = createRunner(controller, operations, overrides).start(agent, createRunInput(), config);
     await expect(first.wait()).rejects.toBeInstanceOf(position === "projection" ? OperationCommitError : RunCommitError);
     store.port.commitRunTree = commit;
@@ -703,16 +747,19 @@ describe("Runner semantic integration", () => {
     });
     const result = await recovered.wait();
     expect(result.status, JSON.stringify({cause: result.cause, tree: recovered.getSnapshot().runTree})).toBe("completed");
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(childCalls).toBe(1);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(childCalls).toBe(2);
     expect(rootCalls).toBe(2);
-    expect(recovered.getSnapshot().runTree.nodes.map(node => node.runId)).toEqual(["run_001", "run_002"]);
+    expect(recovered.getSnapshot().runTree.nodes.map(node => node.runId)).toEqual(["run_001", "run_002", "run_003"]);
     expect(recovered.getSnapshot().runTree.settlement.complete).toBe(true);
     const records = (await store.port.readRunTree(first.runId))!;
     const root = records.members.find(value => value.head.state.run.id === first.runId)!.head;
-    expect(root.control.descendantTransfers).toHaveLength(1);
-    expect(root.control.descendantContinuations).toHaveLength(1);
-    expect(root.state.items.filter(item => item.payload.kind === "observation" && item.payload.observation.kind === "descendant_run")).toHaveLength(1);
+    expect(root.control.descendantTransfers).toHaveLength(2);
+    expect(root.control.descendantContinuations).toHaveLength(2);
+    const children = records.members.filter(value => value.admission.lineage.kind === "descendant");
+    expect(new Set(children.map(value => value.admission.delegationRequest!.ref.id)).size).toBe(2);
+    expect(new Set(children.map(value => value.admission.delegationRequest!.authorityDerivation.id)).size).toBe(2);
+    expect(root.state.items.filter(item => item.payload.kind === "observation" && item.payload.observation.kind === "descendant_run")).toHaveLength(2);
     expect(root.state.items.some(item => item.payload.kind === "controller_turn" && item.payload.status === "interrupted")).toBe(false);
   });
 
@@ -1145,7 +1192,7 @@ describe("Runner semantic integration", () => {
       }
       return receipt;
     };
-    const failure={kind:"input_preparation" as const,failure:{code:"context_input_unavailable" as const,message:"Original recipient input unavailable",retryable:false,
+    const failure={kind:"input_preparation" as const,failure:{code:"model_request_input_preparation_failed" as const,message:"No usable input could be prepared for this model request.",retryable:false,
       metadata:{needId:"original-need",acceptanceId:"original-limitation",reason:"combination_unsupported"}}};
     const controller=new ScriptedController([()=>{throw new TaskDecisionActivityError(failure,"settled_failure");}]);
     const agent=createAgent(),config=createRunConfig(operations),dependencies={runTreeCommits:store.port};

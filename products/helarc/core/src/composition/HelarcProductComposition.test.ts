@@ -37,6 +37,9 @@ import {
   type RuntimeEvent,
 } from "@agent-anything/observability/events";
 import { describe, expect, it, vi } from "vitest";
+import {OPENAI_RESPONSES,bindModelAgentComposition} from "@agent-anything/model-interaction/protocol";
+import {createHelarcNativeProductComposition} from "./HelarcProductComposition.js";
+import type {HelarcNativeTaskModelBinding} from "./HelarcTaskModelBinding.js";
 import {ModelTaskDecisionCoordinator} from "@agent-anything/agent-runtime/execution-coordinator";
 import {createSystemRetryExecutor,systemRetryClock} from "@agent-anything/agent-runtime/retry";
 import type { TaskDecisionActivity } from "@agent-anything/agent-runtime/decision";
@@ -92,6 +95,37 @@ function createTestProviderProfile(
 }
 
 describe("HelarcProductComposition", () => {
+  it("composes native Product participants without a generic Provider or request builder", async () => {
+    const ref=(id:string)=>({id,revision:"1"}),protocol=OPENAI_RESPONSES;
+    const nativeModel={protocol,configuration:ref("original"),model:"original-model",connectionBinding:ref("connection")};
+    let captured:HelarcNativeTaskModelBinding|undefined;
+    const preparations={resume:vi.fn(async()=>{})};
+    const next=vi.fn(async()=>{throw new Error("No model work during composition");});
+    const taskExecution=(binding:HelarcNativeTaskModelBinding)=>{
+      captured=binding;
+      return {preparations,taskDecisions:{historyKind:"native_evidence" as const,next,
+        resourceMetering:{modelInputTokens:"unavailable" as const,modelOutputTokens:"unavailable" as const,costUnits:"unavailable" as const}},
+        compositions:binding.agents.map(agent=>bindModelAgentComposition({agent:{id:agent.id,revision:agent.revision},protocol,configuration:binding.model,
+          adapter:{implementation:ref("native-adapter"),protocol},task:{purpose:ref("task"),input:{implementation:ref("native-input"),protocol},
+            interpreter:{implementation:ref("native-task"),protocol}},auxiliary:[]}))};
+    };
+    const stopEvaluation={kind:"purpose" as const,id:"native-stop",evaluate:vi.fn(async()=>{throw new Error("Disabled Stop");})};
+    const input={runId:"native",...createTask("D:/workspace"),...createLocalContributions(),nativeModel,taskExecution,stopEvaluation,
+      nativeNarratives:{read:async()=>null},now:fixedNow};
+    const product=await createHelarcNativeProductComposition(input);
+    expect(captured!.agents).toEqual([product.agent,product.delegatedAgent]);
+    expect(captured!.model).toEqual(nativeModel);
+    expect(captured).not.toHaveProperty("buildRequest");
+    expect(captured).not.toHaveProperty("interpret");
+    expect(product.preparations).toBe(preparations);
+    expect(product.taskDecisions.historyKind).toBe("native_evidence");
+    expect(next).not.toHaveBeenCalled();expect(stopEvaluation.evaluate).not.toHaveBeenCalled();
+    await expect(createHelarcNativeProductComposition({...input,taskExecution:binding=>{
+      const result=taskExecution(binding);
+      return {...result,compositions:result.compositions.map((c,i)=>i?bindModelAgentComposition({...c.composition,
+        configuration:{...c.composition.configuration,model:"changed"}}):c)};
+    }})).rejects.toThrow("helarc_native_product_original_binding_changed");
+  });
   it("binds Host task execution to Product rules without constructing a second preparation lifecycle", async () => {
     let bound: HelarcTaskModelBinding | undefined;
     const preparations = {resume: vi.fn(async () => {})};

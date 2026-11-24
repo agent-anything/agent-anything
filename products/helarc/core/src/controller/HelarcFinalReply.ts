@@ -13,7 +13,7 @@ export const HELARC_FINAL_REPLY_RECIPIENT_GUIDANCE = [
   "The final reply is delivered to the caller: the user for root work, or the Parent Agent for delegated work.",
   "The Parent receives the resolved final reply, not the Child's conversation history. Do not assume the Parent has read earlier Child messages.",
 ].join(" ");
-export function createHelarcEndingSignalFeedback(input: {readonly hasText: boolean; readonly hasPlan: boolean}): string {
+export function createHelarcEndingSignalFeedback(input: {readonly hasText: boolean; readonly hasPlan: boolean; readonly wireEndingExample?:string|null}): string {
   return [
     "No callable request or ending signal was received. Ordinary text alone does not end this Run.",
     input.hasText
@@ -21,7 +21,11 @@ export function createHelarcEndingSignalFeedback(input: {readonly hasText: boole
       : "If you want to end, make a native final_result call. Supply response for a new final reply; omit it to adopt eligible existing text, if any.",
     input.hasPlan
       ? "A Plan exists: include its complete final snapshot in plan, with actual step statuses. Do not use empty arguments or mark unfinished steps completed just to end."
-      : 'No Plan exists. To end without replacing existing text, call final_result with arguments {}. To supply a new reply, use {"response":"<complete reply>"}.',
+      : input.wireEndingExample === undefined
+        ? 'No Plan exists. To end without replacing existing text, call final_result with arguments {}. To supply a new reply, use {"response":"<complete reply>"}.'
+        : input.wireEndingExample === null
+          ? "No Plan exists. Follow the supplied final_result parameter schema, including its required wire fields and absence markers."
+          : `No Plan exists. To end without replacing existing text, call final_result with arguments ${input.wireEndingExample}. Follow the supplied parameter schema to supply a new response.`,
     "A supplied response replaces the reply delivered to the caller; it is not a completion confirmation. A Parent receives that selected reply, not your private conversation history.",
     "If further work is needed, request the appropriate available function instead.",
   ].join(" ");
@@ -62,7 +66,10 @@ export function resolveHelarcFinalReply(input: {
 }): { readonly summary: string; readonly source: HelarcOutputSource; readonly finalReply: HelarcFinalReplyResolution } {
   const item = input.modelItems.find(item => item.kind === "model_tool_call" && item.call.modelCallRef.id === input.call.modelCallRef.id);
   if (!item) throw new TypeError("Final reply requires its exact ending Call item.");
-  const ending = Object.freeze({modelItemId: item.id, call: snapshotModelCallRef(input.call.modelCallRef)});
+  const endingCall = snapshotModelCallRef(input.call.modelCallRef);
+  if (endingCall.turnId === null) throw new TypeError("model_call_turn_convention_required");
+  const ending = Object.freeze({modelItemId: item.id, call: endingCall});
+  const endingTurnId = endingCall.turnId;
   const resolution = (disposition: HelarcFinalReplyResolution["disposition"], textJoin: HelarcFinalReplyResolution["textJoin"]): HelarcFinalReplyResolution =>
     Object.freeze({protocolRevision: HELARC_FINAL_REPLY_REVISION, runId: input.runId,
       interactionRevision: input.interactionRevision, ending, disposition, textJoin});
@@ -73,14 +80,14 @@ export function resolveHelarcFinalReply(input: {
   const selected = selectHelarcFinalReplyText({input: input.call.input, current, previous: previous?.textBlocks ?? []});
   if (selected.disposition === "supplied" || selected.disposition === "explicit_empty") {
     const response = selected.summary;
-    return Object.freeze({summary: response, source: Object.freeze({kind: "model_control", turnId: ending.call.turnId,
+    return Object.freeze({summary: response, source: Object.freeze({kind: "model_control", turnId: endingTurnId,
       modelItemId: item.id, modelCallRef: ending.call, control: "final_result", argumentPath: "/response"}),
       finalReply: resolution(response === "" ? "explicit_empty" : "supplied", "none")});
   }
   const blocks = selected.blocks;
   if (blocks.length === 0) return Object.freeze({summary: "", source: Object.freeze({kind: "no_text"}), finalReply: resolution("no_text", "none")});
   const fromCurrent = selected.disposition === "adopted_current";
-  const turnId = fromCurrent ? ending.call.turnId : previous!.turnId;
+  const turnId = fromCurrent ? endingTurnId : previous!.turnId;
   return Object.freeze({summary: blocks.map(block => block.text).join("\n\n"),
     source: Object.freeze({kind: "model_text", turnId, modelItemIds: Object.freeze(blocks.map(block => block.modelItemId)),
       adopted: Object.freeze({runId: input.runId, runItem: fromCurrent ? null : Object.freeze({id: previous!.runItemId, sequence: previous!.runItemSequence}),

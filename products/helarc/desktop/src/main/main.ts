@@ -27,7 +27,8 @@ app.on("before-quit",event=>{
   void closeHelarcHost({
     activities:async remaining=>{await services?.catch(()=>{});return activityHost?.service.close(remaining);},
     inspection:async()=>{await inspection?.then(source=>source.close());},
-    storage:async()=>{await services?.then(source=>source.close(),()=>{});await executionStore?.then(store=>store.close());},
+    storage:async()=>{try{await services?.then(source=>source.close(),()=>{});await inspection?.then(source=>source.drainSources());}
+      finally{await executionStore?.then(store=>store.close());}},
     diagnostics:async()=>{await diagnostics?.flush();},
   }).then(result=>{
     if(result.incomplete.length||result.failed.length){
@@ -52,8 +53,9 @@ async function initializeServices(){
   if(closing)throw new Error("Application is closing.");
   executionStore=HelarcExecutionStore.open(join(userDataPath,"execution"),undefined,source.evidenceObserver,
     source.fileMaterialObserver,diagnostics,new ElectronSafeStorageCredentialCipher(),source.contextMaterialObserver,
-    source.activityObserver,source.contextFoundationObserver);
+    source.activityObserver,source.contextFoundationObserver,source.protocolObserver);
   const executions=await executionStore;
+  source.protocolObserver?.bindContentReader(executions.protocolJournal,executions.contextSelections);
   await reconcileInterruptedHooks(executions,record=>source.definitions?.recoveredHook(record));
   if(closing)throw new Error("Application is closing.");
   activityHost=createHelarcActivityHost(executions,{diagnostics});

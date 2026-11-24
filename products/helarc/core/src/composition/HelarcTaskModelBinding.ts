@@ -27,6 +27,20 @@ export interface HelarcTaskExecutionComposition {
 
 export type HelarcTaskExecutionFactory = (binding: HelarcTaskModelBinding) => HelarcTaskExecutionComposition | Promise<HelarcTaskExecutionComposition>;
 
+/** Product input to a selected native implementation, without a generic request builder. */
+export interface HelarcNativeTaskModelBinding {
+  readonly preview:import("../run/presentation/HelarcNativePreview.js").HelarcNativePreviewObserver;
+  readonly model: import("@agent-anything/model-interaction/protocol").ModelProtocolConfigurationBinding;
+  readonly agents: readonly AgentDefinition<HelarcAgentOutput>[];
+  readonly controller: HelarcControllerProtocolComposition;
+  readonly environment: (runId: string) => Parameters<typeof buildHelarcProviderRequest>[3];
+  readonly materials: ContextMaterialAccessPort | undefined;
+  readonly requestBound: (runId: string, requestId: string, catalog: HelarcModelCallableCatalog) => void;
+}
+export type HelarcNativeTaskExecutionFactory = (binding: HelarcNativeTaskModelBinding) =>
+  (HelarcTaskExecutionComposition & {readonly compositions: readonly import("@agent-anything/model-interaction/protocol").ModelAgentCompositionBinding[]}) |
+  Promise<HelarcTaskExecutionComposition & {readonly compositions: readonly import("@agent-anything/model-interaction/protocol").ModelAgentCompositionBinding[]}>;
+
 export function createHelarcTaskModelBinding(input: {
   readonly agents: readonly AgentDefinition<HelarcAgentOutput>[];
   readonly protocol: HelarcControllerProtocolComposition;

@@ -102,6 +102,7 @@
     "@agent-anything/observability": "workspace:*",
     "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/operation-composition": "workspace:*",
+    "@agent-anything/provider-integrations": "workspace:*",
     "@agent-anything/tools": "workspace:*",
     "@agent-anything/workspace": "workspace:*",
     "@streamparser/json": "0.0.26"

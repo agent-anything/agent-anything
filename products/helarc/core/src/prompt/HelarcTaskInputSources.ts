@@ -1,5 +1,6 @@
-import {snapshotProviderRequest,type ProviderRequest,type ModelJsonValue} from "@agent-anything/model-interaction";
-import {declareModelResultTextSlot,modelInputValueDigest,type InputDuty,type ModelInputSection,type ModelInputSourceRef} from "@agent-anything/model-interaction/input";
+import {snapshotProviderRequest,type ProviderRequest} from "@agent-anything/model-interaction";
+import {modelInputValueDigest,type InputDuty,type ModelInputSection,type ModelInputSourceRef} from "@agent-anything/model-interaction/input";
+import {helarcResultTextDeclaration} from "./HelarcResultTextDeclaration.js";
 import {createInputDeliverySections,inputNotificationDigest,inputNotificationDeliveryId,validateTaskDecisionSource,type TaskDecisionSourceRecord} from "@agent-anything/agent-runtime/decision";
 import {restoreHelarcCallableCatalog} from "../controller/HelarcModelCallableCatalog.js";
 import type {OriginalInputSources,OriginalInputSourceGroup} from "@agent-anything/agent-runtime/context-representation";
@@ -49,16 +50,9 @@ export function createHelarcTaskInputSources(original:TaskDecisionSourceRecord,r
       if(value.content.kind!=="model_message"||value.content.message.role!=="tool")return [];
       const message=value.content.message;
       return message.content.flatMap(({result})=>{
-        const body=result.content;
-        if(result.presentation.presenter.id!=="agent-runtime.observation"||result.presentation.disposition==="unavailable"||
-          !jsonObject(body)||!["descendant_run","descendant_result_transfer"].includes(String(body.kind)))return [];
-        const output=body.output;
-        if(!jsonObject(output)||typeof output.summary!=="string"||!output.summary.length)return [];
         const id=`${value.id}:${result.modelCallRef.id}:report`;
-        return [{id,owner:{owner:"helarc-task-input",kind:"result_text_declaration",id,revision},sectionId:value.id,
-          slot:declareModelResultTextSlot(message,result.modelCallRef.id,["output","summary"]),requirements:[{
-            id:`${id}:report-content`,revision,basis:"Helarc delegated result report contract",
-            description:"Preserve the report's actionable findings, requested deliverable, conditions, unresolved work, failures, uncertainty, references and applicability. Do not substitute a list of steps taken for the result. The surrounding execution facts remain unchanged; do not contradict them or infer success from completion."}]}];
+        const declaration=helarcResultTextDeclaration(result,id,revision);
+        return declaration?.source.kind==="inline"?[{...declaration,sectionId:value.id}]:[];
       });
     });
     const groupRevision=resultTexts.length?modelInputValueDigest({occurrences,resultTexts}):revision;
@@ -82,7 +76,4 @@ function sourceDuties(section:ModelInputSection):readonly InputDuty[] {
   // Every occurrence remains in the original conversation. Unclassified meaning is not permission to omit it.
   duties.push("continuity");
   return duties;
-}
-function jsonObject(value:ModelJsonValue|undefined):value is {readonly [key:string]:ModelJsonValue} {
-  return value!==null&&typeof value==="object"&&!Array.isArray(value);
 }

@@ -31,15 +31,23 @@ exports.acceptNormalPreparation=async function({store,provider,registry,work,pro
     options:[{id:"source-preserving-method",request,stableScope:reference("both-child-reports-complete"),addresses:["subsequent-large-reports"],
       entries:quote.phases.map(p=>({phase:p.kind,state:"unknown",evidence:reference(`entry:${p.kind}`)})),limits:{maximumStages:intent.maximumStages,maximumAttempts:intent.maximumAttempts},capability:[],comparisons:[]}],
     inFlight:[],explorationHistory:[],optionalInFlight:0,autoPrepare:true,consumerActive:true};
+  const upgrade=process.env.ACTIVITY_POLICY_UPGRADE==="1";
+  if(upgrade){
+    const original=input.options[0],alternate={...request,combine:"merge"};
+    original.entries=quote.phases.map(p=>({phase:p.kind,state:p.kind==="read"?"unknown":"supported",evidence:reference("original:"+p.kind)}));
+    input.options.push({...original,id:"alternate-method",request:alternate,entries:quoteRepresentationMethod(alternate).phases.map(p=>({
+      phase:p.kind,state:p.condition==="conditional"?"unknown":"supported",evidence:reference("alternate:"+p.kind)}))});
+  }
   const pool={id:"helarc:model-execution",revision:"1",authority:"isolated-host",capacity:1};
   await a({kind:"bind_resource_pool",pool});
   await a({kind:"register_fact_source",source:{id:"normal-input-facts",runId:"parent",owner:"context-representation"}});
   await a({kind:"publish_fact",fact:{id:"normal-input-ready",sourceId:"normal-input-facts",ref:{owner:"context-representation",kind:"prepared_input",id:prepared.prepared.preparationStageId,revision:"1"}}});
   await a({kind:"subscribe_reconsideration",subscription:{id:"normal-policy-watch",runId:"parent",owner:"context-representation",sources:["normal-input-facts"]}});
   const boundary=await a({kind:"read_reconsideration",subscriptionId:"normal-policy-watch",limit:16});
-  const proposal=contextPreparationAcceptance({id:"normal-policy-accept",input,expectedDecisionId:null,expectedControlRevision:0,reconsideration:boundary,methods:work,
+  const proposal=contextPreparationAcceptance({id:"normal-policy-accept",input,...upgrade?{policyRevision:"10"}:{},expectedDecisionId:null,expectedControlRevision:0,reconsideration:boundary,methods:work,
     execution:{path:intent,workId:"original-normal-preparation",schedulingScopeId:scope.runId,timing:{kind:"unknown"},resources:["model-access","model-measurement"].map(capability=>({poolId:pool.id,capability,units:1}))}});
   assert.equal(proposal.decision.foreground.kind,"continue");assert.equal(proposal.decision.investment.kind,"propose");assert.equal(proposal.decision.investment.reason,"opportunity");
+  if(upgrade)assert.equal(proposal.decision.investment.optionId,"source-preserving-method");
   // A failed participant must leave neither consumed B nor a scheduled/partially opened method.
   const rejected=await store.sharedAcceptance.accept({...proposal.acceptance,id:"invalid-normal-policy-accept",parts:proposal.acceptance.parts.map(p=>p.owner==="context_preparation_policy"?{...p,proposal:{...p.proposal,expectedControlRevision:99}}:p)});
   assert.equal(rejected.outcome,"rejected");assert.equal(await a({kind:"read_path",pathId:intent.id}),null);
@@ -49,7 +57,7 @@ exports.acceptNormalPreparation=async function({store,provider,registry,work,pro
   const schedule=await a({kind:"read_schedule",workId:"original-normal-preparation"});assert.equal(schedule.service,"guaranteed");
   assert.equal((await store.contextPolicy.query({kind:"latest",scopeId:scope.id})).decision.id,proposal.decision.id);
   assert.equal((await a({kind:"read_reconsideration",subscriptionId:"normal-policy-watch",limit:16})).facts.length,0);
-  await verifyAdmissionLimitation({store,work,signal,input,intent,pool});
+  await verifyAdmissionLimitation({store,work,signal,input:{...input,options:[input.options[0]]},intent,pool});
 };
 
 async function verifyAdmissionLimitation({store,work,signal,input,intent,pool}) {
@@ -66,8 +74,8 @@ async function verifyAdmissionLimitation({store,work,signal,input,intent,pool}) 
   const processor=new ActivityReconsiderationProcessor(store.activityHandoffs,store.sharedAcceptance,
     (owner,subscription)=>owner==="context-representation"&&subscription.id==="limited-policy-watch"?handler:null);
   const result=await processor.scan("parent",signal);
-  assert.deepEqual(result.failures,[]);assert.equal(result.rejected[0].code,"activity_schedule_resource_unavailable");assert.deepEqual(result.accepted,["limited-policy-watch"]);
-  assert.equal((await store.contextPolicy.query({kind:"latest",scopeId:scope.id})).decision.investment.reason,"admission_rejected:activity_schedule_resource_unavailable");
+  assert.deepEqual(result.failures,[]);assert.equal(result.rejected[0].code,"activity_schedule_claim_exceeds_pool_capacity");assert.deepEqual(result.accepted,["limited-policy-watch"]);
+  assert.equal((await store.contextPolicy.query({kind:"latest",scopeId:scope.id})).decision.investment.reason,"admission_rejected:activity_schedule_claim_exceeds_pool_capacity");
   assert.equal(await a({kind:"read_path",pathId:"unadmitted-method"}),null);
   await a({kind:"publish_fact",fact:{id:"limited-unrelated-notification",sourceId:"limited-input-facts",ref:{owner:"context-representation",kind:"observation",id:"unchanged-arrangement",revision:"1"}}});
   const again=await processor.scan("parent",signal);assert.deepEqual(again.failures,[]);assert.equal(proposals,1,"The same rejected arrangement must not be reapplied");

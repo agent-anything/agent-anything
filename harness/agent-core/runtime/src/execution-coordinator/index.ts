@@ -36,8 +36,9 @@ export type {
   RunTreeApprovalSettlementKind,
   RunTreeApprovalSnapshot,
 } from "./RunTreeApprovalAccount.js";
-export { RunExecutionCoordinator } from "./RunExecutionCoordinator.js";
+export { RunExecutionCoordinator, type AdmittedRun } from "./RunExecutionCoordinator.js";
 export {ModelTaskDecisionCoordinator} from "./ModelTaskDecisionCoordinator.js";
+export {ActivityContinuationCoordinator,createActivityContinuationArrangement} from "./ActivityContinuation.js";
 export {DirectTaskDecisionCoordinator} from "./DirectTaskDecisionCoordinator.js";
 export type {ModelTaskDecisionCoordinatorOptions, ParseProviderResponse, BuildProviderRequest} from "./ModelTaskDecisionCoordinator.js";
 export type {AgentExecutionExtensions} from "../decision/AgentExecutionExtensions.js";
@@ -52,6 +53,7 @@ export type { RunTreeCommitDraft, PreparedRunTreeTransition } from "./RunTreeCom
 export type { ToolResultPresenter } from "./ToolResultPresenter.js";
 export type { RunInputNotification, RunInputNotificationSource } from "./RunInputNotifications.js";
 export type { RunObserver, RunSnapshotObservation, RunTransitionObservation } from "./RunObserver.js";
+export type {RunResourceContribution,RunResourceContributionSource} from "./RunResourceContributions.js";
 export { RUN_LIFECYCLE_DESCRIPTION } from "./RunObserver.js";
 export type { RunExecutionObserver, RunExecutionObservation } from "./RunExecutionObserver.js";
 export { retainRunConfiguration, restoreRunConfiguration, type RetainedRunConfig } from "./RunConfigurationCheckpoint.js";

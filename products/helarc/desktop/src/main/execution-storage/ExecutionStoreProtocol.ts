@@ -37,7 +37,7 @@ export interface ExecutionRecordReceipt {
 
 export interface ExecutionRetentionPin {
   readonly ownerId: string;
-  readonly reason: "unfinished_run" | "undelivered_result" | "unsettled_process" | "file_material" | "context_material" | "activity_handoff";
+  readonly reason: "unfinished_run" | "undelivered_result" | "unsettled_process" | "file_material" | "context_material" | "activity_handoff" | "protocol_evidence";
 }
 
 export type FileMaterialStoreCommand =
@@ -54,6 +54,9 @@ export type FileMaterialStoreCommand =
 export type FileMaterialStoreValue = FileMaterialRecord | readonly FileMaterialRecord[] | FileMaterialReservation | FileMaterialRead | null;
 
 export type ExecutionStoreCommand =
+  | {readonly kind:"protocol_journal";readonly command:import("@agent-anything/agent-runtime/model-access").ProtocolJournalCommand}
+  | {readonly kind:"material_delivery";readonly query:import("@agent-anything/context/custody").MaterialDeliveryQuery}
+  | {readonly kind:"material_delivery_facts";readonly runId:string;readonly after:number;readonly limit:number}
   | {readonly kind: "prepare_conversation_handoff"; readonly sourceRunId: string; readonly sessionId: string}
   | {readonly kind:"model_input_usage";readonly query:import("@agent-anything/model-interaction/input").InputUsageQuery}
   | {readonly kind:"accept_shared";readonly proposal:import("@agent-anything/agent-runtime/activity").SharedAcceptanceProposal}
@@ -65,8 +68,9 @@ export type ExecutionStoreCommand =
   | {readonly kind:"context_policy_investments";readonly input:{readonly scopeId:string;readonly afterWorkId:string|null;readonly limit:number}}
   | {readonly kind:"context_foundation_facts";readonly runId:string;readonly after:number;readonly limit:number}
   | {readonly kind: "query_acceptance"; readonly id: string}
-  | {readonly kind: "activity_handoff"; readonly command: import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand}
+  | {readonly kind: "activity_handoff"; readonly command: import("@agent-anything/agent-runtime/activity").ActivityHandoffCommand;readonly returnKind?:"receipt"}
   | {readonly kind: "register_recording"; readonly recording: import("./ExecutionRecording.js").ExecutionRecording}
+  | {readonly kind:"recording_replay_bounds";readonly rootRunId:string}
   | {readonly kind: "context_preparation"; readonly command: import("./ContextPreparationDatabase.js").ContextPreparationCommand}
   | {readonly kind: "context_material"; readonly command: ContextMaterialCommand}
   | {readonly kind: "commit_reference_transfer"; readonly transfer: ExecutionReferenceTransfer}
@@ -79,8 +83,13 @@ export type ExecutionStoreCommand =
   | {readonly kind: "commit_compensation_association"; readonly association: CompensationAssociation}
   | {readonly kind: "read_compensation_association"; readonly invocationId: string}
   | {readonly kind: "admit_product_run"; readonly admission: HelarcExecutionAdmission}
+  | {readonly kind: "resolve_admission"; readonly rootRunId:string; readonly intentId:string}
+  | {readonly kind: "read_run_control"; readonly runId:string}
+  | {readonly kind: "read_tree_control"; readonly rootRunId:string}
+  | {readonly kind: "close_admission"; readonly rootRunId:string; readonly intentId:string}
   | {readonly kind: "read_product_run"; readonly rootRunId: string}
-  | {readonly kind: "list_product_runs"}
+  | {readonly kind: "list_product_runs";readonly rootRunId?:string}
+  | {readonly kind:"discover_product_work";readonly delivery:"file_cleanup"|"undelivered"}
   | {readonly kind: "list_retention_pins"}
   | {readonly kind: "commit_product_delivery"; readonly rootRunId: string}
   | {readonly kind: "commit_shell_session"; readonly commit: ShellSessionCommit}
@@ -94,6 +103,7 @@ export type ExecutionStoreCommand =
   | {readonly kind: "read_run_tree_commit"; readonly recordId: string}
   | {readonly kind: "read_run_tree_latest"; readonly rootRunId: string}
   | {readonly kind: "read_run_tree"; readonly rootRunId: string}
+  | {readonly kind: "read_run_tree_members"; readonly rootRunId: string; readonly cursor: import("./RunTreeMembership.js").RunTreeMembershipCursor | null; readonly limit: number}
   | {readonly kind: "commit_owner"; readonly commit: ExecutionOwnerCommit}
   | {readonly kind: "read_owner_commit"; readonly recordId: string}
   | {readonly kind: "read_owner_latest"; readonly owner: "run" | "composite"; readonly ownerId: string}
@@ -103,6 +113,8 @@ export type ExecutionStoreCommand =
   | { readonly kind: "close" };
 
 export interface ExecutionStoreRequest {
+  /** Non-authoritative correlation only; excluded from retained command content. */
+  readonly diagnosticContext?:import("../diagnostics/ExecutionPerformance.js").PerformanceContext;
   readonly id: number;
   readonly generation: number;
   readonly command: ExecutionStoreWireCommand;
@@ -115,6 +127,15 @@ export type ExecutionStoreWireCommand = ExecutionStoreCommand
 
 export type FileMaterialFinalizationPage = {readonly records: readonly FileMaterialRecord[]; readonly next: string | null};
 export type ExecutionStoreValue =
+  readonly import("./HelarcExecutionAdmission.js").ProductWorkSummary[] |
+  import("./ExecutionRecording.js").RecordingReplayBounds |
+  import("./RunExecutionControl.js").RunExecutionControl |
+  readonly import("./RunExecutionControl.js").RunExecutionControl[] |
+  import("./ExecutionAdmissionResolution.js").ExecutionAdmissionResolution |
+  import("./RunTreeMembership.js").RunTreeMembershipPage |
+  {protocolJournalValue:import("@agent-anything/agent-runtime/model-access").ProtocolJournalValue} |
+  {materialDeliveryValue:import("@agent-anything/context/custody").MaterialDeliveryValue} |
+  {materialDeliveryFacts:readonly import("./MaterialDeliveryDatabase.js").MaterialDeliveryFact[]} |
   import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff |
   {custodyValue:import("@agent-anything/context/custody").MaterialCustodyValue} |
   {representationValue:import("@agent-anything/context/representation").RepresentationValue} |
@@ -126,6 +147,8 @@ export type ExecutionStoreValue =
   {contextFacts:readonly import("./ContextFoundationRecords.js").ContextFoundationFact[]} |
   {acceptanceValue: import("@agent-anything/agent-runtime/activity").SharedAcceptanceReceipt | null} | {activityValue: import("@agent-anything/agent-runtime/activity").ActivityHandoffValue} | import("./ExecutionRecording.js").ExecutionRecordingRegistration | {preparationValue: unknown} | ContextMaterialValue | readonly ExecutionReferenceTransfer[] | ExecutionReferencePage | FileMaterialFinalizationPage | FileMaterialStoreValue | ExecutionEvidenceRecord | CompensationAssociation | ExecutionRecordReceipt | ActionRecoveryRecords | ExecutionOwnerCommit | RunCommitReceipt | RunTreeCommit | RunTreeCommitReceipt | RunTreeRecoveryRecords | AgentHookInvocationCheckpoint | readonly AgentHookInvocationCheckpoint[] | readonly ProcessCheckpoint[] | ShellSessionCommit | HelarcExecutionAdmission | readonly HelarcExecutionDiscovery[] | readonly ExecutionRetentionPin[] | null;
 export type ExecutionStoreReply =
+  | {readonly kind:"protocol_journal_observation";readonly fact:import("@agent-anything/agent-runtime/model-access").ProtocolJournalFact}
+  | {readonly kind:"material_delivery_observation";readonly fact:import("./MaterialDeliveryDatabase.js").MaterialDeliveryFact}
   | {readonly kind:"context_foundation_observation";readonly fact:import("./ContextFoundationRecords.js").ContextFoundationFact}
   | {readonly kind: "activity_observation"; readonly fact: import("@agent-anything/agent-runtime/activity").ActivityHandoffFact}
   | {readonly kind: "context_material_observation"; readonly observation: import("./ContextMaterialObservation.js").ContextMaterialObservation}

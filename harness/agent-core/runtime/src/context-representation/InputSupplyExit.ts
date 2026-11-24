@@ -3,15 +3,15 @@ import {activityFactSourceId,type ActivityHandoffPort,type ActivityPathState,typ
   type ActivitySchedulingAcceptance,type ActivityScheduledSettlement,type ActivityReconsiderationPreparation,type SharedAcceptancePart} from "../activity/index.js";
 import {inputSupplyExit,inputSupplyFactSource,type InputSupplyResponsibilityStore,type InputSupplyHead,type InputSupplyExit as Exit,
   type InputSupplyExitDisposition,type InputSupplyExitPending} from "./InputSupplyResponsibility.js";
-import type {ContextMethodInputConsumer} from "./ContextMethodInputConsumer.js";
-import type {OriginalInputSupplyBasis} from "./OriginalInputSupply.js";
+import type {InputSupplyReceptionOwner} from "./InputSupplyReception.js";
 
 /** Return ends the input wait. This owner separately disposes its original accepted responsibilities. */
 export class InputSupplyExitWork {
   constructor(private readonly ports:{readonly activities:ActivityHandoffPort;readonly responsibilities:InputSupplyResponsibilityStore;
-    readonly receivers?:Pick<ContextMethodInputConsumer,"prepareClosure">}) {}
+    readonly receivers?:InputSupplyReceptionOwner}) {}
 
-  async prepare(basis:OriginalInputSupplyBasis,subscriptionId:string,returned:ActivityStageState|null,signal:AbortSignal):Promise<ActivityReconsiderationPreparation> {
+  async prepare(basis:{readonly need:import("../activity/index.js").ActivityInputNeed;readonly consumer:ActivityPathState;readonly sourceStage:ActivityStageState},
+    subscriptionId:string,returned:ActivityStageState|null,signal:AbortSignal):Promise<ActivityReconsiderationPreparation> {
     signal.throwIfAborted();const {need,consumer,sourceStage}=basis;
     const exit=await this.ports.responsibilities.query({kind:"exit",needId:need.id}) as Exit|null;
     const origin={needId:need.id,runId:consumer.intent.runId,owner:need.supplier,consumerPathId:consumer.intent.id,

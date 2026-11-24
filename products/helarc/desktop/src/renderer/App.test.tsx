@@ -1,6 +1,6 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HelarcMainSnapshot } from "../shared/HelarcDesktopApi.js";
 import { createHelarcRunTreeTestSnapshot } from "../shared/testing/HelarcRunTreeTestSnapshot.js";
 import { App } from "./App.js";
@@ -11,6 +11,7 @@ import {
 } from "./interactions/InteractionPanels.js";
 
 describe("Helarc workbench shell", () => {
+  afterEach(()=>vi.unstubAllGlobals());
   it("renders the primary workbench surfaces", () => {
     const html = renderToStaticMarkup(<App />);
 
@@ -24,7 +25,8 @@ describe("Helarc workbench shell", () => {
     expect(html).not.toContain("Templates");
   });
 
-  it("requires a new configuration before showing an unsaved Service form", () => {
+  it("requires a new configuration before showing an unsaved protocol form", () => {
+    vi.stubGlobal("window",{helarc:{providerConfigurations:{list:vi.fn()}}});
     const html = renderToStaticMarkup(
       <SettingsPanel
         snapshot={unconfiguredSnapshot()}
@@ -33,7 +35,7 @@ describe("Helarc workbench shell", () => {
     );
 
     expect(html).toContain(
-      '<option value="ollama" selected="">Ollama</option>',
+      '<option value="ollama.chat" selected="">Ollama Chat</option>',
     );
     expect(html).toContain("No saved configurations");
     expect(html).toContain('aria-label="New configuration"');
@@ -41,6 +43,7 @@ describe("Helarc workbench shell", () => {
   });
 
   it("renders Settings as a standalone page with a close action", () => {
+    vi.stubGlobal("window",{helarc:{providerConfigurations:{list:vi.fn()}}});
     const html = renderToStaticMarkup(
       <SettingsPage
         snapshot={unconfiguredSnapshot()}
@@ -54,6 +57,12 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain('role="tab"');
     expect(html).not.toContain('class="workbench"');
     expect(html).not.toContain('class="task-composer"');
+  });
+
+  it("reports unavailable storage rather than offering an editable provider without a host",()=>{
+    const html=renderToStaticMarkup(<SettingsPanel snapshot={unconfiguredSnapshot()} onSaved={()=>undefined}/>);
+    expect(html).toContain("Provider configuration storage is unavailable.");
+    expect(html).not.toContain('aria-label="New configuration"');
   });
 
   it("renders offered approval decision actions", () => {

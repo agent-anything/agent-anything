@@ -5,17 +5,19 @@ import { HELARC_NATIVE_TOOL_PROTOCOL_REVISION } from "./HelarcController.js";
 import { HELARC_PROTOCOL_RECOVERY_EXECUTION_FLOW } from "./HelarcControllerExecutionFlow.js";
 import { HELARC_PROTOCOL_RECOVERY_POLICY } from "./HelarcControllerProtocolComposition.js";
 import {snapshotTaskModelExchange, type TaskModelExchange} from "@agent-anything/agent-runtime/decision";
+import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 const CHECKPOINT_KEY = HELARC_PROTOCOL_RECOVERY_POLICY.id;
 const MISSING_SIGNAL = "helarc_ending_signal_missing";
 
 interface RecoveryState {
-  readonly version: 2;
+  readonly version: 3;
   readonly policyRevision: string;
   readonly maximumConsecutiveMissing: number;
   readonly runId: string;
   readonly requestId: string;
   readonly iteration: number;
-  readonly turnId: string;
+  readonly responseIdentity: string;
+  readonly responseDigest: string;
   readonly consecutiveMissing: number;
   readonly disposition: "feedback" | "reset" | "exhausted";
   readonly exchange: TaskModelExchange | null;
@@ -26,6 +28,8 @@ export class HelarcProtocolRecoveryController<TOutput> implements TaskDecisionAc
   private readonly states = new Map<string, RecoveryState>();
 
   constructor(private readonly inner: TaskDecisionActivity<TOutput>) {}
+
+  get historyKind() { return this.inner.historyKind ?? "turn_messages"; }
 
   get resourceMetering(): TaskDecisionActivity<TOutput>["resourceMetering"] {
     return this.inner.resourceMetering;
@@ -75,12 +79,15 @@ export class HelarcProtocolRecoveryController<TOutput> implements TaskDecisionAc
       }
 
       const requestId = input.toolExposure.controllerRequestId;
-      const turnId = decision.modelItems.find(item => item.kind === "model_turn_finish")?.turnId;
-      if (!turnId) throw new ActivityCheckpointError("helarc_protocol_recovery_turn_missing");
+      const native = decision.modelItems.find(item => item.kind === "native_purpose_evidence");
+      const turn = decision.modelItems.find(item => item.kind === "model_turn_finish");
+      if ((!native && !turn) || (native && turn)) throw new ActivityCheckpointError("helarc_protocol_recovery_response_missing");
+      const responseIdentity = native ? modelInputValueDigest(native.evidence) : turn!.turnId;
+      const responseDigest = modelInputValueDigest(decision);
       const replayed = saved?.requestId === requestId;
       let state: RecoveryState;
       if (replayed) {
-        if (saved.iteration !== input.iteration || saved.turnId !== turnId ||
+        if (saved.iteration !== input.iteration || saved.responseIdentity !== responseIdentity || saved.responseDigest !== responseDigest ||
             (saved.disposition === "feedback") !== missing) {
           throw new ActivityCheckpointError("helarc_protocol_recovery_response_changed");
         }
@@ -88,9 +95,9 @@ export class HelarcProtocolRecoveryController<TOutput> implements TaskDecisionAc
       } else {
         const consecutiveMissing = missing ? (saved?.consecutiveMissing ?? 0) + 1 : 0;
         state = Object.freeze({
-          version: 2, policyRevision: HELARC_PROTOCOL_RECOVERY_POLICY.revision,
+          version: 3, policyRevision: HELARC_PROTOCOL_RECOVERY_POLICY.revision,
           maximumConsecutiveMissing: HELARC_PROTOCOL_RECOVERY_POLICY.maximumConsecutiveMissing,
-          runId: input.runId, requestId, iteration: input.iteration, turnId, consecutiveMissing,
+          runId: input.runId, requestId, iteration: input.iteration, responseIdentity, responseDigest, consecutiveMissing,
           disposition: !missing ? "reset" : consecutiveMissing >= HELARC_PROTOCOL_RECOVERY_POLICY.maximumConsecutiveMissing ? "exhausted" : "feedback",
           exchange: missing && consecutiveMissing >= HELARC_PROTOCOL_RECOVERY_POLICY.maximumConsecutiveMissing ? snapshotTaskModelExchange(decision, input) : null,
         });
@@ -118,9 +125,10 @@ export class HelarcProtocolRecoveryController<TOutput> implements TaskDecisionAc
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new ActivityCheckpointError(CHECKPOINT_KEY);
     const state = value as RecoveryState;
     const maximum = HELARC_PROTOCOL_RECOVERY_POLICY.maximumConsecutiveMissing;
-    if (state.version !== 2 || state.policyRevision !== HELARC_PROTOCOL_RECOVERY_POLICY.revision ||
+    if (state.version !== 3 || state.policyRevision !== HELARC_PROTOCOL_RECOVERY_POLICY.revision ||
         state.maximumConsecutiveMissing !== maximum || state.runId !== input.runId ||
-        typeof state.requestId !== "string" || !state.requestId || typeof state.turnId !== "string" || !state.turnId ||
+        typeof state.requestId !== "string" || !state.requestId || typeof state.responseIdentity !== "string" || !state.responseIdentity ||
+        typeof state.responseDigest !== "string" || !state.responseDigest ||
         !Number.isSafeInteger(state.iteration) || state.iteration < 1 || state.iteration > input.iteration ||
         !Number.isSafeInteger(state.consecutiveMissing) || state.consecutiveMissing > state.iteration ||
         !(state.disposition === "reset" && state.consecutiveMissing === 0 ||
@@ -135,9 +143,11 @@ export class HelarcProtocolRecoveryController<TOutput> implements TaskDecisionAc
 }
 
 function isMissingSignal<T>(decision: TaskDecisionProposal<T>): boolean {
-  return decision.kind === "continue_with_feedback" && decision.feedback.code === MISSING_SIGNAL &&
-    decision.feedback.source.owner === "helarc" && decision.feedback.source.kind === "controller_protocol" &&
-    decision.feedback.source.id === HELARC_NATIVE_TOOL_PROTOCOL_REVISION;
+  if (decision.kind !== "continue_with_feedback" || decision.feedback.code !== MISSING_SIGNAL || decision.feedback.source.owner !== "helarc") return false;
+  const source = decision.feedback.source;
+  if (source.kind === "controller_protocol") return source.id === HELARC_NATIVE_TOOL_PROTOCOL_REVISION;
+  return source.kind === "native_task_acceptance" && decision.modelItems.some(item =>
+    item.kind === "native_purpose_evidence" && item.evidence.acceptance.id === source.id && item.evidence.acceptance.revision === source.revision);
 }
 
 function recoveryFacts(state: RecoveryState) {
@@ -152,7 +162,7 @@ function exhausted<T>(state: RecoveryState, input: TaskDecisionInputSources<T>):
     metadata: {owner: "helarc", protocol: HELARC_NATIVE_TOOL_PROTOCOL_REVISION,
       feedbackCode: MISSING_SIGNAL, policyId: CHECKPOINT_KEY, version: state.version, policyRevision: state.policyRevision,
       maximumConsecutiveMissing: state.maximumConsecutiveMissing, runId: state.runId, requestId: state.requestId,
-      iteration: state.iteration, turnId: state.turnId, consecutiveMissing: state.consecutiveMissing, disposition: state.disposition},
+      iteration: state.iteration, responseIdentity: state.responseIdentity, consecutiveMissing: state.consecutiveMissing, disposition: state.disposition},
   }}, "settled_failure", null, state.requestId === input.toolExposure.controllerRequestId && state.exchange ?
     {exchange: snapshotTaskModelExchange(state.exchange, input)} : undefined);
 }

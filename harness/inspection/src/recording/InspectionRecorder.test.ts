@@ -28,6 +28,17 @@ async function setup(rich = false) {
   return { directory, recorder, query, subject, selection: { sourceId: subject.sourceId, datasetId: subject.datasetId } };
 }
 describe("Inspection recording", () => {
+  it("bounds the durable import producer window as well as its total queue",async()=>{
+    const {recorder,subject}=await setup();
+    for(let index=0;index<320;index++){
+      expect(await recorder.offerWhenReady({subject,occurredAt:null,payload:{kind:"event",name:"windowed-import",sequence:index,code:null}},
+        {maxPendingRecords:100})).toBe(true);
+      expect(recorder.health().queued).toBeLessThanOrEqual(100);
+    }
+    expect((await recorder.flush()).native).toBe("settled");expect(recorder.health().dropped).toBe(0);
+    await expect(recorder.offerWhenReady({subject,occurredAt:null,payload:{kind:"event",name:"bad",sequence:null,code:null}},
+      {maxPendingRecords:0})).rejects.toThrow("inspection_replay_window_invalid");
+  });
   it("backpressures durable replay past ingress capacity without changing live capture limits",async()=>{
     const {recorder,subject}=await setup();
     for(let index=0;index<5000;index++)expect(await recorder.offerWhenReady({
@@ -232,7 +243,7 @@ describe("Inspection recording", () => {
     provider.observe({...exchange, stage: "request", request: {requestId: call.providerRequestId, purpose: "controller", ...modelInputFromSections([section]),
       composition: {id: "composition", sections: [section], lineage: {}, workingView: createExactModelWorkingView({sections: [section], recipientRunId: "run-1", boundary: "request"})},
       interaction: {kind: "native_tool_turn", callables: []}}} as never);
-    provider.observe({...exchange, stage: "settled", result: {kind: "succeeded", response: {kind: "native_tool_turn", turn: {turnId: "model-turn", usage: null, finish: {kind: "normal"}, assistant: {content: callCount ? [{kind: "model_tool_call", call: {modelCallRef: call}}] : [{kind: "text", text: "Done"}]}}}}} as never);
+    provider.observe({...exchange, stage: "settled", result: {kind: "succeeded", response: {kind: "native_tool_turn", turn: {turnId: "model-turn", usage: null, finish: {kind: "normal"}, assistant: {content: callCount ? [{kind: "model_tool_call", call: {modelCallRef: call,name:"Read",ordinal:0,input:{path:"file.txt"}}}] : [{kind: "text", text: "Done"}]}}}}} as never);
     if (callCount) execution.observe({kind: "scheduling", runId: "run-1", occurredAt: now, call, position: 0, disposition: "queued", rule: "decision_source_order", groupId: null, reason: null} as never);
     execution.observe({kind: "retry_event", runId: "run-1", occurredAt: now, event: {type: "retry_attempt_started", runId: "run-1", owner: "provider_request", operationId: "retry-operation", attemptId: "logical-attempt", occurredAt: now}} as never);
     await recorder.flush();

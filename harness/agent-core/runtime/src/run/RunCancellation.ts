@@ -13,9 +13,21 @@ export type RunCancellationReasonCode =
   | "host_shutdown"
   | "approval_cancelled"
   | "parent_run_cancelled"
+  | "parent_run_ending"
   | "runner_shutdown";
 
+export interface DelegatedCancellationBasis {
+  readonly scope: "subtree";
+  readonly commandId: string;
+  readonly parentRunId: string;
+  readonly requestId: string;
+  readonly requestRevision: string;
+  readonly relationId: string;
+  readonly childRunId: string;
+}
+
 export interface RunCancellationRequestInput {
+  readonly delegation?: DelegatedCancellationBasis;
   readonly origin: RunCancellationOrigin;
   readonly reasonCode: RunCancellationReasonCode;
   readonly reason?: string;
@@ -24,6 +36,7 @@ export interface RunCancellationRequestInput {
 }
 
 export interface RunCancellationRequest {
+  readonly delegation?: DelegatedCancellationBasis;
   readonly id: string;
   readonly runId: string;
   readonly origin: RunCancellationOrigin;
@@ -53,6 +66,7 @@ export interface RunCancellationController {
 }
 
 export interface RunCancellationSummary {
+  readonly delegation?: DelegatedCancellationBasis;
   readonly requestId: string;
   readonly origin: RunCancellationOrigin;
   readonly reasonCode: RunCancellationReasonCode;
@@ -113,7 +127,7 @@ const originReasonCodes: Readonly<Record<RunCancellationOrigin, readonly RunCanc
   user: ["user_requested"],
   host: ["host_requested", "host_shutdown"],
   approval: ["approval_cancelled"],
-  parent_run: ["parent_run_cancelled"],
+  parent_run: ["parent_run_cancelled", "parent_run_ending"],
   runner: ["runner_shutdown"],
 };
 const MAX_CANCELLATION_REASON_LENGTH = 500;
@@ -131,6 +145,8 @@ export function createRunCancellationController(
     if (retained.runId !== input.runId) throw new TypeError("Cancellation recovery targets another Run.");
     assertNonEmpty(retained.id, "retained cancellation id");
     assertDateTime(retained.requestedAt, "retained cancellation requestedAt");
+    const delegation = retained.delegation === undefined ? undefined :
+      snapshotBasis(retained.delegation, input.runId, retained.origin);
     validateRequestInput({origin: retained.origin, reasonCode: retained.reasonCode,
       ...(retained.approvalRequestId === null ? {} : {approvalRequestId: retained.approvalRequestId}),
       ...(retained.parentRunId === null ? {} : {parentRunId: retained.parentRunId})});
@@ -139,7 +155,7 @@ export function createRunCancellationController(
         normalizeOptionalText(retained.parentRunId ?? undefined) !== retained.parentRunId) {
       throw new TypeError("Retained cancellation request is not canonical.");
     }
-    request = Object.freeze(retained);
+    request = Object.freeze({...retained, ...(delegation ? {delegation} : {})});
     abortController.abort(request);
   }
   const context: CancellationContext = Object.freeze({
@@ -171,6 +187,7 @@ export function createRunCancellationController(
       assertDateTime(requestedAt, "cancellation requestedAt");
 
       const candidate = Object.freeze({
+        ...(requestInput.delegation ? {delegation:snapshotBasis(requestInput.delegation,input.runId,requestInput.origin)} : {}),
         id: requestId,
         runId: input.runId,
         origin: requestInput.origin,
@@ -199,10 +216,19 @@ export function toRunCancellationSummary(
 ): RunCancellationSummary {
   return Object.freeze({
     requestId: request.id,
+    ...(request.delegation ? {delegation:request.delegation} : {}),
     origin: request.origin,
     reasonCode: request.reasonCode,
     requestedAt: request.requestedAt,
   });
+}
+
+function snapshotBasis(b:DelegatedCancellationBasis,runId:string,origin:RunCancellationOrigin):DelegatedCancellationBasis {
+  if(b.scope!=="subtree"||b.childRunId!==runId||b.parentRunId===runId||!["host","user"].includes(origin))
+    throw new TypeError("Invalid delegated cancellation scope.");
+  for(const key of ["commandId","parentRunId","requestId","requestRevision","relationId","childRunId"] as const)
+    assertNonEmpty(b[key],key);
+  return Object.freeze({...b});
 }
 
 function validateRequestInput(input: RunCancellationRequestInput): void {

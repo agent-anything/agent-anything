@@ -4,6 +4,10 @@
   "description": "Reusable model-provider transport adapters for Agent Harness.",
   "type": "module",
   "exports": {
+    "./native": {
+      "types": "./src/native/index.ts",
+      "import": "./dist/native/index.js"
+    },
     "./http": {
       "types": "./src/http/index.ts",
       "import": "./dist/http/index.js"
@@ -35,8 +39,14 @@
   "dependencies": {
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
-    "eventsource-parser": "4.1.1"
+    "ajv": "8.20.0",
+    "eventsource-parser": "4.1.1",
+    "undici": "7.27.1",
+    "ws": "^8.23.0"
   },
   "license": "Apache-2.0",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
+  }
 }

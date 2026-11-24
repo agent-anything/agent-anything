@@ -1,9 +1,9 @@
-import { selectedCases } from './cases.mjs';
+import { suites } from './cases.mjs';
 
 const MAX_RESPONSE = 2 * 1024 * 1024;
 
 export function configuration(input) {
-  if (!input || typeof input !== 'object' || !['ollama', 'openai-compatible'].includes(input.kind)) throw Error('Select a connection type.');
+  if (!input || typeof input !== 'object' || !['ollama', 'openai-compatible','openai-responses'].includes(input.kind)) throw Error('Select a connection type.');
   const url = new URL(input.baseUrl);
   if (url.username || url.password || url.search || url.hash || !['http:', 'https:'].includes(url.protocol) ||
       (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw Error('Use HTTPS, or HTTP on localhost, without URL credentials or query parameters.');
@@ -11,11 +11,13 @@ export function configuration(input) {
     apiKey: String(input.apiKey || process.env.MODEL_EVALUATOR_API_KEY || ''),
     timeoutMs: Number(input.timeoutMs ?? 300000), repetitions: Number(input.repetitions ?? 3),
     parameters: input.parameters ?? {}, suite: input.suite ?? 'baseline' };
-  selectedCases(config.suite);
+  const suite = suites.find(s=>s.id===config.suite);
+  if (!suite || (config.kind==='openai-responses') !== (suite.kind==='openai-responses')) throw Error('Select a suite for this protocol.');
+  if (suite.kind && config.repetitions!==1) throw Error('Native protocol probes run once per evaluation.');
   if (!Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || config.timeoutMs > 1800000 ||
       !Number.isInteger(config.repetitions) || config.repetitions < 1 || config.repetitions > 10 || config.model.length > 512 ||
       config.apiKey.length > 16384 || !config.parameters || Array.isArray(config.parameters) || typeof config.parameters !== 'object') throw Error('Invalid connection settings or limits.');
-  const allowed = config.kind === 'ollama' ? ['temperature', 'num_ctx', 'think'] : ['temperature', 'reasoning_effort', 'thinking'];
+  const allowed = config.kind === 'ollama' ? ['temperature', 'num_ctx', 'think'] : config.kind==='openai-responses' ? [] : ['temperature', 'reasoning_effort', 'thinking'];
   if (Object.keys(config.parameters).some(k => !allowed.includes(k)) || JSON.stringify(config.parameters).length > 4096) throw Error('Unsupported generation parameter.');
   return config;
 }
@@ -25,7 +27,7 @@ export function safeConfiguration(config) {
   return safe;
 }
 
-async function request(config, route, body, signal) {
+export async function request(config, route, body, signal, wire=false) {
   const response = await fetch(`${config.baseUrl}${route}`, { method: body ? 'POST' : 'GET', redirect: 'error',
     headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}) },
     body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]) });
@@ -36,6 +38,7 @@ async function request(config, route, body, signal) {
       size += value.length; if (size > MAX_RESPONSE) throw Error('Response exceeds the evidence size limit.'); chunks.push(value); }
   } finally { await reader.cancel().catch(() => {}); }
   const raw = Buffer.concat(chunks).toString('utf8');
+  if (wire) return {httpStatus:response.status, requestId:response.headers.get('x-request-id'), raw};
   const failure = message => Object.assign(Error(message), { response: { httpStatus: response.status, body: raw } });
   if (!response.ok) throw failure(`HTTP ${response.status}: ${raw.slice(0, 1500)}`);
   try { return JSON.parse(raw); } catch { throw failure('Response is not valid JSON.'); }

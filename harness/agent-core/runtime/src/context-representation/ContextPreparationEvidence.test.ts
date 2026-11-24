@@ -2,6 +2,8 @@ import {describe,it,expect,vi} from "vitest";
 import {observeContextPreparationInput,readContextPreparationEvidence,contextPreparationCostEvidence,acceptedConversationRepresentationContinuity,type ContextPreparationObservationWindow} from "./ContextPreparationEvidence.js";
 import type {PreparedContextInput} from "./ContextInputPreparation.js";
 import type {ContextPreparationDecisionRecord} from "./ContextPreparationDecisionStore.js";
+import {assessInputCapacity} from "@agent-anything/model-interaction/input";
+import {decideContextPreparation,type ContextPreparationPolicyInput} from "./ContextPreparationPolicy.js";
 
 const scope={id:"scope",runId:"root",recipient:"agent",purpose:"task",target:"target",continuity:"task",owner:"context-representation",authorityBasis:"authority"};
 const evidence=(id:string)=>({owner:"activity",kind:"fact" as const,id,revision:"1"});
@@ -14,6 +16,35 @@ function sample(sequence:number,value:number,previous:ContextPreparationObservat
     representationContinuity:"original",prepared,evidence:evidence(`prepare:${sequence}`),previous};
 }
 describe("normal preparation evidence",()=>{
+  it("does not turn unknown native consumption into zero or a reservation",()=>{
+    const description={state:"active",revision:2,used:{stages:2,attempts:2,readBytes:null,storedBytes:null,modelCalls:null},
+      remaining:{stages:3,attempts:3,readBytes:10,storedBytes:20,modelCalls:1},allowance:{limits:{modelCalls:2},reserved:{modelCalls:1}},
+      limitations:["native consumption unknown"]} as Parameters<typeof contextPreparationCostEvidence>[1];
+    const evidence=contextPreparationCostEvidence("native",description);
+    expect(evidence.confirmedProgress).toEqual({stageAdmissions:2,dispatchedAttempts:2,acceptedReadBytes:null,acceptedStoredBytes:null,modelInputsPrepared:null});
+    expect(evidence.reserved).toEqual({modelCalls:1});expect(evidence.forecast).toBe("unknown");
+  });
+  it("uses the same growth policy for native input evidence without a generic request",()=>{
+    let previous:ContextPreparationObservationWindow|null=null;
+    for(let sequence=0;sequence<4;sequence++){
+      const {prepared,...basis}=sample(sequence,500+sequence*150,previous);
+      const recipient={inputId:prepared.encoded.id,measurements:prepared.measurement,limits:prepared.limits,
+        assessment:assessInputCapacity({encodedInputId:prepared.encoded.id,targetRevision:scope.target,purpose:scope.purpose,
+          evidence:prepared.measurement,limits:prepared.limits,reservations:[],policy:{id:"capacity",revision:"1",purpose:scope.purpose,
+            basis:"Original native input",allowEstimatedFit:true,allowUnknown:true}})};
+      const observed=observeContextPreparationInput({...basis,recipient});previous=observed.report.window;
+      expect(observed.pressure).toHaveLength(sequence===3?1:0);
+      const policy:ContextPreparationPolicyInput={scope,boundary:"boundary",requirementsDigest:"requirements",
+        current:{kind:"recipient_prepared",scope,inputId:recipient.inputId,bodyDigest:"body",exactInputDigest:"exact",judgmentId:"combination",
+          allowed:true,risks:[],capacity:recipient,evidence:basis.evidence},currentRejectedInputId:null,alternatives:[],pressure:observed.pressure,
+        options:[],inFlight:[],explorationHistory:[],optionalInFlight:0,autoPrepare:true,consumerActive:true,observationReport:observed.report};
+      expect(decideContextPreparation(policy).foreground.kind).toBe("continue");
+      expect(()=>decideContextPreparation({...policy,current:{...policy.current,capacity:undefined} as typeof policy.current})).toThrow("observation_scope_invalid");
+      expect(()=>observeContextPreparationInput({...basis,recipient:{...recipient,inputId:"other"}})).toThrow("capacity_scope_invalid");
+      expect(()=>observeContextPreparationInput({...basis,recipient:{...recipient,assessment:{...recipient.assessment,allowed:false}}})).toThrow("capacity_changed");
+    }
+    expect(previous!.inputs.map(i=>i.inputId)).toEqual(["input:0","input:1","input:2","input:3"]);
+  });
   it("observes accepted input revisions without inventing another task turn or growth sample",()=>{
     let previous:ContextPreparationObservationWindow|null=null;
     for(let sequence=0;sequence<3;sequence++)previous=observeContextPreparationInput(sample(sequence,500+sequence*150,previous)).report.window;

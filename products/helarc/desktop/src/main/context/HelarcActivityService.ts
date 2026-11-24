@@ -29,6 +29,7 @@ export class HelarcActivityService {
   private closed=false;
   private closing:Promise<{readonly localExecutionsFinished:boolean;readonly localInFlight:number}>|null=null;
   private readonly issues=new Map<string,string>();
+  private cycling=false;
 
   constructor(private readonly options:HelarcActivityServiceOptions) {
     this.processor=new ActivityHandoffProcessor(options.store.activityHandoffs,options.purposes,
@@ -38,6 +39,7 @@ export class HelarcActivityService {
     this.unsubscribe=options.store.onActivityChange(()=>this.pump.wake());
     this.completion=this.pump.run({signal:this.controller.signal,rediscoveryMs:options.rediscoveryMs,
       scopes:async()=>{
+        this.cycling=true;
         const read=()=>options.store.activityHandoffs.command({kind:"pending_scopes",afterRunId:this.cursor,limit:64});
         let scopes=await read() as readonly ActivityPendingScope[];
         if(!scopes.length&&this.cursor){this.cursor=null;scopes=await read() as readonly ActivityPendingScope[];}
@@ -72,7 +74,7 @@ export class HelarcActivityService {
           if(signature)this.issues.set(key,signature);else this.issues.delete(key);
           if(this.issues.size>256)this.issues.delete(this.issues.keys().next().value!);
         }
-        await options.report?.(cycle);
+        try{await options.report?.(cycle);}finally{this.cycling=false;}
       }}).catch(error=>{
         if(!this.controller.signal.aborted){this.failure=error;this.processor.stopDispatch();
           reportExecutionFailure(options.diagnostics,"activity_service",{},error);}
@@ -85,6 +87,8 @@ export class HelarcActivityService {
     if(this.closing&&phase!=="settlement")throw new ActivityHostUnavailableError("closing");
   }
   wake():void {this.assertAvailable();this.pump.wake();}
+  scopeIdle(runId:string):boolean{return !this.cycling&&!this.processor.inFlightFor(runId);}
+  forgetIdleScope(runId:string):void{if(!this.scopeIdle(runId))throw new TypeError("activity_scope_busy");this.processor.forgetIdleScope(runId);}
   close(timeoutMs=10000):Promise<{readonly localExecutionsFinished:boolean;readonly localInFlight:number}> {
     if(!Number.isFinite(timeoutMs)||timeoutMs<0)throw new TypeError("activity_shutdown_budget_invalid");
     return this.closing??=this.closeWithin(timeoutMs);

@@ -18,6 +18,7 @@ import {
   isoDateTime,
   nullableToken,
   snapshotJsonValue,
+  isStableModelJsonInput,
   strictRecord,
   token,
 } from "../ModelInteractionContractValidation.js";
@@ -118,9 +119,14 @@ export interface ModelInputComposition {
   readonly composedAt: string;
 }
 
+const ownedCompositions = new WeakSet<object>();
+const sourceCompositions = new WeakMap<object,ModelInputComposition>();
 export function snapshotModelInputComposition(
   input: ModelInputComposition,
 ): ModelInputComposition {
+  if(ownedCompositions.has(input))return input;
+  const retained=sourceCompositions.get(input);
+  if(retained)return retained;
   strictRecord(input, "ModelInputComposition", [
     "id", "providerId", "model", "interaction", "sections", "instructions", "messages",
     "lineage", "composedAt", "workingView",
@@ -153,7 +159,7 @@ export function snapshotModelInputComposition(
     sections,
     lineage,
   });
-  return Object.freeze({
+  const result=Object.freeze({
     id: token(input.id, "ModelInputComposition.id"),
     providerId: token(input.providerId, "ModelInputComposition.providerId"),
     model: token(input.model, "ModelInputComposition.model"),
@@ -165,6 +171,9 @@ export function snapshotModelInputComposition(
     lineage,
     composedAt: isoDateTime(input.composedAt, "ModelInputComposition.composedAt"),
   });
+  ownedCompositions.add(result);
+  if(isStableModelJsonInput(input))sourceCompositions.set(input,result);
+  return result;
 }
 
 function assertInstructionLineage(input: {

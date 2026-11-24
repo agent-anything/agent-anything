@@ -2,7 +2,7 @@ import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import type {MaterialCustodyPort} from "@agent-anything/context/custody";
 import type {ContextSelectionPort,ContextUseHead} from "@agent-anything/context/selection";
 import {contextPreparationReconsideration,readContextPreparationHistory,readContextPreparationEvidence,decideContextPreparation,inputSupplyResponsibility,
-  prepareOriginalInputSelection,OriginalInputRepresentationReception,
+  prepareOriginalInputSelection,OriginalInputRepresentationReception,originalInputLimitationFacts,
   originalInputReceptionCombinations,originalInputReceptionExtension,originalInputReceptionTemplate,
   type OriginalInputSource,type ContextPreparationDecisionStore,type ContextPreparationCurrentEvidence,type ContextPreparationExecutionArrangement,
   type RepresentationMethodWork,type ContextMethodInputSupply,type ContextMethodInputConsumer,
@@ -21,7 +21,7 @@ export function createHelarcInputPreparation<TSource extends OriginalInputSource
   return createHelarcOriginalInputSupply({...ports,receivers:ports.methodConsumers,decide:async(basis,binding,result,snapshot,signal)=>{
     const unavailable=(reason:string,evidence:ContextInputUnavailability["evidence"]):SharedAcceptancePart=>({owner:"activity",kind:"stage_submission",
       proposal:{...basis.need.unavailableStage,input:{kind:"context_input_unavailable",needId:basis.need.id,supplier:basis.need.supplier,
-        boundary:binding.sources.boundary,reason,evidence} satisfies ContextInputUnavailability}});
+        boundary:binding.sources.boundary,reason,evidence,...(result.kind==="available"?originalInputLimitationFacts(result.current):{})} satisfies ContextInputUnavailability}});
     if(result.kind!=="available") {
       if(result.kind==="pending"||result.kind==="changed")throw new TypeError("helarc_unsettled_input_evidence");
       const path=await ports.activities.command({kind:"read_path",pathId:binding.preparation.id}) as import("@agent-anything/agent-runtime/activity").ActivityPathState;
@@ -60,7 +60,8 @@ export function createHelarcInputPreparation<TSource extends OriginalInputSource
       const option=producer.record.input.options.find(o=>o.id===selected.optionId);
       if(!option)throw new TypeError("helarc_task_preparation_original_option_missing");
       signal.throwIfAborted();
-      const supplied=resupplyHelarcOriginalInputRepresentationMethod(binding,methodSupply,option);
+      if(option.request.method==="protocol")throw new TypeError("helarc_protocol_method_requires_original_owner");
+      const supplied=resupplyHelarcOriginalInputRepresentationMethod(binding,methodSupply,{...option,request:option.request});
       originalWork.push({workId:original.workId,pathId:original.pathId,optionId:option.id,available:supplied.kind==="available",
         reason:supplied.kind==="available"?"original_scope_and_request_revalidated":supplied.reason});
       if(supplied.kind!=="available")continue;
@@ -139,7 +140,7 @@ export function createHelarcInputPreparation<TSource extends OriginalInputSource
         ...["material-read","material-write"].map(capability=>({poolId:host.localPoolId,capability,units:1})),
         ...["model-access","model-measurement"].map(capability=>({poolId:host.modelPoolId,capability,units:1}))]});
     const handler=contextPreparationReconsideration({activities:ports.activities,decisions:ports.decisions,methods:ports.methods,resolve:async()=>({
-      policy:preparedPolicy,expectedControlRevision:head?.control.revision??0,
+      policy:preparedPolicy,methodComparisonRevision:host.context.methodComparisonRevision??"legacy",expectedControlRevision:head?.control.revision??0,
       inputObservationSources:receivers.flatMap(r=>r.state.kind==="not_started"?[]:r.state.observeSources),
       prepareInputUnavailability:async(_id,decision)=>[unavailable(decision.investment.kind==="defer"||decision.investment.kind==="none"?
         decision.investment.reason:decision.foreground.kind==="limited"?decision.foreground.reason:"input_unavailable",
@@ -179,7 +180,7 @@ export function createHelarcInputPreparation<TSource extends OriginalInputSource
     const withScope=async(value:ActivityReconsiderationPreparation):Promise<OriginalInputSupplyDecision>=>{
       const accepted=value.participants.find(p=>p.owner==="context_preparation_policy"&&p.kind==="decision")?.proposal as ContextPreparationDecisionProposal|undefined;
       if(!accepted)throw new TypeError("helarc_task_preparation_decision_missing");
-      const decision=decideContextPreparation(accepted.input),selected=decision.investment;
+      const decision=decideContextPreparation(accepted.input,accepted.policyRevision??"legacy"),selected=decision.investment;
       const targets=new Map<string,"method_production"|"method_reception">();
       if(selected.kind==="reuse")targets.set(selected.pathId,"method_production");
       for(const receiver of receivers)if((selected.kind==="prepare_input"&&selected.optionId===receiver.option.id)||(selected.kind==="reuse_input"&&selected.pathId===receiver.state.id)||

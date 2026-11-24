@@ -33,7 +33,7 @@ vi.mock("node:worker_threads",async importOriginal=>{
         if(request.command.kind==="read_content") {
           this.reply({kind:"content_blocks",id:request.id,blocks:request.command.ids.map(id=>wire.blocks.get(id)!)});return;
         }
-        if(kind==="list_product_runs") {this.reply({kind:"result",id:request.id,value:[]});return;}
+        if(kind==="list_product_runs"||kind==="discover_product_work") {this.reply({kind:"result",id:request.id,value:[]});return;}
         throw new Error(`Unexpected fixture wire command ${kind}`);
       });
     }

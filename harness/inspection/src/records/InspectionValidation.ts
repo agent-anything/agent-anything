@@ -3,7 +3,7 @@ import {INSPECTION_PROCESS_CATEGORIES} from "./InspectionProcessEvidence.js";
 import {validWorkMeasurement} from "./InspectionWorkMeasurement.js";
 import { validateExecutionFlowDefinition, type ExecutionFlowDefinition } from "@agent-anything/observability/execution-flow";
 
-const kinds = new Set(["run", "turn", "request", "provider-attempt", "call", "operation", "action", "attempt", "control", "definition", "artifact", "context", "contribution", "hook", "event", "process", "process-observation", "flow-definition", "flow-invocation", "flow-step"]);
+const kinds = new Set(["run", "turn", "request", "provider-attempt", "call", "operation", "action", "attempt", "control", "definition", "artifact", "context", "contribution", "hook", "event", "process", "process-observation", "flow-definition", "flow-invocation", "flow-step", "model-activity"]);
 const relationKinds = ["contains", "descendant", "binding", "materializes", "trigger", "produces", "transforms", "delivers", "includes", "omits", "prerequisite", "retry", "settles", "cause", "observes", "next", "call", "return", "spawn", "join", "resume"];
 type Check = (value: unknown) => boolean;
 const text: Check = (value) => typeof value === "string" && value.length <= 4096;
@@ -19,6 +19,11 @@ function shape(fields: Record<string, Check>): Check {
     Object.keys(value).length === Object.keys(fields).length && Object.entries(fields).every(([key, check]) => check((value as Record<string, unknown>)[key]));
 }
 const payloads: Record<string, Record<string, Check>> = {
+  call:{name:text,ordinal:integer,origin:oneOf("model","native")},
+  native_interaction:{protocol:identity,protocolRevision:identity,interpretation:identity,interpretationRevision:identity,
+    purpose:identity,recipientId:identity,compositionDigest:identity,model:nullable(text)},
+  native_fact:{details:array(shape({name:identity,value:nullable(text)})),category:identity,nativeType:identity,nativeId:nullable(identity),operationId:nullable(identity),position:nullable(text),
+    status:nullable(text),origin:oneOf("live","import"),limitation:nullable(identity)},
   evaluation_report: {reportId: identity, comparison: oneOf("C01", "C02", "C03", "C04"), target: text,
     startingBoundary: identity, status: oneOf("complete", "partial"), trialCount: integer, limitationCount: integer},
   work_measurement:{version:oneOf("1"),origin:()=>true,purpose:()=>true,target:()=>true,data:()=>true},
@@ -94,7 +99,11 @@ function flowObservation(...types: string[]): Check {
   };
 }
 
-export function snapshotInspectionJson(value: unknown, maxBytes = 64 * 1024): InspectionJson {
+export const inspectionStructureLimit = 64 * 1024;
+export class InspectionSnapshotSizeError extends TypeError {
+  constructor() { super("Inspection value exceeds its byte limit."); }
+}
+export function snapshotInspectionJson(value: unknown, maxBytes = inspectionStructureLimit): InspectionJson {
   let size = 0;
   let items = 0;
   const visit = (current: unknown, depth: number): InspectionJson => {
@@ -103,7 +112,7 @@ export function snapshotInspectionJson(value: unknown, maxBytes = 64 * 1024): In
     if (typeof current === "number" && Number.isFinite(current)) { size += 24; return current; }
     if (typeof current === "string") {
       size += current.length * 3 + 2;
-      if (size > maxBytes) throw new TypeError("Inspection value exceeds its byte limit.");
+      if (size > maxBytes) throw new InspectionSnapshotSizeError();
       return current;
     }
     if (Array.isArray(current)) {
@@ -125,13 +134,13 @@ export function snapshotInspectionJson(value: unknown, maxBytes = 64 * 1024): In
       const descriptor = Object.getOwnPropertyDescriptor(current, key)!;
       if (!("value" in descriptor) || key === "__proto__" || key === "constructor") throw new TypeError("Inspection cannot invoke accessors.");
       size += key.length * 3 + 3;
-      if (size > maxBytes) throw new TypeError("Inspection value exceeds its byte limit.");
+      if (size > maxBytes) throw new InspectionSnapshotSizeError();
       result[key] = visit(descriptor.value, depth + 1);
     }
     return Object.freeze(result);
   };
   const result = visit(value, 0);
-  if (size > maxBytes) throw new TypeError("Inspection value exceeds its byte limit.");
+  if (size > maxBytes) throw new InspectionSnapshotSizeError();
   return result;
 }
 

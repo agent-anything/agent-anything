@@ -4,6 +4,7 @@ import * as inputApi from "./input/index.js";
 import * as contextApi from "./context/index.js";
 import type { RetrySchedulerOwnership } from "./index.js";
 import * as api from "./index.js";
+import * as protocolApi from "./protocol/index.js";
 
 describe("Model Interaction public API", () => {
   it("exposes focused Model Interaction runtime values from their owner paths", () => {
@@ -13,12 +14,14 @@ describe("Model Interaction public API", () => {
       "assessModelContext",
       "createModelCallRef",
       "createModelTurnId",
+      "createNativeModelCallRef",
       "createNativeToolTurnInteraction",
       "createProviderAttemptInterruption",
       "createProviderSemanticRequestDigest",
       "createUnknownModelInputMeasurement",
       "modelCallRefKey",
       "modelCallableDefinitionsContentDigest",
+      "modelCallsShareDecisionBasis",
       "modelInstructionsEqual",
       "modelMessagesEqual",
       "providerGeneratedOutput",
@@ -26,6 +29,7 @@ describe("Model Interaction public API", () => {
       "providerResponseUsage",
       "providerResultFromInterruption",
       "publishProviderDelivery",
+      "requireModelCallTurn",
       "resolveModelThinkingSelection",
       "snapshotModelCallRef",
       "snapshotModelCallableDefinition",
@@ -54,8 +58,16 @@ describe("Model Interaction public API", () => {
       "snapshotProviderUsage",
       "verifyProviderTransportAccounting",
     ]);
+    expect(Object.keys(protocolApi).sort()).toEqual([
+      "DEEPSEEK_CHAT_COMPLETIONS", "ModelCompositionRegistry", "ModelProtocolBindingError", "OLLAMA_CHAT", "OPENAI_RESPONSES",
+      "assertChildModelComposition", "bindModelAgentComposition", "decodeModelArguments", "nativeModelSourceKey", "requireModelPurpose",
+      "sameProtocolRef", "sameRevisionRef", "snapshotModelAgentCompositionBinding", "snapshotModelInteractionProtocol", "snapshotModelInteractionScope",
+      "snapshotModelProtocolConfiguration", "snapshotModelProtocolParticipant", "snapshotModelPurposeEvidence", "snapshotModelSchemaMapping",
+      "snapshotNativeModelSource", "snapshotProtocolRevisionRef",
+    ]);
     expect(Object.keys(inputApi).sort()).toEqual([
       "ModelInputCompositionError",
+      "ModelInputEncodingUnsupportedError",
       "RemoteInputMeasurementNotDispatchedError",
       "accountObligations",
       "accountRelationships",
@@ -71,7 +83,9 @@ describe("Model Interaction public API", () => {
       "createEncodedModelInput",
       "createExactModelWorkingView",
       "createOwnerModelWorkingView",
+      "declareModelResultContentTextSlot",
       "declareModelResultTextSlot",
+      "fillModelResultContentTextSlots",
       "fillModelResultTextSlot",
       "fillModelResultTextSlots",
       "inputAccountingFootprint",
@@ -85,6 +99,7 @@ describe("Model Interaction public API", () => {
       "modelInputValueDigest",
       "nextInputCombination",
       "organizeOriginalInput",
+      "readModelResultContentTextSlot",
       "readModelResultTextSlot",
       "recordInputCombination",
       "selectModelWorkingView",

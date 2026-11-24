@@ -162,7 +162,7 @@ export function createDelegationResult(input: {
   readonly request: DelegationRequest;
   readonly correlation: DelegationRunCorrelation;
   readonly childResult: RunResult;
-  readonly narrative: string | null;
+  readonly narrative: string | import("./DelegationNarrativeSource.js").DelegationNarrativeSelection | null;
   readonly effects: DelegationEffectSummary;
   readonly usage: DelegationUsageSummary;
   readonly limitDisposition: DelegationLimitDisposition;
@@ -374,14 +374,16 @@ function validateChildResult(
 }
 
 function snapshotNarrative(
-  input: string | null,
+  input: string | import("./DelegationNarrativeSource.js").DelegationNarrativeSelection | null,
   maximumLength: number,
   result:RunResult,
   recordId:string,
 ): DelegationNarrative | null {
   if (input === null) return null;
-  const source=createDelegationNarrativeSource(recordId,result.runId,result.cause.ref,input);
-  return Object.freeze({trust:"attributed_model_output",text:input.length<=maximumLength?input:null,source});
+  if(typeof input!=="string")strictRecord(input,"DelegationNarrativeSelection",["text","origins"]);
+  const text=typeof input==="string"?input:input.text;
+  const source=createDelegationNarrativeSource(recordId,result.runId,result.cause.ref,text,typeof input==="string"?undefined:input.origins);
+  return Object.freeze({trust:"attributed_model_output",text:text.length<=maximumLength?text:null,source});
 }
 
 function snapshotNarrativeValue(

@@ -32,6 +32,24 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  it("keeps protocol settings on the trusted narrow channel and refuses a native-to-legacy start fallback", async () => {
+    const frame = { url: "file:///helarc/index.html" };
+    const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };
+    const snapshot = mainSnapshot();
+    const controller = controllerDouble(snapshot, { reportProviderError: (message: string) => ({ ...snapshot, error: { code: "provider_config_invalid", message } }) });
+    const save = vi.fn(async () => ({ ok: true, value: { disposition: "pending" } }));
+    const api = { save, list: async () => ({ ok: true, value: { defaultSelection: null, configurations: [] } }), eligibility: async () => ({ ok: true, value: { available: false, reason: "not_installed" } }) };
+    registerHelarcIpc({ window: windowDouble({ webContents: contents }), controller, providerConfigurations: api as never });
+    const event = { sender: contents, senderFrame: frame };
+    const settings = requiredHandler(HELARC_IPC_CHANNELS.providerConfigurations);
+    expect(await settings({ ...event, senderFrame: {} }, { operation: "save", input: {} })).toEqual({ ok: false, code: "provider_settings_request_invalid" });
+    expect(save).not.toHaveBeenCalled();
+    const receipt = await requiredHandler(HELARC_IPC_CHANNELS.startRun)(event, { version: 1, commandId: "native-start", kind: "run.start", payload: {
+      taskText: "Work", target: { kind: "new_thread" }, providerConfiguration: { id: "provider", revision: "original" },
+    } });
+    expect(receipt).toMatchObject({ status: "handled", result: { ok: false, error: { code: "provider_config_invalid" } } });
+    expect(controller.startRun).not.toHaveBeenCalled();
+  });
   it("restricts storage inventory and cleanup to the trusted frame", async () => {
     const frame = { url: "file:///helarc/index.html" };
     const contents = { mainFrame: frame, getURL: () => frame.url, send: vi.fn(), on: vi.fn() };
@@ -105,7 +123,7 @@ describe("Helarc IPC", () => {
       on:vi.fn((name:string,callback:(...args:unknown[]) => void) => callbacks.set(name,callback))};
     const detach = vi.fn();
     const subscribeResponsePreviews = vi.fn((scope:{threadId:string;productRunId:string}) => scope.threadId === "thread" ? detach : null);
-    const names = ["readConversation","readConversationTurn","readCurrentWork","readTaskDetails","readWorkHistory","readArtifactContent","readResponsePreview"] as const;
+    const names = ["readConversation","readConversationResponseGroup","readCurrentWork","readTaskDetails","readWorkHistory","readArtifactContent","readResponsePreview"] as const;
     const workbench = Object.fromEntries(names.map(name => [name,vi.fn(async () => ({status:"page"}))]));
     const controller = controllerDouble(mainSnapshot(),{workbench,subscribeResponsePreviews});
     registerHelarcIpc({window:windowDouble({webContents:contents}),controller});

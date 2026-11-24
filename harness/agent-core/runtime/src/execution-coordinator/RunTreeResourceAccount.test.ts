@@ -6,6 +6,41 @@ import {
 } from "./RunTreeResourceAccount.js";
 
 describe("RunTreeResourceAccount", () => {
+  it("replaces cumulative native contributions and restores their adoption without charging twice",()=>{
+    const account=new RunTreeResourceAccount("root",envelope(100));
+    const value={source:"native",runId:"root",sequence:4,revision:"observed-4",
+      usage:{modelInputTokens:{knownValue:12,status:"unknown" as const}}};
+    account.replaceContribution("root",value);
+    account.record("root",{actions:{status:"measured",value:1}});
+    const restored=RunTreeResourceAccount.restore(account.checkpoint());
+    restored.replaceContribution("root",value);
+    expect(restored.getSnapshot("root").modelInputTokens).toMatchObject({measuredConsumed:12,measurementStatus:"unknown",available:88});
+    restored.replaceContribution("root",{...value,sequence:5,revision:"observed-5",usage:{modelInputTokens:{knownValue:17,status:"measured"}}});
+    expect(restored.getSnapshot("root").modelInputTokens).toMatchObject({measuredConsumed:17,measurementStatus:"measured",available:83});
+    expect(restored.getNodeSnapshot("root").usage.actions).toEqual({status:"measured",value:1});
+    expect(()=>restored.replaceContribution("root",value)).toThrow(/backwards/);
+    const saved=restored.checkpoint();
+    expect(RunTreeResourceAccount.restore(saved).checkpoint()).toEqual(saved);
+    restored.settle("root");
+    expect(()=>restored.replaceContribution("root",{...value,sequence:6})).toThrow(/settled/);
+  });
+  it("does not charge a Child contribution in the Parent and preserves released allocation",()=>{
+    const account=new RunTreeResourceAccount("root",envelope(100));
+    account.reserve("root","child",amounts(40));
+    account.replaceContribution("child",{source:"native",runId:"child",sequence:1,revision:"child-1",usage:{modelInputTokens:{knownValue:15,status:"measured"}}});
+    account.settle("child");
+    account.replaceContribution("root",{source:"native",runId:"root",sequence:2,revision:"root-2",usage:{modelInputTokens:{knownValue:8,status:"measured"}}});
+    expect(account.getSnapshot("root").modelInputTokens).toMatchObject({measuredConsumed:23,available:77});
+    expect(account.getNodeSnapshot("root").usage.modelInputTokens).toEqual({status:"measured",value:8});
+    expect(RunTreeResourceAccount.restore(account.checkpoint()).getSnapshot("root")).toEqual(account.getSnapshot("root"));
+  });
+  it("rejects a checkpoint whose contribution differs from its adopted resource totals",()=>{
+    const account=new RunTreeResourceAccount("root",envelope(100));
+    account.replaceContribution("root",{source:"native",runId:"root",sequence:1,revision:"one",usage:{modelInputTokens:{knownValue:12,status:"measured"}}});
+    const saved=account.checkpoint();
+    expect(()=>RunTreeResourceAccount.restore({...saved,nodes:saved.nodes.map(node=>({...node,
+      contributions:node.contributions!.map(value=>({...value,usage:{modelInputTokens:{knownValue:11,status:"measured" as const}}}))}))})).toThrow(/totals disagree/);
+  });
   it("restores nested reservations, unknown usage and released capacity without resetting or charging twice", () => {
     const account = new RunTreeResourceAccount("root", envelope(100));
     account.reserve("root", "child", amounts(60));

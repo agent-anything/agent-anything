@@ -24,6 +24,7 @@ import {
 import {
   composeModelInput,
   modelInputFromComposition,
+  snapshotModelInputComposition,
 } from "./input/index.js";
 
 const CALLABLE: ModelCallableDefinition = {
@@ -323,6 +324,13 @@ describe("provider-neutral Model Interaction contracts", () => {
       continuation: null,
       metadata: {},
     });
+    expect(snapshotProviderRequest(request)).toBe(request);
+    expect(snapshotModelInputComposition(request.composition)).toBe(request.composition);
+    const restored=JSON.parse(JSON.stringify(request));
+    expect(snapshotProviderRequest(restored)).not.toBe(restored);
+    restored.composition.messages[0].content[0].text="different from its original sections";
+    expect(()=>snapshotProviderRequest(restored)).toThrow(/diverges/);
+    expect(()=>snapshotProviderRequest({...request,requestId:"different"})).toThrow(/does not match/);
     const binding = {
       method: "POST" as const,
       endpoint: "https://provider.example/v1/chat",

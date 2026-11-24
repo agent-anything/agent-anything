@@ -1,7 +1,7 @@
 import {describe,expect,it,vi} from "vitest";
 import {OllamaProvider} from "@agent-anything/provider-integrations/ollama";
 import {createNativeToolTurnInteraction,type ProviderRequest} from "@agent-anything/model-interaction";
-import {composeModelInput,organizeOriginalInput,modelInputValueDigest} from "@agent-anything/model-interaction/input";
+import {composeModelInput,organizeOriginalInput,modelInputValueDigest,assessInputCapacity} from "@agent-anything/model-interaction/input";
 import {ContextInputPreparationHandler,firstContextInputPreparationStage,decideContextPreparation,contextPreparationApplicabilityKey,contextPreparationWorkKey,
   quoteRepresentationMethod,contextEmpiricalRange,timingSupportsPreparation,contextPreparationAdmissionKey,contextReceptionAdmissionKey,contextPreparationAdoption,contextPreparationReconsideration,observeContextPreparationInput,
   type ContextPreparationPolicyInput,type ContextPreparationOption,type ContextPolicyEvidence,type PreparedContextInput,
@@ -43,6 +43,67 @@ function receiver(proposal:ContextPreparationOption,workId:string,pathId:string)
   return {id:"receiver",members:[{workId,pathId,requestDigest:modelInputValueDigest(proposal.request)}],addresses:proposal.addresses,comparisons:[],evidence:ref("receiver-option")};
 }
 describe("normal context policy with actual T03 input preparation",()=>{
+  it("compares full-path intervals only on a common basis; an open bound does not prove dominance",async()=>{
+    const input=await fixture(),original=option(input);
+    const offer=(id:string,n:number,known:boolean)=>({...original,id,comparisons:(["external_calls","billed_tokens","elapsed_ms","retained_bytes","detail_accesses"] as const).map(dimension=>({
+      dimension,basis:ref("same-baseline:"+dimension),coverage:"remaining_path_and_use" as const,baseline:{minimum:8,maximum:8},alternative:{minimum:n,maximum:known?n:null}}))});
+    const gap={kind:"gap" as const,evidence:ref("current"),gap:{reason:"capacity" as const,demandId:"d",targetRevision:input.scope.target,information:[],capacity:[],untested:false,responsibility:"request_owner" as const}};
+    const choose=(a:ContextPreparationOption,b:ContextPreparationOption)=>decideContextPreparation({...input,current:gap,options:[a,b]}).comparison!;
+    expect(choose(offer("a",4,true),offer("z",2,true))).toMatchObject({chosenId:"z",basis:"evidence_order",stable:false});
+    expect(choose(offer("a",4,true),offer("z",2,false))).toMatchObject({basis:"bounded_exploration",stable:true});
+    const other=offer("z",2,true);
+    expect(choose(offer("a",4,true),{...other,comparisons:other.comparisons.map(c=>({...c,basis:ref("another-baseline")}))}).stable).toBe(true);
+  });
+  it("uses native complete-input capacity evidence to order comparable source exploration",async()=>{
+    const input=await fixture(),a={...option(input),id:"a",sourceExtent:{utf8Bytes:20,evidence:ref("small")}},
+      b={...a,id:"z",request:{...a.request,objective:"Larger original source"},sourceExtent:{utf8Bytes:1000,evidence:ref("large")}};
+    const measurements=[{id:"bytes",encodedInputId:"native",targetRevision:input.scope.target,methodRevision:"wire:1",dimension:"request_bytes" as const,
+      coverage:"complete" as const,quantity:{kind:"exact" as const,value:1000},basis:"full native body",uncovered:[]}];
+    const limits=[{id:"limit",targetRevision:input.scope.target,dimension:"request_bytes" as const,maximum:900,source:"host"}];
+    const capacity={inputId:"native",measurements,limits,assessment:assessInputCapacity({encodedInputId:"native",targetRevision:input.scope.target,purpose:"task",evidence:measurements,limits,
+      reservations:[],policy:{id:"capacity",revision:"1",purpose:"task",basis:"bytes",allowUnknown:true,allowEstimatedFit:false}})};
+    const current={kind:"recipient_prepared" as const,scope:input.scope,inputId:"native",bodyDigest:"body",exactInputDigest:"exact",judgmentId:"judgment",
+      allowed:false,risks:[],capacity,evidence:ref("current")};
+    const decision=decideContextPreparation({...input,current,options:[a,b]});
+    expect(decision.investment).toMatchObject({kind:"propose",optionId:"z"});
+    expect(decision.limitations).toContain("transformable_source_extent_is_not_predicted_savings_or_fit");
+    expect(decision.foreground.kind).toBe("limited");
+  });
+  it("tries a declared independent recipient path after a capacity gap without reusing the failed candidate",async()=>{
+    const input=await fixture();if(input.current.kind!=="prepared")throw new Error("fixture");
+    const a=option(input),independentReception={boundary:input.boundary,requirementsDigest:input.requirementsDigest,evidence:ref("independent")};
+    const b={...a,id:"independent",request:{...a.request,objective:"Another original source"},independentReception};
+    const work={workId:"original",pathId:"producer",preparationKey:contextPreparationWorkKey(input.scope,a.request),producerState:"ready" as const,evidence:ref("ready")};
+    const gap={kind:"gap" as const,evidence:ref("current"),gap:{reason:"capacity",demandId:"recipient",targetRevision:input.scope.target,
+      information:[],capacity:[{...input.current.prepared.capacity,allowed:false}],untested:false,responsibility:"request_owner" as const}};
+    const received=receiver(a,work.workId,work.pathId),failed={optionId:received.id,pathId:received.id,workId:"receiving",state:"unavailable" as const,
+      reason:"capacity",evidence:ref("failed"),inputGap:{...gap,evidence:ref("received-gap")}};
+    const basis={...input,current:gap,options:[a,b],inFlight:[work],receptionOptions:[received],inputReceptions:[failed]};
+    const decision=decideContextPreparation(basis);
+    expect(decision.investment).toMatchObject({kind:"propose",optionId:b.id});
+    expect(decision.evidence).toEqual(expect.arrayContaining([independentReception.evidence,failed.inputGap.evidence]));
+    expect(decideContextPreparation({...basis,options:[{...a,independentReception}]}).investment.kind).toBe("defer");
+    const {inputGap:_gap,...withoutGap}=failed;
+    expect(decideContextPreparation({...basis,inputReceptions:[{...withoutGap,state:"unknown"}]}).investment)
+      .toMatchObject({kind:"defer",reason:"input_reception_outcome_unknown"});
+    expect(decideContextPreparation({...basis,inputReceptions:[withoutGap]}).investment)
+      .toMatchObject({kind:"defer",reason:"input_reception_requires_bounded_revision"});
+    for(const change of [{boundary:"other"},{requirementsDigest:"different"}])expect(()=>decideContextPreparation({...basis,
+      options:[a,{...b,independentReception:{...independentReception,...change}}]})).toThrow("independent_reception_invalid");
+  });
+  it("does not transfer old measured pressure to a different accepted input",async()=>{
+    const input=await fixture(),proposal=option(input);if(input.current.kind!=="prepared")throw new Error("fixture");
+    const original=input.current.prepared.encoded.id;
+    const current={kind:"recipient_prepared" as const,scope:input.scope,inputId:"unusable",bodyDigest:"unusable",exactInputDigest:"unusable",
+      judgmentId:"old",allowed:false,risks:[],evidence:ref("current")};
+    for(const pressure of [{kind:"input_capacity_risk" as const,inputId:"unusable",evidence:ref("pressure")},
+      {kind:"growth_scenario" as const,inputId:"unusable",evidence:ref("pressure"),timing:null}]){
+      const basis={...input,current,options:[proposal],alternatives:[{input:input.current,comparisons:[]}],pressure:[pressure]};
+      expect(decideContextPreparation(basis)).toMatchObject({foreground:{kind:"continue",adoption:"propose"},
+        investment:{kind:"none",reason:"qualified_recipient_input_available"}});
+      expect(decideContextPreparation({...basis,pressure:[{...pressure,inputId:original}]}).investment.kind).toBe("propose");
+    }
+  });
   it("keeps a Provider refusal separate from quality and numeric capacity, and extends a different legal scope",async()=>{
     const input=await fixture();if(input.current.kind!=="prepared")throw new Error("fixture");
     const prepared=input.current.prepared,rejection={stageId:"refused-stage",targetRevision:prepared.encoded.targetDigest,bodyDigest:prepared.encoded.bodyDigest,evidence:ref("provider-refusal")};
@@ -158,7 +219,7 @@ describe("normal context policy with actual T03 input preparation",()=>{
     expect(decideContextPreparation({...basis,inFlight:[{...work,producerState:"unknown"}]}).investment).toMatchObject({kind:"defer",reason:"original_producer_outcome_unknown"});
     expect(decideContextPreparation({...basis,inFlight:[{...work,producerState:"failed"}]}).investment).toMatchObject({kind:"defer",reason:"original_path_requires_bounded_revision"});
     expect(decideContextPreparation({...basis,pressure:[]}).investment.kind).toBe("defer");
-    const limited={optionId:receiving.id,conditionsDigest:contextReceptionAdmissionKey(basis,receiving),acceptanceId:"refused",code:"activity_schedule_resource_unavailable"};
+    const limited={optionId:receiving.id,conditionsDigest:contextReceptionAdmissionKey(basis,receiving),acceptanceId:"refused",code:"activity_schedule_claim_exceeds_pool_capacity"};
     expect(decideContextPreparation({...basis,admissionLimitations:[limited]}).excluded).toContainEqual({optionId:receiving.id,reasons:[`admission_rejected:${limited.code}`]});
     expect(()=>decideContextPreparation({...basis,inFlight:[]})).toThrow("reception_binding_invalid");
     expect(()=>decideContextPreparation({...basis,reuseOptions:[reuse,reuse]})).toThrow("reuse_ambiguous");
@@ -225,10 +286,10 @@ describe("normal context policy with actual T03 input preparation",()=>{
     expect(f.methods.prepareSubmission).toHaveBeenCalledOnce();
     expect(proposal.observeSources).toEqual(["activity-source:control:background","activity-source:progress:background","input"]);
   });
-  it("retains a rejected background arrangement and reproposes only the independently usable input",async()=>{
+  it.each(["activity_schedule_claim_exceeds_pool_capacity","activity_schedule_resource_unavailable"])("retains the original %s receipt and reproposes only the independently usable input",async code=>{
     const current=await fixture(),input={...current,options:[option(current)],pressure:[{kind:"growth_scenario" as const,evidence:ref("pressure"),timing:null}]};
     const f=supplyFixture(input),proposal=await f.make().prepare(f.snapshot,new AbortController().signal);
-    const receipt={id:proposal.acceptanceId!,digest:"original",sequence:1,scope:input.scope.runId,outcome:"rejected" as const,rejection:{owner:"activity",code:"activity_schedule_resource_unavailable"}};
+    const receipt={id:proposal.acceptanceId!,digest:"original",sequence:1,scope:input.scope.runId,outcome:"rejected" as const,rejection:{owner:"activity",code}};
     const revised=await proposal.rejected!(receipt);
     expect(revised).not.toBeNull();expect(revised!.acceptanceId).not.toBe(proposal.acceptanceId);expect(revised!.close).toBe(true);
     expect(revised!.participants.some(p=>p.kind==="scheduling_acceptance")).toBe(false);
@@ -257,7 +318,7 @@ describe("normal context policy with actual T03 input preparation",()=>{
     const proposal=await handler.prepare(f.snapshot,new AbortController().signal);
     expect(reception).toHaveBeenCalledOnce();expect(f.methods.prepareSubmission).not.toHaveBeenCalled();
     const receipt={id:proposal.acceptanceId!,digest:"original",sequence:1,scope:current.scope.runId,outcome:"rejected" as const,
-      rejection:{owner:"activity",code:"activity_schedule_resource_unavailable"}};
+      rejection:{owner:"activity",code:"activity_schedule_claim_exceeds_pool_capacity"}};
     const revised=await proposal.rejected!(receipt);expect(revised).not.toBeNull();expect(revised!.close).toBe(true);
     expect(revised!.participants.find(p=>p.owner==="context_preparation_policy")?.proposal).toMatchObject({investment:null,input:{options:[],
       admissionLimitations:[{optionId:"receiver",acceptanceId:receipt.id,code:receipt.rejection.code}]}});
@@ -376,7 +437,14 @@ describe("normal context policy with actual T03 input preparation",()=>{
     const basis={...input,inFlight:[work],options:[proposal],pressure:[{kind:"growth_scenario" as const,evidence:ref("pressure"),timing:null}]};
     expect(decideContextPreparation(basis).investment).toMatchObject({kind:"defer",reason:"original_path_requires_bounded_revision"});
     const replaces={workId:work.workId,pathId:work.pathId,evidence:ref("revised-source-division")};
-    expect(decideContextPreparation({...basis,options:[{...proposal,replaces}]}).investment).toMatchObject({kind:"propose",replaces});
+    expect(decideContextPreparation({...basis,options:[{...proposal,replaces}]},"13").investment).toMatchObject({kind:"propose",replaces});
+    const limit=ref("assessment-failed"),remaining={stages:20,attempts:30,readBytes:65536,storedBytes:65536,modelCalls:8};
+    const revised={...proposal,request:{...proposal.request,objective:"Changed division of the original source"},admissionConditions:[replaces.evidence],
+      replaces:{...replaces,observedLimitation:limit}},inFlight=[{...work,limitationEvidence:limit,remaining}];
+    expect(decideContextPreparation({...basis,inFlight,options:[revised]}).investment).toMatchObject({kind:"propose",replaces:revised.replaces});
+    for(const opt of [{...revised,admissionConditions:[]},{...revised,request:proposal.request},{...revised,replaces:{...replaces,observedLimitation:ref("unrelated")}}])
+      expect(decideContextPreparation({...basis,inFlight,options:[opt]}).investment.kind).toBe("defer");
+    expect(decideContextPreparation({...basis,inFlight:[{...inFlight[0]!,remaining:{...remaining,modelCalls:0}}],options:[revised]}).investment.kind).toBe("defer");
     expect(decideContextPreparation({...basis,inFlight:[{...work,producerState:"unknown"}],options:[{...proposal,replaces}]}).investment)
       .toMatchObject({kind:"defer",reason:"original_producer_outcome_unknown"});
   });
@@ -401,10 +469,20 @@ describe("normal context policy with actual T03 input preparation",()=>{
   it("does not retry a rejected arrangement until its relevant conditions change",async()=>{
     const input=await fixture(),proposal=option(input);
     const basis={...input,options:[proposal],pressure:[{kind:"growth_scenario" as const,evidence:ref("pressure"),timing:null}],
-      admissionLimitations:[{optionId:proposal.id,conditionsDigest:contextPreparationAdmissionKey(input,proposal),acceptanceId:"rejected",code:"activity_schedule_resource_unavailable"}]};
+      admissionLimitations:[{optionId:proposal.id,conditionsDigest:contextPreparationAdmissionKey(input,proposal),acceptanceId:"rejected",code:"activity_schedule_claim_exceeds_pool_capacity"}]};
     expect(decideContextPreparation(basis).investment.kind).toBe("defer");
     expect(decideContextPreparation({...basis,options:[{...proposal,admissionConditions:[ref("changed-host-pool")]}]}).investment.kind).toBe("propose");
-    expect(decideContextPreparation({...basis,admissionResponse:"rejected"}).investment).toMatchObject({kind:"defer",reason:"admission_rejected:activity_schedule_resource_unavailable"});
+    expect(decideContextPreparation({...basis,admissionResponse:"rejected"}).investment).toMatchObject({kind:"defer",reason:"admission_rejected:activity_schedule_claim_exceeds_pool_capacity"});
+  });
+  it("excludes only an unadmitted option before reporting the original refusal",async()=>{
+    const input=await fixture(),first=option(input),second={...first,id:"alternative",request:{...first.request,objective:"Independent source"}};
+    const current={kind:"gap" as const,gap:{reason:"capacity",demandId:"demand",targetRevision:input.scope.target,information:[],capacity:[],untested:false,responsibility:"request_owner" as const},evidence:ref("current")};
+    const limit=(o:typeof first)=>({optionId:o.id,conditionsDigest:contextPreparationAdmissionKey(input,o),acceptanceId:"refused:"+o.id,code:"activity_schedule_pool_missing"});
+    const a=limit(first),b=limit(second),basis={...input,current,options:[first,second],admissionResponse:a.acceptanceId,admissionLimitations:[a]};
+    expect(decideContextPreparation(basis,"14").investment.kind).toBe("defer");
+    expect(decideContextPreparation(basis,"15").investment).toMatchObject({kind:"propose",optionId:second.id});
+    expect(decideContextPreparation({...basis,admissionResponse:b.acceptanceId,admissionLimitations:[a,b]},"15").investment)
+      .toMatchObject({kind:"defer",reason:"admission_rejected:activity_schedule_pool_missing"});
   });
   it("does not add future pressure to current occupancy or compare queue-free time as a complete path",()=>{
     const timing={preparation:{minimum:10,maximum:20},pressure:{minimum:30,maximum:40},evidence:[ref("actual-path")],includesQueue:true,arrangement:"critical_path" as const};

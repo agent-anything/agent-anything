@@ -11,11 +11,11 @@ import type { SandboxEnforcement } from "@agent-anything/action-execution/sandbo
 import type {RetainedCommandEnvironment} from "./ExecutionEnvironmentProtection.js";
 
 /** Original Product composition, with command environment sealed by the Host. Never executable services. */
-export interface HelarcExecutionAdmission {
+interface HelarcExecutionAdmissionBase {
+  readonly productStart?: import("@agent-anything/helarc/work-context").HelarcRunStartCommit;
   readonly conversationHandoff?: import("../run/HelarcConversationHandoff.js").HelarcConversationHandoff & {
     readonly recipientAgent: import("@agent-anything/agent-core/agent").AgentDefinitionRevisionRef;
   };
-  readonly version: 3;
   readonly rootRunId: string;
   readonly productRunId: string;
   readonly sessionId: string;
@@ -24,11 +24,7 @@ export interface HelarcExecutionAdmission {
   readonly inputItems: readonly RunInputItem[];
   readonly workspace: WorkspaceSelection;
   readonly identity: IdentityRef;
-  readonly providerProfile: HelarcProviderProfile;
-  readonly providerBinding: HelarcProviderRecoveryBinding;
-  readonly providerCredential: import("../provider/HelarcRunCredentialBinding.js").HelarcRunCredentialBinding;
   readonly instructionSettings: HelarcInstructionSettings;
-  readonly contextBinding:import("../context/HelarcContextRunBinding.js").HelarcContextRunBinding;
   readonly permissionPreset: HelarcPermissionPreset;
   readonly enforcement: SandboxEnforcement;
   readonly commandLimits: Partial<CodeAgentCommandLimits> | null;
@@ -39,6 +35,25 @@ export interface HelarcExecutionAdmission {
   readonly commandEnvironment: RetainedCommandEnvironment;
   readonly executionBindings: import("@agent-anything/canonical-action/subject").SerializableValue;
 }
+/** Historical generic composition. Its fields must not be synthesized for native work. */
+export interface HelarcLegacyExecutionAdmission extends HelarcExecutionAdmissionBase {
+  readonly version:3;
+  readonly providerProfile:HelarcProviderProfile;
+  readonly providerBinding:HelarcProviderRecoveryBinding;
+  readonly providerCredential:import("../provider/HelarcRunCredentialBinding.js").HelarcRunCredentialBinding;
+  readonly contextBinding:import("../context/HelarcContextRunBinding.js").RetainedContextRunBinding;
+}
+export interface HelarcNativeExecutionAdmission extends HelarcExecutionAdmissionBase {
+  readonly version:4;
+  readonly model:{
+    readonly configuration:import("../../shared/ProviderConfiguration.js").ProviderConfiguration;
+    readonly connection:import("../provider/ProviderConnectionRetention.js").RetainedConnection;
+    readonly root:import("@agent-anything/model-interaction/protocol").ModelAgentCompositionBinding;
+    readonly delegated:import("@agent-anything/model-interaction/protocol").ModelAgentCompositionBinding;
+  };
+  readonly contextBinding:import("../context/HelarcNativeContextRunBinding.js").RetainedNativeContextRunBinding;
+}
+export type HelarcExecutionAdmission=HelarcLegacyExecutionAdmission|HelarcNativeExecutionAdmission;
 
 export interface HelarcProviderRecoveryBinding {
   readonly descriptor: Provider["descriptor"];
@@ -57,8 +72,17 @@ export function retainHelarcProviderBinding(provider: Provider): HelarcProviderR
 }
 
 export interface HelarcExecutionDiscovery {
+  readonly admitted: boolean;
   readonly admission: HelarcExecutionAdmission;
   readonly terminal: boolean;
   readonly delivered: boolean;
   readonly revision: number;
+}
+
+export interface ProductWorkSummary extends Omit<HelarcExecutionDiscovery,"admission"> {
+  readonly rootRunId:string;
+  readonly productRunId:string;
+  readonly sessionId:string;
+  readonly title:string;
+  readonly resumeLimitation:import("../../shared/HelarcExecutionRecovery.js").RecoveryBindingLimitation|null;
 }

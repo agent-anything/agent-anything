@@ -1,7 +1,7 @@
 import {describe, expect, it} from "vitest";
 import {createModelCallRef, type ModelCallableRequest, type ModelToolResult} from "../ModelCall.js";
 import {modelInputFromSections, type ModelInputSection} from "./ModelInput.js";
-import {createExactModelWorkingView, selectModelWorkingView} from "./ModelWorkingView.js";
+import {createExactModelWorkingView, selectModelWorkingView, snapshotModelInputPreservation, type ModelInputPreservation} from "./ModelWorkingView.js";
 import {applyModelInputOwnerForms, modelInputOccurrenceDigest, type ModelInputOwnerForm} from "./ModelInputForms.js";
 
 const section = (id: string, content: ModelInputSection["content"], role: ModelInputSection["role"] = "user"): ModelInputSection => ({
@@ -26,6 +26,16 @@ function exchange() {
   ]};
 }
 describe("Exact model working views", () => {
+  it("snapshots explicit assurance identity without weakening preservation validation",()=>{
+    const scope={id:"joint-profile",revision:"1"},permittedEvidence:("direct"|"method_assurance")[]=["direct","method_assurance"];
+    const value:ModelInputPreservation={obligations:[{id:"duty",requirement:"account",basis:"Original duty",assuranceScope:scope,permittedEvidence}],relationships:[]};
+    const saved=snapshotModelInputPreservation(value);scope.revision="2";permittedEvidence.pop();
+    expect(saved.obligations[0]?.assuranceScope).toEqual({id:"joint-profile",revision:"1"});
+    expect(saved.obligations[0]?.permittedEvidence).toEqual(["direct","method_assurance"]);
+    expect(Object.isFrozen(saved.obligations[0]?.assuranceScope)).toBe(true);
+    expect(()=>snapshotModelInputPreservation({...value,obligations:[{...value.obligations[0]!,assuranceScope:{id:"joint-profile",revision:""}}]})).toThrow();
+    expect(()=>snapshotModelInputPreservation({...value,obligations:[{...value.obligations[0]!,permittedEvidence:["direct","direct"]}]})).toThrow();
+  });
   it("allows a source-owned closed result body, but protects active groups and every Call binding", () => {
     const {sections, results} = exchange();
     const admitted = sections.map(value => ({...value, provenance: {...value.provenance!, retainedPresentation: value.source},

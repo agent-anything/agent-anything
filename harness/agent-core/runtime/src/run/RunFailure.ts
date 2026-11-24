@@ -45,6 +45,15 @@ export type RunFailureCause =
   | { readonly kind: "telemetry"; readonly failure: TelemetryFailure };
 
 export type RunFailureKind = RunFailureCause["kind"];
+const failureKinds = {
+  input_preparation: true, runtime: true, model: true, provider: true, operation: true,
+  interaction: true, approval: true, permission: true, policy: true, action_execution: true,
+  sandbox: true, tool: true, composite: true, descendant: true, context: true, audit: true, telemetry: true,
+} satisfies Record<RunFailureKind, true>;
+
+export function isRunFailureKind(value: unknown): value is RunFailureKind {
+  return typeof value === "string" && Object.hasOwn(failureKinds, value);
+}
 export type RunFailureForKind<TKind extends RunFailureKind> = Extract<
   RunFailureCause,
   { readonly kind: TKind }

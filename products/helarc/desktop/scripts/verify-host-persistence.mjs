@@ -9,8 +9,8 @@ const directory = await mkdtemp(join(tmpdir(), "helarc-host-persistence-"));
 const env = {...process.env}; delete env.ELECTRON_RUN_AS_NODE;
 let passed = false;
 try {
-  await new Promise((resolve, reject) => {
-    const child = spawn(electron, [fileURLToPath(new URL("./fixtures/host-persistence.cjs", import.meta.url)), directory],
+  const run = args => new Promise((resolve, reject) => {
+    const child = spawn(electron, [fileURLToPath(new URL("./fixtures/host-persistence.cjs", import.meta.url)), directory, ...args],
       {env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"]});
     let output = "", expired = false, termination=Promise.resolve();
     child.stdout.on("data", value => {output += value;}); child.stderr.on("data", value => {output += value;});
@@ -29,6 +29,8 @@ try {
       else {process.stdout.write(output); resolve();}
     });
   });
+  await run(process.argv.slice(2));
+  if(process.argv.includes("--encoding-limitation"))await run(["--reopen-limitation"]);
   passed = true;
 } finally {
   if (passed && process.env.HELARC_KEEP_VERIFICATION !== "1") {

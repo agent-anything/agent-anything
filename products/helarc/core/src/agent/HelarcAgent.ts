@@ -7,6 +7,7 @@ import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import { validHelarcFinalReply } from "../controller/HelarcFinalReply.js";
 import { snapshotModelCallRef, type ModelCallRef } from "@agent-anything/model-interaction";
 import {snapshotContextMaterialRefs} from "@agent-anything/context/material";
+import {snapshotModelPurposeEvidence,snapshotNativeModelSource,sameProtocolRef} from "@agent-anything/model-interaction/protocol";
 import {
   HELARC_INSTRUCTION_CATALOG,
   resolveHelarcAgentInstructions,
@@ -82,7 +83,7 @@ function createAgent(
 ): AgentDefinition<HelarcAgentOutput> {
   return snapshotAgentDefinition({
     id,
-    revision: `instructions-v1:${instructions.contentDigest.value}:output-v3`,
+    revision: `instructions-v1:${instructions.contentDigest.value}:output-v4`,
     name,
     instructions,
     output: HELARC_OUTPUT_CONTRACT,
@@ -100,7 +101,7 @@ const HELARC_OUTPUT_CONTRACT = Object.freeze({
     }
     const source = candidate.source;
     if (!isRecord(source) || !(source.kind === "product_status" || source.kind === "no_text" ||
-      validControlSource(source) ||
+      validControlSource(source) || validNativeSource(source) ||
       (source.kind === "model_finish" && typeof source.turnId === "string") ||
       (source.kind === "model_text" && typeof source.turnId === "string" && Array.isArray(source.modelItemIds) && source.modelItemIds.every(id => typeof id === "string")))) {
       return { valid: false as const, message: "Helarc output requires explicit provenance." };
@@ -131,6 +132,20 @@ function validControlSource(source: Record<string, unknown>): boolean {
   try {
     return snapshotModelCallRef(source.modelCallRef as ModelCallRef).turnId === source.turnId;
   } catch { return false; }
+}
+
+function validNativeSource(source:Record<string,unknown>):boolean {
+  if(source.kind!=="native_response"||typeof source.disposition!=="string"||!Array.isArray(source.sources))return false;
+  if(!["supplied","explicit_empty","adopted_current","adopted_previous","no_text","refusal"].includes(source.disposition))return false;
+  try {
+    const evidence=snapshotModelPurposeEvidence(source.evidence);
+    return source.sources.every(s=>{
+      const ref=snapshotNativeModelSource(s);
+      return ref.scope.runId===evidence.scope.runId&&ref.scope.recipientId===evidence.scope.recipientId&&
+        ref.scope.purpose.id===evidence.scope.purpose.id&&ref.scope.purpose.revision===evidence.scope.purpose.revision&&
+        evidence.sources.some(current=>sameProtocolRef(current.protocol,ref.protocol));
+    });
+  }catch{return false;}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

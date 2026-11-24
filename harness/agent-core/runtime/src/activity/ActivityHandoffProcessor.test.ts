@@ -12,6 +12,7 @@ describe("ActivityHandoffProcessor control races",()=>{
       if(value.kind==="review_scheduling")return null;
       if(value.kind==="pending")return [{sequence:1,runId:"run",pathId:"path",requestId:"stage",kind:"execution"}];
       if(value.kind==="read_stage")return stage;
+      if(value.kind==="read_snapshot")return {path,stages:[stage],inputNeeds:[]};
       if(value.kind==="read_path")return path;
       if(value.kind==="dispatch")throw failure;
       throw new Error(`Unexpected ${value.kind}`);
@@ -31,6 +32,7 @@ describe("ActivityHandoffProcessor control races",()=>{
       if(value.kind==="review_scheduling")return null;
       if(value.kind==="pending")return [{sequence:1,runId:"run",pathId:"path",requestId:"stage",kind:"execution"}];
       if(value.kind==="read_stage")return stage;
+      if(value.kind==="read_snapshot")return {path,stages:[stage],inputNeeds:[]};
       if(value.kind==="read_path")return path;
       if(value.kind==="record_authorization_restriction")return stage={...stage,authorizationRestrictions:{execution:value.refusal!}};
       throw new Error(`Unexpected ${value.kind}`);
@@ -47,11 +49,11 @@ describe("ActivityHandoffProcessor control races",()=>{
     ["reconciliation","accepted"],["interpretation","settled"],["settlement","settled"],
   ] as const)("does not act on stale %s discovery after %s",async(kind,status)=>{
     const command=vi.fn(async(value:{kind:string})=>value.kind==="pending"?[{sequence:1,runId:"run",pathId:"path",requestId:"stage",kind}]:
-      value.kind==="read_stage"?{request:{id:"stage"},status}:value.kind==="read_path"?{intent:{id:"path",runId:"run"},cancelled:false}:null);
+      value.kind==="read_snapshot"?{path:{intent:{id:"path",runId:"run"},cancelled:false},stages:[{request:{id:"stage"},status}],inputNeeds:[]}:null);
     const resolve=vi.fn();
     const processor=new ActivityHandoffProcessor({command},{resolve},{hostSession:"host",worker:"worker",generation:1},()=>"2026-10-31T00:00:00Z");
     expect(await processor.scan("run",new AbortController().signal)).toEqual({progressed:[],pending:[{requestId:"stage",reason:"handoff_already_progressed"}],failures:[]});
-    expect(resolve).not.toHaveBeenCalled();expect(command.mock.calls.map(c=>c[0].kind)).toEqual(["review_scheduling","pending","read_stage","read_path"]);
+    expect(resolve).not.toHaveBeenCalled();expect(command.mock.calls.map(c=>c[0].kind)).toEqual(["review_scheduling","pending","read_snapshot"]);
   });
   it("does not reconcile a local execution that completes between stage and path reads",async()=>{
     const path={intent:{id:"path",runId:"run",purpose:{contract:{ref:{id:"purpose"}}}},controlRevision:0,cancelled:false} as ActivityPathState;
@@ -62,6 +64,7 @@ describe("ActivityHandoffProcessor control races",()=>{
     const port:ActivityHandoffPort={command:vi.fn(async command=>{
       if(command.kind==="pending")return [{sequence:1,runId:"run",pathId:"path",requestId:"stage",kind:stage.status==="admitted"?"execution":"reconciliation"}];
       if(command.kind==="read_stage")return stage;
+      if(command.kind==="read_snapshot")return {path,stages:[stage],inputNeeds:[]};
       if(command.kind==="read_path") {if(finishDuringRead){release();await processor.settled();}return path;}
       if(command.kind==="observe_paths") {if(finishDuringRead){release();await processor.settled();}return [{pathId:"path",runId:"run",changeRevision:1,controlRevision:0,progressRevision:0,cancelled:false}];}
       if(command.kind==="dispatch"){stage={...stage,status:"dispatched",attempt:command.attempt};return {granted:true,stage};}
@@ -84,6 +87,7 @@ describe("ActivityHandoffProcessor control races",()=>{
       if(command.kind==="review_scheduling")return null;
       if(command.kind==="pending")return [{sequence:1,runId:"run",pathId:"path",requestId:"stage",kind:"interpretation"}];
       if(command.kind==="read_stage")return stage;
+      if(command.kind==="read_snapshot")return {path,stages:[stage],inputNeeds:[]};
       if(command.kind==="read_path")return changed&&situation!=="unchanged"?{...path,intent:situation==="different_path"?{...path.intent,runId:"other"}:path.intent,controlRevision:1,cancelled:true}:path;
       if(command.kind==="claim_processing"){changed=true;throw failure;}
       throw new Error(`Unexpected ${command.kind}`);

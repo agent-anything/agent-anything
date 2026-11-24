@@ -1,6 +1,11 @@
 import type { InspectionSubjectRef } from "./InspectionRecord.js";
 
-export type InspectionAdmissionReason = "record_capacity" | "structure_capacity" | "content_capacity" | "invalid_input" | "record_oversized";
+export type InspectionAdmissionReason = "record_capacity" | "structure_capacity" | "content_capacity" | "invalid_input" | "structure_oversized" | "record_oversized";
+export interface InspectionAdmissionValidation {
+  readonly stage: "envelope" | "structure_snapshot" | "fields" | "scope" | "content" | "encoded_record";
+  readonly recordId: string | null;
+  readonly limitBytes?: number;
+}
 export interface InspectionAdmissionIssue {
   readonly reason: InspectionAdmissionReason;
   readonly count: number;
@@ -8,10 +13,12 @@ export interface InspectionAdmissionIssue {
   readonly lastSequence: number | null;
   readonly firstAt: string;
   readonly lastAt: string;
-  readonly samples: readonly {sequence: number | null; subject: InspectionSubjectRef | null}[];
+  readonly samples: readonly {sequence: number | null; subject: InspectionSubjectRef | null;
+    validation?: InspectionAdmissionValidation; detail?: {operation: string; stage: string}; pending?: {records: number; structureBytes: number; contentBytes: number}}[];
   readonly coalesced: boolean;
 }
 export interface InspectionIngressHealth {
+  readonly history?: {started: number; confirmed: number; incomplete: number};
   readonly revision: number;
   readonly accepted: number;
   readonly dropped: number;
@@ -54,15 +61,15 @@ export interface InspectionRecordingProgress {
   readonly ingress: InspectionIngressHealth;
   readonly native: {readonly persisted: number; readonly duplicates: number; readonly rejected: number;
     readonly lastReceipt: InspectionBatchReceipt | null; readonly target: number; readonly transactionMaxMs: number};
-  readonly projection: {readonly cursor: number; readonly status: "active" | "failed" | "closed";
+  readonly projection: {readonly cursor: number; readonly status: "active" | "failed" | "closed" | "incomplete";
     readonly code: string | null; readonly issues: readonly InspectionProjectionIssue[]; readonly sliceMaxMs: number};
   readonly lastFlush?: {readonly id: number; readonly accepted: number; readonly healthRevision: number;
-    readonly nativeTarget: number; readonly projectionCursor: number; readonly projection: "settled" | "failed"};
+    readonly nativeTarget: number; readonly projectionCursor: number; readonly projection: "settled" | "failed" | "incomplete"};
 }
 export interface InspectionFlushResult {
   readonly barrier: {readonly accepted: number; readonly healthRevision: number};
   readonly native: "settled" | "pending" | "failed" | "unknown";
-  readonly projection: "settled" | "pending" | "failed" | "unknown";
+  readonly projection: "settled" | "pending" | "failed" | "unknown" | "incomplete";
   readonly watermark: number | null;
   readonly projectionCursor: number | null;
   readonly unpersisted: number;

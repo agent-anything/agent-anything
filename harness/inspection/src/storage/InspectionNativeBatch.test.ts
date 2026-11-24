@@ -29,6 +29,22 @@ function offer(id: string, sequence = 1, text = "retained"): InspectionOffer {
 const digest = (offers: readonly InspectionOffer[]) => createHash("sha256").update(JSON.stringify(offers)).digest("hex");
 const health = (accepted: number) => ({...initialInspectionProgress().ingress, accepted, revision: accepted});
 
+it("verifies bounded content ranges, including UTF-8 edges, without loading the whole body",()=>{
+  const {db,raw}=setup(),text="abc"+"\u4e2d".repeat(400000),value=offer("large",1,text);
+  const receipt=db.writeNativeBatch("batch",digest([value]),[value],health(1));
+  expect(db.readWork.loadedBodyBytes).toBe(0);
+  let offset=0,out="";
+  while(true){const before=db.readWork.loadedBodyBytes;const page=db.readContent("large-body",receipt.watermark,offset,4096)!;
+    expect(page.descriptor.availability).toBe("present");expect(db.readWork.loadedBodyBytes-before).toBeLessThanOrEqual(2*65536);
+    out+=page.text;if(page.nextOffset===null)break;offset=page.nextOffset;}
+  expect(out).toBe(text);
+  const corrupt=Buffer.from(text);corrupt[10]=0;
+  raw.prepare("UPDATE bodies SET bytes=?").run(corrupt);
+  expect(db.readContent("large-body",receipt.watermark,0,4096)?.descriptor.unavailableReason).toBe("content_integrity_failed");
+  raw.prepare("UPDATE bodies SET ranges=?").run("{}");
+  expect(db.readContent("large-body",receipt.watermark,200000,4096)?.descriptor.unavailableReason).toBe("content_integrity_failed");
+});
+
 it("commits native bodies, descriptors and receipts atomically without projecting telemetry", () => {
   const {db, raw, path} = setup();
   const offers = [offer("first"), offer("second", 2)];

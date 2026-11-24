@@ -2,6 +2,7 @@ import {activityFactSourceId,type ActivityHandoffPort,type ActivityPathIntent,ty
   type ActivityScopeLifetime,type ActivityPublishedFact,type ActivityReconsiderationHandler,type ActivityReconsiderationSnapshot,
   type ActivityReconsiderationPreparation,type ActivitySchedulingAcceptance,type ActivityScheduledSettlement,type SharedAcceptancePart} from "../../activity/index.js";
 import {inputSupplyFactSource,type InputSupplyResponsibilityStore,type InputSupplyUsersPage,type InputSupplyExit} from "../InputSupplyResponsibility.js";
+import type {InputSupplyProduction} from "../InputSupplyProduction.js";
 
 export interface RepresentationProductionLifetime {
   readonly scope:(runId:string)=>ActivityScopeLifetime;
@@ -11,6 +12,12 @@ export interface RepresentationProductionLifetime {
 /** Ends production, not retained evidence. Input consumers never own this closure. */
 export class RepresentationProductionLifecycle implements ActivityReconsiderationHandler {
   constructor(private readonly activities:ActivityHandoffPort,private readonly lifetime:RepresentationProductionLifetime) {}
+
+  declaration(intent:ActivityPathIntent,firstStageId:string):InputSupplyProduction {
+    if(!intent.scheduledWorkId)throw new TypeError("representation_lifetime_scope_invalid");
+    return {kind:"input_supply_production",revision:"1",pathId:intent.id,firstStageId,runId:intent.runId,owner:intent.owner,
+      workId:intent.scheduledWorkId,subscriptionId:`${intent.id}:production-lifecycle`};
+  }
 
   subscription(intent:ActivityPathIntent):SharedAcceptancePart {
     const scope=this.lifetime.scope(intent.runId);

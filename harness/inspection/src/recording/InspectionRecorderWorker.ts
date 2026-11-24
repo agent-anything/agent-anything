@@ -149,20 +149,21 @@ async function finishBarriers(): Promise<void> {
   for (const [id, barrier] of barriers) {
     let coverage: InspectionCoverage = db.snapshot();
     const projection = coverage.recording!.projection;
-    if (projection.status === "active" && projection.cursor < barrier.target) continue;
+    const incomplete=projection.status === "active" && projection.cursor < barrier.target;
+    if (incomplete && !barrier.close) continue;
     barriers.delete(id);
     db.updateCoverage({recording: {...coverage.recording!, lastFlush: {id, accepted: barrier.accepted,
       healthRevision: barrier.healthRevision, nativeTarget: barrier.target, projectionCursor: projection.cursor,
-      projection: projection.status === "failed" ? "failed" : "settled"}}});
+      projection: projection.status === "failed" ? "failed" : incomplete ? "incomplete" : "settled"}}});
     coverage = db.snapshot();
     if (barrier.close) {
       const exported: InspectionTelemetryWrite[] = [];
       if (projection.status === "active") {
         await telemetry.close(record => exported.push(record));
-        db.writeProjection(exported, {...projection, status: "closed", issues: telemetry.issues}, telemetry.dropped);
+        db.writeProjection(exported, {...projection, status: incomplete?"incomplete":"closed", code:incomplete?"telemetry_projection_incomplete":projection.code, issues: telemetry.issues}, telemetry.dropped);
       }
       closing = true; stopMaintenance();
-      db.updateCoverage({status: "closed"});
+      db.updateCoverage({status: "closed",limitations:[...new Set([...coverage.limitations,...(incomplete?["telemetry_projection_incomplete"]:[])])]});
       db.checkpoint(); coverage = db.snapshot(); db.close();
       atomicInspectionJson(join(directory, "manifest.json"), {...manifest, status: "closed"});
       send({kind: "flushed", id, coverage}); port.close(); return;
@@ -194,6 +195,7 @@ if (!failed) port.on("message", (message: RecorderCommand) => {
       if (barriers.size >= 16) { send({kind: "flush_rejected", id: message.id, code: "inspection_flush_capacity"}); return; }
       db.updateIngress(message.health);
       barriers.set(message.id, {target: db.snapshot().recording!.native.target, close: message.close, ...message.barrier});
+      if(message.close)await projectSlice();
       await finishBarriers(); scheduleProjection();
     }
   }).catch(error => { closing = false; fail(error); });

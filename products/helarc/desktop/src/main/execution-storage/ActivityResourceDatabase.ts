@@ -10,8 +10,19 @@ CREATE INDEX activity_resource_scope ON activity_resource_reservations(scope_key
 
 /** Conservatively consumed execution allowance, not observed cost or a professional method's progress. */
 export class ActivityResourceDatabase {
-  constructor(private readonly db:Database.Database) {}
+  constructor(private readonly db:Database.Database,private readonly path?:(id:string)=>ActivityPathIntent|null) {}
   allowance(path:ActivityPathIntent):ActivityResourceAllowance {
+    const own=this.localAllowance(path),reserved={...own.reserved};
+    for(const dimension of Object.keys(path.resourceBudgetSources??{})){
+      const source=this.source(path,dimension),value=this.localAllowance(source);
+      reserved[dimension]=value.reserved[dimension]??0;
+    }
+    return {limits:own.limits,reserved};
+  }
+  validate(path:ActivityPathIntent):void {
+    for(const dimension of Object.keys(path.resourceBudgetSources??{}))this.source(path,dimension);
+  }
+  private localAllowance(path:ActivityPathIntent):ActivityResourceAllowance {
     const row=this.db.prepare("SELECT value,digest FROM activity_resource_allowances WHERE scope_key=?").get(this.key(path)) as {value:string;digest:string}|undefined;
     if(!row)return {limits:path.resourceLimits??{},reserved:{}};
     const value=this.checked<ActivityResourceAllowance>(row);
@@ -31,18 +42,30 @@ export class ActivityResourceDatabase {
       return this.allowance(path);
     }
     if(reservation.pathId!==path.id||!Object.keys(reservation.amounts).length||Object.keys(reservation.amounts).length>32)fail("reservation_invalid");
-    const prior=this.allowance(path),reserved={...prior.reserved};
+    const writes=new Map<string,{limits:Readonly<Record<string,number>>;reserved:Record<string,number>}>();
     for(const [key,amount] of Object.entries(reservation.amounts)) {
       activityToken(key);activityCount(amount,true);
+      const source=this.source(path,key),scopeKey=this.key(source);
+      let pending=writes.get(scopeKey);
+      if(!pending){const value=this.localAllowance(source);pending={limits:value.limits,reserved:{...value.reserved}};writes.set(scopeKey,pending);}
+      const prior=pending,reserved=pending.reserved;
       const limit=prior.limits[key],total=(reserved[key]??0)+amount;
       if(limit===undefined||!Number.isSafeInteger(total)||total>limit)fail("limit_exceeded");
       reserved[key]=total;
     }
-    const value={limits:prior.limits,reserved},key=this.key(path);
-    this.db.prepare("INSERT INTO activity_resource_reservations VALUES (?,?,?,?)").run(reservation.id,key,JSON.stringify(reservation),modelInputValueDigest(reservation));
-    this.db.prepare("INSERT INTO activity_resource_allowances VALUES (?,?,?) ON CONFLICT(scope_key) DO UPDATE SET value=excluded.value,digest=excluded.digest")
+    this.db.prepare("INSERT INTO activity_resource_reservations VALUES (?,?,?,?)").run(reservation.id,this.key(path),JSON.stringify(reservation),modelInputValueDigest(reservation));
+    for(const [key,value] of writes)this.db.prepare("INSERT INTO activity_resource_allowances VALUES (?,?,?) ON CONFLICT(scope_key) DO UPDATE SET value=excluded.value,digest=excluded.digest")
       .run(key,JSON.stringify(value),modelInputValueDigest(value));
-    return value;
+    return this.allowance(path);
+  }
+  private source(path:ActivityPathIntent,dimension:string):ActivityPathIntent {
+    const id=path.resourceBudgetSources?.[dimension];if(!id)return path;
+    const source=this.path?.(id);
+    if(!source||source.id===path.id||source.runId!==path.runId||source.owner!==path.owner||source.permissionBasis!==path.permissionBasis||
+      source.resourceBudgetSources?.[dimension]!==undefined||source.resourceScope===path.resourceScope||
+      source.resourceLimits?.[dimension]!==path.resourceLimits?.[dimension]||source.resourceLimits?.[dimension]===undefined||
+      Date.parse(path.deadlineAt)>Date.parse(source.deadlineAt))fail("budget_source_invalid");
+    return source;
   }
   private key(path:ActivityPathIntent):string{return JSON.stringify([path.runId,path.resourceScope]);}
   private checked<T>(row:{value:string;digest:string}):T {

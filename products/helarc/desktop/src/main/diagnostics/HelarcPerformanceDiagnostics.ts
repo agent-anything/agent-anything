@@ -4,17 +4,21 @@ import {stat} from "node:fs/promises";
 import {dirname, join} from "node:path";
 import {SerializedAtomicFile} from "../persistence/SerializedAtomicFile.js";
 import type {ExecutionPerformanceEvent} from "./ExecutionPerformance.js";
+import {ExecutionRequestEvidence} from "./ExecutionRequestEvidence.js";
 
 type Finished = Extract<ExecutionPerformanceEvent, {kind: "finished"}>;
 const counterKeys = new Set(["encode.nodes", "encode.reusedNodes", "encode.reusedBytes", "encode.blockBuilds",
   "decode.nodes", "decode.reusedNodes", "decode.reusedBytes", "content.reads", "content.readBytes", "content.readReuses",
   "content.parses", "content.parseReuses", "content.referenceReuses", "content.closureVisits", "content.returnRootReuses",
+  "content.rootReads", "content.rootReuses", "sql.reads", "sql.writes", "wire.replyBytes", "wire.replyBlocks",
+  "custody.chunkReads", "custody.bytesRead", "custody.chunkWrites", "custody.bytesWritten",
   "thread.cpuUserUs", "thread.cpuSystemUs", "loop.activeUs", "loop.idleUs"]);
 const contextKeys = new Set(["command", "wireKind", "runId", "threadId", "productRunId", "commitId", "treeCommitId",
   "generation", "requestId", "revision", "expectedRevision", "recordId", "controllerTurnId", "controllerStatus",
   "materialOperation", "requestBytes", "contentBlocks", "pendingRequests", "pendingBytes", "workerThreadId",
   "wireSequence", "transferOperation", "count", "totalMs", "maxMs", "bodyMs", "boundaryMs", "timingBasis",
-  "pathId", "stageId", "attemptId", "workId", "purposeDigest", "clockDomain", "monotonicMs", "originalClockDomain", "activityCommand", "cpuBasis", "startupId", "measuredThreadId"]);
+  "pathId", "stageId", "attemptId", "workId", "purposeDigest", "clockDomain", "monotonicMs", "originalClockDomain", "activityCommand", "cpuBasis", "startupId", "measuredThreadId",
+  "storageInstanceId", "workInvocation", "readKind", "selectedStageCount", "selectedInputNeedCount", "callerOwner", "callerPurpose", "operationId", "returnKind", "queuedBehindRequestId"]);
 
 export function safeExecutionPerformanceEvent(input:ExecutionPerformanceEvent):ExecutionPerformanceEvent {
   const context=Object.fromEntries(Object.entries(input.context).filter(([key])=>contextKeys.has(key))
@@ -36,6 +40,7 @@ export class HelarcPerformanceDiagnostics {
   private readonly totals = new Map<string, {count: number; failed: number; unknown: number; totalMs: number; maxMs: number}>();
   private readonly resources: object[] = [];
   private readonly counters = new Map<string, {reports: number; total: number; max: number}>();
+  private readonly requests = new ExecutionRequestEvidence();
   private evicted = 0;
   private writeFailures = 0;
   private dirty = false;
@@ -51,6 +56,7 @@ export class HelarcPerformanceDiagnostics {
   record(input: ExecutionPerformanceEvent): void {
     try {
       const event = safeExecutionPerformanceEvent(input);
+      this.requests.record(event);
       if (event.kind === "started") {
         if (this.active.size >= 64) {this.active.delete(this.active.keys().next().value!); this.evicted++;}
         this.active.set(event.id, event);
@@ -114,6 +120,7 @@ export class HelarcPerformanceDiagnostics {
       semantics: "Inclusive wall durations; overlapping stages are not additive. Totals count reports; database reports include per-command count/maxMs and inherit command outcome. Counters measure representation work/bytes, not durations, unique storage or avoided validation. thread.cpu counters measure the named thread over the interval when cpuBasis permits; overlapping intervals are not additive. Resource samples use process-wide CPU/RSS. Event-loop activity is not CPU usage. Bounded diagnostic retention, not an execution journal.",
       evicted: this.evicted, writeFailures: this.writeFailures, active: [...this.active.values()],
       recent: [...this.recent], slowest: [...this.slowest],
+      requestEvidence:this.requests.snapshot(),
       totals: Object.fromEntries([...this.totals].map(([key, value]) => [key, {...value}])),
       counters: Object.fromEntries([...this.counters].map(([key, value]) => [key, {...value}])), resources: [...this.resources]};
     this.writing = this.file.transact(async file => {

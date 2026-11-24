@@ -77,14 +77,14 @@ export function ForegroundActivity({ scope, active, responseProgress, showAvaila
   </>;
 }
 
-export function ChildExecutionActivity({ scope }: { scope: WorkbenchScope }) {
+export function ChildExecutionActivity({ scope, responseProgress }: { scope: WorkbenchScope; responseProgress?: string }) {
   const items = useExecutionActivityItems(scope);
   const foreground = items.filter(item => item.placement === "foreground" && !item.taskEnded);
   const item = foremost(foreground.length ? foreground : items);
   if (!item) return null;
   return <div className="wb-execution-child" aria-label="Execution activity">
     <ActivityIcon item={item} />
-    <span>{item.title}: {item.status}</span>
+    <span>{item.title}: {item.purpose === "task_response" && item.state === "running" && responseProgress ? responseProgress : item.status}</span>
     {item.taskEnded && <small>Task ended</small>}
     {items.length > 1 && <small title={`${items.length - 1} additional activities`}>+{items.length - 1}</small>}
     {item.detailsLimited && <small>Limited view</small>}

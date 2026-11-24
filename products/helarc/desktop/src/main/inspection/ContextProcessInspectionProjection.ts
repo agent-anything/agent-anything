@@ -5,12 +5,16 @@ import type {InspectionProjectionSink,InspectionProjectionRefs} from "./Inspecti
 import type {InspectionRecordInput,InspectionJudgmentContent} from "@agent-anything/inspection/records";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {processEvidenceRecords} from "./ProcessEvidenceProjection.js";
+import {identifiedRecords} from "./InspectionReplay.js";
 
 /** Presentation consumes declared relationships; private detail content supplies no graph semantics. */
 export function recordContextProcessEvidence(fact:ContextFoundationFact,r:InspectionProjectionSink):void {
   for(const record of contextProcessInspectionRecords(fact,r))r.offer(record);
 }
 export function* contextProcessInspectionRecords(fact:ContextFoundationFact,r:InspectionProjectionRefs):Generator<InspectionRecordInput> {
+  yield* identifiedRecords(`context-fact:${fact.runId}:${fact.sequence}`,projectContextFact(fact,r));
+}
+function* projectContextFact(fact:ContextFoundationFact,r:InspectionProjectionRefs):Generator<InspectionRecordInput> {
   const evidence=fact.evidence;
   if(!evidence)throw new Error("context_process_evidence_missing");
   validateContextProcessEvidence(evidence);

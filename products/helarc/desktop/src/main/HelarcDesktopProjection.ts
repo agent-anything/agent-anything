@@ -181,6 +181,11 @@ export function projectHelarcHostCommandReceipt(
     };
   }
 
+  if(receipt.kind==="descendant.cancel"){
+    const {version,commandId,runId,kind,status,result}=receipt;
+    return {version,commandId,runId,kind,status,result:result.status==="rejected"?result:{
+      status:"routed",requestId:result.cancellation.request.id,cancellationStatus:result.cancellation.status}};
+  }
   if (receipt.kind === "descendant.resume") {
     if (receipt.result.status === "rejected") {
       return {

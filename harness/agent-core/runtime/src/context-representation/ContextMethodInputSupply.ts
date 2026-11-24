@@ -14,9 +14,11 @@ import {methodCombinationEvidence} from "./methods/MethodCombinationEvidence.js"
 import type {InputSupplyBinding} from "./InputSupplyResponsibility.js";
 import type {ActivityReconsiderationState} from "../activity/index.js";
 import {sameMethodInputSchedulingBinding,validateMethodInputScheduling} from "./ContextMethodInputScheduling.js";
+import type {InputSupplyReception} from "./InputSupplyReception.js";
 
 export interface ContextMethodInputPlan {
   readonly revision:"5";
+  readonly reception?:import("./ContextInputReceptionBinding.js").ContextInputReceptionBinding;
   readonly scheduling:import("../activity/index.js").ActivitySchedulingIntent|null;
   readonly inputSupply?:InputSupplyBinding;
   readonly producers:readonly {readonly pathId:string;readonly candidateIds:readonly string[]}[];
@@ -24,7 +26,7 @@ export interface ContextMethodInputPlan {
   readonly materialAdmissions?:readonly MaterialAccessAdmission[];
   readonly materialization:{readonly intent:Omit<ActivityPathIntent,"purpose"|"owner">;readonly request:ContextInputMaterializationRequest};
   readonly check:{readonly intent:Omit<ActivityPathIntent,"purpose"|"owner">;readonly objective:string;
-    readonly template:RepresentationMethodRequest["template"];
+    readonly template:NonNullable<RepresentationMethodRequest["template"]>;
     readonly sourceBasis?:"original"|"qualified_when_covered";
     readonly capacity:RepresentationMethodRequest["capacity"];readonly bounds:RepresentationMethodRequest["bounds"]};
 }
@@ -51,7 +53,9 @@ export class ContextMethodInputSupply {
     if(plan.scheduling&&(!scheduling||initial&&scheduling.closed||!sameMethodInputSchedulingBinding(plan.scheduling,scheduling.intent)))
       throw new TypeError("method_input_supply_scheduling_unconfirmed");
     const original=ContextInputMaterializationWork.initialStage(path.id,plan.materialization.request);
-    if(!equal(first.request,{...original,input:{...original.input as object,methodInputPlan:plan}})||
+    const handoff=(first.request.input as {inputSupplyReception?:InputSupplyReception}).inputSupplyReception;
+    if(!equal(first.request,{...original,input:{...original.input as object,methodInputPlan:plan,...(plan.reception?{inputReception:plan.reception}:{}),
+      ...(handoff?{inputSupplyReception:methodInputReceptionHandoff(plan)}:{})}})||
       (initial&&state.closed)||![...plan.producers.map(p=>p.pathId),path.id].every(id=>["control","progress"].every(kind=>
         state.subscription.sources.includes(activityFactSourceId(kind as "control"|"progress",id)))))
       throw new TypeError("method_input_supply_binding_unconfirmed");
@@ -186,7 +190,8 @@ export class ContextMethodInputSupply {
     const parts=[...this.ports.materialization.prepareSubmission(plan.materialization.intent,plan.materialization.request)];
     const first=parts[1]!.proposal as ActivityStageRequest;
     // The supplier retains its continuation with the first delegated input. The reader only interprets request/pages.
-    parts[1]={...parts[1]!,proposal:{...first,input:{...first.input as object,methodInputPlan:plan}}};
+    parts[1]={...parts[1]!,proposal:{...first,input:{...first.input as object,methodInputPlan:plan,...(plan.reception?{inputReception:plan.reception}:{}),
+      ...(plan.inputSupply?{inputSupplyReception:methodInputReceptionHandoff(plan)}:{})}}};
     return parts;
   }
   private async existing(pathId:string,parts:readonly SharedAcceptancePart[]):Promise<boolean> {
@@ -197,4 +202,12 @@ export class ContextMethodInputSupply {
       !original||modelInputValueDigest(original.request)!==modelInputValueDigest(parts[1]!.proposal))throw new TypeError("method_input_original_binding_changed");
     return true;
   }
+}
+
+function methodInputReceptionHandoff(plan:ContextMethodInputPlan):InputSupplyReception {
+  if(!plan.inputSupply)throw new TypeError("method_input_supply_binding_missing");
+  const id=plan.materialization.intent.id;
+  return {kind:"input_supply_reception",revision:"1",inputSupply:plan.inputSupply,scope:plan.scope,pathId:id,firstStageId:`${id}:stage:1`,
+    workId:plan.materialization.intent.scheduledWorkId??null,subscriptionId:`${id}:consumer`,closureKind:"method_input_closed",
+    coveredPathIds:[id,plan.materialization.request.preparationIntent.id,plan.check.intent.id]};
 }

@@ -33,6 +33,7 @@ import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 import type {
   DelegationResumeReceipt,
   DelegationResumeRoute,
+  DelegationCancelReceipt, DelegationCancelRoute,
   DelegationSteeringReceipt,
   DelegationSteeringRoute,
 } from "../delegation/index.js";
@@ -99,6 +100,7 @@ export interface RunHandle<TOutput = unknown> {
   steer(input: RunSteeringInput): Promise<RunSteeringSubmissionReceipt>;
   steerDescendant(input: DelegationSteeringRoute): Promise<DelegationSteeringReceipt>;
   resumeDescendant(input: DelegationResumeRoute): Promise<DelegationResumeReceipt>;
+  cancelDescendant(input: DelegationCancelRoute): Promise<DelegationCancelReceipt>;
   submitInteraction(input: InteractionSubmissionInput): Promise<InteractionSubmissionOutcome>;
   wait(): Promise<RunResult<TOutput>>;
   getResult(): RunResult<TOutput> | null;
@@ -136,6 +138,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     ((input: DelegationSteeringRoute) => Promise<DelegationSteeringReceipt>) | null = null;
   private resumeDescendantImpl:
     ((input: DelegationResumeRoute) => Promise<DelegationResumeReceipt>) | null = null;
+  private cancelDescendantImpl: ((input: DelegationCancelRoute) => Promise<DelegationCancelReceipt>) | null = null;
 
   constructor(
     runId: string,
@@ -340,6 +343,14 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       });
     }
     return this.steerDescendantImpl(input);
+  }
+
+  bindDescendantCancel(handler: (input:DelegationCancelRoute)=>Promise<DelegationCancelReceipt>):void {
+    if(this.cancelDescendantImpl)throw new TypeError("Descendant cancellation already bound");
+    this.cancelDescendantImpl=handler;
+  }
+  async cancelDescendant(input:DelegationCancelRoute):Promise<DelegationCancelReceipt>{
+    return this.cancelDescendantImpl?.(input)??{status:"rejected",code:"delegation_relation_unknown"};
   }
 
   bindDescendantResume(

@@ -15,6 +15,8 @@ export interface ActivityPathIntent {
   /** Original work identity is stable across paths, stages and task requests. */
   readonly scheduledWorkId?: string;
   readonly resourceLimits?:Readonly<Record<string,number>>;
+  /** Direct original budget path per shared dimension, independent of execution scheduling. */
+  readonly resourceBudgetSources?:Readonly<Record<string,string>>;
 }
 export interface ActivityResourceReservation {
   readonly id:string;
@@ -133,6 +135,7 @@ export interface ActivityStageState {
   readonly retry?:ActivityAttemptRetryReceipt|null;
 }
 export type ActivityHandoffCommand =
+  | ({readonly kind:"read_snapshot"|"observe_state"} & import("./ActivityObservation.js").ActivityReadScope)
   | {readonly kind:"observe_paths";readonly pathIds:readonly string[]}
   | {readonly kind:"read_work_view";readonly scopeId:string;readonly limit:number}
   | import("./ActivityScheduling.js").ActivitySchedulingCommand
@@ -161,6 +164,7 @@ export type ActivityHandoffCommand =
   | {readonly kind: "read_path"; readonly pathId: string}
   | {readonly kind: "read_stage"; readonly requestId: string}
   | {readonly kind: "pending_scopes"; readonly afterRunId: string | null; readonly limit: number}
+  | {readonly kind:"scope_obligations";readonly runId:string}
   | {readonly kind: "pending"; readonly runId: string; readonly after: number; readonly limit: number;readonly pathId?:string};
 
 export interface ActivityHandoffItem {
@@ -172,6 +176,7 @@ export interface ActivityHandoffItem {
 }
 export interface ActivityDispatchReceipt {readonly kind: "dispatch"; readonly stage: ActivityStageState; readonly granted: boolean; readonly scheduling?: import("./ActivityScheduling.js").ActivitySchedulingDispatch;}
 export interface ActivityPendingScope {readonly runId:string;}
+export interface ActivityScopeObligations {readonly runId:string;readonly pendingHandoffs:number;readonly openSubscriptions:number;}
 export interface ActivityHandoffFact {
   readonly sequence: number;
   readonly runId: string;
@@ -188,13 +193,43 @@ export interface ActivityHandoffObserver {
   observeStage?(path:ActivityPathState,stage:ActivityStageState):void;
   observeTiming?(event:import("./ActivityWorkTiming.js").ActivityTimingObservation):void;
 }
-export type ActivityHandoffValue = readonly (import("./ActivityObservation.js").ActivityPathObservation|null)[] | import("./ActivityWorkView.js").ActivityWorkView | ActivityPathState | ActivityStageState | ActivityRawResult | ActivityDispatchReceipt | ActivityInputNeed | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | readonly ActivityPendingScope[] |
-  import("./ActivityScheduling.js").ActivityScheduledPathPage |
+export type ActivityHandoffValue = import("./ActivityObservation.js").ActivityControlReceipt | import("./ActivityObservation.js").ActivitySnapshot | import("./ActivityObservation.js").ActivityStateObservation | readonly (import("./ActivityObservation.js").ActivityPathObservation|null)[] | import("./ActivityWorkView.js").ActivityWorkView | ActivityPathState | ActivityStageState | ActivityRawResult | ActivityDispatchReceipt | ActivityInputNeed | ActivityResourceReservation | ActivityResourceAllowance | readonly ActivityHandoffItem[] | readonly ActivityHandoffFact[] | readonly ActivityPendingScope[] |
+  ActivityCommandReceipt | ActivityScopeObligations | import("./ActivityScheduling.js").ActivityScheduledPathPage |
   import("./ActivityScheduling.js").ActivityScheduledSettlement |
   readonly import("./ActivityReconsideration.js").ActivityReconsiderationState[] |
   import("./ActivityScheduling.js").ActivityResourcePool | import("./ActivityScheduling.js").ActivitySchedulingAcceptance | import("./ActivityScheduling.js").ActivitySchedulingReview | readonly import("./ActivityScheduling.js").ActivitySchedulingCandidate[] |
   import("./ActivityReconsideration.js").ActivityFactSource | import("./ActivityReconsideration.js").ActivityPublishedFact | import("./ActivityReconsideration.js").ActivityReconsiderationState | import("./ActivityReconsideration.js").ActivityReconsiderationSnapshot | null;
-export interface ActivityHandoffPort {command(command: ActivityHandoffCommand): Promise<ActivityHandoffValue>;}
+export interface ActivityAccessObservation {
+  readonly owner:string;
+  readonly purpose:string;
+  readonly operationId?:string;
+}
+export interface ActivityCommandReceipt {
+  readonly kind:"activity_command_receipt";
+  readonly command:"admit"|"save_raw"|"claim_processing"|"accept"|"settle";
+  readonly requestId:string;
+  readonly pathId:string;
+  readonly status:ActivityStageState["status"];
+  readonly resultId:string|null;
+  readonly receiptId:string|null;
+  readonly settlementId:string|null;
+  readonly processingId:string|null;
+}
+export interface ActivityCommandOptions {
+  readonly observation?:ActivityAccessObservation;
+  /** Only for stage mutation acknowledgements, not dispatch or evidence reads. */
+  readonly returnKind?:"receipt";
+}
+export function activityCommandReceipt(command:ActivityHandoffCommand,stage:ActivityStageState):ActivityCommandReceipt {
+  if(command.kind!=="admit"&&command.kind!=="save_raw"&&command.kind!=="claim_processing"&&command.kind!=="accept"&&command.kind!=="settle")
+    throw new TypeError("activity_command_receipt_unsupported");
+  return {kind:"activity_command_receipt",command:command.kind,requestId:stage.request.id,pathId:stage.request.pathId,status:stage.status,
+    resultId:stage.result?.id??null,receiptId:stage.receipt?.id??null,settlementId:stage.settlement?.id??null,processingId:stage.processing?.id??null};
+}
+export interface ActivityHandoffPort {
+  /** Observation is non-authoritative and must never change command acceptance. */
+  command(command: ActivityHandoffCommand, options?:ActivityCommandOptions): Promise<ActivityHandoffValue>;
+}
 
 export function validateActivityPath(intent: ActivityPathIntent): void {
   [intent.id, intent.runId, intent.owner, intent.permissionBasis, intent.resourceScope].forEach(activityToken);
@@ -204,6 +239,13 @@ export function validateActivityPath(intent: ActivityPathIntent): void {
     for(const [key,value] of Object.entries(intent.resourceLimits)){activityToken(key);activityCount(value,true);}
   }
   validateActivityPurpose(intent.purpose.contract);
+  if(intent.resourceBudgetSources){
+    if(Object.keys(intent.resourceBudgetSources).length>32)throw new TypeError("activity_resource_dimensions_invalid");
+    for(const [dimension,pathId] of Object.entries(intent.resourceBudgetSources)){
+      activityToken(dimension);activityToken(pathId);
+      if(pathId===intent.id||intent.resourceLimits?.[dimension]===undefined)throw new TypeError("activity_resource_budget_invalid");
+    }
+  }
   if (modelInputValueDigest(intent.purpose.contract) !== intent.purpose.digest || intent.owner !== intent.purpose.contract.acceptanceOwner) throw new TypeError("activity_path_owner_invalid");
   [intent.maximumStages, intent.maximumAttempts, intent.maximumConcurrent].forEach(value => activityCount(value));
   if (intent.maximumConcurrent > intent.maximumAttempts || intent.maximumStages > 10000 || intent.maximumAttempts > 10000 || !Number.isFinite(Date.parse(intent.deadlineAt))) throw new TypeError("activity_path_bound_invalid");

@@ -211,7 +211,7 @@ export class ProviderInspectionAdapter implements ProviderObserver {
           for (const block of turn.assistant.content) {
             if (block.kind !== "model_tool_call") continue;
             const call = recorder.ref("runtime", "call", block.call.modelCallRef.id, value.runId);
-            recorder.offer({ subject: call, occurredAt: value.occurredAt, payload: { kind: "event", name: "model.call", sequence: null, code: null }, links: [inspectionLink("produces", request, call), inspectionLink("contains", modelTurn, call)], contents: [{ name: "Model call", stage: "decoded", class: "provider", mediaType: "application/json", value: block.call as unknown as InspectionJson }] });
+            recorder.offer({ subject: call, occurredAt: value.occurredAt, payload: { kind: "call", name: block.call.name, ordinal:block.call.ordinal, origin:"model" }, links: [inspectionLink("produces", request, call), inspectionLink("contains", modelTurn, call)], contents: [{ name: "Model call", stage: "decoded", class: "provider", mediaType: "application/json", value: block.call as unknown as InspectionJson }] });
           }
         }
       }

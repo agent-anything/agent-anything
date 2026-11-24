@@ -113,7 +113,7 @@ async function main(){
     const boundary=await a({kind:"read_reconsideration",subscriptionId:"policy-recheck",limit:16});
     const receipt={id:"accept-context-policy",subscriptionId:"policy-recheck",expectedRevision:0,through:boundary.through,factIds:boundary.facts.map(f=>f.id),
       decision:{owner:"context-representation",kind:"decision",id:decision.id,revision:"1"},close:false};
-    const participants=[{owner:"context_preparation_policy",kind:"decision",proposal:{input:policyInput,expectedDecisionId:null,expectedControlRevision:0,investment:null}}];
+    const participants=[{owner:"context_preparation_policy",kind:"decision",proposal:{input:policyInput,policyRevision:decision.policy.revision,decisionId:decision.id,expectedDecisionId:null,expectedControlRevision:0,investment:null}}];
     await a({kind:"accept_reconsideration",receipt,participants});
     assert.equal((await store.contextPolicy.query({kind:"latest",scopeId:scope.id})).decision.id,decision.id);
     await a({kind:"publish_fact",fact:{id:"later-policy-fact",sourceId:"policy-inputs",ref:{owner:"context-representation",kind:"input",id:"later-input",revision:"1"}}});

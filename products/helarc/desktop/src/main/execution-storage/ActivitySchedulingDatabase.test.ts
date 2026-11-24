@@ -6,6 +6,7 @@ import SqliteDatabase from "better-sqlite3";
 import {ActivityPurposeRegistry,type ActivityHandoffCommand,type ActivitySchedulingIntent,type ActivityStageState,type ActivityDispatchReceipt,type ActivitySchedulingAcceptance} from "@agent-anything/agent-runtime/activity";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {ExecutionDatabase} from "./ExecutionDatabase.js";
+import {SharedAcceptanceDatabase,SharedAcceptanceRejection} from "./SharedAcceptanceDatabase.js";
 
 const roots:string[]=[],databases:ExecutionDatabase[]=[];
 afterEach(()=>{for(const db of databases.splice(0))db.close();for(const root of roots.splice(0)){
@@ -277,7 +278,28 @@ describe("durable shared activity scheduling",()=>{
     const f=open();f.work("a");
     expect(()=>f.send({kind:"schedule_work",intent:{...f.intent("a"),id:"bad",scopeId:"other"},expectedRevision:1})).toThrow("work_identity_conflict");
     expect(()=>f.send({kind:"bind_resource_pool",pool:{id:"model",revision:"1",authority:"test-host",capacity:2}})).toThrow("identity_conflict");
-    expect(()=>f.send({kind:"schedule_work",intent:{...f.intent("a"),id:"bad-resource",resources:[{poolId:"model",capability:"model",units:2}]},expectedRevision:1})).toThrow("resource_unavailable");
+    const command={kind:"schedule_work" as const,intent:{...f.intent("a"),id:"bad-resource",resources:[{poolId:"model",capability:"model",units:2}]},expectedRevision:1};
+    const code="activity_schedule_claim_exceeds_pool_capacity";
+    expect(()=>f.send(command)).toThrowError(expect.objectContaining({code}));
+    const facts=f.send({kind:"facts",runId:"a",after:0,limit:256}) as readonly import("@agent-anything/agent-runtime/activity").ActivityHandoffFact[];
+    expect(facts.filter(v=>v.kind==="scheduling_limited").map(v=>v.details.code)).toEqual([code]);
+    const proposal={id:"over-capacity",scope:"a",actor:"method",parts:[{owner:"activity",kind:"scheduling_acceptance",proposal:command}]};
+    expect(f.db.acceptShared(f.db.generation,proposal).acceptanceValue).toMatchObject({outcome:"rejected",rejection:{owner:"activity",code}});
+  });
+  it("replays an old admission receipt unchanged while a fresh rejection uses the specific code",()=>{
+    const f=open(),command={kind:"schedule_work",intent:{...f.intent("old"),resources:[{poolId:"model",capability:"model",units:2}]},expectedRevision:0};
+    const proposal={id:"original-admission",scope:"old",actor:"method",parts:[{owner:"activity",kind:"scheduling_acceptance",proposal:command}]};
+    f.db.close();
+    // Have the former participant produce a real receipt with the ordinary integrity seal.
+    const raw=new SqliteDatabase(join(f.directory,"execution.sqlite"));
+    const previous=new SharedAcceptanceDatabase(raw,[{owner:"activity",kinds:["scheduling_acceptance"],prepare:p=>p,
+      apply:()=>{throw new SharedAcceptanceRejection("activity","activity_schedule_resource_unavailable");}}]);
+    const receipt=(()=>{try{return previous.accept(proposal);}finally{raw.close();}})();
+    const restored=open(f.directory);
+    expect(restored.db.querySharedAcceptance(restored.db.generation,proposal.id)).toEqual(receipt);
+    expect(restored.db.acceptShared(restored.db.generation,proposal).acceptanceValue).toEqual(receipt);
+    expect(restored.db.acceptShared(restored.db.generation,{...proposal,id:"fresh-admission"}).acceptanceValue.rejection?.code).toBe("activity_schedule_claim_exceeds_pool_capacity");
+    expect(restored.send({kind:"read_schedule",workId:"old"})).toBeNull();
   });
   it("freezes a bounded path delegation across treatment changes, closure and restart",()=>{
     const f=open();f.work("source");

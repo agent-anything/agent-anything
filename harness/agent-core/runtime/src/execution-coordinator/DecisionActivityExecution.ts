@@ -7,10 +7,10 @@ import {
   type ProjectionManifest,
 } from "@agent-anything/context/projection";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
-import type { ModelConversationSeed } from "../decision/TaskConversation.js";
+import type { TaskInteractionSeed } from "../decision/TaskInteractionSeed.js";
 import type { DescendantTargetsProjection } from "../delegation/index.js";
 import {
-  projectModelInteraction,
+  projectTaskInteraction,
   type TaskDecisionProposal,
   type TaskDecisionInputSources,
 } from "../decision/index.js";
@@ -57,6 +57,7 @@ export class ContextProjectionPreparationError extends ContextContractError {
 }
 
 export interface PrepareDecisionSourcesInput<TOutput> {
+  readonly historyKind?: "turn_messages" | "native_evidence";
   readonly inputDelivery?: import("../decision/index.js").ControllerInputDeliveryBatch | null;
   readonly projectionRequestId?: string;
   readonly agent: AgentDefinition<TOutput>;
@@ -68,7 +69,7 @@ export interface PrepareDecisionSourcesInput<TOutput> {
   readonly exposure: ToolExposureProof;
   readonly contextProjection: DecisionSourceProjection;
   readonly requestedAt: string;
-  readonly modelInteractionSeed: ModelConversationSeed | null;
+  readonly modelInteractionSeed: TaskInteractionSeed | null;
   readonly descendants: DescendantTargetsProjection;
 }
 
@@ -101,7 +102,8 @@ export function prepareDecisionSources<TOutput>(
     task: input.runInput.task,
     inputItems: input.runInput.items,
     toolExposure: input.exposure,
-    interaction: projectModelInteraction({
+    interaction: projectTaskInteraction({
+      kind: input.historyKind,
       runId: input.state.run.id,
       runRevision: input.state.revision,
       items: input.state.items,

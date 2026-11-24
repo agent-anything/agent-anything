@@ -23,7 +23,7 @@ export type {
   RunFailureKind,
   RuntimeFailure,
 } from "./RunFailure.js";
-export { createRunFailureCause, runFailureCode, runFailureMessage, runFailureMetadata } from "./RunFailure.js";
+export { createRunFailureCause, isRunFailureKind, runFailureCode, runFailureMessage, runFailureMetadata } from "./RunFailure.js";
 export type { ActiveRunStatus, RunResultStatus, RunStatus, TerminalRunStatus } from "./RunStatus.js";
 export type {
   PendingRunSubject,

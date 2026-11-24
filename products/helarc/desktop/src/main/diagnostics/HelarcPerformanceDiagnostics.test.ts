@@ -19,6 +19,7 @@ it("records bounded, correlated timing evidence without request bodies or creden
   const path = await location(), diagnostics = new HelarcPerformanceDiagnostics(path);
   const sink = {performance: diagnostics.record.bind(diagnostics)};
   const end = beginExecutionTiming(sink, "storage.host.request", {runId: "run", requestId: 3,
+    storageInstanceId:"store",generation:1,activityCommand:"read_snapshot",readKind:"content",selectedStageCount:2,
     prompt: "private-prompt", environment: "private-environment", credential: "private-credential"});
   await diagnostics.flush();
   expect(JSON.parse(await readFile(path, "utf8")).active).toMatchObject([{context: {runId: "run", requestId: 3}}]);
@@ -30,6 +31,10 @@ it("records bounded, correlated timing evidence without request bodies or creden
   await diagnostics.flush();
   const text = await readFile(path, "utf8"), report = JSON.parse(text);
   expect(report.active).toEqual([]);
+  expect(report.requestEvidence.requests[0]).toMatchObject({complete:true,events:[
+    {context:{storageInstanceId:"store",activityCommand:"read_snapshot",readKind:"content",selectedStageCount:2}},
+    {kind:"finished"},
+  ]});
   expect(report.recent).toHaveLength(64);
   expect(report.slowest).toHaveLength(32);
   expect(report.totals["storage.host.request:"].count).toBe(1);
@@ -53,11 +58,13 @@ it("persists active work and process resource samples periodically without a com
 it("keeps work counters separate from durations and excludes unknown/sensitive counter names", async () => {
   const path = await location(), diagnostics = new HelarcPerformanceDiagnostics(path);
   const end = beginExecutionTiming({performance: diagnostics.record.bind(diagnostics)}, "storage.worker.command", {command: "commit_run_tree"});
-  end("ok", {"encode.nodes": 20, "encode.reusedBytes": 1000, "private-prompt": 1, "decode.nodes": -1});
+  end("ok", {"encode.nodes": 20, "encode.reusedBytes": 1000, "custody.chunkReads":2,"custody.bytesRead":65536,
+    "custody.chunkWrites":1,"custody.bytesWritten":32768,"private-prompt": 1, "decode.nodes": -1});
   await diagnostics.flush();
   const text = await readFile(path, "utf8"), report = JSON.parse(text);
   expect(report.counters["storage.worker.command:commit_run_tree:encode.reusedBytes"]).toEqual({reports: 1, total: 1000, max: 1000});
   expect(report.recent[0].counters).toMatchObject({"encode.nodes": 20, "encode.reusedBytes": 1000,
+    "custody.chunkReads":2,"custody.bytesRead":65536,"custody.chunkWrites":1,"custody.bytesWritten":32768,
     "loop.activeUs":expect.any(Number),"loop.idleUs":expect.any(Number)});
   expect(report.recent[0].context.cpuBasis).toMatch(/current_thread|unavailable/);
   expect(report.recent[0].counters["decode.nodes"]).toBeUndefined();

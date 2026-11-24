@@ -3,7 +3,7 @@ import type {
   HelarcRunProjection,
   HelarcRunPresentationRecord,
 } from "@agent-anything/helarc/run";
-import { helarcSubtaskName } from "@agent-anything/helarc/run";
+import { helarcSubtaskName,helarcNativePresentationId,helarcNativeResponseGroupId } from "@agent-anything/helarc/run";
 import type { HelarcThreadRecord } from "@agent-anything/helarc/work-context";
 import type * as D from "../../shared/HelarcWorkbench.js";
 import {
@@ -38,10 +38,10 @@ export const outputModelItems = (
     ? source.modelItemIds
     : source?.kind === "model_control"
       ? [source.modelItemId]
-      : [];
+      : source?.kind === "native_response" ? source.sources.map(helarcNativePresentationId) : [];
 
-export interface ConversationTurn {
-  entry: D.ConversationTurnEntry;
+export interface ConversationResponseGroup {
+  entry: D.ConversationResponseGroupEntry;
   blocks: D.ConversationBlock[];
 }
 export function presentConversationWork(
@@ -57,7 +57,7 @@ export function presentConversationWork(
     productRunId,
     runId,
   };
-  const turns = new Map<string, ConversationTurn>();
+  const turns = new Map<string, ConversationResponseGroup>();
   const notices: D.ConversationMessageEntry[] = [];
   const placedMessages = new Set<string>();
   const records = new Map(
@@ -74,6 +74,15 @@ export function presentConversationWork(
   if (runId === p.host.runId) for (const message of thread.messages) {
     if (message.correlation.runId !== productRunId || message.source.kind !== "agent_run") continue;
     const source = message.metadata.outputSource as D.HelarcOutputSource | undefined;
+    if(source?.kind==="native_response")for(const block of source.adopted??[]){
+      const id=helarcNativePresentationId(block.source);
+      if(block.source.scope.runId!==runId||sourceRecords.some(r=>r.origin?.modelItemId===id))continue;
+      sourceRecords.push({id,runId,sequence:block.runItem.sequence,revision:0,observedAt:message.createdAt,
+        source:{owner:"runtime",kind:"run_item",id:block.runItem.id,sequence:block.runItem.sequence},
+        origin:{runId,turnId:null,nativeSource:block.source as import("@agent-anything/model-interaction/protocol").NativeModelSourceRef,
+          turnSequence:block.runItem.sequence,modelItemId:id,ordinal:block.ordinal,callId:null,source:block.runItem},
+        content:{kind:"assistant_text",turnId:null,modelItemId:id,ordinal:block.ordinal,text:block.text,omittedBytes:0}});
+    }
     if (source?.kind !== "model_text" || !source.adopted?.runItem || source.adopted.runId !== runId) continue;
     const item = source.adopted.runItem;
     for (const block of source.adopted.blocks) if (!sourceRecords.some(record => record.origin?.modelItemId === block.modelItemId)) {
@@ -99,12 +108,14 @@ export function presentConversationWork(
     itemId,
   });
   const turnFor = (o: HelarcModelItemOrigin) => {
-    let turn = turns.get(o.turnId);
+    const groupId=o.nativeSource?helarcNativeResponseGroupId(o.nativeSource):o.turnId;
+    if(!groupId)throw new TypeError("conversation_source_identity_missing");
+    let turn = turns.get(groupId);
     if (!turn) {
       turn = {
         entry: {
-          kind: "turn",
-          id: `turn:${productRunId}:${runId}:${o.turnId}`,
+          kind: "response_group",
+          id: `response:${productRunId}:${runId}:${groupId}`,
           title: null,
           role: "assistant",
           position: [anchor, o.source.sequence],
@@ -113,13 +124,13 @@ export function presentConversationWork(
           omittedBytes: 0,
           productRunId,
           runId,
-          sourceId: o.turnId,
+          sourceId: groupId,
           modelItemIds: [],
           detail: null,
           artifactIds: [],
           disposition: null,
           scope,
-          turnId: o.turnId,
+          groupId,
           blocks: [],
           nextCursor: null,
           blockCount: 0,
@@ -127,7 +138,7 @@ export function presentConversationWork(
         },
         blocks: [],
       };
-      turns.set(o.turnId, turn);
+      turns.set(groupId, turn);
     }
     return turn;
   };
@@ -157,7 +168,9 @@ export function presentConversationWork(
       const outputSource = message?.metadata.outputSource as D.HelarcOutputSource | undefined;
       const adoptedBlock = outputSource?.kind === "model_text"
         ? outputSource.adopted?.blocks.find(block => block.modelItemId === o.modelItemId) : undefined;
-      const sourceText = adoptedBlock?.text ?? (outputSource?.kind === "model_control" ? message?.content : undefined);
+      const nativeBlock=outputSource?.kind==="native_response"?outputSource.adopted?.find(b=>helarcNativePresentationId(b.source)===o.modelItemId):undefined;
+      const sourceText = adoptedBlock?.text ?? nativeBlock?.text ?? (outputSource?.kind === "model_control" ||
+        (outputSource?.kind === "native_response" && outputSource.sources.length===1) ? message?.content : undefined);
       const text = textPage(sourceText ?? c.text, 0, 2048);
       turnFor(o).blocks.push({
         id: o.modelItemId,
@@ -166,7 +179,7 @@ export function presentConversationWork(
         kind: c.kind === "final_response" ? "final_response" : c.kind === "assistant_reasoning" ? "reasoning" : "text",
         text: text.text,
         omittedBytes: text.omittedBytes + (sourceText !== undefined ? 0 : c.omittedBytes),
-        detail: adoptedBlock ? {...detail(`message:${message!.id}`), section: o.modelItemId}
+        detail: adoptedBlock || nativeBlock ? {...detail(`message:${message!.id}`), section: o.modelItemId}
           : detail(message ? `message:${message.id}` : r!.id),
         disposition:
           c.kind !== "final_response" ||

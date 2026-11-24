@@ -15,7 +15,7 @@ import {executeProcessQuery} from "./InspectionProcessRead.js";
 import {METRIC_QUERIES,validateMetricQuery} from "./InspectionMetricValidation.js";
 import {executeMetricQuery} from "./InspectionMetricRead.js";
 
-const viewKinds = ["list_definitions", "list_runs", "list_records", "get_hierarchy", "get_lifecycle", "get_data_flow", "get_dependencies", "get_scheduling", "get_model_request", "get_conversation_delivery", "get_context_evidence", "get_execution", "get_timeline", "get_telemetry"];
+const viewKinds = ["list_definitions", "list_runs", "list_records", "get_hierarchy", "get_lifecycle", "get_data_flow", "get_dependencies", "get_scheduling", "get_model_request", "list_native_interactions", "get_native_interaction", "get_conversation_delivery", "get_context_evidence", "get_execution", "get_timeline", "get_telemetry"];
 export function validateInspectionQuery(value: unknown): InspectionQuery {
   const copy = snapshotInspectionJson(value, 256 * 1024) as unknown as Record<string, unknown>;
   if (copy === null || typeof copy !== "object" || typeof copy.kind !== "string") throw new Error("inspection_query_invalid");
@@ -24,7 +24,9 @@ export function validateInspectionQuery(value: unknown): InspectionQuery {
   const all = ["list_sources", "list_datasets", "get_snapshot", "get_record", "get_subject", "get_content", "get_execution_flow", "list_flow_occurrences", "get_flow_occurrence", ...viewKinds];
   if (!all.includes(copy.kind)) throw new Error("inspection_query_invalid");
   const allowed = copy.kind === "list_sources" ? ["kind"] : copy.kind === "list_datasets" ? ["kind", "sourceId", "after"] : copy.kind === "get_snapshot" ? ["kind", "sourceId", "datasetId", "watermark"] : ["kind", "sourceId", "datasetId", "watermark", "subject", "runId", "includeDescendants", "from", "to", "recordKind", "after", "limit", "recordId", "contentId", "offset", "length", "invocationId", "occurrenceId", "stepId", "cursor"];
+  if (copy.kind === "get_native_interaction") allowed.push("nativeCategories");
   if (Object.keys(copy).some((key) => !allowed.includes(key))) throw new Error("inspection_query_invalid");
+  if (copy.nativeCategories !== undefined && (!Array.isArray(copy.nativeCategories) || !copy.nativeCategories.length || copy.nativeCategories.length > 16 || copy.nativeCategories.some(v=>typeof v!=="string"||! /^[a-z_]{1,64}$/.test(v)))) throw new Error("inspection_query_invalid");
   if (copy.kind !== "list_sources") validateOpaqueId(String(copy.sourceId));
   if (!["list_sources", "list_datasets"].includes(copy.kind)) validateOpaqueId(String(copy.datasetId));
   if (!["list_sources", "list_datasets", "get_snapshot"].includes(copy.kind) && (!Number.isSafeInteger(copy.watermark) || Number(copy.watermark) < 0)) throw new Error("inspection_cursor_invalid");
@@ -40,6 +42,7 @@ export function validateInspectionQuery(value: unknown): InspectionQuery {
   if (copy.kind === "get_subject" && !copy.subject || copy.kind === "get_record" && !copy.recordId || copy.kind === "get_content" && !copy.contentId) throw new Error("inspection_query_invalid");
   validateFlowQueryFields(copy);
   if (["get_conversation_delivery", "get_context_evidence"].includes(copy.kind) && (copy.subject as InspectionSubjectRef | undefined)?.kind !== "request") throw new Error("inspection_query_invalid");
+  if(copy.kind==="get_native_interaction"&&(copy.subject as InspectionSubjectRef|undefined)?.kind!=="model-activity")throw new Error("inspection_query_invalid");
   if (copy.includeDescendants !== undefined && (typeof copy.includeDescendants !== "boolean" || !copy.runId || !viewKinds.includes(copy.kind))) throw new Error("inspection_query_invalid");
   for (const field of ["from", "to"]) if (copy[field] !== undefined && (copy.kind !== "get_timeline" || typeof copy[field] !== "string" || !Number.isFinite(Date.parse(String(copy[field]))))) throw new Error("inspection_query_invalid");
   if (copy.from && copy.to && Date.parse(String(copy.from)) > Date.parse(String(copy.to))) throw new Error("inspection_query_invalid");
@@ -100,7 +103,7 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
     if (db.manifest().sourceId !== query.sourceId || db.manifest().datasetId !== query.datasetId) throw new Error("inspection_dataset_corrupt");
     const watermark = query.kind === "get_snapshot" ? query.watermark ?? db.snapshot().watermark : query.watermark;
     const coverage = db.snapshotAt(watermark);
-    const result = { ...base, coverage, selection: { sourceId: query.sourceId, datasetId: query.datasetId, watermark } };
+    const result = { ...base, coverage, readWork: db.readWork, selection: { sourceId: query.sourceId, datasetId: query.datasetId, watermark } };
     if (query.kind === "get_snapshot") return result;
     if (query.kind === "get_execution_flow" || query.kind === "list_flow_occurrences" || query.kind === "get_flow_occurrence") return executeFlowQuery(db, query, result);
     if (query.kind === "get_record") { const record = db.record(query.recordId, watermark); return { ...result, records: record ? [record] : [], limitations: record ? [] : ["not_observed"] }; }
@@ -138,6 +141,14 @@ export function executeInspectionQuery(root: string, input: InspectionQuery): In
       return { ...result, graph: graph(db, watermark, key, kinds, runScope.runIds), records: query.subject ? db.records({ watermark, subjectKey: key!, limit: 100 }) : [], limitations: runScope.limitations };
     }
     const limit = Math.max(1, query.limit ?? 100);
+    if(query.kind==="list_native_interactions"||query.kind==="get_native_interaction"){
+      const page=query.kind==="list_native_interactions"?db.subjects(watermark,"model-activity",after,limit+1,runScope.runIds):
+        db.records({watermark,after,limit:limit+1,subjectKey:key!,kind:query.recordKind,nativeCategories:query.nativeCategories});
+      const records:InspectionRecord[]=[];let bytes=0;
+      for(const record of page.slice(0,limit)){const size=Buffer.byteLength(JSON.stringify(record));if(bytes+size>1536*1024)break;records.push(record);bytes+=size;}
+      const binding=query.kind==="get_native_interaction"?db.latest(key!,watermark,"native_interaction"):null;
+      return {...result,records,relatedRecords:binding?[binding]:[],next:page.length>records.length?nextPage(records.at(-1)?.commitSequence):null,limitations:runScope.limitations};
+    }
     const objectKind = query.kind === "get_model_request" ? "request" : query.kind === "get_execution" || query.kind === "get_scheduling" ? "call" : undefined;
     if (objectKind && !query.subject) {
       const page = db.subjects(watermark, objectKind, after, Math.min(limit, 50) + 1, runScope.runIds);

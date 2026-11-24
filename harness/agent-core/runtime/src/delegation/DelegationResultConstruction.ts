@@ -13,7 +13,7 @@ export interface DelegationResultConstructionInput {
   readonly request: DelegationRequest;
   readonly correlation: DelegationRunCorrelation;
   readonly childResult: RunResult;
-  readonly narrative: string | null;
+  readonly narrative: string | import("./DelegationNarrativeSource.js").DelegationNarrativeSelection | null;
   readonly resourceSettlement: RunTreeResourceSettlement;
   readonly createdAt: string;
 }

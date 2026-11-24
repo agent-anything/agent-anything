@@ -10,3 +10,4 @@ export {
   HELARC_PROMPT_ARCHITECTURE_VERSION,
   HELARC_TOOL_EXPOSURE_VERSION,
 } from "./HelarcPromptAssembly.js";
+export {helarcResultTextDeclaration} from "./HelarcResultTextDeclaration.js";

@@ -80,6 +80,24 @@ async function main(){
     const original=(await store.contextPolicy.investments({scopeId:"normal-policy-scope",afterWorkId:null,limit:64}))[0];
     assert.equal(original.decision.foreground.kind,"continue");assert.equal(original.investment.pathId,"method-path");
     assert.equal((await a({kind:"read_path",pathId:"method-path"})).intent.scheduledWorkId,original.investment.workId);
+    if(process.env.ACTIVITY_POLICY_UPGRADE){
+      const {decideContextPreparation,contextPreparationReconsideration}=await import("@agent-anything/agent-runtime/context-representation");
+      const {ActivityReconsiderationProcessor}=await import("@agent-anything/agent-runtime/activity");
+      assert.equal(original.decision.policy.revision,"10");
+      assert.equal(original.decision.investment.optionId,"source-preserving-method");
+      assert.equal(decideContextPreparation(original.input).investment.optionId,"alternate-method");
+      const handler=contextPreparationReconsideration({decisions:store.contextPolicy,activities:store.activityHandoffs,methods:work,
+        resolve:async()=>({policy:original.input,expectedControlRevision:0,execution:()=>{throw Error("Recovery attempted new method production");}})});
+      const processor=new ActivityReconsiderationProcessor(store.activityHandoffs,store.sharedAcceptance,
+        (owner,sub)=>owner==="context-representation"&&sub.id==="normal-policy-watch"?handler:null);
+      const cycle=await processor.scan("parent",signal);assert.deepEqual(cycle.failures,[]);assert.deepEqual(cycle.rejected,[]);
+      const next=(await store.contextPolicy.query({kind:"latest",scopeId:"normal-policy-scope"})).decision;
+      if(next.policy.revision==="10"){
+        assert.equal(cycle.accepted.length,0);assert.equal(next.id,original.decision.id);
+        assert.notEqual(phase,"finish","Later committed progress must be reconsidered by the new policy");
+      }else if(next.investment.kind==="reuse"){assert.equal(next.policy.revision,"13");assert.equal(next.investment.pathId,original.investment.pathId);assert.equal(next.investment.workId,original.investment.workId);}
+      else assert.equal(next.investment.reason,"retained_result_requires_recipient_input_organization");
+    }
   }
   if(phase==="generated"||phase==="checked") {
     for(let i=0;i<300;i++) {

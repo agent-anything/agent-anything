@@ -3,7 +3,6 @@ import type {Provider} from "@agent-anything/model-interaction";
 import {ActivityPurposeRegistry,type ActivityPurposeHandler,type ActivityPathState,type ActivityInputNeed,
   type ActivityReconsiderationHandler,type ActivitySchedulingIntent} from "@agent-anything/agent-runtime/activity";
 import {SourceMaterialPublicationWork,ContextInputPreparationWork,RepresentationMethodWork} from "@agent-anything/agent-runtime/context-representation";
-import type {RunCommit} from "@agent-anything/agent-runtime/execution-coordinator";
 import {HELARC_STOP_MODEL_PURPOSE,HelarcStopModelWork,HelarcStopModelExecution,HelarcStopLifecycle} from "@agent-anything/helarc/task-fulfillment";
 import type {HelarcTaskExecutionFactory} from "@agent-anything/helarc/composition";
 import {HELARC_CONTROLLER_CAPABILITY} from "@agent-anything/helarc/controller";
@@ -17,11 +16,12 @@ import {createHelarcTaskPreparation} from "./HelarcTaskPreparation.js";
 import {createHelarcStopPreparation} from "./HelarcStopPreparation.js";
 import {bindHelarcMethodInputSupply} from "./HelarcMethodInputSupply.js";
 import {createHelarcMaterialAccess,helarcMaterialRecipient} from "./HelarcMaterialAccess.js";
-import {createHelarcReportMaterialHandoff} from "./HelarcReportMaterialHandoff.js";
+import {createHelarcReportMaterialHandoff,reportCaptureAuthorization} from "./HelarcReportMaterialHandoff.js";
+import {createHelarcRunActivityScope} from "./HelarcRunActivityScope.js";
 
 export interface HelarcActivityHost {
   readonly bindings:HelarcActivityBindings;
-  readonly service:Pick<HelarcActivityService,"assertAvailable"|"wake">;
+  readonly service:Pick<HelarcActivityService,"assertAvailable"|"wake">&Partial<Pick<HelarcActivityService,"scopeIdle"|"forgetIdleScope">>;
 }
 export const HELARC_RUN_ACTIVITY_COMPOSITION={id:"helarc.run-activities",revision:"2",
   modelPoolCapacity:1,localPoolCapacity:2,maximumResponseStages:8,maximumResponseAttempts:8,maximumReportBytes:8*1024*1024} as const;
@@ -35,34 +35,11 @@ export function createHelarcRunActivityComposition(input:{
   const {store,provider,context,rootRunId,host,now}=input;
   validateHelarcContextRunBinding(context);
   const registry=new ActivityPurposeRegistry<ActivityPurposeHandler>();
-  const scopeId=`helarc-tree:${rootRunId}`,modelPoolId=`helarc-model:${digest({provider:provider.descriptor.id,target:provider.modelContext.target})}`;
-  const localPoolId="helarc-local-materials",permissionBasis=`helarc-activity:${digest({rootRunId,context:context.id,modelPoolId,composition:HELARC_RUN_ACTIVITY_COMPOSITION})}`;
-  const originalMembers=new Map<string,RunCommit>();
-  let active=false,prepared=false,recoveryIntent:"settle"|"continue"|"cancel"="settle",task:ReturnType<typeof createHelarcTaskResponseExecution>|undefined;
-  async function original(runId:string) {
-    let member=originalMembers.get(runId);
-    if(!member) {
-      member=await store.readRunCommit(`${runId}:commit:0`)??undefined;
-      if(!member?.admission||member.state.run.id!==runId||member.admission.lineage.root.id!==rootRunId)
-        throw new TypeError("helarc_activity_original_membership_unavailable");
-      originalMembers.set(runId,member);
-    }
-    return member;
-  }
-  const hostPort={assertAvailable:()=>{host.service.assertAvailable();if(!active)throw new TypeError("helarc_activity_binding_not_activated");},
-    subscribe:(listener:()=>void,interest?:import("@agent-anything/agent-runtime/activity").ActivityChangeInterest)=>store.onActivityChange(listener,interest),wake:()=>host.service.wake()};
-  const authorize:ActivityPurposeHandler["authorize"]=async(path,_stage,signal,action)=>{
-    signal.throwIfAborted();host.service.assertAvailable(action==="interpretation"||action==="settlement"?"settlement":"progression");
-    if(!active)throw new TypeError("helarc_activity_binding_not_activated");
-    if(path.intent.permissionBasis!==permissionBasis)throw new TypeError("helarc_activity_permission_basis_changed");
-    await original(path.intent.runId);signal.throwIfAborted();
-    if(recoveryIntent==="settle"&&(action==="admission"||action==="execution"))return {kind:"temporary",code:"helarc_recovery_continue_required",
-      message:"Original response reconciliation is available; new execution is waiting for an explicit continuation."};
-    if(recoveryIntent==="cancel"&&action==="execution")return {kind:"denied",code:"helarc_recovery_cancel_requested",message:"Recovery was authorized for cancellation, not new execution.",
-      decision:{owner:"helarc-host",id:rootRunId,revision:"cancel"}};
-    return {kind:"allowed"};
-  };
-  const publications=new SourceMaterialPublicationWork(store.activityHandoffs,registry,{materials:store.materialCustody,selections:store.contextSelections,authorize,now});
+  const scope=createHelarcRunActivityScope({rootRunId,store,host,contextId:context.id,composition:HELARC_RUN_ACTIVITY_COMPOSITION,
+    modelPoolId:`helarc-model:${digest({provider:provider.descriptor.id,target:provider.modelContext.target})}`});
+  const {scopeId,modelPoolId,localPoolId,permissionBasis,original,authorize,deadline,host:hostPort}=scope;
+  let task:ReturnType<typeof createHelarcTaskResponseExecution>|undefined;
+  const publications=new SourceMaterialPublicationWork(store.activityHandoffs,registry,{materials:store.materialCustody,selections:store.contextSelections,authorize:reportCaptureAuthorization(store,scope),now});
   const preparation=new ContextInputPreparationWork(store.activityHandoffs,registry,{provider,usage:store.inputUsage,materials:store.materialCustody,authorize,now});
   const methods=new RepresentationMethodWork({provider,usage:store.inputUsage,materials:store.materialCustody,representations:store.representations,
     selections:store.contextSelections,activities:store.activityHandoffs,authorize,now,
@@ -82,10 +59,6 @@ export function createHelarcRunActivityComposition(input:{
   const schedule=(id:string,runId:string,owner:string,reason:ActivitySchedulingIntent["reason"]):ActivitySchedulingIntent=>({
     id:`${id}:schedule`,workId:id,runId,scopeId,owner,reason,allowedPathIds:[id],decisionId:id,policyRevision:HELARC_RUN_ACTIVITY_COMPOSITION.revision,
     delayImpact:"The original consumer is waiting for its requested response",timing:{kind:"unknown"},resources:[{capability:"model-request",poolId:modelPoolId,units:1}]});
-  async function deadline(runId:string) {
-    const member=await original(runId);
-    return new Date(Date.parse(member.state.startedAt)+member.admission!.config.limits.maxDurationMs).toISOString();
-  }
   const taskExecution:HelarcTaskExecutionFactory=binding=>{
     if(task)throw new TypeError("helarc_task_purpose_already_bound");
     task=createHelarcTaskResponseExecution({provider,purposes:registry,activities:store.activityHandoffs,acceptance:store.sharedAcceptance,
@@ -100,7 +73,7 @@ export function createHelarcRunActivityComposition(input:{
   const stopExecution=new HelarcStopModelExecution({work:stopWork,activities:store.activityHandoffs,acceptance:store.sharedAcceptance,host:hostPort,rediscoveryMs:100,
     arrange:async(source,id)=>({identity:identity(id,source.event.run.id,await deadline(source.event.run.id)),
       schedule:schedule(id,source.event.run.id,HELARC_STOP_MODEL_PURPOSE.acceptanceOwner,"necessary")})});
-  const reportHandoff=createHelarcReportMaterialHandoff({store,publications,host:hostPort,rediscoveryMs:100,
+  const reportHandoff=createHelarcReportMaterialHandoff({store,publications,host:hostPort,rediscoveryMs:100,assertNewDeliveryAllowed:scope.assertNewDeliveryAllowed,
     binding:async result=>({child:await helarcMaterialRecipient(store,result.correlation.child.run.id),
       parent:await helarcMaterialRecipient(store,result.correlation.origin.parent.run.id),permissionBasis,scopeId,localPoolId,
       deadlineAt:await deadline(result.correlation.origin.parent.run.id),maximumSourceBytes:HELARC_RUN_ACTIVITY_COMPOSITION.maximumReportBytes}),
@@ -135,23 +108,10 @@ export function createHelarcRunActivityComposition(input:{
       subscription.binding?.kind==="input_need"?inputSupply:subscription.binding?.kind==="activity_path"?independent:null};
   return {taskExecution,stopExecution,reportHandoff,contextMaterials:createHelarcMaterialAccess(store),
     async prepareActivation() {
-      if(prepared)return;
       if(!task)throw new TypeError("helarc_task_purpose_unbound");
-      host.service.assertAvailable();
-      const admission=await store.readProductRun(rootRunId);
-      if(admission?.contextBinding.id!==context.id)throw new TypeError("helarc_activity_original_admission_missing");
-      for(const [id,capacity] of [[modelPoolId,HELARC_RUN_ACTIVITY_COMPOSITION.modelPoolCapacity],[localPoolId,HELARC_RUN_ACTIVITY_COMPOSITION.localPoolCapacity]] as const)
-        await store.activityHandoffs.command({kind:"bind_resource_pool",pool:{id,capacity,revision:"1",authority:"helarc.activity-host.v1"}});
-      prepared=true;
+      await scope.prepareActivation();
     },
     activate(intent:"settle"|"continue"|"cancel"="continue") {
-      if(active){
-        if(recoveryIntent==="cancel"&&intent!=="cancel")throw new TypeError("helarc_cancelled_binding_cannot_continue");
-        if(intent!=="settle")recoveryIntent=intent;
-        host.service.wake();return;
-      }
-      if(!prepared)throw new TypeError("helarc_activity_activation_unprepared");
-      host.service.assertAvailable();recoveryIntent=intent;
-      host.bindings.bind(rootRunId,registered);active=true;host.service.wake();
+      scope.activate(registered,intent);
     }};
 }

@@ -1,6 +1,6 @@
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {activityFactSourceId,type ActivityInputNeed,type ActivityPathIntent,type ActivityPathState,type ActivityStageState,
-  type ActivityHandoffPort,type ActivitySchedulingIntent,type ActivityReconsiderationHandler,type ActivityReconsiderationPreparation,
+  type ActivityHandoffPort,type ActivitySnapshot,type ActivityStateObservation,type ActivitySchedulingIntent,type ActivityReconsiderationHandler,type ActivityReconsiderationPreparation,
   type ActivityReconsiderationSnapshot,type SharedAcceptancePart} from "../activity/index.js";
 import type {ProviderRequest} from "@agent-anything/model-interaction";
 import type {SourceMaterialPublicationWork,SourceMaterialPublicationRequest,PublishedSourceMaterial,UnavailableSourceMaterial} from "./SourceMaterialPublication.js";
@@ -47,7 +47,7 @@ export interface OriginalInputSupplyDecision extends ActivityReconsiderationPrep
 export class OriginalInputSupply<TSource extends OriginalInputSource> implements ActivityReconsiderationHandler {
   constructor(private readonly ports:{
     readonly source:{
-      readonly stageId:(need:ActivityInputNeed,consumer:ActivityPathState)=>string;
+      readonly stageId:(need:ActivityInputNeed,consumer:Pick<ActivityPathState,"intent">)=>string;
       readonly validate:(source:unknown,consumer:ActivityPathState)=>asserts source is TSource;
     };
     readonly activities:ActivityHandoffPort;
@@ -68,11 +68,17 @@ export class OriginalInputSupply<TSource extends OriginalInputSource> implements
     if(subscription.binding?.kind!=="input_need")throw new TypeError("input_supply_subscription_binding_missing");
     const need=await this.ports.activities.command({kind:"read_input_need",id:subscription.binding.id}) as ActivityInputNeed|null;
     if(!need||need.supplier!==subscription.owner)throw new TypeError("input_supply_supplier_changed");
-    const consumer=await this.ports.activities.command({kind:"read_path",pathId:need.stage.pathId}) as ActivityPathState|null;
+    const observation={observation:{owner:subscription.owner,purpose:"original-input-supply",operationId:subscription.id}};
+    const headObservation=await this.ports.activities.command({kind:"observe_state",pathId:need.stage.pathId,requestIds:[],inputNeedIds:[]},observation) as ActivityStateObservation;
+    if(!headObservation.path)throw new TypeError("input_supply_consumer_binding_changed");
+    const sourceStageId=this.ports.source.stageId(need,headObservation.path);
+    const evidence=await this.ports.activities.command({kind:"read_snapshot",pathId:need.stage.pathId,
+      requestIds:[sourceStageId,need.stage.id,need.unavailableStage.id],inputNeedIds:[need.id]},observation) as ActivitySnapshot;
+    const consumer=evidence.path;
     if(!consumer||consumer.intent.runId!==subscription.runId||consumer.intent.purpose.contract.inputOwner!==subscription.owner)
       throw new TypeError("input_supply_consumer_binding_changed");
-    const sourceStageId=this.ports.source.stageId(need,consumer);
-    const sourceStage=await this.ports.activities.command({kind:"read_stage",requestId:sourceStageId}) as ActivityStageState|null;
+    if(modelInputValueDigest(evidence.inputNeeds[0])!==modelInputValueDigest(need))throw new TypeError("input_supply_need_changed");
+    const sourceStage=evidence.stages.find(stage=>stage?.request.id===sourceStageId);
     if(!sourceStage||sourceStage.request.id!==sourceStageId||sourceStage.request.pathId!==consumer.intent.id||
       sourceStage.status!=="accepted"||sourceStage.result?.completeness!=="complete"||sourceStage.result.outcome!=="returned"||
       sourceStage.receipt?.requestId!==sourceStage.request.id||sourceStage.receipt.resultId!==sourceStage.result.id||
@@ -81,8 +87,8 @@ export class OriginalInputSupply<TSource extends OriginalInputSource> implements
     const source:unknown=sourceStage.request.input;
     this.ports.source.validate(source,consumer);
     const basis={need,consumer,source,sourceStage};
-    const supplied=await this.ports.activities.command({kind:"read_stage",requestId:need.stage.id}) as ActivityStageState|null;
-    const unavailable=await this.ports.activities.command({kind:"read_stage",requestId:need.unavailableStage.id}) as ActivityStageState|null;
+    const supplied=evidence.stages.find(stage=>stage?.request.id===need.stage.id)??null;
+    const unavailable=evidence.stages.find(stage=>stage?.request.id===need.unavailableStage.id)??null;
     if(supplied&&unavailable)throw new TypeError("input_supply_conflicting_outcomes");
     if(consumer.cancelled||supplied||unavailable)return new InputSupplyExitWork(this.ports).prepare(basis,subscription.id,unavailable??supplied,signal);
     await this.ports.authorize(basis,signal);
@@ -121,13 +127,14 @@ export class OriginalInputSupply<TSource extends OriginalInputSource> implements
     };
     const unavailableSource=binding.publications.find(p=>p.state==="unavailable");
     if(unavailableSource) {
-      const path=await this.ports.activities.command({kind:"read_path",pathId:unavailableSource.pathId}) as ActivityPathState|null;
-      const stage=await this.ports.activities.command({kind:"read_stage",requestId:`${unavailableSource.pathId}:capture`}) as ActivityStageState|null;
+      const snapshot=await this.ports.activities.command({kind:"read_snapshot",pathId:unavailableSource.pathId,
+        requestIds:[`${unavailableSource.pathId}:capture`],inputNeedIds:[]},observation) as ActivitySnapshot;
+      const path=snapshot.path,stage=snapshot.stages[0];
       const outcome=path&&stage?sourceMaterialOutcome(path,stage):null;
       if(outcome?.kind!=="source_material_unavailable"||modelInputValueDigest(outcome)!==modelInputValueDigest(unavailableSource.unavailable))
         throw new TypeError("input_supply_source_limitation_changed");
       const input:ContextInputUnavailability={kind:"context_input_unavailable",needId:need.id,supplier:need.supplier,
-        boundary:binding.input.demand.historyBoundary,reason:"original_source_unavailable",
+        boundary:binding.input.demand.historyBoundary,reason:"original_source_unavailable",sourceStop:outcome.limitation.kind,
         evidence:[{owner:"shared_acceptance",kind:"professional_stop",id:outcome.stopAcceptanceId,revision:"1"}]};
       return register({decision:{owner:need.supplier,kind:"input_source_unavailable",id:need.id,revision:modelInputValueDigest(input)},
         participants:[{owner:"activity",kind:"stage_submission",proposal:{...need.unavailableStage,input}}],close:false});
@@ -145,16 +152,18 @@ export class OriginalInputSupply<TSource extends OriginalInputSource> implements
         supplyDependencies:responsibilities,participants:[],
         observeSources:[activityFactSourceId("control",consumer.intent.id),inputSupplyFactSource(origin).id],close:false});
     }
-    const preparing=await this.ports.activities.command({kind:"read_path",pathId:binding.preparation.id}) as ActivityPathState|null;
+    const preparationSnapshot=await this.ports.activities.command({kind:"read_snapshot",pathId:binding.preparation.id,
+      requestIds:[`${binding.preparation.id}:stage:1`],inputNeedIds:[]},observation) as ActivitySnapshot;
+    const preparing=preparationSnapshot.path;
     if(preparing) {
-      const original=await this.ports.activities.command({kind:"read_stage",requestId:`${binding.preparation.id}:stage:1`}) as ActivityStageState|null;
+      const original=preparationSnapshot.stages[0];
       const {purpose,owner,...identity}=preparing.intent;
       if(purpose.digest!==modelInputValueDigest(CONTEXT_INPUT_PREPARATION_PURPOSE)||owner!==need.supplier||
         modelInputValueDigest(identity)!==modelInputValueDigest(binding.preparation)||
         modelInputValueDigest((original?.request.input as ContextInputPreparationStageInput|undefined)?.request)!==modelInputValueDigest(binding.input))
         throw new TypeError("input_supply_preparation_binding_changed");
       const demand=binding.input.demand;
-      const result=await readContextInputEvidence({activities:this.ports.activities,pathId:preparing.intent.id,
+      const result=await readContextInputEvidence({activities:this.ports.activities,pathId:preparing.intent.id,snapshot:preparationSnapshot,
         scope:{runId:demand.runId,recipient:demand.recipient,purpose:demand.purpose,target:demand.targetRevision,owner:need.supplier},
         demandId:demand.id,boundary:demand.historyBoundary},signal);
       if(result.kind!=="pending"&&result.kind!=="changed") {

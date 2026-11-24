@@ -68,7 +68,7 @@ export class HelarcResponseProgress {
       for (const part of attempt.parts) {
         const positionKey = JSON.stringify([key, part.id]);
         const previousOffset = this.positions.get(positionKey) ?? 0;
-        const offset = part.text.length < previousOffset || (part.kind === "final_response" && part.committedRecordId !== null)
+        const offset = part.text.length < previousOffset || ((part.kind === "final_response" || part.nativeSource) && part.committedRecordId !== null)
           ? 0 : previousOffset;
         const segment = textPage(
           part.text,

@@ -450,6 +450,7 @@ export class ModelTaskDecisionCoordinator<TOutput = unknown> implements TaskDeci
     });
     const preparedRequest = withContinuation(request, preparation.continuation);
     const inputDeliveryReceipt = createProviderInputDeliveryReceipt(controllerInput.inputDelivery, preparedRequest);
+    if(controllerInput.interaction.kind==="native_evidence")throw new TypeError("turn_task_input_participant_mismatch");
     const openingReceipt = controllerInput.interaction.opening ? null : createConversationOpeningReceipt(controllerInput.runId, preparedRequest);
     let settlement: ProviderRequestSettlement;
     try {

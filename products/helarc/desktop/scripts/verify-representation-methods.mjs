@@ -31,6 +31,8 @@ const layered=process.argv.includes("--layered")||lines;
 const distributed=process.argv.includes("--distributed");
 const contracts=process.argv.includes("--contracts");
 const normalPolicy=process.argv.includes("--normal-policy");
+const policyUpgrade=process.argv.includes("--policy-upgrade");
+assert(!policyUpgrade||normalPolicy&&!adoption&&!live,"Policy upgrade uses the isolated four-process producer path");
 const normalRevision=process.argv.includes("--normal-revision");
 const simple=process.argv.includes("--simple");
 const wholeCheckTarget=process.argv.includes("--whole-check-target-capacity");
@@ -106,6 +108,7 @@ try {
   }
   const verification=JSON.parse(await readFile(join(root,"verification.json"),"utf8"));
   await writeFile(join(root,"physical-requests.json"),JSON.stringify({methodJobs,bodies},null,2));
+  if(policyUpgrade)assert.deepEqual(methodJobs,["generate","check"]);
   assert.equal(calls,verification.totalProviderCalls);if(!live&&!layered&&!distributed&&!contracts&&!stopLong)assert.equal(calls,taskRejection?9:inputRejection?6:methodRetry?3:stop?(stopRetry?2:1):multiple?6:joint?(inputUnavailable?5:6):resupply?6:inputUnavailable?3:(adoption&&!cancelConsumer?4:2)+(verification.revision?.additionalProviderCalls??0));if(layered||distributed)assert(calls>2);if(distributed)assert(verification.checkGroups>0);assert.equal(verification.inspection.dropped,0);assert.equal(verification.inspection.rejected,0);
   assert.equal(bodies.length-methodBodies.length,taskRejection?3:stopRetry||stopRejection?2:resupply?2:adoption&&!cancelConsumer&&!inputUnavailable?1:0,"Only accepted consumer requests and their recorded retries reach the Provider");
   if(stopRetry||methodRetry)assert.deepEqual(bodies[1],bodies[0],"Technical retry preserves the original wire input");
@@ -118,7 +121,7 @@ try {
 } finally {
   for(const controller of inFlight)controller.abort(new Error("Isolated verification ended"));
   server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
-  if(success&&resolve(root).startsWith(resolve(tmpdir())+"\\")&&root.includes("helarc-representation-method-"))await rm(root,{recursive:true,force:true});
+  if(success&&!policyUpgrade&&resolve(root).startsWith(resolve(tmpdir())+"\\")&&root.includes("helarc-representation-method-"))await rm(root,{recursive:true,force:true});
   else console.log(`Preserved isolated evidence: ${root}`);
 }
 function run(phase,endpoint) {
@@ -144,6 +147,7 @@ function run(phase,endpoint) {
     if(distributed)env.ACTIVITY_DISTRIBUTED="1";
     if(contracts)env.ACTIVITY_CONTRACTS="1";
     if(normalPolicy)env.ACTIVITY_NORMAL_POLICY="1";
+    if(policyUpgrade)env.ACTIVITY_POLICY_UPGRADE="1";
     if(normalRevision)env.ACTIVITY_NORMAL_REVISION="1";
     if(simple)env.ACTIVITY_SIMPLE="1";
     if(wholeCheckTarget)env.ACTIVITY_WHOLE_CHECK_TARGET="1";

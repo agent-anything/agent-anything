@@ -8,6 +8,20 @@ const STARTED_AT = "2026-08-23T00:00:00.000Z";
 const DEADLINE_AT = "2026-08-23T00:01:00.000Z";
 
 describe("RunTreeExecution", () => {
+  it("rejects a duplicate relation before allocating a Child or changing resources", () => {
+    const tree = createTree({maxTotalDescendantRuns: 3, maxActiveDescendantRuns: 3, maxDescendantDepth: 2});
+    reserve(tree, tree.rootLineage, "run-root", "child-a", 1);
+    const before = tree.checkpoint();
+    expect(() => tree.reserveDescendant({
+      relationId: "relation-child-a", relationKind: "delegation",
+      createChildRunId: () => { throw new Error("Must not allocate another Child"); },
+      parentRunId: "run-root", parentLineage: tree.rootLineage,
+      parentRunAction: action("run-root", 2), parentDeadlineAt: DEADLINE_AT,
+      childLocalDeadlineAt: DEADLINE_AT, resourceAllocation: resourceAmounts(100),
+      authorityRevision: "child-b-authority-v1", dispatch: dispatch(2),
+    })).toThrow(/relation identity already exists/);
+    expect(tree.checkpoint()).toEqual(before);
+  });
   it("restores the same tree with pending Child delivery and original authority and deadlines", () => {
     const tree = createTree({maxTotalDescendantRuns: 2, maxActiveDescendantRuns: 2, maxDescendantDepth: 2});
     reserve(tree, tree.rootLineage, "run-root", "child-a", 1);

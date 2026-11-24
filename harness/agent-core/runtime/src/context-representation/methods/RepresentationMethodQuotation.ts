@@ -43,7 +43,7 @@ export function quoteRepresentationMethod(request:RepresentationMethodRequest):R
   const minimumReads=request.method==="search"?request.sources.length:reads;
   const modelCalls=exact||reusableCheck?0:generates?2:1;
   // Each non-reused model job includes assembly, fixed/full input organization, binding and dispatch.
-  const stages=minimumReads+(partition?1:0)+(exact?1:reusableCheck?1:modelCalls*5);
+  const stages=minimumReads+(partition?1:0)+(exact?1:reusableCheck?1:modelCalls*(request.nativeComposition?2:5));
   const generatedEvidenceBytes=request.sources.filter(s=>s.role!=="candidate").reduce((n,s)=>n+s.access.range.end-s.access.range.start,0);
   const exactEvidenceBytes=request.sources.filter(s=>s.role==="source").reduce((n,s)=>n+s.access.range.end-s.access.range.start,0);
   const readBytes=request.method==="preserve"?0:request.method==="search"?exactEvidenceBytes:

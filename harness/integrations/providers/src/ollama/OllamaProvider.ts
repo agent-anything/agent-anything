@@ -36,7 +36,7 @@ import {
   type ProviderTransportAccounting,
   type ProviderTransportLimit,
 } from "@agent-anything/model-interaction/transport";
-import {createEncodedModelInput, verifyEncodedModelInput, type EncodedModelInput, type ModelInputComposition} from "@agent-anything/model-interaction/input";
+import {createEncodedModelInput, verifyEncodedModelInput, modelInputValueDigest, ModelInputEncodingUnsupportedError, type EncodedModelInput, type ModelInputComposition} from "@agent-anything/model-interaction/input";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
 import {
   classifyProviderHttpFailure,
@@ -85,6 +85,7 @@ export interface OllamaProviderConfig {
 }
 
 export class OllamaProvider implements Provider {
+  get inputTargetDigest():string {return modelInputValueDigest(encodedTarget(this.config));}
   readonly descriptor: ProviderDescriptor;
   readonly modelContext: ProviderModelContext;
   readonly requestBodyTransportLimit: ProviderTransportLimit;
@@ -559,7 +560,7 @@ function encodeOllamaChatMessages(
     for (const block of message.content) {
       if (block.kind === "text") {
         if (sawCall || textBlockCount > 0) {
-          throw new TypeError(
+          throw new ModelInputEncodingUnsupportedError("assistant_content_shape_unsupported",
             "Ollama assistant history must use at most one text block before Tool calls.",
           );
         }

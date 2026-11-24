@@ -2,6 +2,9 @@ import type { InspectionPayload } from "@agent-anything/inspection/records";
 
 export function payloadSummary(payload: InspectionPayload): string {
   switch (payload.kind) {
+    case "call": return payload.name;
+    case "native_interaction": return `${payload.protocol} / ${payload.purpose} / ${payload.model ?? "Model not recorded"}`;
+    case "native_fact": return `${payload.nativeType} / ${payload.category}${payload.status ? ` / ${payload.status}` : ""}${payload.limitation ? ` / ${payload.limitation}` : ""}`;
     case "evaluation_report": return `${payload.comparison} / ${payload.reportId} / ${payload.status}`;
     case "process_evidence": return `${payload.category} / ${payload.name}${payload.status ? ` / ${payload.status}` : ""}`;
     case "process_relationship": return `Recorded relation / ${payload.ordinal + 1} of ${payload.total}`;

@@ -3,9 +3,11 @@ import { captureExecutionError, diagnosticText } from "./ExecutionErrorDetails.j
 import {dirname, join} from "node:path";
 import {HelarcPerformanceDiagnostics} from "./HelarcPerformanceDiagnostics.js";
 import type {ExecutionPerformanceEvent, ExecutionPerformanceSink} from "./ExecutionPerformance.js";
+import {IdentifiedWorkTiming,type WorkSample} from "./IdentifiedWorkTiming.js";
 
 export type ExecutionDiagnosticContext = Readonly<Record<string, string | number | boolean | null>>;
 export interface ExecutionDiagnosticSink extends ExecutionPerformanceSink {
+  readonly workTiming?:IdentifiedWorkTiming;
   record(stage: string, context: ExecutionDiagnosticContext, error: unknown): void;
 }
 
@@ -20,12 +22,15 @@ export class HelarcExecutionDiagnostics implements ExecutionDiagnosticSink {
   private tail: Promise<void> = Promise.resolve();
   private readonly timings: HelarcPerformanceDiagnostics;
 
-  constructor(path: string,private readonly observer?:ExecutionPerformanceSink) {
+  readonly workTiming?:IdentifiedWorkTiming;
+  constructor(path: string,private readonly observer?:ExecutionPerformanceSink & {workBoundary?(s:WorkSample):void}) {
+    if(observer?.workBoundary)this.workTiming=new IdentifiedWorkTiming(s=>observer.workBoundary!(s));
     this.file = new SerializedAtomicFile(path);
     this.timings = new HelarcPerformanceDiagnostics(join(dirname(path), "execution-performance.json"));
   }
 
   performance(event: ExecutionPerformanceEvent): void {
+    this.workTiming?.observe(event);
     this.timings.record(event);
     try {this.observer?.performance?.(event);}catch{/* Observation cannot change execution. */}
   }

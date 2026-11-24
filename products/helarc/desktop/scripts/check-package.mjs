@@ -15,6 +15,10 @@ if (process.platform === "win32") {
 const requiredFiles = [
   packageJson.main,
   "dist/preload/preload.cjs",
+  "dist/main/execution-storage/ExecutionStoreWorker.js",
+  "dist/main/execution-storage/ExecutionStoreWorker.js.map",
+  "dist/main/provider/ProviderRegistryWorker.js",
+  "dist/main/provider/ProviderRegistryWorker.js.map",
   "dist/renderer/index.html",
   appMetadata.iconAsset,
 ];

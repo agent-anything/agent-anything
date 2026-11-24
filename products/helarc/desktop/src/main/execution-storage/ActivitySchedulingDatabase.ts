@@ -44,7 +44,7 @@ export class ActivitySchedulingDatabase {
     const old=this.work(intent.workId);
     if((old?.revision??0)!==expectedRevision||old?.closed)fail("revision_conflict");
     if(old&&(old.run_id!==intent.runId||old.scope_id!==intent.scopeId||old.owner!==intent.owner))fail("work_identity_conflict");
-    for(const claim of intent.resources){const pool=this.pool(claim.poolId);if(claim.units>pool.capacity)fail("resource_unavailable");}
+    for(const claim of intent.resources){const pool=this.pool(claim.poolId);if(claim.units>pool.capacity)fail("claim_exceeds_pool_capacity");}
     // Resources are an execution binding. A changed treatment cannot change that binding.
     if(old){const prior=this.read(intent.workId)!.intent;same(prior.resources,intent.resources);same(prior.delegatedPathOwners??[],intent.delegatedPathOwners??[]);same(prior.allowedPathIds?[...prior.allowedPathIds].sort():null,intent.allowedPathIds?[...intent.allowedPathIds].sort():null);}
     const service=intent.reason==="optional"?"spare":"guaranteed";

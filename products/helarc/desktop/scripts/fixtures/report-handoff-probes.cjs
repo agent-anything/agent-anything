@@ -1,6 +1,6 @@
 const assert=require("node:assert/strict");
 
-// Runs inside the real Electron process against the same SQLite Worker, after task dispatch closes.
+// Run with no competing scheduler, after source settlement while the recipient can still receive.
 module.exports=async function({store,createHandoff,result,binding}) {
   const {ActivityHandoffProcessor,ActivityPurposeRegistry,ActivityReconsiderationProcessor}=await import("@agent-anything/agent-runtime/activity");
   const {SourceMaterialPublicationWork}=await import("@agent-anything/agent-runtime/context-representation");
@@ -62,7 +62,12 @@ module.exports=async function({store,createHandoff,result,binding}) {
   // Parent access is independently withdrawn; published source and other owners remain intact.
   const admitted=probe("cancel-admitted"),acceptance=store.sharedAcceptance,originalAccept=acceptance.accept;
   acceptance.accept=async proposal=>{const receipt=await originalAccept.call(acceptance,proposal);
-    if(proposal.actor==="helarc.report-handoff"&&receipt.outcome==="accepted")admitted.controller.abort();return receipt;};
+    if(proposal.parts.some(p=>p.kind==="require_open")&&receipt.outcome==="accepted")admitted.controller.abort();
+    if(proposal.parts.some(p=>p.kind==="withdraw_access")&&receipt.outcome==="accepted"){
+      const id=`${result.narrative.source.recordId}:parent:${digest(admitted.binding.parent)}`;
+      await assert.rejects(()=>store.materialCustody.command({kind:"describe",holdId:`${id}:hold`,recipient:admitted.binding.parent}));
+    }
+    return receipt;};
   try {
     const outcome=admitted.start();outcome.catch(()=>{});await waitFor(async()=>Boolean(await admitted.stage()));await drain(3);
     assert.equal((await outcome).reason,"report_publication_cancelled");
@@ -71,6 +76,23 @@ module.exports=async function({store,createHandoff,result,binding}) {
     await assert.rejects(()=>store.materialCustody.command({kind:"describe",holdId:`${id}:hold`,recipient:admitted.binding.parent}));
   } finally {acceptance.accept=originalAccept;}
   passed.push("cancel-after-parent-access");
+  const fenced=probe("withdraw-before-grant");
+  acceptance.accept=async proposal=>{
+    if(proposal.parts.some(p=>p.kind==="require_open")){
+      const cancel=new AbortController();cancel.abort();
+      assert.equal((await fenced.handoff.publish(result,cancel.signal)).reason,"report_publication_cancelled");
+      const rejected=await originalAccept.call(acceptance,proposal);
+      assert.equal(rejected.rejection?.code,"report_publication_withdrawn");return rejected;
+    }
+    return originalAccept.call(acceptance,proposal);
+  };
+  try{
+    const outcome=fenced.start();outcome.catch(()=>{});await waitFor(async()=>Boolean(await fenced.stage()));await drain(3);
+    assert.equal((await outcome).reason,"report_publication_cancelled");
+    const id=`${result.narrative.source.recordId}:parent:${digest(fenced.binding.parent)}`;
+    await assert.rejects(()=>store.materialCustody.command({kind:"describe",holdId:id+":hold",recipient:fenced.binding.parent}));
+  }finally{acceptance.accept=originalAccept;}
+  passed.push("withdraw-before-grant");
   const described=probe("cancel-describe"),custody=store.materialCustody,originalCommand=custody.command;
   custody.command=async command=>{const value=await originalCommand.call(custody,command);
     if(command.kind==="describe"&&command.recipient.recipient===described.binding.parent.recipient)described.controller.abort();return value;};

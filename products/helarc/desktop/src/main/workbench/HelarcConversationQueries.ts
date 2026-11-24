@@ -7,7 +7,7 @@ import { compareConversationPosition as compare } from "../../shared/HelarcWorkb
 import {
   outputModelItems,
   presentConversationWork,
-  type ConversationTurn,
+  type ConversationResponseGroup,
 } from "./ConversationPresentation.js";
 import {
   decodePosition,
@@ -148,12 +148,12 @@ export class HelarcConversationQueries {
     }
   }
 
-  async readConversationTurn(
-    q: D.ConversationTurnQuery,
-  ): Promise<D.ConversationTurnPage | D.WorkbenchRejected> {
+  async readConversationResponseGroup(
+    q: D.ConversationResponseGroupQuery,
+  ): Promise<D.ConversationResponseGroupPage | D.WorkbenchRejected> {
     if (
       !taskScopeValid(q) ||
-      !readToken(q.turnId) ||
+      !readToken(q.groupId) ||
       (q.cursor !== null && !readToken(q.cursor))
     )
       return readRejected("invalid_query");
@@ -163,7 +163,7 @@ export class HelarcConversationQueries {
         scope: q,
         position: { kind: "latest" },
       });
-      const turn = assembled?.turns.find((t) => t.entry.turnId === q.turnId);
+      const turn = assembled?.turns.find((t) => t.entry.groupId === q.groupId);
       if (!turn) return readRejected("not_found");
       return turnPage(turn, q.cursor, 224 * 1024, 100);
     } catch {
@@ -175,7 +175,7 @@ export class HelarcConversationQueries {
     const thread = await this.sources.loadThread(q.threadId);
     if (!thread || thread.thread.id !== q.threadId) return null;
     const entries: D.ConversationEntry[] = [],
-      turns: ConversationTurn[] = [];
+      turns: ConversationResponseGroup[] = [];
     const placed = new Set<string>();
     let matched = q.scope === undefined,
       omittedRecords = 0,
@@ -253,17 +253,17 @@ export class HelarcConversationQueries {
 }
 
 function turnPage(
-  turn: ConversationTurn,
+  turn: ConversationResponseGroup,
   token: string | null,
   budget: number,
   maximum: number,
-): D.ConversationTurnPage | D.WorkbenchRejected {
+): D.ConversationResponseGroupPage | D.WorkbenchRejected {
   const { entry, blocks: all } = turn;
   const identity = [
     entry.scope.threadId,
     entry.scope.productRunId,
     entry.scope.runId,
-    entry.turnId,
+    entry.groupId,
   ];
   const cursor = token ? decodePosition(token) : null;
   const keys = all.map((b) => [b.id, b.ordinal]);
@@ -280,10 +280,10 @@ function turnPage(
     return readRejected("stale_cursor");
   const offset = (cursor?.offset as number | undefined) ?? 0;
   const blocks: D.ConversationBlock[] = [];
-  const page: D.ConversationTurnPage = {
+  const page: D.ConversationResponseGroupPage = {
     status: "page",
     scope: entry.scope,
-    turnId: entry.turnId,
+    groupId: entry.groupId,
     revision: entry.revision,
     blocks,
     nextCursor: null,

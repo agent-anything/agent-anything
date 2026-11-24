@@ -2,6 +2,14 @@ import {createHash} from "node:crypto";
 import {createProviderSemanticRequestDigest, type ProviderRequest} from "../ProviderRequest.js";
 import {modelInputValueDigest} from "./ModelWorkingView.js";
 
+/** A known native representation limitation, not a corrupt binding or permission failure. */
+export class ModelInputEncodingUnsupportedError extends Error {
+  constructor(readonly code:string,message:string) {
+    super(message);this.name="ModelInputEncodingUnsupportedError";
+    if(!/^[a-z][a-z0-9_]*$/.test(code))throw new TypeError("input_encoding_failure_code_invalid");
+  }
+}
+
 /** Credentials and mutable transport handles are deliberately absent. */
 export interface EncodedModelInput {
   readonly kind: "encoded_model_input";

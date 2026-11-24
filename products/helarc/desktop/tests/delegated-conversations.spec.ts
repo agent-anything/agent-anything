@@ -50,6 +50,7 @@ test("parallel Child text stays with its work without reordering or stealing rea
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const env = {...process.env, HELARC_SMOKE_USER_DATA: await mkdtemp(join(tmpdir(), "helarc-child-reading-")),
+    HELARC_SMOKE_PARALLEL_STREAMS: "1",
     HELARC_SMOKE_ENDPOINT: `http://127.0.0.1:${(server.address() as {port: number}).port}`, HELARC_SMOKE_TIMEOUT_MS: "80000"};
   delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({args: [fileURLToPath(new URL("./electron-smoke.mjs", import.meta.url))], env});
@@ -59,7 +60,7 @@ test("parallel Child text stays with its work without reordering or stealing rea
     page.on("pageerror", error => pageErrors.push(error.message));
     await page.locator("#task-input").fill("Compare independent findings and then perform a follow-up.");
     await page.getByRole("button", {name: "Send message", exact: true}).click();
-    await expect.poll(() => held.has("first") && held.has("second"), {timeout: 20000}).toBe(true);
+    await expect.poll(() => { expect(errors).toEqual([]); return held.has("first") && held.has("second"); }, {timeout: 20000}).toBe(true);
     const group = page.getByRole("region", {name: "Parallel subtasks", exact: true});
     const first = group.getByRole("region", {name: "Subtask 1", exact: true});
     const second = group.getByRole("region", {name: "Subtask 2", exact: true});
@@ -123,7 +124,9 @@ test("parallel Child text stays with its work without reordering or stealing rea
       const pending = held.get(name)!;
       chunk(pending.response, `\nI will check the available files for ${name}.`, [call(pending.body, "Glob", {pattern: "*"})], true);
     }
-    await expect.poll(() => held.has("later"), {timeout: 15000}).toBe(true);
+    // Child tool/result exchanges and the subsequent Parent delegation are separate milestones.
+    await expect.poll(() => { expect(errors).toEqual([]); return counts.first === 2 && counts.second === 2; }, {timeout: 15000}).toBe(true);
+    await expect.poll(() => { expect(errors).toEqual([]); return held.has("later"); }, {timeout: 15000}).toBe(true);
     await page.getByRole("button", {name: /Latest messages/}).click();
     await expect(group).toContainText("second finished.");
     const secondConversation = group.getByRole("region", {name: "Subtask 2: Inspect the second input", exact: true});
@@ -140,6 +143,7 @@ test("parallel Child text stays with its work without reordering or stealing rea
     expect(pageErrors).toEqual([]);
     expect(counts).toEqual({root: 3, first: 2, second: 2, later: 1});
   } finally {
+    await info.attach("delegation-progress", {body: JSON.stringify({counts,held:[...held.keys()],errors}), contentType:"application/json"});
     await app.close();
     for (const pending of held.values()) if (!pending.response.writableEnded) pending.response.destroy();
     server.closeAllConnections();

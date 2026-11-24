@@ -6,6 +6,7 @@ import type {
   RunResultStatus,
 } from "@agent-anything/agent-runtime/run";
 import { runSettlementCauseCode } from "@agent-anything/agent-runtime/run";
+import { MODEL_REQUEST_INPUT_FAILURE, describeModelRequestInputFailure } from "@agent-anything/agent-runtime/decision";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
@@ -15,6 +16,7 @@ import type {
 import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcControllerTraceProjection } from "../observability/index.js";
+import {nativeModelSourceKey} from "@agent-anything/model-interaction/protocol";
 
 export type HelarcProductStatus =
   | "completed"
@@ -219,6 +221,21 @@ export function projectHelarcProductResult(
 
 function projectOutputSource(source: HelarcAgentOutput["source"] | undefined, result: RunResult<HelarcAgentOutput>): HelarcAgentOutput["source"] {
   if (!source) return {kind: "product_status"};
+  if(source.kind==="native_response"&&source.text){
+    const adopted=source.text.flatMap(block=>{
+      const key=nativeModelSourceKey(block.source);
+      if(!source.sources.some(s=>nativeModelSourceKey(s)===key))throw new TypeError("native_final_text_source_invalid");
+      for(const item of result.items){
+        if(item.payload.kind!=="controller_turn")continue;
+        const evidence=item.payload.modelItems.find(m=>m.kind==="native_purpose_evidence");
+        if(evidence?.kind!=="native_purpose_evidence")continue;
+        const ordinal=evidence.evidence.sources.findIndex(s=>nativeModelSourceKey(s)===key);
+        if(ordinal>=0)return [{...block,ordinal,runItem:{id:item.ref.id,sequence:item.ref.sequence}}];
+      }
+      return [];
+    });
+    return {...source,adopted};
+  }
   if (source.kind !== "model_text" || !source.adopted || source.adopted.runItem !== null) return source;
   const item = result.items.find(item => item.payload.kind === "controller_turn" && item.payload.modelItems.some(model =>
     model.kind === "assistant_text" && model.turnId === source.turnId && source.modelItemIds.includes(model.id)));
@@ -391,6 +408,11 @@ function appendSafeRunFailure(
   errors: Array<{ code: string; message: string }>,
   failure: RunFailureCause,
 ): void {
+  if (failure.kind === "input_preparation" &&
+      (failure.failure.code === MODEL_REQUEST_INPUT_FAILURE || failure.failure.code === "context_input_unavailable")) {
+    appendSafeError(errors, failure.failure.code, describeModelRequestInputFailure(failure.failure.metadata));
+    return;
+  }
   if (failure.kind === "provider") {
     const providerErrorCode = failure.failure.metadata.providerErrorCode;
     if (isSafeProviderErrorCode(providerErrorCode)) {

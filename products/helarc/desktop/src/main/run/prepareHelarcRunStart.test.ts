@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { prepareHelarcRunStart } from "./prepareHelarcRunStart.js";
+import {OPENAI_RESPONSES} from "@agent-anything/model-interaction/protocol";
 
 describe("prepareHelarcRunStart", () => {
+  it("retains native protocol and original configuration without a synthetic legacy profile",()=>{
+    const {providerProfiles:_,providerProfileId:__,...base}=input();
+    const nativeModel={protocol:OPENAI_RESPONSES,configuration:{id:"native",revision:"3"},model:"controlled"};
+    const result=prepareHelarcRunStart({...base,nativeModel,displayName:"Native configuration",endpointLabel:"localhost"});
+    expect(result.ok).toBe(true);if(!result.ok)return;
+    expect(result.prepared.run).toHaveProperty("nativeModel",nativeModel);
+    expect(result.prepared.run).not.toHaveProperty("providerProfileId");
+    expect(result.prepared.provider).toMatchObject({profileId:null,providerKind:null,nativeModel});
+    expect(result.prepared.task.metadata).toHaveProperty("modelConfiguration",nativeModel.configuration);
+    expect(prepareHelarcRunStart({...base,nativeModel:{...nativeModel,protocol:{...OPENAI_RESPONSES,providerId:"other"}},
+      displayName:"Invalid binding",endpointLabel:"localhost"})).toMatchObject({ok:false,error:{code:"run_model_configuration_invalid"}});
+  });
   it("prepares manual task text into Run, Task, and Thread Workspace contracts", () => {
     const result = prepareHelarcRunStart({
       ...input(),

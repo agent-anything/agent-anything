@@ -8,12 +8,17 @@ export function RecordingCoverage({coverage, onRecord, onSubject}: {coverage: In
   const [open, setOpen] = useState(false);
   const progress = coverage.recording;
   const projection = progress?.projection;
+  const history=progress?.ingress.history;
+  const outstanding=history?history.started-history.confirmed-history.incomplete:0;
   const pending = projection?.status === "active" && projection.cursor < progress!.native.target;
   const uncertain = coverage.limitations.some(value => value.includes("unknown") || value.includes("failed"));
   const inspect = (action: () => void) => {setOpen(false); action();};
   return <>
     {coverage.dropped + coverage.rejected > 0 && <Tag color="warning">Native capture gaps</Tag>}
+    {outstanding>0 && <Tag>History not yet confirmed</Tag>}
+    {!!history?.incomplete && <Tag color="warning">Historical coverage incomplete</Tag>}
     {pending && <Tag>Projection pending</Tag>}
+    {projection?.status === "incomplete" && <Tag color="warning">Telemetry projection incomplete</Tag>}
     {projection?.status === "failed" && <Tag color="warning">Projection failed</Tag>}
     {coverage.telemetryDropped > 0 && <Tag color="warning">Telemetry limitations</Tag>}
     {uncertain && <Tag color="warning">Unconfirmed recording tail</Tag>}
@@ -29,9 +34,11 @@ export function RecordingCoverage({coverage, onRecord, onSubject}: {coverage: In
         ...(progress ? [
           {key: "accepted", label: "Admission", children: `${progress.ingress.accepted} accepted; health revision ${progress.ingress.revision}`},
           {key: "duplicates", label: "Exact duplicate offers", children: progress.native.duplicates},
+          {key: "history", label: "Historical catch-up", children: history ?
+            `${history.confirmed} confirmed; ${outstanding} unconfirmed; ${history.incomplete} incomplete` : "None recorded"},
           {key: "receipt", label: "Last durable batch", children: progress.native.lastReceipt ? `${progress.native.lastReceipt.firstSequence} - ${progress.native.lastReceipt.lastSequence}` : "None"},
           {key: "projection", label: "Derived projection", children: `${projection!.status}; handled prefix ${projection!.cursor}; native target ${progress.native.target}`},
-          {key: "failure", label: "Projection failure", children: projection!.code ?? "None recorded"},
+          {key: "failure", label: "Projection limitation", children: projection!.code ?? "None recorded"},
           {key: "flush", label: "Last completed flush", children: progress.lastFlush ? `Admission barrier ${progress.lastFlush.accepted}; projection ${progress.lastFlush.projection} through ${progress.lastFlush.projectionCursor}` : "None recorded"},
           {key: "highWater", label: "Ingress high-water marks", children: `${progress.ingress.highWater.records} records; ${progress.ingress.highWater.structureBytes} structure bytes; ${progress.ingress.highWater.contentBytes} content bytes`},
           {key: "timing", label: "Maximum observed durations", children: `Queue ${progress.ingress.timings.queueMaxMs.toFixed(1)} ms; native acknowledgement ${progress.ingress.timings.acknowledgementMaxMs.toFixed(1)} ms; projection slice ${projection!.sliceMaxMs.toFixed(1)} ms`},
@@ -45,8 +52,12 @@ export function RecordingCoverage({coverage, onRecord, onSubject}: {coverage: In
           {title: "Ingress range", render: (_, issue) => `${issue.firstSequence ?? "unknown"} - ${issue.lastSequence ?? "unknown"}`},
         ]} expandable={{expandedRowRender: issue => <>
           <p>{issue.firstAt} to {issue.lastAt}. {issue.coalesced ? "Bounded samples; intervening attribution not retained." : "Recorded samples:"}</p>
-          {issue.samples.map((sample, index) => sample.subject ? <Button key={index} type="link" onClick={() => inspect(() => onSubject(sample.subject!))}>
-            {sample.subject.owner} / {sample.subject.kind} / {sample.sequence}</Button> : <span key={index}>Unknown source </span>)}
+          {issue.samples.map((sample, index) => <div key={index}>{sample.subject ? <Button type="link" onClick={() => inspect(() => onSubject(sample.subject!))}>
+            {sample.subject.owner} / {sample.subject.kind}{sample.sequence!==null && ` / ${sample.sequence}`}
+            {sample.detail && ` · ${sample.detail.stage} / ${sample.detail.operation}`}
+            {sample.pending && ` · ${sample.pending.records} records, ${sample.pending.structureBytes} structure bytes, ${sample.pending.contentBytes} content bytes`}</Button> : "Unknown source"}
+            {sample.validation && <div>{sample.validation.stage}{sample.validation.limitBytes!==undefined && ` · limit ${sample.validation.limitBytes} bytes`}
+              {sample.validation.recordId && <div>{sample.validation.recordId}</div>}</div>}</div>)}
         </>}}/>
       </>}
       {!!projection?.issues.length && <><Typography.Title level={5}>Projection issues</Typography.Title>

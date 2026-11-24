@@ -7,6 +7,9 @@ export {
   interpretHelarcStopModelResult,
   type HelarcStopModelSource,
   type HelarcStopExecution,
+  type HelarcStopEvaluation,
+  HELARC_TASK_FULFILLMENT_SCHEMA,
+  interpretHelarcFulfillmentValue,
 } from "./HelarcTaskFulfillmentHook.js";
 export {
   snapshotHelarcTaskFulfillmentAssessment,
@@ -18,3 +21,5 @@ export {
 export {HELARC_STOP_MODEL_PURPOSE,HelarcStopModelPath,HelarcStopModelWork,type HelarcStopModelProgress} from "./HelarcStopModelWork.js";
 export {HelarcStopModelExecution} from "./HelarcStopModelExecution.js";
 export {HelarcStopLifecycle} from "./HelarcStopLifecycle.js";
+export {createHelarcNativeStopSource,createHelarcNativeStopEvaluation,type HelarcNativeStopSource} from "./HelarcNativeStopEvaluation.js";
+export {prepareHelarcResponsesStop,prepareHelarcDeepSeekStop,prepareHelarcOllamaStop} from "./HelarcNativeStopEvaluation.js";

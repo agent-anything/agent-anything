@@ -1,6 +1,6 @@
 import type {HelarcProviderModelSettings} from "./HelarcModelSelection.js";
 
-export interface HelarcContextObservationTarget {
+export interface HelarcProfileContextObservationTarget {
   readonly profileId:string;
   readonly providerKind:"ollama"|"openai-compatible";
   readonly baseUrl:string;
@@ -9,6 +9,15 @@ export interface HelarcContextObservationTarget {
   readonly contextWindowTokens:number|null;
   readonly artifact:string|null;
 }
+export interface HelarcNativeContextObservationTarget {
+  readonly kind:"native_configuration";
+  readonly configuration:{readonly id:string;readonly revision:string};
+  readonly protocol:{readonly id:"openai.responses"|"deepseek.chat-completions"|"ollama.chat";readonly revision:string};
+  readonly model:string;
+  readonly semanticRevision:string;
+  readonly artifact:string|null;
+}
+export type HelarcContextObservationTarget=HelarcProfileContextObservationTarget|HelarcNativeContextObservationTarget;
 export interface HelarcContextCapabilityObservation {
   readonly id:string;
   readonly revision:string;

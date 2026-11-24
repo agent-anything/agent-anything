@@ -4,7 +4,7 @@ import type { InspectionQuery, InspectionViewQuery } from "./InspectionQuery.js"
 type View = Extract<InspectionQuery, {kind:InspectionViewQuery}>;
 const scope = (query:View) => createHash("sha256").update(JSON.stringify([
   query.kind,query.sourceId,query.datasetId,query.watermark,query.subject ? inspectionSubjectKey(query.subject):null,
-  query.runId ?? null,query.includeDescendants ?? false,query.recordKind ?? null,query.from ?? null,query.to ?? null,
+  query.runId ?? null,query.includeDescendants ?? false,query.recordKind ?? null,query.from ?? null,query.to ?? null,query.nativeCategories ?? null,
 ])).digest("hex");
 export function readInspectionPageCursor(query:View): number {
   if (query.after === undefined) return 0;

@@ -1,13 +1,14 @@
-import {randomUUID} from "node:crypto";
 import {contextStageObservation,contextActivityFactObservation} from "@agent-anything/agent-runtime/context-representation";
 import {taskModelStageObservation} from "@agent-anything/agent-runtime/decision";
+import {protocolObservationStage} from "@agent-anything/agent-runtime/model-access";
 import {InspectionRecorder} from "@agent-anything/inspection/recording";
 import {inspectionLink,inspectionContentId} from "@agent-anything/inspection/adapters";
 import {modelInputValueDigest} from "@agent-anything/model-interaction/input";
 import {processEvidenceRecords,processObservationRef} from "./ProcessEvidenceProjection.js";
 import {stageMeasurements,responsibilityMeasurement} from "./ActivityMeasurementProjection.js";
+import {helarcNativeInputRecords,nativePreparationRecords} from "./HelarcNativeInputInspectionProjection.js";
 import type {InspectionRecordInput} from "@agent-anything/inspection/records";
-import {replayInspectionRecords, type InspectionProjectionSink,type InspectionProjectionRefs} from "./InspectionReplay.js";
+import {replayInspectionRecords,identifiedRecords,throughSequence, type InspectionProjectionSink,type InspectionProjectionRefs} from "./InspectionReplay.js";
 import type {ActivityHandoffFact, ActivityHandoffObserver,ActivityPathState,ActivityStageState,ActivitySchedulingAcceptance,ActivitySchedulingDispatch,
   ActivityPublishedFact,ActivityReconsiderationReceipt,ActivityReconsiderationSubscription} from "@agent-anything/agent-runtime/activity";
 
@@ -25,9 +26,16 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
     for(const record of this.stageRecords(path,stage,r))r.offer(record);
   }
   private *stageRecords(path:ActivityPathState,stage:ActivityStageState,r:InspectionProjectionRefs):Generator<InspectionRecordInput> {
+    yield* identifiedRecords("activity-stage:"+modelInputValueDigest({stage,path}),this.stageProjection(path,stage,r));
+  }
+  private *stageProjection(path:ActivityPathState,stage:ActivityStageState,r:InspectionProjectionRefs):Generator<InspectionRecordInput> {
     const runId=path.intent.runId;
     const context=contextStageObservation(path,stage),task=taskModelStageObservation(path,stage);
     yield* stageMeasurements(r,path,stage,context);
+    yield* helarcNativeInputRecords(r,path,stage);
+    const preparation=nativePreparationRecords(r,runId,stage.request.id,stage.result,stage.status==="accepted");
+    const primary=preparation.next();
+    if(!primary.done)yield primary.value;
     const subject=r.ref("activity","contribution",stage.request.id,runId);
     const contents:NonNullable<Parameters<InspectionRecorder["offer"]>[0]["contents"]>[number][]=
       [{name:"Submitted stage input",class:"agent",stage:"input",mediaType:"application/json",value:JSON.parse(JSON.stringify(stage.request.input))},
@@ -37,7 +45,7 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
           stopId:stage.stop?.id??null,settlementId:stage.settlement?.id??null,attemptCount:stage.attemptCount??null,retry:JSON.parse(JSON.stringify(stage.retry??null))}}];
     if(stage.result) {
       contents.push({name:"Durable stage result",class:"agent",stage:"result",mediaType:"application/json",value:JSON.parse(JSON.stringify(stage.result))});
-      yield {subject:r.ref("activity","contribution",stage.result.id,runId),occurredAt:stage.result.recordedAt,
+      yield {id:"activity-raw:"+modelInputValueDigest([runId,stage.result.id]),subject:r.ref("activity","contribution",stage.result.id,runId),occurredAt:stage.result.recordedAt,
         payload:{kind:"execution",phase:"settled",executionKind:"durable_raw_result",status:stage.result.outcome,code:null,effectCertainty:null},
         links:[inspectionLink("produces",subject,r.ref("activity","contribution",stage.result.id,runId))],
         contents:[{name:"Original result and measured usage",class:"agent",stage:"raw",mediaType:"application/json",value:JSON.parse(JSON.stringify(stage.result))}]};
@@ -45,6 +53,18 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
     const {prepared,publication,limitation,materialization,method}=context;
     contents.push({name:"Owner evidence scope",class:"execution",stage:"observation",mediaType:"application/json",value:JSON.parse(JSON.stringify({scope:context.scope,contextCoverage:context.coverage,taskCoverage:task.coverage}))});
     const links=[];
+    const native=protocolObservationStage(path,stage);
+    if(native){
+      links.push(inspectionLink("binding",subject,r.ref("protocol-execution","model-activity",native.activityId,runId)),
+        inspectionLink("binding",r.ref("protocol-content","contribution",native.input.id,runId,native.input.digest),subject));
+      if(native.observation)links.push(inspectionLink("observes",subject,r.ref("protocol-execution","event",native.observation.id,runId,native.observation.revision)));
+      if(native.limitation){
+        const b=native.limitation.basis;
+        links.push(inspectionLink("observes",subject,r.ref("protocol-evidence","event",`${b.scopeId}:${b.kind}:${b.key}`,runId,String(b.revision))));
+      }
+      if(native.scheduledWorkId)links.push(inspectionLink("binding",r.ref("activity-scheduling","contribution",native.scheduledWorkId,runId),subject));
+      contents.push({name:"Native observation delegation (not purpose acceptance)",class:"execution",stage:"observation",mediaType:"application/json",value:JSON.parse(JSON.stringify(native))});
+    }
     if(task.source) {
       const source=r.ref("model-input","contribution",task.source.requestId,runId);
       links.push(inspectionLink("binding",source,subject));
@@ -155,7 +175,7 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
         r.ref("model-input-measurement","contribution",prepared.measurementDerivation.observation.id,runId)));
       links.push(inspectionLink("produces",subject,r.ref("model-input","contribution",prepared.encoded.id,runId)),
         inspectionLink("includes",r.ref("activity","contribution",prepared.preparationStageId,runId),subject));
-      const preparedRecordId=randomUUID(),preparedSubject=r.ref("model-input","contribution",prepared.encoded.id,runId);
+      const preparedRecordId="prepared-input:"+modelInputValueDigest([runId,prepared.encoded.id,prepared.request]),preparedSubject=r.ref("model-input","contribution",prepared.encoded.id,runId);
       yield {id:preparedRecordId,subject:preparedSubject,occurredAt:null,
         payload:{kind:"execution",phase:"settled",executionKind:"prepared_model_input",status:"prepared",code:null,effectCertainty:null},
         contents:[{name:"Prepared encoded input (not proof of sending)",class:"agent",stage:"encoded",mediaType:"text/plain",value:prepared.encoded.body},
@@ -178,11 +198,16 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
     yield* processEvidenceRecords(r,{observation:processObservationRef(r,origin,context.scope.revision),occurredAt:null,
       evidence:{origin,digest:context.scope.revision,subject,executionPath:r.ref("activity","contribution",stage.request.pathId,runId),category:context.coverage.method?"method":prepared?"input":"coordination",name:"purpose_bound_stage",status:stage.status,
         purpose:prepared?.demand.purpose??materialization?.purpose??null,recipient:prepared?{runId:prepared.demand.runId,recipient:prepared.demand.recipient,purpose:prepared.demand.purpose}:null},links});
+    // Append the independent relationships without renumbering sibling stage records.
+    yield* preparation;
   }
   observe(fact:ActivityHandoffFact,r:InspectionProjectionSink=this.recorder):void {
     for(const record of this.factRecords(fact,r))r.offer(record);
   }
   private *factRecords(fact:ActivityHandoffFact,r:InspectionProjectionRefs):Generator<InspectionRecordInput> {
+    yield* identifiedRecords(`activity-fact:${fact.runId}:${fact.sequence}`,this.factProjection(fact,r));
+  }
+  private *factProjection(fact:ActivityHandoffFact,r:InspectionProjectionRefs):Generator<InspectionRecordInput> {
     const measurement=responsibilityMeasurement(r,fact);if(measurement)yield measurement;
     const subject = r.ref("activity","event",`${fact.runId}:handoff:${fact.sequence}`,fact.runId);
     const subjectOwner=fact.kind.startsWith("scheduling_")?"activity-scheduling":fact.kind.startsWith("reconsideration_")?"activity-reconsideration":fact.kind==="fact_published"?"activity-source":"activity";
@@ -193,6 +218,27 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
     const professional=contextActivityFactObservation(fact);
     const ref=(value:import("@agent-anything/context/evidence").ContextProcessObjectRef)=>r.ref(value.owner,"contribution",value.id,value.runId,value.revision);
     const related=professional.links.map(link=>inspectionLink(link.kind,ref(link.from),ref(link.to)));
+    if(fact.kind==="path_opened"&&fact.details.resourceBudgetSources&&typeof fact.details.resourceBudgetSources==="object") {
+      for(const [dimension,sourceId] of Object.entries(fact.details.resourceBudgetSources)) {
+        if(typeof sourceId!=="string")continue;
+        const budget=r.ref("activity-resource","contribution",JSON.stringify([sourceId,dimension]),fact.runId);
+        related.push(inspectionLink("binding",r.ref("activity","contribution",sourceId,fact.runId),budget),
+          inspectionLink("binding",budget,path));
+        yield {subject:budget,occurredAt:fact.occurredAt,
+          payload:{kind:"execution",phase:"pending",executionKind:"shared_resource_budget",status:"bound",code:null,effectCertainty:null},
+          contents:[{name:"Original budget source and consuming path",class:"execution",stage:"resource_binding",mediaType:"application/json",
+            value:{dimension,sourcePathId:sourceId,consumerPathId:fact.pathId}}]};
+      }
+    }
+    if(fact.kind==="resources_reserved") {
+      const reservation=fact.details.reservation as import("@agent-anything/agent-runtime/activity").ActivityResourceReservation;
+      const reserved=r.ref("activity-resource","contribution",reservation.id,fact.runId);
+      related.push(inspectionLink("produces",stage??path,reserved),inspectionLink("observes",subject,reserved));
+      yield {subject:reserved,occurredAt:fact.occurredAt,
+        payload:{kind:"execution",phase:"settled",executionKind:"resource_reservation",status:"reserved",code:null,effectCertainty:null},
+        contents:[{name:"Consumed allowance (not observed usage)",class:"execution",stage:"reservation",mediaType:"application/json",
+          value:JSON.parse(JSON.stringify(fact.details))}]};
+    }
     if(professional.closure) {
       const closure=professional.closure;
       yield {subject:ref(closure.subject),occurredAt:fact.occurredAt,payload:{kind:"execution",phase:"settled",executionKind:closure.kind,status:closure.status,code:null,effectCertainty:null},
@@ -275,6 +321,11 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
       const published=fact.details.fact as ActivityPublishedFact;
       const original=r.ref(published.ref.owner,"contribution",published.ref.id,fact.runId,professional.referenceRevision===undefined?published.ref.revision:professional.referenceRevision);
       const publication=r.ref("activity-publication","contribution",published.id,fact.runId);
+      if(published.ref.owner==="helarc.report-handoff"&&published.ref.kind==="accepted_report_capture"){
+        const h=(published as ActivityPublishedFact&{handoff?:{parent:{runId:string};result:{id:string;revision:string};pathId:string}}).handoff;
+        if(h)related.push(inspectionLink("binding",publication,r.ref("activity","contribution",h.pathId,fact.runId)),
+          inspectionLink("observes",publication,r.ref("agent-runtime","contribution",h.result.id,h.parent.runId,h.result.revision)));
+      }
       related.push(inspectionLink("produces",original,publication),inspectionLink("includes",r.ref("activity-source","contribution",published.sourceId,fact.runId),publication),inspectionLink("observes",subject,publication));
       if(published.origin)related.push(
         inspectionLink("observes",publication,r.ref("activity","contribution",published.origin.stageId,fact.runId)),
@@ -311,10 +362,11 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
         ...(stage && typeof fact.details.modelRequestId === "string" ? [inspectionLink("includes",stage,r.ref("model-interaction","request",fact.details.modelRequestId,fact.runId))] : [])],
       contents:[{name:"Durable activity handoff",class:"execution",stage:fact.kind,mediaType:"application/json",value:JSON.parse(JSON.stringify(fact))}]});
   }
-  async replay(runId:string,port:import("@agent-anything/agent-runtime/activity").ActivityHandoffPort): Promise<void> {
+  async replay(runId:string,port:import("@agent-anything/agent-runtime/activity").ActivityHandoffPort,through=Number.MAX_SAFE_INTEGER): Promise<void> {
     let after = 0;
+    const read=throughSequence(async(after,limit)=>await port.command({kind:"facts",runId,after,limit}) as readonly ActivityHandoffFact[],through);
     while (true) {
-      const facts = await port.command({kind:"facts",runId,after,limit:128}) as readonly ActivityHandoffFact[];
+      const facts = await read(after,128);
       const stages = new Set<string>();
       for (const fact of facts) {
         await replayInspectionRecords(this.recorder,this.factRecords(fact,this.recorder));
@@ -322,9 +374,10 @@ export class ActivityHandoffInspectionAdapter implements ActivityHandoffObserver
           const raw=await port.command({kind:"read_raw_result",resultId:fact.details.resultId}) as import("@agent-anything/agent-runtime/activity").ActivityRawResult|null;
           if(raw) {
             const r=this.recorder,subject=r.ref("activity","contribution",raw.id,runId);
-            if(!await r.offerWhenReady({subject,occurredAt:raw.recordedAt,payload:{kind:"execution",phase:"settled",executionKind:"durable_raw_result",status:raw.outcome,code:null,effectCertainty:null},
+            if(!await r.offerWhenReady({id:"activity-raw:"+modelInputValueDigest([runId,raw.id]),subject,occurredAt:raw.recordedAt,payload:{kind:"execution",phase:"settled",executionKind:"durable_raw_result",status:raw.outcome,code:null,effectCertainty:null},
               links:[inspectionLink("produces",r.ref("activity","contribution",fact.requestId,runId),subject)],
               contents:[{name:"Original result and measured usage",class:"agent",stage:"raw",mediaType:"application/json",value:JSON.parse(JSON.stringify(raw))}]}))throw new Error("inspection_replay_record_rejected");
+            await replayInspectionRecords(r,nativePreparationRecords(r,runId,fact.requestId,raw,false));
           }
         }
         if(fact.requestId && ["stage_submitted","raw_saved","accepted","settled"].includes(fact.kind)) {

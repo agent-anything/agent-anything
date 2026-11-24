@@ -93,14 +93,14 @@ export function createHelarcOriginalInputSupply<TSource extends OriginalInputSou
     resolve:async(basis,signal)=>{
       const bound=await ports.binding(basis);signal.throwIfAborted();validateHelarcContextRunBinding(bound.context);
       const {policy}=bound.context,consumer=basis.consumer.intent,source=basis.source;
-      if(!ports.provider.encodeInput||!basis.sourceStage.result||!bound.treeScopeId||!bound.modelPoolId||!bound.localPoolId||
+      if(!ports.provider.encodeInput||!ports.provider.inputTargetDigest||!basis.sourceStage.result||!bound.treeScopeId||!bound.modelPoolId||!bound.localPoolId||
         source.request.composition.providerId!==ports.provider.descriptor.id||source.request.composition.model!==ports.provider.modelContext.target.model)
         throw new TypeError("helarc_task_input_binding_unavailable");
       const {sources,recipient,observation}=ports.describe(basis);
       const rejectedInputs=await readModelInputRejections(ports.activities,basis.consumer,basis.need,basis.sourceStage.request.id);
       if(sources.runId!==consumer.runId||recipient.runId!==consumer.runId||recipient.purpose!==source.request.purpose||
         modelInputValueDigest(sources.request)!==modelInputValueDigest(source.request))throw new TypeError("helarc_original_input_description_changed");
-      const target=ports.provider.encodeInput(source.request,bound.deliveryMode).targetDigest;
+      const target=ports.provider.inputTargetDigest;
       const scope:ContextUseScope={...recipient,id:`${consumer.runId}:purpose-input:${modelInputValueDigest({target,context:bound.context.id,recipient,authority:consumer.permissionBasis})}`,
         owner:"context-representation",continuity:recipient.purpose,target,authorityBasis:consumer.permissionBasis};
       const workId=`${basis.need.id}:supply`,preparationId=`${workId}:prepare`;

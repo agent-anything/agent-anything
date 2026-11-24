@@ -2,7 +2,7 @@ const {app} = require("electron");
 const assert = require("node:assert/strict");
 const {join} = require("node:path");
 const {pathToFileURL} = require("node:url");
-const {writeFile} = require("node:fs/promises");
+const {readFile,writeFile} = require("node:fs/promises");
 const [directory,phase,endpoint] = process.argv.slice(2);
 app.setPath("userData",join(directory,"electron")); app.disableHardwareAcceleration();
 let store;
@@ -40,10 +40,20 @@ async function main() {
     await processor.drain("child",signal); await processor.drain("child",signal);
     const stage = await port.command({kind:"read_stage",requestId:"generate"});
     assert.equal(stage.status,"raw_result"); assert.equal(typeof stage.result.value.content,"string"); assert(stage.result.value.content.trim().length);
+    const scope={pathId:"path",requestIds:["generate"],inputNeedIds:[]};
+    const observed=await port.command({kind:"observe_state",...scope});
+    assert.equal(observed.stages[0].status,"raw_result");
+    assert.equal("progress" in observed.path,false);
+    assert.equal("result" in observed.stages[0],false);
+    assert.deepEqual((await port.command({kind:"read_snapshot",...scope})).stages[0],stage);
+    await assert.rejects(port.command({kind:"read_snapshot",...scope,pathId:"another-path"}),/scope/);
+    await writeFile(join(directory,"original-stage.json"),JSON.stringify(stage));
     if (process.env.ACTIVITY_LIVE_MODEL) assert.deepEqual(stage.result.value.request,stage.request.input);
     app.exit(73); return;
   }
   if (phase === "accept-and-expand") {
+    const retained=await port.command({kind:"read_snapshot",pathId:"path",requestIds:["generate"],inputNeedIds:[]});
+    assert.deepEqual(retained.stages[0],JSON.parse(await readFile(join(directory,"original-stage.json"),"utf8")));
     await processor.drain("child",signal);
     const path = await port.command({kind:"read_path",pathId:"path"}); assert.equal(path.progressRevision,1);
     assert.equal((await port.command({kind:"pending",runId:"child",after:0,limit:10}))[0].requestId,"check");
@@ -54,8 +64,13 @@ async function main() {
   const path = await port.command({kind:"read_path",pathId:"path"});
   assert.equal(path.progressRevision,2); assert.equal(path.dispatchedAttempts,2);
   assert.deepEqual(await port.command({kind:"pending",runId:"child",after:0,limit:10}),[]);
+  const complete=await port.command({kind:"read_snapshot",pathId:"path",requestIds:["generate","check"],inputNeedIds:[]});
+  assert.deepEqual(complete.path,path);
+  assert(complete.stages.every(stage=>stage.status==="accepted"));
+  assert.deepEqual(complete.stages[0].result,JSON.parse(await readFile(join(directory,"original-stage.json"),"utf8")).result);
   await writeFile(join(directory,"verification.json"),JSON.stringify({electron:process.versions.electron,node:process.versions.node,
-    storageGeneration:store.generation,progressRevision:path.progressRevision,externalCalls:1,stages:2,recovery:"raw-result and accepted-progress",pending:0},null,2));
+    storageGeneration:store.generation,progressRevision:path.progressRevision,externalCalls:1,stages:2,recovery:"raw-result and accepted-progress",pending:0,
+    scopedObservation:true,consistentSnapshot:true,rawEvidencePreserved:true},null,2));
   await store.close(); store = null; app.exit(0);
 }
 main().catch(async error => {console.error(error); if (store) await store.close().catch(()=>{}); app.exit(1);});

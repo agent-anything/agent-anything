@@ -46,6 +46,8 @@ describe("Provider selection admission", () => {
     const credentials={resolveApiKey:vi.fn(async()=>({ok:true as const,apiKey:null,credentialStatus:"missing" as const}))};
     const saved={providerProfile:resolved.profile,providerBinding:retainHelarcProviderBinding(original),providerCredential:{kind:"saved" as const,ref}};
     const restored=bindHelarcRunProvider(JSON.parse(JSON.stringify(saved)),credentials);
+    expect(original.inputTargetDigest).toMatch(/^sha256:/);
+    expect(restored.inputTargetDigest).toBe(original.inputTargetDigest);
     expect(credentials.resolveApiKey).not.toHaveBeenCalled();
     const request=taskRequest(restored),encoded=restored.encodeInput!(request,"buffered");
     restored.verifyEncodedInput!(request,encoded);
@@ -59,11 +61,14 @@ describe("Provider selection admission", () => {
   it("preserves full-input encoding and verification through selection and original-binding recovery",async()=>{
     const {selection}=fixture(),resolved=(await selection.resolve())!;
     const wrapped=createHelarcProvider(resolved.config);
+    expect(wrapped.inputTargetDigest).toBe(createHelarcProvider({...resolved.config,selectionFacts:undefined}).inputTargetDigest);
+    expect(wrapped.inputTargetDigest).toMatch(/^sha256:/);
     const request=taskRequest(wrapped),encoded=wrapped.encodeInput!(request,"streaming");
     expect(JSON.parse(encoded.body)).toMatchObject({model:"model",stream:true,messages:[{role:"user",content:"Inspect the original input."}]});
     expect(JSON.parse(encoded.body).tools[0].function.name).toBe("final_result");
     const recovered=restoreHelarcProvider({providerProfile:resolved.profile,providerBinding:retainHelarcProviderBinding(wrapped)},"");
     expect(recovered.encodeInput!(request,"streaming")).toEqual(encoded);
+    expect(recovered.inputTargetDigest).toBe(wrapped.inputTargetDigest);
     expect(()=>recovered.verifyEncodedInput!(request,encoded)).not.toThrow();
     expect(()=>recovered.verifyEncodedInput!(request,{...encoded,body:"{}"})).toThrow("encoded_model_input_binding_changed");
   });

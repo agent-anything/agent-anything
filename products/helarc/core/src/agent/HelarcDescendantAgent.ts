@@ -29,6 +29,7 @@ export function createHelarcDescendantAgentContribution(
   contextMaterials?: ContextMaterialAccessPort,
   materialHandoff?: HelarcMaterialHandoff,
   reportHandoff?:HelarcReportHandoff,
+  nativeNarratives?:import("../controller/native/HelarcNativeNarrative.js").HelarcNativeNarrativeReader,
 ): HelarcDescendantAgentContribution {
   const contract = findHelarcBaselineToolContract("Agent");
   const sendMessageContract = findHelarcBaselineToolContract("SendMessage");
@@ -250,6 +251,14 @@ export function createHelarcDescendantAgentContribution(
         project(
           input: Parameters<RunnerDelegationComposition["narrativeProjection"]["project"]>[0],
         ) {
+          const output=input.childResult.finalOutput;
+          if(input.childResult.status==="completed"&&isHelarcOutput(output)&&output.source?.kind==="native_response"){
+            return {text:output.summary,origins:[{owner:"helarc",kind:"native_final_reply",id:output.source.evidence.acceptance.id,revision:output.source.evidence.acceptance.revision}]};
+          }
+          if(input.childResult.status!=="completed"&&input.childResult.items.some(item=>item.payload.kind==="controller_turn"&&item.payload.modelItems.some(m=>m.kind==="native_purpose_evidence"))){
+            if(!nativeNarratives)throw new TypeError("helarc_native_report_reader_required");
+            return projectNativeDescendantNarrative(input.childResult,nativeNarratives);
+          }
           return projectHelarcDescendantNarrative(input.childResult);
         },
       }),
@@ -419,6 +428,16 @@ function projectHelarcDescendantNarrative(input:{readonly status:string;readonly
     if(payload.kind!=="controller_turn")continue;
     const blocks=payload.modelItems.flatMap(item=>item.kind==="assistant_text"&&item.text.trim().length>0?[item.text]:[]);
     if(blocks.length)return blocks.join("\n\n");
+  }
+  return null;
+}
+
+async function projectNativeDescendantNarrative(input:RunResult,reader:import("../controller/native/HelarcNativeNarrative.js").HelarcNativeNarrativeReader){
+  for(let i=input.items.length-1;i>=0;i--){
+    const payload=input.items[i]!.payload;if(payload.kind!=="controller_turn")continue;
+    const item=payload.modelItems.find(m=>m.kind==="native_purpose_evidence");if(!item)continue;
+    if(item.evidence.scope.runId!==input.runId)throw new TypeError("helarc_native_report_run_changed");
+    const selected=await reader.read(item.evidence);if(selected)return selected;
   }
   return null;
 }

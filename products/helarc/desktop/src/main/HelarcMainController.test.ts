@@ -43,7 +43,7 @@ import {captureExecutionError} from "./diagnostics/ExecutionErrorDetails.js";
 import type {ExecutionDiagnosticSink} from "./diagnostics/HelarcExecutionDiagnostics.js";
 
 type InteractionRequestRef = NonNullable<HelarcMainSnapshot["run"]>["host"]["pendingInteractions"][number]["request"];
-const controllerFixtures = new WeakMap<HelarcMainController, {store: HelarcExecutionStore; signal: AbortSignal; rejections: Map<string, string>}>();
+const controllerFixtures = new WeakMap<HelarcMainController, {store: HelarcExecutionStore; signal: AbortSignal; rejections: Map<string, string>; activityFailures: Set<string>}>();
 // Real durable multi-exchange/view-reopen workflows measured 5.3-6.3s; local waits keep their own bounds.
 const DURABLE_WORKFLOW_TIMEOUT_MS=15000;
 const commandOutputDirectory = mkdtempSync(join(tmpdir(), "helarc-controller-output-"));
@@ -100,8 +100,8 @@ async function createTestController(input: Omit<HelarcMainControllerInput, "acti
     if (original) originals.set(admission.rootRunId, original);
   };
   const controller = new HelarcMainController({...input, executionStore: store, activityHost,
-    bindRunProvider: async (provider, profile) => {
-      const bound = await input.bindRunProvider?.(provider, profile) ?? {provider, credential: {kind: "none" as const}};
+    bindRunProvider: async (provider, profile, productRunId) => {
+      const bound = await input.bindRunProvider?.(provider, profile, productRunId) ?? {provider, credential: {kind: "none" as const}};
       boundProvider = bindFixtureProviderEncoding(bound.provider);
       return {...bound, provider: boundProvider};
     },
@@ -112,7 +112,7 @@ async function createTestController(input: Omit<HelarcMainControllerInput, "acti
     },
   });
   const observers = new AbortController();
-  controllerFixtures.set(controller, {store, signal: observers.signal, rejections});
+  controllerFixtures.set(controller, {store, signal: observers.signal, rejections, activityFailures});
   let closing: Promise<void> | undefined, ending = false;
   const pending = new Set<Promise<unknown>>();
   function track<T>(start: () => Promise<T>): Promise<T> {
@@ -258,7 +258,8 @@ describe("HelarcMainController", () => {
     const before = (await store.loadThread(first.threadId))!.runs[0]!;
     expect(before.project).toEqual({ id: project.id, revision: 1 });
     provider.complete();
-    await waitForSnapshot(controller, (snapshot) => snapshot.threadSummaries[0]?.latestRun?.status === "completed");
+    // Terminal persistence precedes releasing the activity slot and adopting the next workspace.
+    await waitForSnapshot(controller, (snapshot) => snapshot.execution === "idle" && snapshot.threadSummaries[0]?.latestRun?.status === "completed");
     expect(controller.getSnapshot().workspace?.path).toBe(secondPath);
     const complete = new CompleteProvider();
     const currentProvider = controller.getSnapshot().provider;
@@ -266,7 +267,7 @@ describe("HelarcMainController", () => {
     controller.configureProvider({ provider: complete, profile: currentProvider.activeProfile });
     const second = await controller.startRun({ taskText: "Inspect again", target: { kind: "continue_thread", threadId: first.threadId } });
     if (!second.ok) throw new Error(second.error.message);
-    await waitForSnapshot(controller, (snapshot) => snapshot.threadSummaries[0]?.latestRun?.runId === second.productRunId && snapshot.threadSummaries[0]?.latestRun?.status === "completed");
+    await waitForSnapshot(controller, (snapshot) => snapshot.execution === "idle" && snapshot.threadSummaries[0]?.latestRun?.runId === second.productRunId && snapshot.threadSummaries[0]?.latestRun?.status === "completed");
     const stored = (await store.loadThread(first.threadId))!;
     expect(stored.thread.projectId).toBe(project.id);
     expect(stored.thread.workspace.primary.path).toBe(firstPath);
@@ -431,14 +432,14 @@ describe("HelarcMainController", () => {
     expect(snapshot.provider).toMatchObject({
       configured: true,
       activeProfile: {
-        id: "complete-provider",
+        id: "openai-compatible.chat-completions",
         displayName: "Complete Provider",
         credentialStatus: "empty_allowed",
         isActive: true,
       },
       profiles: [
         {
-          id: "complete-provider",
+          id: "openai-compatible.chat-completions",
           isActive: true,
         },
       ],
@@ -617,12 +618,13 @@ describe("HelarcMainController", () => {
       target: { kind: "new_thread" },
     });
 
+    if (!result.ok) throw new Error("Expected an accepted task");
     expect(result).toMatchObject({
       ok: true,
-      taskId: "helarc-task-1",
+      taskId: expect.stringMatching(/^helarc-task-/),
       snapshot: {
         acceptedTask: {
-          id: "helarc-task-1",
+          id: result.taskId,
           prompt: "Update docs",
         },
         error: null,
@@ -633,7 +635,7 @@ describe("HelarcMainController", () => {
     expect(snapshot).toMatchObject({
       status: "completed",
       acceptedTask: {
-        id: "helarc-task-1",
+        id: result.taskId,
         prompt: "Update docs",
       },
       run: {
@@ -688,15 +690,16 @@ describe("HelarcMainController", () => {
       controller,
       (snapshot) => snapshot.status === "completed" && snapshot.activeThread?.messages.length === 2,
     );
-    void controller.startRun({
+    const started = await controller.startRun({
       taskText: "Update docs",
       target: { kind: "new_thread" },
     });
 
+    if (!started.ok) throw new Error("Expected an accepted Run");
     const snapshot = await completed;
     expect(snapshot.threadSummaries).toMatchObject([{
-      id: "helarc-thread-1",
-      latestRun: { runId: "helarc-run-1", status: "completed" },
+      id: started.threadId,
+      latestRun: { runId: started.productRunId, status: "completed" },
     }]);
     expect(snapshot.activeThread).toMatchObject({
       title: "Update docs",
@@ -719,7 +722,7 @@ describe("HelarcMainController", () => {
       threadSummaries: await restoredStore.listThreadSummaries(),
       threadStore: restoredStore,
     });
-    await expect(restoredController.openThread("helarc-thread-1")).resolves.toMatchObject({
+    await expect(restoredController.openThread(started.threadId)).resolves.toMatchObject({
       ok: true,
       snapshot: {
         activeThread: { messages: [{ role: "user" }, { role: "assistant" }] },
@@ -813,6 +816,8 @@ describe("HelarcMainController", () => {
       provider: new CompleteProvider(),
       threadStore,
     });
+    // Release test-owned I/O before Controller teardown, including assertion failures and timeouts.
+    onTestFinished(releaseFirstProgress);
     controller.selectWorkspacePath("D:/projects/agent-anything");
     const terminalPersisted = waitForSnapshot(
       controller,
@@ -946,48 +951,49 @@ describe("HelarcMainController", () => {
         snapshot.status === "completed"
         && snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
-    controller.startRun({
+    const started = await controller.startRun({
       taskText: "Update docs",
       target: { kind: "new_thread" },
     });
-    await completed;
+    if (!started.ok) throw new Error("Expected an accepted Run");
+    const messageId = (await completed).activeThread!.messages[0]!.id;
 
     const summaries = await threadStore.listThreadSummaries();
     expect(summaries).toMatchObject([
       {
-        id: "helarc-thread-1",
+        id: started.threadId,
         title: "Update docs",
         latestRun: {
-          runId: "helarc-run-1",
+          runId: started.productRunId,
           status: "completed",
         },
       },
     ]);
 
-    await expect(threadStore.loadThread("helarc-thread-1")).resolves.toMatchObject({
+    await expect(threadStore.loadThread(started.threadId)).resolves.toMatchObject({
       thread: {
-        id: "helarc-thread-1",
-        latestRunId: "helarc-run-1",
+        id: started.threadId,
+        latestRunId: started.productRunId,
       },
       messages: [
         {
-          id: "helarc-message-1",
+          id: messageId,
           role: "user",
           content: "Update docs",
-          relatedRunIds: ["helarc-run-1"],
+          relatedRunIds: [started.productRunId],
         },
         {
-          id: "helarc-message-1-assistant",
+          id: `${messageId}-assistant`,
           role: "assistant",
           content: "No changes needed.",
-          relatedRunIds: ["helarc-run-1"],
-          relatedArtifactIds: ["helarc-run-1-artifact-final-output"],
+          relatedRunIds: [started.productRunId],
+          relatedArtifactIds: [`${started.productRunId}-artifact-final-output`],
         },
       ],
       runs: [
         {
-          id: "helarc-run-1",
-          triggeringMessageId: "helarc-message-1",
+          id: started.productRunId,
+          triggeringMessageId: messageId,
           triggerMessageRole: "user",
           terminal: {
             host: {
@@ -1001,7 +1007,7 @@ describe("HelarcMainController", () => {
               },
             },
           },
-          artifactIds: ["helarc-run-1-artifact-final-output"],
+          artifactIds: [`${started.productRunId}-artifact-final-output`],
           provider: {
             profileId: "provider-a",
             displayName: "Provider A",
@@ -1011,11 +1017,11 @@ describe("HelarcMainController", () => {
       ],
       artifacts: [
         {
-          id: "helarc-run-1-artifact-final-output",
+          id: `${started.productRunId}-artifact-final-output`,
           kind: "final-output",
           title: "Final output",
           summary: "No changes needed.",
-          runId: "helarc-run-1",
+          runId: started.productRunId,
         },
       ],
     });
@@ -1023,33 +1029,33 @@ describe("HelarcMainController", () => {
     const snapshot = controller.getSnapshot();
     expect(snapshot.threadSummaries).toMatchObject([
       {
-        id: "helarc-thread-1",
+        id: started.threadId,
         title: "Update docs",
         latestRun: {
-          runId: "helarc-run-1",
+          runId: started.productRunId,
           status: "completed",
         },
       },
     ]);
     expect(snapshot.activeThread).toMatchObject({
-      id: "helarc-thread-1",
+      id: started.threadId,
       title: "Update docs",
       messages: [
         {
-          id: "helarc-message-1",
+          id: messageId,
           role: "user",
           content: "Update docs",
         },
         {
-          id: "helarc-message-1-assistant",
+          id: `${messageId}-assistant`,
           role: "assistant",
           content: "No changes needed.",
-          relatedArtifactIds: ["helarc-run-1-artifact-final-output"],
+          relatedArtifactIds: [`${started.productRunId}-artifact-final-output`],
         },
       ],
       artifacts: [
         {
-          id: "helarc-run-1-artifact-final-output",
+          id: `${started.productRunId}-artifact-final-output`,
           kind: "final-output",
           title: "Final output",
           summary: "No changes needed.",
@@ -1146,7 +1152,7 @@ describe("HelarcMainController", () => {
     const record = await threadStore.loadThread(completed.activeThread?.id ?? "");
     expect(record).not.toBeNull();
     expect(record?.runs[0]?.artifactIds).toEqual([
-      "helarc-run-1-artifact-final-output",
+      `${completed.run!.productRunId}-artifact-final-output`,
     ]);
     expect(record?.artifacts.map(({ kind }) => kind)).toEqual(["final-output"]);
     await expect(access(markerPath)).resolves.toBeUndefined();
@@ -1173,7 +1179,8 @@ describe("HelarcMainController", () => {
       expect(delivery.sourceId).toBe(notification.source.id);
       expect(delivery.recipient).toEqual({runId,recipient:binding.scope.recipient,purpose:prepared.request.purpose});
       await expect(store.materialCustody.command({kind:"describe",holdId:delivery.holdId,recipient:delivery.recipient})).rejects.toMatchObject({code:"material_unavailable"});
-      const model=await store.activityHandoffs.command({kind:"read_stage",requestId:binding.input.stageRequestId}) as ActivityStageState;
+      expect(binding.input.stageRequestId).not.toBeNull();
+      const model=await store.activityHandoffs.command({kind:"read_stage",requestId:binding.input.stageRequestId!}) as ActivityStageState;
       expect(model).toMatchObject({status:"accepted",result:{id:fact.details.responseId},receipt:{id:fact.details.acceptanceId}});
       const taskPath=await store.activityHandoffs.command({kind:"read_path",pathId:binding.input.activityId});
       expect(taskPath).toMatchObject({progress:{exchange:{inputDeliveryReceipt:{via:{selection:{revision:"2",recipient:delivery.recipient,
@@ -1197,7 +1204,6 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForPendingApproval(controller);
-    const stopped = waitForProductResult(controller, "completed");
     const result = await controller.startRun({
       taskText: "Run command",
       target: { kind: "new_thread" },
@@ -1296,7 +1302,7 @@ describe("HelarcMainController", () => {
       },
     });
 
-    const stoppedSnapshot = await stopped;
+    const stoppedSnapshot = await waitForProductResult(controller, "completed");
     expect(stoppedSnapshot).toMatchObject({
       status: "completed",
       run: {
@@ -1335,7 +1341,6 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForPendingApproval(controller);
-    const completed = waitForProductResult(controller, "completed");
     controller.startRun({
       taskText: "Run command",
       target: { kind: "new_thread" },
@@ -1371,7 +1376,7 @@ describe("HelarcMainController", () => {
       },
     });
 
-    const completedSnapshot = await completed;
+    const completedSnapshot = await waitForProductResult(controller, "completed");
     expect(completedSnapshot).toMatchObject({
       status: "completed",
       run: {
@@ -1460,7 +1465,7 @@ describe("HelarcMainController", () => {
           terminal: { status: "cancelled", code: "runtime_cancelled" },
         },
       },
-      threadSummaries: [{ latestRun: { runId: "helarc-run-1", status: "cancelled" } }],
+      threadSummaries: [{ latestRun: { runId: terminalSnapshot.run!.productRunId, status: "cancelled" } }],
       activeThread: { messages: [{ role: "user" }, { role: "assistant", content: "Run cancelled." }] },
     });
     expect(JSON.stringify(terminalSnapshot.run)).not.toContain(
@@ -1572,7 +1577,7 @@ describe("HelarcMainController", () => {
     const firstCompleted = waitForSnapshot(
       controller,
       (snapshot) =>
-        snapshot.run?.host.terminal?.status === "completed" &&
+        snapshot.execution === "idle" && snapshot.run?.host.terminal?.status === "completed" &&
         snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
     await controller.startRun({
@@ -1582,12 +1587,13 @@ describe("HelarcMainController", () => {
     await firstCompleted;
 
     const secondWaiting = waitForPendingApproval(controller);
-    await controller.startRun({
+    const second = await controller.startRun({
       taskText: "Wait second",
       target: { kind: "new_thread" },
     });
+    if (!second.ok) throw new Error("Expected second Run");
     const secondSnapshot = await secondWaiting;
-    expect(secondSnapshot.run?.productRunId).toBe("helarc-run-2");
+    expect(secondSnapshot.run?.productRunId).toBe(second.productRunId);
     const secondHarnessRunId = secondSnapshot.run?.harnessRunId;
     if (secondHarnessRunId === undefined) throw new Error("Expected active Harness Run id.");
 
@@ -1603,7 +1609,7 @@ describe("HelarcMainController", () => {
     expect(controller.getSnapshot()).toMatchObject({
       status: "waiting_for_approval",
       run: {
-        productRunId: "helarc-run-2",
+        productRunId: second.productRunId,
         harnessRunId: secondHarnessRunId,
         display: { status: "waiting_for_approval" },
       },
@@ -1638,7 +1644,7 @@ describe("HelarcMainController", () => {
       ok: false,
       error: { code: "run_already_active" },
     });
-    await expect(firstStart).resolves.toMatchObject({ ok: true, taskId: "helarc-task-1" });
+    await expect(firstStart).resolves.toMatchObject({ ok: true, taskId: expect.stringMatching(/^helarc-task-/) });
     await waitForActiveRunTerminal(controller, "completed");
     expect(controller.getSnapshot().threadSummaries).toHaveLength(1);
   });
@@ -1677,10 +1683,11 @@ describe("HelarcMainController", () => {
       first,
       (snapshot) => snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
-    await first.startRun({
+    const started = await first.startRun({
       taskText: "Persisted task",
       target: { kind: "new_thread" },
     });
+    if (!started.ok) throw new Error("Expected an accepted Run");
     await completed;
 
     const restoredStore = new FileHelarcThreadStore(storePath);
@@ -1689,13 +1696,13 @@ describe("HelarcMainController", () => {
       threadStore: restoredStore,
       threadSummaries: await restoredStore.listThreadSummaries(),
     });
-    const opened = await restored.openThread("helarc-thread-1");
+    const opened = await restored.openThread(started.threadId);
 
     expect(opened).toMatchObject({
       ok: true,
       snapshot: {
         activeThread: {
-          id: "helarc-thread-1",
+          id: started.threadId,
           messages: [
             { role: "user", content: "Persisted task" },
             { role: "assistant", content: "No changes needed." },
@@ -1707,14 +1714,15 @@ describe("HelarcMainController", () => {
     const secondCompleted = waitForSnapshot(
       restored,
       (snapshot) => snapshot.threadSummaries.some(
-        (thread) => thread.id === "helarc-thread-2" && thread.latestRun?.status === "completed",
+        (thread) => thread.id !== started.threadId && thread.latestRun?.status === "completed",
       ),
     );
-    await expect(restored.startRun({
+    const second = await restored.startRun({
       taskText: "Second persisted task",
       target: { kind: "new_thread" },
-    })).resolves
-      .toMatchObject({ ok: true, taskId: "helarc-task-2" });
+    });
+    if (!second.ok) throw new Error("Expected a second accepted Run");
+    expect(second.taskId).not.toBe(started.taskId);
     await secondCompleted;
   }, 10_000);
 
@@ -1779,9 +1787,9 @@ describe("HelarcMainController", () => {
     });
     expect(first).toMatchObject({
       ok: true,
-      taskId: "helarc-task-1",
-      productRunId: "helarc-run-1",
-      threadId: "helarc-thread-1",
+      taskId: expect.stringMatching(/^helarc-task-/),
+      productRunId: expect.stringMatching(/^helarc-run-/),
+      threadId: expect.stringMatching(/^helarc-thread-/),
     });
     if (!first.ok) {
       throw new Error("Expected the first Run to start.");
@@ -1790,7 +1798,8 @@ describe("HelarcMainController", () => {
       controller,
       (snapshot) =>
         snapshot.threadSummaries[0]?.latestRun?.runId === first.productRunId &&
-        snapshot.threadSummaries[0]?.latestRun?.status === "completed",
+        snapshot.threadSummaries[0]?.latestRun?.status === "completed" &&
+        snapshot.execution === "idle",
     );
     await expect(controller.openThread(first.threadId)).resolves.toMatchObject({
       ok: true,
@@ -1810,9 +1819,9 @@ describe("HelarcMainController", () => {
     });
     expect(second).toMatchObject({
       ok: true,
-      taskId: "helarc-task-2",
-      productRunId: "helarc-run-2",
-      threadId: "helarc-thread-1",
+      taskId: expect.stringMatching(/^helarc-task-/),
+      productRunId: expect.stringMatching(/^helarc-run-/),
+      threadId: first.threadId,
     });
     if (!second.ok) {
       throw new Error("Expected the continued Run to start.");
@@ -1825,33 +1834,37 @@ describe("HelarcMainController", () => {
     );
 
     const record = await threadStore.loadThread(first.threadId);
+    expect(second.productRunId).not.toBe(first.productRunId);
+    expect(second.taskId).not.toBe(first.taskId);
+    const [firstMessage, secondMessage] = record!.runs.map(r => r.triggeringMessageId);
+    expect(firstMessage).not.toBe(secondMessage);
     expect(record).toMatchObject({
       thread: {
-        id: "helarc-thread-1",
-        latestRunId: "helarc-run-2",
+        id: first.threadId,
+        latestRunId: second.productRunId,
       },
       runs: [
-        { id: "helarc-run-1", threadId: "helarc-thread-1" },
-        { id: "helarc-run-2", threadId: "helarc-thread-1" },
+        { id: first.productRunId, threadId: first.threadId },
+        { id: second.productRunId, threadId: first.threadId },
       ],
       messages: [
         {
-          id: "helarc-message-1",
+          id: firstMessage,
           role: "user",
           content: "Inspect the current implementation",
         },
         {
-          id: "helarc-message-1-assistant",
+          id: `${firstMessage}-assistant`,
           role: "assistant",
           content: "No changes needed.",
         },
         {
-          id: "helarc-message-2",
+          id: secondMessage,
           role: "user",
           content: "Summarize the next step",
         },
         {
-          id: "helarc-message-2-assistant",
+          id: `${secondMessage}-assistant`,
           role: "assistant",
           content: "No changes needed.",
         },
@@ -1922,11 +1935,11 @@ describe("HelarcMainController", () => {
 });
 
 class CompleteProvider implements Provider {
-  private readonly context = createFakeProviderContext("complete-provider", "desktop-test-model");
+  private readonly context = createFakeProviderContext("openai-compatible.chat-completions", "desktop-test-model");
   readonly modelContext = this.context.modelContext;
   readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
-    id: "complete-provider",
+    id: "openai-compatible.chat-completions",
     name: "Complete Provider",
     capabilities: {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
@@ -2028,11 +2041,11 @@ class DeferredCompleteProvider extends CompleteProvider {
 }
 
 class SecretFailingProvider implements Provider {
-  private readonly context = createFakeProviderContext("secret-failing-provider", "desktop-test-model");
+  private readonly context = createFakeProviderContext("openai-compatible.chat-completions", "desktop-test-model");
   readonly modelContext = this.context.modelContext;
   readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
-    id: "secret-failing-provider",
+    id: "openai-compatible.chat-completions",
     name: "Secret failing Provider",
     capabilities: {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
@@ -2070,11 +2083,11 @@ class SecretFailingProvider implements Provider {
 }
 
 class ScriptedProvider implements Provider {
-  private readonly context = createFakeProviderContext("scripted-provider", "desktop-test-model");
+  private readonly context = createFakeProviderContext("openai-compatible.chat-completions", "desktop-test-model");
   readonly modelContext = this.context.modelContext;
   readonly requestBodyTransportLimit = this.context.requestBodyTransportLimit;
   readonly descriptor = {
-    id: "scripted-provider",
+    id: "openai-compatible.chat-completions",
     name: "Scripted Provider",
     capabilities: {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
@@ -2477,15 +2490,14 @@ function waitForSnapshot(
       clearTimeout(timeout); unsubscribe(); fixture?.signal.removeEventListener("abort", cancelled);
     };
     const cancelled = () => {dispose(); reject(fixture?.signal.reason);};
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(() => {
       dispose();
       const current = controller.getSnapshot();
-      const activities = fixture && current.run ? await fixture.store.activityHandoffs.command({kind: "read_work_view",
-        scopeId: `helarc-tree:${current.run.harnessRunId}`, limit: 64}).catch(error => String(error)) : null;
       reject(new Error(`Timed out waiting for matching Helarc snapshot: ${JSON.stringify({
         status: current.status, execution: current.execution, error: current.error, run: current.run?.host.status,
-        pending: current.run?.host.pendingInteractions.map(item => ({request: item.request, phase: item.phase})), activities,
+        pending: current.run?.host.pendingInteractions.map(item => ({request: item.request, phase: item.phase})),
         rejected: [...fixture?.rejections ?? []],
+        activityFailures: [...fixture?.activityFailures ?? []],
       })}`));
     }, timeoutMs);
 
